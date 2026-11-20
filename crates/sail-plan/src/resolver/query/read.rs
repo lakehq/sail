@@ -38,7 +38,9 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{CatalogTableLookup, PlanResolverState, TableSourceKey};
+use crate::resolver::state::{
+    CatalogTableLookup, CatalogTableLookupKey, PlanResolverState, TableSourceKey,
+};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -138,7 +140,10 @@ impl PlanResolver<'_> {
         required_format: Option<&str>,
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
-        let key = (reference.to_vec(), required_format.map(ToString::to_string));
+        let key = CatalogTableLookupKey {
+            reference: reference.to_vec(),
+            required_format: required_format.map(ToString::to_string),
+        };
         if let Some(lookup) = state.get_catalog_table_lookup(&key) {
             return Ok(lookup);
         }

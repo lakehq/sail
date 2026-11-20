@@ -4,13 +4,9 @@
 
 from __future__ import annotations
 
-import threading
-import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
 import pytest
-import requests
 
 from pysail.testing.spark.session import spark_connect_server
 
@@ -19,52 +15,6 @@ if TYPE_CHECKING:
 
 NAMESPACE = "load_table_requests"
 TABLE_PATH = f"/v1/namespaces/{NAMESPACE}/tables/"
-ACCESS_DELEGATION = "X-Iceberg-Access-Delegation"
-
-
-@pytest.fixture(scope="module")
-def recording_catalog(iceberg_rest_endpoint: str) -> Generator[tuple[str, list], None, None]:
-    """Forward requests to the REST catalog and record each method, path, and delegation header."""
-    records = []
-
-    class Proxy(BaseHTTPRequestHandler):
-        def forward(self):
-            body = self.rfile.read(int(self.headers.get("content-length", "0")))
-            headers = {"Content-Type": "application/json"}
-            if ACCESS_DELEGATION in self.headers:
-                headers[ACCESS_DELEGATION] = self.headers[ACCESS_DELEGATION]
-            response = requests.request(
-                self.command,
-                iceberg_rest_endpoint + self.path,
-                data=body or None,
-                headers=headers,
-                timeout=30,
-            )
-            records.append((self.command, urllib.parse.unquote(self.path), self.headers.get(ACCESS_DELEGATION)))
-            self.send_response(response.status_code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(response.content)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(response.content)
-
-        do_GET = forward  # noqa: N815
-        do_POST = forward  # noqa: N815
-        do_DELETE = forward  # noqa: N815
-        do_HEAD = forward  # noqa: N815
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", records
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=10)
 
 
 @pytest.fixture(scope="module")
@@ -86,9 +36,9 @@ def remote(recording_catalog, seaweedfs_host_endpoint) -> Generator[str, None, N
 
 def _table_loads(records, start):
     return [
-        (path.removeprefix(TABLE_PATH), header)
-        for method, path, header in records[start:]
-        if method == "GET" and path.startswith(TABLE_PATH)
+        (record.path.removeprefix(TABLE_PATH), record.access_delegation)
+        for record in records[start:]
+        if record.method == "GET" and record.path.startswith(TABLE_PATH)
     ]
 
 

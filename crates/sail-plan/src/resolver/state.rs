@@ -28,6 +28,14 @@ pub(super) struct TableSourceKey {
     pub temporal_options: Vec<(String, String)>,
 }
 
+/// Identifies a catalog table lookup by the table reference as written and the
+/// format required by the read, if any.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct CatalogTableLookupKey {
+    pub reference: Vec<String>,
+    pub required_format: Option<String>,
+}
+
 struct SharedTableSource(Arc<dyn TableSource>);
 
 impl std::fmt::Debug for SharedTableSource {
@@ -156,7 +164,7 @@ pub(super) struct PlanResolverState {
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
     /// The catalog lookups made so far, keyed by the table reference and the required
     /// format, so that the query loads each catalog table only once.
-    catalog_table_lookups: HashMap<(Vec<String>, Option<String>), CatalogTableLookup>,
+    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
 }
 
 /// A catalog table or view, with the lakehouse resolution of a catalog table.
@@ -508,14 +516,14 @@ impl PlanResolverState {
 
     pub fn get_catalog_table_lookup(
         &self,
-        key: &(Vec<String>, Option<String>),
+        key: &CatalogTableLookupKey,
     ) -> Option<CatalogTableLookup> {
         self.catalog_table_lookups.get(key).cloned()
     }
 
     pub fn insert_catalog_table_lookup(
         &mut self,
-        key: (Vec<String>, Option<String>),
+        key: CatalogTableLookupKey,
         lookup: CatalogTableLookup,
     ) {
         self.catalog_table_lookups.insert(key, lookup);

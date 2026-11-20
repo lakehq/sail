@@ -8,8 +8,12 @@ servers.
 
 from __future__ import annotations
 
+import json
+import threading
 import time
-from typing import TYPE_CHECKING
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pytest
 import requests
@@ -28,6 +32,7 @@ LAKEKEEPER_IMAGE = "quay.io/lakekeeper/catalog:v0.12.1"
 LAKEKEEPER_DATABASE_URL = "postgresql://postgres:postgres@lakekeeper-db:5432/postgres"
 LAKEKEEPER_PROJECT_ID = "00000000-0000-0000-0000-000000000000"
 NESSIE_NAMESPACE_SEPARATOR = "-"
+ACCESS_DELEGATION = "X-Iceberg-Access-Delegation"
 
 
 @pytest.fixture(scope="module")
@@ -283,6 +288,69 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
     host = iceberg_rest_container.get_container_host_ip()
     port = iceberg_rest_container.get_exposed_port(8181)
     return f"http://{host}:{port}"
+
+
+class RecordedRequest(NamedTuple):
+    """A request forwarded by the recording catalog proxy."""
+
+    method: str
+    path: str
+    body: Any
+    status: int
+    access_delegation: str | None
+
+
+@pytest.fixture(scope="module")
+def recording_catalog(iceberg_rest_endpoint: str) -> Generator[tuple[str, list[RecordedRequest]], None, None]:
+    """Forward requests to the REST catalog and record each of them."""
+    records = []
+
+    class Proxy(BaseHTTPRequestHandler):
+        def forward(self):
+            body = self.rfile.read(int(self.headers.get("content-length", "0")))
+            headers = {"Content-Type": "application/json"}
+            if ACCESS_DELEGATION in self.headers:
+                headers[ACCESS_DELEGATION] = self.headers[ACCESS_DELEGATION]
+            response = requests.request(
+                self.command,
+                iceberg_rest_endpoint + self.path,
+                data=body or None,
+                headers=headers,
+                timeout=30,
+            )
+            records.append(
+                RecordedRequest(
+                    self.command,
+                    urllib.parse.unquote(self.path),
+                    json.loads(body) if body else None,
+                    response.status_code,
+                    self.headers.get(ACCESS_DELEGATION),
+                )
+            )
+            self.send_response(response.status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response.content)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(response.content)
+
+        do_GET = forward  # noqa: N815
+        do_POST = forward  # noqa: N815
+        do_DELETE = forward  # noqa: N815
+        do_HEAD = forward  # noqa: N815
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", records
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
 
 
 @pytest.fixture(scope="module")

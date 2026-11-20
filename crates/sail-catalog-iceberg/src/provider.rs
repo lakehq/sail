@@ -5258,6 +5258,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_lakehouse_table_rejects_invalid_scan_planning_mode() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let mut response = create_table_response_with_access_session_hints();
+        response["config"]["scan-planning-mode"] = serde_json::json!("unknown");
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let err = ctx
+            .catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::InvalidArgument(message)
+                if message == "Invalid Iceberg REST scan-planning-mode: unknown"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn begin_table_access_omits_access_delegation_header_when_disabled() {
         let ctx = TestContext::new_with_properties(
             Some("test"),
