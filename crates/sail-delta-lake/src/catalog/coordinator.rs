@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +21,6 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use crate::delta_log::LogStoreRef;
-use crate::physical_plan::DeltaCommitExec;
 use crate::snapshot::{DeltaSnapshotConfig, catalog_managed_commit_path};
 use crate::spec::{
     CommitAction, DataType as DeltaDataType, DeltaOperation, DomainMetadata, Metadata,
@@ -117,19 +117,10 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    pub(crate) async fn latest_table_version(
-        &self,
-        lakehouse_table: &LakehouseExecutionContext,
-        table: &DeltaCatalogManagedTable,
-    ) -> Result<i64> {
-        self.get_ratified_commits(lakehouse_table, table.table_uri.clone(), 1, None)
-            .await
-            .map(|response| response.latest_table_version)
-    }
-
-    /// Commits the staged commit to the catalog. The `base` is the snapshot of the table
-    /// that the commit is based on. The staged commit file is deleted when the catalog
-    /// rejects the commit, and kept when the outcome is not known.
+    /// Commits the staged commit to the catalog, and publishes it when every version before
+    /// it is published. The `base` is the snapshot of the table that the commit is based on.
+    /// The staged commit file is deleted when the catalog rejects the commit, and kept when
+    /// the outcome is not known.
     pub(crate) async fn commit_staged(
         &self,
         lakehouse_table: &LakehouseExecutionContext,
@@ -152,7 +143,10 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             )
             .await?
         {
-            StagedCommitOutcome::Committed => Ok(()),
+            StagedCommitOutcome::Committed(latest_backfilled_version) => {
+                publish_ratified_commit(log_store, staged, latest_backfilled_version).await;
+                Ok(())
+            }
             StagedCommitOutcome::Conflict(message) => Err(commit_conflict_error(&message)),
         }
     }
@@ -173,7 +167,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         base: Option<&DeltaSnapshot>,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
-        latest_backfilled_version: Option<i64>,
+        mut latest_backfilled_version: Option<i64>,
     ) -> Result<StagedCommitOutcome> {
         let manager = self.context.extension::<CatalogManager>()?;
         let mut update = match delta_catalog_managed_commit_update(
@@ -206,7 +200,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 )
                 .await;
             let Some(error) = commit_outcome_error(outcome) else {
-                return Ok(StagedCommitOutcome::Committed);
+                return Ok(StagedCommitOutcome::Committed(latest_backfilled_version));
             };
             let unknown = matches!(error, CatalogError::CommitStateUnknown(_));
             outcome_unknown |= unknown;
@@ -223,7 +217,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     .staged_commit_state(lakehouse_table, table, log_store, staged)
                     .await
                 {
-                    Ok(StagedCommitState::Ratified) => return Ok(StagedCommitOutcome::Committed),
+                    Ok(StagedCommitState::Ratified) => {
+                        return Ok(StagedCommitOutcome::Committed(latest_backfilled_version));
+                    }
                     Ok(StagedCommitState::Lost) => {
                         delete_staged_commit(log_store, staged).await;
                         return Ok(StagedCommitOutcome::Conflict(format!(
@@ -252,14 +248,15 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 // published and reported, which any writer of the table may do.
                 published_ratified_commits = true;
                 match self
-                    .publish_ratified_commits(lakehouse_table, table, log_store, staged.version - 1)
+                    .publish_ratified_commits(lakehouse_table, table, log_store, staged.version)
                     .await
                 {
-                    Ok(Some(version)) => {
+                    Ok(Some(version)) if Some(version) > latest_backfilled_version => {
+                        latest_backfilled_version = Some(version);
                         update["latest_backfilled_version"] = serde_json::json!(version);
                         continue;
                     }
-                    Ok(None) => {}
+                    Ok(_) => {}
                     Err(e) => warn!(
                         "Failed to publish the ratified Delta commits of `{}`: {e}",
                         table.table_uri
@@ -322,40 +319,30 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         }
     }
 
-    /// Publishes the ratified commits of the table that are not published, in the order of
-    /// their versions up to `end_version`. Returns the latest version that is published.
+    /// Publishes the ratified commits of the table before `version` that are not published,
+    /// in the order of their versions. Returns the latest version up to which every commit
+    /// is published.
     async fn publish_ratified_commits(
         &self,
         lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
         log_store: &LogStoreRef,
-        end_version: i64,
+        version: i64,
     ) -> Result<Option<i64>> {
         let response = self
             .get_ratified_commits(
                 lakehouse_table,
                 table.table_uri.clone(),
                 1,
-                Some(end_version),
+                Some(version - 1),
             )
             .await?;
-        let mut commits = response.commits;
-        commits.retain(|commit| commit.version <= end_version);
-        commits.sort_by_key(|commit| commit.version);
-        let mut latest = None;
-        for commit in commits {
-            if latest.is_some_and(|latest| commit.version != latest + 1) {
-                break;
-            }
-            let path = catalog_managed_commit_path(&commit.file_name);
-            publish_commit(log_store, &path, commit.version).await?;
-            latest = Some(commit.version);
-        }
-        Ok(latest)
+        Ok(publish_ratified_commits_before(log_store, &response, version).await)
     }
 
     /// Stages the actions as the next commit of the table and commits it to the catalog.
-    /// Returns the staged commit that the catalog ratified, which is not published yet.
+    /// Returns the staged commit that the catalog ratified, which is published when every
+    /// version before it is published.
     ///
     /// When another writer wins the version, a blind append is checked against the commits
     /// of the other writers and staged again on top of them. Any other commit fails, since
@@ -377,7 +364,10 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         let mut conflict: Option<(i64, String)> = None;
         let mut retries = 0;
         loop {
-            let latest_version = self.latest_table_version(lakehouse_table, table).await?;
+            let response = self
+                .get_ratified_commits(lakehouse_table, table.table_uri.clone(), 1, None)
+                .await?;
+            let latest_version = response.latest_table_version;
             if let Some((version, message)) = &conflict
                 && latest_version < *version
             {
@@ -403,12 +393,8 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 .into_staged_commit_future_with_catalog_latest_version(latest_version)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let latest_backfilled_version = DeltaCommitExec::latest_published_backfilled_version(
-                log_store,
-                reference.as_deref(),
-                staged.version - 1,
-            )
-            .await?;
+            let latest_backfilled_version =
+                publish_ratified_commits_before(log_store, &response, staged.version).await;
             match self
                 .try_commit_staged(
                     lakehouse_table,
@@ -421,8 +407,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 )
                 .await?
             {
-                StagedCommitOutcome::Committed => {
+                StagedCommitOutcome::Committed(latest_backfilled_version) => {
                     staged.metrics.num_retries = retries;
+                    publish_ratified_commit(log_store, &staged, latest_backfilled_version).await;
                     return Ok(staged);
                 }
                 StagedCommitOutcome::Conflict(message) => {
@@ -506,7 +493,9 @@ const COMMIT_RESEND_BACKOFF: Duration = Duration::from_millis(200);
 
 /// What the catalog decided about a staged commit.
 enum StagedCommitOutcome {
-    Committed,
+    /// The staged commit is ratified, with the latest backfilled version that the commit
+    /// request reported.
+    Committed(Option<i64>),
     /// The staged commit is not ratified since the table has changed.
     Conflict(String),
 }
@@ -558,13 +547,87 @@ fn commit_state_unknown_error(
     )))
 }
 
+/// Publishes the ratified commits before `version` that the catalog returned, in the order of
+/// their versions, and returns the latest version up to which every commit is published,
+/// which is the version that a commit request may report as backfilled.
+///
+/// The catalog returns the ratified commits that are not reported as published, so every
+/// version before the first of them, or up to the latest version of the table when there is
+/// none, is published. Any other version counts only when its published commit exists.
+/// Commits are published in the order of their versions, so the publishing stops at the
+/// first commit that cannot be published.
+pub(crate) async fn publish_ratified_commits_before(
+    log_store: &LogStoreRef,
+    response: &DeltaRatifiedCommitResponse,
+    version: i64,
+) -> Option<i64> {
+    let ratified = response
+        .commits
+        .iter()
+        .filter(|commit| commit.version < version)
+        .map(|commit| (commit.version, commit.file_name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut published = ratified
+        .keys()
+        .next()
+        .map_or(response.latest_table_version, |first| first - 1)
+        .min(version - 1)
+        .max(-1);
+    for next in (published + 1)..version {
+        let path = ratified.get(&next).map_or_else(
+            || commit_path(next),
+            |file_name| catalog_managed_commit_path(file_name),
+        );
+        if let Err(error) = ensure_commit_published(log_store, &path, next).await {
+            if ratified.contains_key(&next) {
+                warn!("Failed to publish the ratified Delta commit `{path}`: {error}");
+            }
+            break;
+        }
+        published = next;
+    }
+    (published >= 0).then_some(published)
+}
+
+/// Publishes a commit that the catalog ratified once every version before it is published,
+/// since the versions of a table are published in order. A failure to publish does not fail
+/// the commit, which any writer of the table may publish later.
+async fn publish_ratified_commit(
+    log_store: &LogStoreRef,
+    staged: &CatalogManagedStagedCommit,
+    latest_backfilled_version: Option<i64>,
+) {
+    if latest_backfilled_version != Some(staged.version - 1) {
+        warn!(
+            "Catalog-managed Delta commit version {} is not published since an earlier version is not published",
+            staged.version
+        );
+        return;
+    }
+    if let Err(error) = publish_commit(log_store, &staged.staged_path, staged.version).await {
+        warn!(
+            "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {error}",
+            staged.version
+        );
+    }
+}
+
+/// Publishes the commit at the path as the version unless the version is published. The
+/// path of the published commit itself is an error when the commit does not exist.
+async fn ensure_commit_published(log_store: &LogStoreRef, path: &Path, version: i64) -> Result<()> {
+    let published = commit_path(version);
+    match log_store.object_store(None).head(&published).await {
+        Ok(_) => Ok(()),
+        Err(ObjectStoreError::NotFound { .. }) if *path != published => {
+            publish_commit(log_store, path, version).await
+        }
+        Err(error) => Err(DataFusionError::External(Box::new(error))),
+    }
+}
+
 /// Copies a ratified commit to its place in the published Delta log. The commit that is
 /// published already is not written again.
-pub(crate) async fn publish_commit(
-    log_store: &LogStoreRef,
-    path: &Path,
-    version: i64,
-) -> Result<()> {
+async fn publish_commit(log_store: &LogStoreRef, path: &Path, version: i64) -> Result<()> {
     let published = commit_path(version);
     if *path == published {
         return Ok(());

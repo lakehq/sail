@@ -696,8 +696,7 @@ impl CommitData {
             let CommitAction::Protocol(protocol) = action else {
                 return false;
             };
-            protocol.has_reader_feature(&TableFeature::CatalogManaged)
-                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
+            protocol.is_catalog_managed()
         })
     }
 }

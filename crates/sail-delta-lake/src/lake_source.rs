@@ -437,11 +437,9 @@ impl LakeSource for DeltaLakeSource {
         // table is replaced with a commit to the file system, which is not allowed for
         // a table with the catalog-managed protocol.
         let replace_context = replace_context.filter(|_| {
-            replace_snapshot.as_ref().is_some_and(|snapshot| {
-                let protocol = snapshot.protocol();
-                protocol.has_reader_feature(&TableFeature::CatalogManaged)
-                    && protocol.has_writer_feature(&TableFeature::CatalogManaged)
-            })
+            replace_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.protocol().is_catalog_managed())
         });
         if let Some(snapshot) = replace_snapshot.as_ref()
             && replace_context.is_none()
@@ -1708,10 +1706,7 @@ pub(crate) fn ensure_not_catalog_managed_delta(
     snapshot: &crate::table::DeltaSnapshot,
     operation: &str,
 ) -> Result<()> {
-    let protocol = snapshot.protocol();
-    if protocol.has_reader_feature(&TableFeature::CatalogManaged)
-        || protocol.has_writer_feature(&TableFeature::CatalogManaged)
-    {
+    if snapshot.protocol().is_catalog_managed() {
         return not_impl_err!("{operation} is not yet supported for catalog-managed Delta tables");
     }
     Ok(())

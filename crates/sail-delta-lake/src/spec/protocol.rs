@@ -377,6 +377,14 @@ impl Protocol {
             .is_some_and(|features| features.contains(feature))
     }
 
+    /// Returns `true` if the table protocol declares the catalog-managed feature. The feature
+    /// is a reader-writer feature, and a protocol that declares it in either list is treated
+    /// as catalog-managed, so that a commit never bypasses the catalog.
+    pub fn is_catalog_managed(&self) -> bool {
+        self.has_reader_feature(&TableFeature::CatalogManaged)
+            || self.has_writer_feature(&TableFeature::CatalogManaged)
+    }
+
     pub fn supports_in_commit_timestamps(&self) -> bool {
         self.min_writer_version() >= 7 && self.has_writer_feature(&TableFeature::InCommitTimestamp)
     }

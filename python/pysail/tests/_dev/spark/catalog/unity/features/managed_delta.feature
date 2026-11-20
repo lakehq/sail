@@ -325,7 +325,7 @@ Feature: Unity Catalog managed Delta table operations
       INSERT INTO unity_table_test.managed_delta_unpublished_latest_t VALUES
         (2, 'two')
       """
-    Then staged Delta commit for version 1 exists in location without published backfill
+    Then staged Delta commit for version 1 exists in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_unpublished_latest_t version 2 references staged Delta commit in location
 
   Scenario: DELETE on managed Delta table uses Unity latest version when prior commit is unpublished
@@ -353,7 +353,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | name  |
       | 1  | one   |
       | 3  | three |
-    Then staged Delta commit for version 1 exists in location without published backfill
+    Then staged Delta commit for version 1 exists in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_unpublished_latest_t version 2 references staged Delta commit in location
 
   Scenario: Managed Delta named-table reads use Unity ratified commit when published commit is corrupted

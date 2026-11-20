@@ -20,8 +20,6 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
-use log::warn;
-use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
 use sail_common_datafusion::command::CommandOutput;
@@ -29,9 +27,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::catalog::coordinator::{
-    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, publish_commit,
-};
+use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
@@ -42,14 +38,14 @@ use crate::schema::{
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata,
-    MetadataValue, SaveMode, StructField, StructType, TableFeature, commit_path,
+    MetadataValue, SaveMode, StructField, StructType,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{
-    CatalogManagedStagedCommit, CommitBuilder, CommitProperties, FinalizedCommit,
-    Metrics as CommitFinalMetrics, OperationMetrics,
+    CommitBuilder, CommitProperties, FinalizedCommit, Metrics as CommitFinalMetrics,
+    OperationMetrics,
 };
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
@@ -313,10 +309,7 @@ impl DeltaCommitExec {
                 _ => None,
             })
             .or_else(|| reference.map(|snapshot| snapshot.protocol()));
-        protocol.is_some_and(|protocol| {
-            protocol.has_reader_feature(&TableFeature::CatalogManaged)
-                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
-        })
+        protocol.is_some_and(|protocol| protocol.is_catalog_managed())
     }
 
     fn split_create_actions_for_catalog_managed_commit(
@@ -457,56 +450,6 @@ impl DeltaCommitExec {
         Self::existing_create_bootstrap_snapshot(log_store, actions, catalog_managed)
             .await
             .map(|snapshot| snapshot.is_some())
-    }
-
-    pub(crate) async fn publish_staged_commit(
-        log_store: &LogStoreRef,
-        staged: &CatalogManagedStagedCommit,
-    ) -> Result<()> {
-        publish_commit(log_store, &staged.staged_path, staged.version).await
-    }
-
-    /// Returns the latest version up to `end_version` for which every commit is published.
-    /// The `base` snapshot gives the first version that may not be published, so the probe
-    /// does not depend on the old commits of the log, which the log cleanup removes.
-    pub(crate) async fn latest_published_backfilled_version(
-        log_store: &LogStoreRef,
-        base: Option<&crate::table::DeltaSnapshot>,
-        end_version: i64,
-    ) -> Result<Option<i64>> {
-        // A version of the snapshot that is not a catalog commit was read from the published
-        // log or is covered by a checkpoint, and a checkpoint covers published versions only.
-        let start_version = base.map_or(0, |base| {
-            base.load_config()
-                .catalog_managed_commits
-                .iter()
-                .flat_map(|commits| commits.commits.iter().map(|commit| commit.version))
-                .min()
-                .map_or(base.version() + 1, |version| {
-                    version.min(base.version() + 1)
-                })
-                .max(0)
-        });
-        Self::published_versions_end(log_store, start_version, end_version).await
-    }
-
-    /// Returns the end of the contiguous published versions that start at `start_version`,
-    /// where every version before `start_version` is known to be published.
-    async fn published_versions_end(
-        log_store: &LogStoreRef,
-        start_version: i64,
-        end_version: i64,
-    ) -> Result<Option<i64>> {
-        let store = log_store.object_store(None);
-        let mut latest = (start_version > 0).then_some(start_version - 1);
-        for version in start_version..=end_version {
-            match store.head(&commit_path(version)).await {
-                Ok(_) => latest = Some(version),
-                Err(ObjectStoreError::NotFound { .. }) => break,
-                Err(err) => return Err(DataFusionError::External(Box::new(err))),
-            }
-        }
-        Ok(latest.filter(|version| *version <= end_version))
     }
 }
 
@@ -1076,12 +1019,6 @@ impl ExecutionPlan for DeltaCommitExec {
                                     .with_user_metadata(user_metadata),
                             )
                             .await?;
-                    if let Err(err) = Self::publish_staged_commit(&log_store, &staged).await {
-                        warn!(
-                            "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {}",
-                            staged.version, err
-                        );
-                    }
                     FinalizedCommit {
                         snapshot: None,
                         metrics: CommitFinalMetrics {
@@ -1646,7 +1583,7 @@ mod create_bootstrap_tests {
     use object_store::memory::InMemory;
 
     use super::*;
-    use crate::spec::{DataType, Protocol, StructField};
+    use crate::spec::{DataType, Protocol, StructField, TableFeature};
 
     fn create_actions(
         features: Vec<TableFeature>,
@@ -1803,33 +1740,6 @@ mod create_bootstrap_tests {
             };
             assert!(error.to_string().contains("different metadata"), "{error}");
         }
-        Ok(())
-    }
-
-    /// The log cleanup removes the old published commits, and the versions before the start
-    /// version are published by the definition of the start version.
-    #[tokio::test]
-    async fn published_versions_end_does_not_depend_on_cleaned_up_commits() -> Result<()> {
-        let store = Arc::new(InMemory::new());
-        for version in [5, 6, 8] {
-            store
-                .put(
-                    &object_store::path::Path::from(format!("_delta_log/{version:020}.json")),
-                    "{}".into(),
-                )
-                .await?;
-        }
-        let table_url =
-            url::Url::parse("memory:///").map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let log_store =
-            crate::delta_log::default_logstore(store.clone(), store, &table_url, &StorageConfig);
-        let end = |start, end| DeltaCommitExec::published_versions_end(&log_store, start, end);
-
-        assert_eq!(end(5, 8).await?, Some(6));
-        assert_eq!(end(5, 5).await?, Some(5));
-        assert_eq!(end(7, 8).await?, Some(6));
-        assert_eq!(end(9, 8).await?, Some(8));
-        assert_eq!(end(0, 8).await?, None);
         Ok(())
     }
 }

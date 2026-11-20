@@ -4,7 +4,7 @@
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -16,6 +16,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
+use object_store::ObjectStoreExt;
 use once_cell::sync::OnceCell;
 use serde_json::Value;
 use url::Url;
@@ -24,8 +25,8 @@ use crate::checkpoint::{
     ReplayedTableState, latest_replayable_version, load_replayed_table_header,
     load_replayed_table_state,
 };
-use crate::delta_log::LogStore;
 use crate::delta_log::segment_files::ReplayedTableHeader;
+use crate::delta_log::{LogStore, read_last_checkpoint_version_from_store};
 use crate::schema::{
     PhysicalPartitionColumn, arrow_field_physical_name, arrow_schema_reorder_partitions,
     protocol_supports_type_widening, schema_contains_type_widening_metadata,
@@ -59,6 +60,101 @@ pub(crate) use config::{
     catalog_managed_commit_path,
 };
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
+
+/// Returns the commits with the staged commit of each version up to `end_version` that the
+/// commits do not have, whose published commit is missing or unreadable, and that has exactly
+/// one staged commit. Returns `None` when there is no such version.
+async fn with_staged_commit_fallbacks(
+    log_store: &dyn LogStore,
+    mut commits: CatalogManagedCommitSet,
+    end_version: i64,
+) -> DeltaResult<Option<CatalogManagedCommitSet>> {
+    let ratified = commits
+        .commits
+        .iter()
+        .map(|commit| commit.version)
+        .collect::<HashSet<_>>();
+    // The versions that the latest checkpoint covers are not replayed from commits. A
+    // snapshot of a version before the checkpoint replays the commits before it.
+    let checkpoint_version = read_last_checkpoint_version_from_store(log_store.object_store(None))
+        .await
+        .filter(|version| *version <= end_version)
+        .unwrap_or(0);
+    let staged = unambiguous_staged_commit_files(log_store)
+        .await?
+        .into_iter()
+        .filter(|(version, _)| {
+            *version > checkpoint_version && *version <= end_version && !ratified.contains(version)
+        });
+    let fallbacks = futures::stream::iter(staged)
+        .map(|(version, file_name)| async move {
+            let readable = published_commit_is_readable(log_store, version).await?;
+            Ok::<_, DeltaTableError>(
+                (!readable).then_some(CatalogManagedCommitFile { version, file_name }),
+            )
+        })
+        .buffer_unordered(PUBLISHED_COMMIT_CHECK_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let len = commits.commits.len();
+    commits.commits.extend(fallbacks.into_iter().flatten());
+    if commits.commits.len() == len {
+        return Ok(None);
+    }
+    commits.commits.sort_by_key(|commit| commit.version);
+    Ok(Some(commits))
+}
+
+/// The number of published commits that are checked at the same time when the staged commits
+/// of a catalog-managed table are resolved.
+const PUBLISHED_COMMIT_CHECK_CONCURRENCY: usize = 16;
+
+/// Lists the staged commits once and returns the versions that have exactly one staged commit.
+async fn unambiguous_staged_commit_files(
+    log_store: &dyn LogStore,
+) -> DeltaResult<BTreeMap<i64, String>> {
+    let prefix = object_store::path::Path::from("_delta_log/_staged_commits");
+    let staged = log_store
+        .object_store(None)
+        .list(Some(&prefix))
+        .try_filter_map(|meta| async move {
+            let path = meta.location.as_ref();
+            let file_name = path.rsplit('/').next().unwrap_or(path);
+            Ok(file_name
+                .ends_with(".json")
+                .then(|| file_name.split('.').next()?.parse::<i64>().ok())
+                .flatten()
+                .map(|version| (version, catalog_managed_commit_file_name(path))))
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+    let mut by_version = BTreeMap::<i64, Option<String>>::new();
+    for (version, file_name) in staged {
+        by_version
+            .entry(version)
+            .and_modify(|existing| *existing = None)
+            .or_insert(Some(file_name));
+    }
+    Ok(by_version
+        .into_iter()
+        .filter_map(|(version, file_name)| Some((version, file_name?)))
+        .collect())
+}
+
+/// Whether the published commit of the version exists and is a sequence of JSON documents.
+async fn published_commit_is_readable(log_store: &dyn LogStore, version: i64) -> DeltaResult<bool> {
+    let path = crate::spec::commit_path(version);
+    let result = match log_store.object_store(None).get(&path).await {
+        Ok(result) => result,
+        Err(object_store::Error::NotFound { .. }) => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    let bytes = result.bytes().await?;
+    Ok(bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.trim_ascii().is_empty())
+        .all(|line| serde_json::from_slice::<Value>(line).is_ok()))
+}
 
 pub struct DeltaSnapshot {
     version: i64,
@@ -143,7 +239,52 @@ impl DeltaSnapshot {
         })
     }
 
+    /// Loads the snapshot at the version, or at the latest version.
+    ///
+    /// The log replay of a catalog-managed table reads the commits that the catalog returns,
+    /// and the published commits for every other version. When that fails, a version whose
+    /// published commit is missing or unreadable is read from its staged commit, if it has
+    /// exactly one. A backfilled version is no longer returned by the catalog, so its staged
+    /// commit is the only copy of the ratified commit when its publishing did not complete.
+    /// A staged commit may also have lost the commit race, so it is never read in place of a
+    /// readable published commit.
     pub(crate) async fn try_new(
+        log_store: &dyn LogStore,
+        config: DeltaSnapshotConfig,
+        version: Option<i64>,
+        replay_hint: Option<&ReplayedTableHeader>,
+    ) -> DeltaResult<Self> {
+        let Some(commits) = config.catalog_managed_commits.clone() else {
+            return Self::try_new_from_log(log_store, config, version, replay_hint).await;
+        };
+        let error =
+            match Self::try_new_from_log(log_store, config.clone(), version, replay_hint).await {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => error,
+            };
+        let Some(end_version) = version.or_else(|| commits.latest_replay_version()) else {
+            return Err(error);
+        };
+        match with_staged_commit_fallbacks(log_store, commits, end_version).await {
+            Ok(Some(commits)) => {
+                debug!(
+                    "Reading staged Delta commits in place of published commits after error: {error}"
+                );
+                let config = DeltaSnapshotConfig {
+                    catalog_managed_commits: Some(commits),
+                    ..config
+                };
+                Self::try_new_from_log(log_store, config, version, replay_hint).await
+            }
+            Ok(None) => Err(error),
+            Err(fallback_error) => {
+                debug!("Failed to find staged Delta commits after error {error}: {fallback_error}");
+                Err(error)
+            }
+        }
+    }
+
+    async fn try_new_from_log(
         log_store: &dyn LogStore,
         config: DeltaSnapshotConfig,
         version: Option<i64>,
@@ -444,14 +585,7 @@ impl DeltaSnapshot {
     }
 
     pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
-        if (self
-            .protocol()
-            .has_reader_feature(&TableFeature::CatalogManaged)
-            || self
-                .protocol()
-                .has_writer_feature(&TableFeature::CatalogManaged))
-            && self.config.catalog_managed_commits.is_none()
-        {
+        if self.protocol().is_catalog_managed() && self.config.catalog_managed_commits.is_none() {
             return Err(DeltaTableError::Unsupported(
                 "Reading catalog-managed Delta tables requires catalog commit replay context"
                     .to_string(),

@@ -8,10 +8,11 @@ use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
+use crate::catalog::coordinator::{
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, publish_ratified_commits_before,
+};
 use crate::catalog_managed::catalog_managed_delta_table;
 use crate::delta_log::{LogStoreRef, StorageConfig};
-use crate::physical_plan::DeltaCommitExec;
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
@@ -829,19 +830,16 @@ pub(crate) async fn commit(
         })?,
     };
     let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse.catalog_table());
-    let latest = coordinator.latest_table_version(lakehouse, &table).await?;
+    let response = coordinator
+        .get_ratified_commits(lakehouse, table.table_uri.clone(), 1, None)
+        .await?;
     let staged = CommitBuilder::from(commit_properties)
         .with_actions(actions.clone())
         .build(Some(snapshot.clone()), log_store.clone(), operation)
-        .into_staged_commit_future_with_catalog_latest_version(latest)
+        .into_staged_commit_future_with_catalog_latest_version(response.latest_table_version)
         .await
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let backfilled = DeltaCommitExec::latest_published_backfilled_version(
-        &log_store,
-        Some(snapshot.as_ref()),
-        staged.version - 1,
-    )
-    .await?;
+    let backfilled = publish_ratified_commits_before(&log_store, &response, staged.version).await;
     // The coordinator deletes the staged file when the catalog rejects the commit. An
     // uncertain catalog response must retain the staged file for reconciliation.
     coordinator
@@ -854,14 +852,7 @@ pub(crate) async fn commit(
             &actions,
             backfilled,
         )
-        .await?;
-    if let Err(error) = DeltaCommitExec::publish_staged_commit(&log_store, &staged).await {
-        log::warn!(
-            "Failed to publish ratified Delta ALTER commit {}: {error}",
-            staged.version
-        );
-    }
-    Ok(())
+        .await
 }
 
 fn column_position(position: &sail_common::spec::ColumnPosition) -> String {
