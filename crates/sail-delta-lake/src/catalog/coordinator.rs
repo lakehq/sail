@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -636,44 +636,56 @@ fn check_published_commit(
 }
 
 /// Whether the published commit is the ratified commit. A writer may publish a ratified commit
-/// by writing its actions again, for example with a line terminator after every action, so the
-/// commits are compared by the `txnId` of their commit information, and by their actions when
-/// either of them has no `txnId`.
+/// by writing its lines again, for example with a line terminator after every line, as Delta
+/// Spark does, so the commits are compared by their non-empty lines without line terminators,
+/// as Delta Spark compares them, and by the actions on those lines otherwise.
 fn is_ratified_commit(published: &[u8], ratified: &[u8]) -> bool {
     if published == ratified {
         return true;
     }
-    let (Some(published), Some(ratified)) =
-        (commit_json_lines(published), commit_json_lines(ratified))
-    else {
+    let (Ok(published), Ok(ratified)) = (
+        std::str::from_utf8(published),
+        std::str::from_utf8(ratified),
+    ) else {
         return false;
     };
-    match (commit_txn_id(&published), commit_txn_id(&ratified)) {
-        (Some(published), Some(ratified)) => published == ratified,
-        _ => published == ratified,
+    let (published, ratified) = (commit_lines(published), commit_lines(ratified));
+    if published == ratified {
+        return true;
     }
+    let actions = |lines: &[&str]| {
+        lines
+            .iter()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .collect::<Option<Vec<_>>>()
+    };
+    matches!(
+        (actions(&published), actions(&ratified)),
+        (Some(published), Some(ratified)) if published == ratified
+    )
 }
 
-/// Returns the actions of a commit file, which has one JSON action on each non-empty line.
-fn commit_json_lines(bytes: &[u8]) -> Option<Vec<serde_json::Value>> {
-    std::str::from_utf8(bytes)
-        .ok()?
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).ok())
+/// Returns the non-empty lines of a commit file without their line terminators.
+fn commit_lines(commit: &str) -> Vec<&str> {
+    commit
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .filter(|line| !line.is_empty())
         .collect()
 }
 
-fn commit_txn_id(actions: &[serde_json::Value]) -> Option<&str> {
-    actions
-        .iter()
-        .find_map(|action| action.get("commitInfo")?.get("txnId")?.as_str())
-}
-
-/// The ratified commits that this process has published or found published, which are not
-/// compared with their published commits again. A published commit is never overwritten.
-static PUBLISHED_RATIFIED_COMMITS: LazyLock<Mutex<(HashSet<String>, VecDeque<String>)>> =
+/// The ratified commits that this process has published or found published, with the entity
+/// tag of their published commits. A ratified commit is not compared with its published commit
+/// again while the published commit has the same entity tag.
+static PUBLISHED_RATIFIED_COMMITS: LazyLock<Mutex<PublishedRatifiedCommits>> =
     LazyLock::new(Default::default);
+
+#[derive(Default)]
+struct PublishedRatifiedCommits {
+    e_tags: HashMap<String, String>,
+    /// The keys of `e_tags` in the order that they were remembered.
+    order: VecDeque<String>,
+}
 
 /// The number of published ratified commits that are remembered.
 const PUBLISHED_RATIFIED_COMMIT_CAPACITY: usize = 4096;
@@ -682,26 +694,37 @@ fn published_ratified_commit_key(log_store: &LogStoreRef, path: &Path) -> String
     format!("{}/{path}", log_store.root_uri().trim_end_matches('/'))
 }
 
-fn is_known_published_ratified_commit(log_store: &LogStoreRef, path: &Path) -> bool {
+fn is_known_published_ratified_commit(
+    log_store: &LogStoreRef,
+    path: &Path,
+    e_tag: Option<&str>,
+) -> bool {
+    let Some(e_tag) = e_tag else {
+        return false;
+    };
     let key = published_ratified_commit_key(log_store, path);
     PUBLISHED_RATIFIED_COMMITS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .0
-        .contains(&key)
+        .e_tags
+        .get(&key)
+        .is_some_and(|known| known == e_tag)
 }
 
-fn remember_published_ratified_commit(log_store: &LogStoreRef, path: &Path) {
+fn remember_published_ratified_commit(log_store: &LogStoreRef, path: &Path, e_tag: Option<String>) {
+    let Some(e_tag) = e_tag else {
+        return;
+    };
     let key = published_ratified_commit_key(log_store, path);
     let mut guard = PUBLISHED_RATIFIED_COMMITS
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (keys, order) = &mut *guard;
-    if keys.insert(key.clone()) {
+    let PublishedRatifiedCommits { e_tags, order } = &mut *guard;
+    if e_tags.insert(key.clone(), e_tag).is_none() {
         order.push_back(key);
         while order.len() > PUBLISHED_RATIFIED_COMMIT_CAPACITY {
             if let Some(oldest) = order.pop_front() {
-                keys.remove(&oldest);
+                e_tags.remove(&oldest);
             }
         }
     }
@@ -762,8 +785,8 @@ async fn publish_ratified_commits_before(
             .get(&next)
             .map(|file_name| catalog_managed_commit_path(file_name));
         let result = match (lookup, path) {
-            (Ok(_), Some(path)) if path != commit_path(next) => {
-                verify_published_commit(log_store, &path, next)
+            (Ok(meta), Some(path)) if path != commit_path(next) => {
+                verify_published_commit(log_store, &path, next, meta.e_tag)
                     .await
                     .map_err(|error| (path, error))
             }
@@ -885,9 +908,14 @@ async fn checkpoint_published_commit(log_store: &LogStoreRef, version: i64, inte
 
 /// Checks that the published commit of the version is the ratified commit at the path. A
 /// ratified commit that is deleted after it is published cannot be compared, and its published
-/// commit is taken as it is.
-async fn verify_published_commit(log_store: &LogStoreRef, path: &Path, version: i64) -> Result<()> {
-    if is_known_published_ratified_commit(log_store, path) {
+/// commit is taken as it is. The entity tag is the one of the published commit.
+async fn verify_published_commit(
+    log_store: &LogStoreRef,
+    path: &Path,
+    version: i64,
+    e_tag: Option<String>,
+) -> Result<()> {
+    if is_known_published_ratified_commit(log_store, path, e_tag.as_deref()) {
         return Ok(());
     }
     let store = log_store.object_store(None);
@@ -901,7 +929,7 @@ async fn verify_published_commit(log_store: &LogStoreRef, path: &Path, version: 
     };
     let published = read_object(&store, &commit_path(version)).await?;
     check_published_commit(&published, &ratified, path, version)?;
-    remember_published_ratified_commit(log_store, path);
+    remember_published_ratified_commit(log_store, path, e_tag);
     Ok(())
 }
 
@@ -922,15 +950,16 @@ async fn publish_commit(log_store: &LogStoreRef, path: &Path, version: i64) -> R
         .put_opts(&published, bytes.clone().into(), options)
         .await
     {
-        Ok(_) => {}
+        Ok(result) => {
+            remember_published_ratified_commit(log_store, path, result.e_tag);
+            Ok(())
+        }
         Err(ObjectStoreError::AlreadyExists { .. }) => {
             let existing = read_object(&store, &published).await?;
-            check_published_commit(&existing, &bytes, path, version)?;
+            check_published_commit(&existing, &bytes, path, version)
         }
-        Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
-    remember_published_ratified_commit(log_store, path);
-    Ok(())
 }
 
 /// Whether the catalog has answered that the commit is not ratified. A failure without such
@@ -1821,6 +1850,11 @@ mod tests {
                 true,
             ),
             ("CRLF after every line", rewritten(&ratified, "\r\n"), true),
+            (
+                "an empty line at the end",
+                rewritten(&ratified, "\n") + "\n",
+                true,
+            ),
             ("another transaction", commit_bytes(Some("t2"), 1), false),
             (
                 "another transaction with the same actions",
@@ -1841,6 +1875,12 @@ mod tests {
                 "{name}"
             );
         }
+        // A commit written with another order of the keys has the same actions.
+        assert!(is_ratified_commit(
+            br#"{"commitInfo":{"operation":"WRITE","txnId":"t1"}}
+"#,
+            br#"{"commitInfo":{"txnId":"t1","operation":"WRITE"}}"#
+        ));
         // Commits without a transaction are compared by their actions.
         let ratified = commit_bytes(None, 1);
         assert!(is_ratified_commit(
@@ -1905,6 +1945,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_published_commit_that_is_overwritten_is_compared_again() -> Result<()> {
+        use crate::delta_log::{StorageConfig, default_logstore};
+
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let url = test_table_url()?;
+        let log_store = default_logstore(store.clone(), store.clone(), &url, &StorageConfig);
+        let put = async |path: Path, bytes: String| {
+            store
+                .put(&path, bytes.into())
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        };
+        put(log_file("0"), commit_bytes(Some("t0"), 0)).await?;
+        put(log_file("1.a"), commit_bytes(Some("t1"), 1)).await?;
+        publish_commit(&log_store, &log_file("1.a"), 1).await?;
+        let response = DeltaRatifiedCommitResponse {
+            latest_table_version: 1,
+            commits: vec![sail_catalog::lakehouse::DeltaRatifiedCommit {
+                version: 1,
+                timestamp: 1,
+                file_name: format!("{:020}.a.json", 1),
+                file_size: 1,
+                file_modification_timestamp: 1,
+            }],
+            ..Default::default()
+        };
+        let published = publish_ratified_commits_before(&log_store, &response, 2).await;
+        assert_eq!(published.version, Some(1));
+        put(commit_path(1), "{not valid delta json\n".to_string()).await?;
+        let published = publish_ratified_commits_before(&log_store, &response, 2).await;
+        assert_eq!(published.version, Some(0));
+        assert!(published.failure.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn a_staged_commit_published_by_another_writer_is_ratified() -> Result<()> {
         use crate::delta_log::{StorageConfig, default_logstore};
 
@@ -1931,27 +2008,29 @@ mod tests {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         }
-        // The catalog returns no commit for version 1, since it is published and reported.
-        store
-            .put(
-                &commit_path(1),
-                rewritten(&commit_bytes(Some("t1"), 1), "\n").into(),
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let response = |latest_table_version| DeltaRatifiedCommitResponse {
             latest_table_version,
             commits: vec![],
             ..Default::default()
         };
-        assert_eq!(
-            staged_commit_state_in(&log_store, &response(1), &staged("a")).await?,
-            StagedCommitState::Ratified
-        );
-        assert_eq!(
-            staged_commit_state_in(&log_store, &response(1), &staged("b")).await?,
-            StagedCommitState::Lost
-        );
+        for terminator in ["\n", "\r\n"] {
+            // The catalog returns no commit for version 1, since it is published and reported.
+            store
+                .put(
+                    &commit_path(1),
+                    rewritten(&commit_bytes(Some("t1"), 1), terminator).into(),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            assert_eq!(
+                staged_commit_state_in(&log_store, &response(1), &staged("a")).await?,
+                StagedCommitState::Ratified
+            );
+            assert_eq!(
+                staged_commit_state_in(&log_store, &response(1), &staged("b")).await?,
+                StagedCommitState::Lost
+            );
+        }
         assert_eq!(
             staged_commit_state_in(&log_store, &response(0), &staged("b")).await?,
             StagedCommitState::Pending

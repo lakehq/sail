@@ -569,14 +569,14 @@ impl From<HashMap<String, Value>> for OperationMetrics {
     }
 }
 
+/// Writes the actions of a commit with a line terminator after every action, as Delta Spark
+/// does, so that a writer that copies the lines of a commit writes the same bytes.
 fn actions_to_log_bytes(actions: &[CommitAction]) -> Result<Bytes, TransactionError> {
     let mut buf: Vec<u8> = Vec::new();
-    for (index, action) in actions.iter().enumerate() {
-        if index > 0 {
-            buf.push(b'\n');
-        }
+    for action in actions {
         serde_json::to_writer(&mut buf, action)
             .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+        buf.push(b'\n');
     }
     Ok(Bytes::from(buf))
 }
