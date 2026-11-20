@@ -206,6 +206,10 @@ impl ScanByDataFilesState {
         Ok(files)
     }
 
+    fn object_store_url(&self) -> Result<ObjectStoreUrl> {
+        ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])
+    }
+
     /// Build an ordered whole-file scan before applying deletes or materializing lineage.
     fn build_rewrite_scan(&self, file: ScanFile) -> Result<Arc<dyn ExecutionPlan>> {
         let store = self
@@ -250,7 +254,7 @@ impl ScanByDataFilesState {
             arrow_schema: None,
             table_reference: None,
         };
-        let object_store_url = ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?;
+        let object_store_url = self.object_store_url()?;
         let reader = Arc::new(CachedParquetFileReaderFactory::new(
             store,
             scoped_file_metadata_cache(
@@ -438,7 +442,8 @@ impl ScanByDataFilesState {
 
         let file_groups = vec![FileGroup::from(partitioned_files)];
 
-        let object_store_url = ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])
+        let object_store_url = self
+            .object_store_url()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let (file_groups, source): (_, Arc<dyn FileSource>) = match format {
