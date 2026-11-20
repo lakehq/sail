@@ -363,3 +363,64 @@ def test_sql_replace_keeps_the_unity_required_properties(
         assert _rows(spark, table, "id") == [(2,)]
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def _published_commits(location: Path) -> dict[int, list[dict]]:
+    commits = {}
+    for path in (location / "_delta_log").glob("[0-9]*.json"):
+        with path.open(encoding="utf-8") as f:
+            commits[int(path.stem)] = [json.loads(line) for line in f if line.strip()]
+    return commits
+
+
+def _row_ids(adds: list[dict]) -> list[int]:
+    return sorted(add["baseRowId"] + offset for add in adds for offset in range(json.loads(add["stats"])["numRecords"]))
+
+
+def test_sql_replace_enables_and_keeps_row_tracking(spark: SparkSession) -> None:
+    database = _unique_database("unity_replace_row_tracking")
+    table = f"{database}.t"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING delta")
+        location = _location_to_path(_table_location(spark, table))
+        spark.sql(f"INSERT INTO {table} VALUES (1), (2), (3)")
+        before, _ = _latest_commit(location)
+        commits = _published_commits(location)
+        configuration = [m for _, a in sorted(commits.items()) for m in _actions(a, "metaData")][-1]["configuration"]
+        assert configuration.get("delta.enableRowTracking") != "true"
+        # The rows of a table that supports row tracking already have row IDs.
+        used = _row_ids([add for actions in commits.values() for add in _actions(actions, "add") if "baseRowId" in add])
+        high_water_mark = max(used, default=-1)
+
+        # A REPLACE enables row tracking, as in Delta Spark.
+        spark.sql(f"REPLACE TABLE {table} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableRowTracking' = 'true')")
+        spark.sql(f"INSERT INTO {table} VALUES (10), (11), (12)")
+        assert _rows(spark, table, "id") == [(10,), (11,), (12,)]
+        commits = _published_commits(location)
+        protocols = [p for _, a in sorted(commits.items()) for p in _actions(a, "protocol")]
+        assert {"rowTracking", "domainMetadata"} <= set(protocols[-1]["writerFeatures"])
+        configuration = [m for _, a in sorted(commits.items()) for m in _actions(a, "metaData")][-1]["configuration"]
+        assert configuration["delta.enableRowTracking"] == "true"
+        row_id_column = configuration["delta.rowTracking.materializedRowIdColumnName"]
+        assert row_id_column.startswith("_row-id-col-")
+        new = {version: actions for version, actions in commits.items() if version > before}
+        adds = [(version, add) for version, actions in new.items() for add in _actions(actions, "add")]
+        assert _row_ids([add for _, add in adds]) == [high_water_mark + 1, high_water_mark + 2, high_water_mark + 3]
+        assert all(add["defaultRowCommitVersion"] == version for version, add in adds)
+
+        # A REPLACE of the table keeps row tracking, the names of the materialized columns,
+        # and the row ID high-water mark.
+        spark.sql(f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta")
+        spark.sql(f"INSERT INTO {table} VALUES (20)")
+        version, actions = _latest_commit(location)
+        (add,) = _actions(actions, "add")
+        assert add["baseRowId"] == high_water_mark + 4
+        assert add["defaultRowCommitVersion"] == version
+        replaced = _published_commits(location)[version - 1]
+        (metadata,) = _actions(replaced, "metaData")
+        assert metadata["configuration"]["delta.enableRowTracking"] == "true"
+        assert metadata["configuration"]["delta.rowTracking.materializedRowIdColumnName"] == row_id_column
+        assert _rows(spark, table, "id") == [(20,)]
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")

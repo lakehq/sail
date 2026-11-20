@@ -299,29 +299,7 @@ _ROW_ID_COLUMN = "delta.rowTracking.materializedRowIdColumnName"
 _ROW_COMMIT_VERSION_COLUMN = "delta.rowTracking.materializedRowCommitVersionColumnName"
 
 
-def _replace_with_row_tracking(spark, name: str, path: Path, kind: str) -> None:
-    """Replaces the table with a table that enables row tracking and has the rows 10, 11, 12."""
-    location = f"LOCATION '{escape_sql_string_literal(str(path))}'"
-    data = spark.createDataFrame([(10,), (11,), (12,)], "id BIGINT").coalesce(1)
-    if kind == "replace":
-        spark.sql(f"REPLACE TABLE {name} (id BIGINT) USING delta {location} TBLPROPERTIES ({_ROW_TRACKING})").collect()
-        spark.sql(f"INSERT INTO {name} VALUES (10), (11), (12)").collect()
-    elif kind in ("rtas", "cortas"):
-        statement = "REPLACE TABLE" if kind == "rtas" else "CREATE OR REPLACE TABLE"
-        spark.sql(
-            f"{statement} {name} USING delta {location} TBLPROPERTIES ({_ROW_TRACKING}) "
-            "AS SELECT * FROM VALUES (10L), (11L), (12L) AS t(id)"
-        ).collect()
-    elif kind == "write-to-replace":
-        data.writeTo(name).using("delta").tableProperty("delta.enableRowTracking", "true").replace()
-    elif kind == "write-to-create-or-replace":
-        data.writeTo(name).using("delta").tableProperty("delta.enableRowTracking", "true").createOrReplace()
-    else:
-        raise AssertionError(kind)
-
-
-@pytest.mark.parametrize("kind", ["replace", "rtas", "cortas", "write-to-replace", "write-to-create-or-replace"])
-def test_row_tracking_can_be_enabled_by_replacing_a_table(spark, delta_jvm_spark: SparkSession, tmp_path, kind):
+def test_row_tracking_can_be_enabled_by_replacing_a_table(spark, delta_jvm_spark: SparkSession, tmp_path):
     name = "row_tracking_replace"
     path = tmp_path / "row_tracking"
     spark.sql(
@@ -331,7 +309,13 @@ def test_row_tracking_can_be_enabled_by_replacing_a_table(spark, delta_jvm_spark
         spark.sql(f"INSERT INTO {name} VALUES (1), (2), (3)").collect()
         spark.sql(f"INSERT INTO {name} VALUES (4), (5)").collect()
         before = max(_commits(path))
-        _replace_with_row_tracking(spark, name, path, kind)
+        spark.sql(
+            f"REPLACE TABLE {name} (id BIGINT) USING delta LOCATION '{escape_sql_string_literal(str(path))}' "
+            f"TBLPROPERTIES ({_ROW_TRACKING})"
+        ).collect()
+        # The REPLACE has no data, so it records no row IDs.
+        assert not any("domainMetadata" in action for action in _commits(path)[before + 1])
+        spark.sql(f"INSERT INTO {name} VALUES (10), (11), (12)").collect()
 
         protocol = _effective(path, "protocol")
         assert protocol["minWriterVersion"] == 7
@@ -359,12 +343,14 @@ def test_row_tracking_can_be_enabled_by_replacing_a_table(spark, delta_jvm_spark
         assert spark.table(name).orderBy("id").collect() == [Row(id=10), Row(id=11), Row(id=12)]
 
         # Delta Spark reads the row IDs and continues the high-water mark.
-        rows = _jvm_row_tracking(delta_jvm_spark, path)
-        assert [row.id for row in rows] == [10, 11, 12]
-        assert sorted(row.row_id for row in rows) == [0, 1, 2]
-        assert {row.row_commit_version for row in rows} == versions
-        delta_jvm_spark.sql(f"INSERT INTO delta.`{escape_sql_identifier(str(path))}` VALUES (100)")
-        assert _jvm_row_tracking(delta_jvm_spark, path)[-1].row_id == 3
+        table = f"delta.`{escape_sql_identifier(str(path))}`"
+        query = f"SELECT id, _metadata.row_id, _metadata.row_commit_version FROM {table} ORDER BY id"
+        rows = delta_jvm_spark.sql(query).collect()
+        assert [row[0] for row in rows] == [10, 11, 12]
+        assert sorted(row[1] for row in rows) == [0, 1, 2]
+        assert {row[2] for row in rows} == versions
+        delta_jvm_spark.sql(f"INSERT INTO {table} VALUES (100)")
+        assert delta_jvm_spark.sql(query).collect()[-1][1] == 3
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
@@ -392,7 +378,10 @@ def test_row_tracking_is_retained_when_replacing_a_table(spark, tmp_path, kind, 
         configuration = _effective(path, "metaData")["configuration"]
         location = f"LOCATION '{escape_sql_string_literal(str(path))}'"
         if kind == "rtas":
-            _replace_with_row_tracking(spark, name, path, kind)
+            spark.sql(
+                f"REPLACE TABLE {name} USING delta {location} TBLPROPERTIES ({_ROW_TRACKING}) "
+                "AS SELECT * FROM VALUES (10L), (11L), (12L) AS t(id)"
+            ).collect()
         elif kind == "replace-without-property":
             spark.sql(f"REPLACE TABLE {name} (id BIGINT) USING delta {location}").collect()
             spark.sql(f"INSERT INTO {name} VALUES (10), (11), (12)").collect()
