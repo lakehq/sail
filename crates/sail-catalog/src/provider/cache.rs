@@ -339,6 +339,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             .await
     }
 
+    async fn get_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        self.inner
+            .get_lakehouse_table(database, table, request)
+            .await
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,

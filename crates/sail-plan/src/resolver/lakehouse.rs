@@ -51,7 +51,18 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
-        let execution = resolved.execution;
+        self.begin_lakehouse_table_access(table, resolved.execution, access_purpose)
+            .await
+    }
+
+    /// Begins access to a table that the catalog has already resolved.
+    pub(super) async fn begin_lakehouse_table_access(
+        &self,
+        table: &[String],
+        execution: LakehouseExecutionContext,
+        access_purpose: TableAccessPurpose,
+    ) -> PlanResult<LakehouseExecutionContext> {
+        let manager = self.ctx.extension::<CatalogManager>()?;
         match manager
             .begin_table_access(
                 table,
@@ -71,7 +82,7 @@ impl PlanResolver<'_> {
     }
 }
 
-fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
+pub(super) fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
     match operation {
         LakehouseOperation::Read => TableAccessPurpose::DataRead,
         LakehouseOperation::Write

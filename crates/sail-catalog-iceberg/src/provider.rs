@@ -1045,6 +1045,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
     ) -> CatalogResult<sail_catalog::lakehouse::LakehouseResolvedTable> {
+        let (_, resolved) = self.get_lakehouse_table(database, table, request).await?;
+        Ok(resolved)
+    }
+
+    async fn get_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, sail_catalog::lakehouse::LakehouseResolvedTable)> {
         let config = self.resolved_catalog_config().await?;
         let result = self
             .load_table_result(database, table, config.access_delegation())
@@ -1059,7 +1069,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             &self.lakehouse_capabilities(),
         );
         resolved.execution.rest_session = Some(session);
-        Ok(resolved)
+        Ok((status, resolved))
     }
 
     fn create_table_metadata_requirement(
@@ -1815,15 +1825,20 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             mut context,
             purpose: _,
         } = request;
-        let catalog_config = self.resolved_catalog_config().await?;
-        let access_delegation = catalog_config.access_delegation().map(ToOwned::to_owned);
-        let result = self
-            .load_table_result(database, table, access_delegation.as_deref())
-            .await?;
-        // TODO: Convert preserved REST table-session credentials into operation-scoped
-        // FileIO/object-store access instead of only fingerprinting the session.
-        let rest_session =
-            Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?;
+        // A context resolved by this catalog already has the session from the same table load.
+        let rest_session = match context.rest_session.take() {
+            Some(rest_session) => rest_session,
+            None => {
+                let catalog_config = self.resolved_catalog_config().await?;
+                let access_delegation = catalog_config.access_delegation().map(ToOwned::to_owned);
+                let result = self
+                    .load_table_result(database, table, access_delegation.as_deref())
+                    .await?;
+                // TODO: Convert preserved REST table-session credentials into operation-scoped
+                // FileIO/object-store access instead of only fingerprinting the session.
+                Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?
+            }
+        };
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
             context.scan = ScanAuthority::IcebergRestServerSide;
         } else {
@@ -5193,6 +5208,63 @@ mod tests {
             assert_eq!(mutations.len(), 1);
             view_commit(&mutations[0]);
         }
+    }
+
+    #[tokio::test]
+    async fn get_lakehouse_table_and_begin_table_access_load_the_table_once() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(header(
+                "X-Iceberg-Access-Delegation",
+                REST_ACCESS_DELEGATION_VENDED_CREDENTIALS,
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints()),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let (status, resolved) = ctx
+            .catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.name, "table1");
+        let rest_session = resolved.execution.rest_session.clone().unwrap();
+        assert_eq!(rest_session.storage_credential_count, 1);
+
+        let session = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.context.rest_session, Some(rest_session.clone()));
+        assert_eq!(session.reference.fingerprint, rest_session.fingerprint);
+        assert_eq!(
+            session.credential_scope.as_deref(),
+            Some("iceberg-rest:db1.table1")
+        );
     }
 
     #[tokio::test]

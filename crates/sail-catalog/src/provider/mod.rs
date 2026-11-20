@@ -137,6 +137,26 @@ pub trait CatalogProvider: Send + Sync {
         ))
     }
 
+    /// Returns the table status together with its lakehouse resolution.
+    /// Providers whose resolution needs more than the table status should load both
+    /// from one catalog response.
+    async fn get_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        let status = self.get_table(database, table).await?;
+        let resolved = resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        );
+        Ok((status, resolved))
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,

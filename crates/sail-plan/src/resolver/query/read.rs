@@ -36,6 +36,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
+use crate::resolver::lakehouse::table_access_purpose;
 use crate::resolver::state::{PlanResolverState, TableSourceKey};
 
 impl PlanResolver<'_> {
@@ -142,13 +143,20 @@ impl PlanResolver<'_> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
         // Data-source identifier reads use the catalog directly, without view shadowing.
+        // The lakehouse resolution comes from the same catalog response as the table status,
+        // so that catalogs such as Iceberg REST load the table only once.
         let lookup = if required_format.is_some() {
-            manager.get_table(&reference).await
+            manager
+                .get_lakehouse_table(&reference, LakehouseOperation::Read)
+                .await
+                .map(|(status, resolved)| (status, Some(resolved)))
         } else {
-            manager.get_table_or_view(&reference).await
+            manager
+                .get_lakehouse_table_or_view(&reference, LakehouseOperation::Read)
+                .await
         };
-        let (status, catalog_reference, lake_relation) = match lookup {
-            Ok(status) => (status, reference.clone(), None),
+        let ((status, resolved), catalog_reference, lake_relation) = match lookup {
+            Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
             | Err(error @ CatalogError::NotSupported(_)) => {
                 let Some((candidate_name, base_reference)) = reference.split_last() else {
@@ -158,12 +166,17 @@ impl PlanResolver<'_> {
                     return Err(error.into());
                 }
                 let base_lookup = if required_format.is_some() {
-                    manager.get_table(base_reference).await
+                    manager
+                        .get_lakehouse_table(base_reference, LakehouseOperation::Read)
+                        .await
+                        .map(|(status, resolved)| (status, Some(resolved)))
                 } else {
-                    manager.get_table_or_view(base_reference).await
+                    manager
+                        .get_lakehouse_table_or_view(base_reference, LakehouseOperation::Read)
+                        .await
                 };
-                let base_status = match base_lookup {
-                    Ok(status) => status,
+                let (base_status, base_resolved) = match base_lookup {
+                    Ok(lookup) => lookup,
                     // A base that names no table, such as `catalog.database` left by
                     // `catalog.database.table`, is not a lake relation either: the
                     // table is what is missing.
@@ -193,7 +206,7 @@ impl PlanResolver<'_> {
                         return Err(PlanError::unsupported(reason));
                     }
                     LakeRelationResolution::Supported(relation) => (
-                        base_status,
+                        (base_status, base_resolved),
                         base_reference.to_vec(),
                         Some((relation_provider, relation)),
                     ),
@@ -270,23 +283,29 @@ impl PlanResolver<'_> {
                 {
                     Some(table_source) => table_source,
                     None => {
-                        let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
-                            self.resolve_lakehouse_table_context_for_access(
-                                &catalog_reference,
-                                LakehouseOperation::Read,
-                                Some(&format),
-                                vec![],
-                                lake_relation_access_purpose(relation.access()),
-                            )
-                            .await?
-                        } else {
-                            self.resolve_lakehouse_table_context(
-                                &catalog_reference,
-                                LakehouseOperation::Read,
-                                Some(&format),
-                                vec![],
-                            )
-                            .await?
+                        let access_purpose = match lake_relation.as_ref() {
+                            Some((_, relation)) => lake_relation_access_purpose(relation.access()),
+                            None => table_access_purpose(LakehouseOperation::Read),
+                        };
+                        let lakehouse_table = match resolved {
+                            Some(resolved) => {
+                                self.begin_lakehouse_table_access(
+                                    &catalog_reference,
+                                    resolved.execution,
+                                    access_purpose,
+                                )
+                                .await?
+                            }
+                            None => {
+                                self.resolve_lakehouse_table_context_for_access(
+                                    &catalog_reference,
+                                    LakehouseOperation::Read,
+                                    Some(&format),
+                                    vec![],
+                                    access_purpose,
+                                )
+                                .await?
+                            }
                         };
                         let info = SourceInfo {
                             paths: location.map(|x| vec![x]).unwrap_or_default(),
