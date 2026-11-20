@@ -791,8 +791,8 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
-        // DataFusion 55.2 gives the same schema here as DataFusion main, since the files have no
-        // extension type metadata and every field is nullable.
+        // DataFusion 55.2 gives the same schema here as the DataFusion commit credited above, since
+        // the files have no extension type metadata and every field is nullable.
         let expected = ParquetFormat::default()
             .infer_schema(&state, &store, &objects)
             .await?;

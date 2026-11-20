@@ -40,8 +40,8 @@ pub fn scoped_listing_url(url: &ListingTableUrl) -> ListingTableUrl {
 
 /// Returns a view of the shared file metadata cache whose keys are scoped to one object store.
 ///
-/// Only lookups, insertions, and removals are scoped. The size and capacity methods and
-/// `clear` act on the shared cache.
+/// Lookups, insertions, removals, and `list_entries` are scoped to the object store. The size,
+/// capacity, and TTL methods, `clear`, and `drop_table_entries` act on the shared cache.
 pub fn scoped_file_metadata_cache(
     cache: Arc<FileMetadataCache>,
     object_store_url: &ObjectStoreUrl,
