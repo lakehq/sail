@@ -3981,4 +3981,166 @@ mod catalog_managed_tests {
         assert_eq!(commit_requests, 0);
         assert_eq!(published.last(), Some(&published_commit(1)));
     }
+
+    /// Runs a write that creates the table that the catalog staged at `memory:///items/`,
+    /// with the storage credentials of the staged table, and returns the error of the
+    /// write, whether the write still uses the credentials, and the store of the table.
+    async fn write_staged_unity_table(
+        input: datafusion::arrow::record_batch::RecordBatch,
+    ) -> (datafusion_common::DataFusionError, bool, Arc<InMemory>) {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_plan::{ExecutionPlan, collect};
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        use crate::physical_plan::{DeltaCommitContext, DeltaCommitExec};
+
+        let catalog = Arc::new(UnityManagedCatalog {
+            catalog_managed_property: false,
+            ratified: None,
+            commit_requests: AtomicUsize::new(0),
+            discover_requests: AtomicUsize::new(0),
+            discover_error: None,
+            commit_error: None,
+            script: None,
+            page_size: None,
+        });
+        let manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "unity".into(),
+                catalog.clone() as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "unity".into(),
+            default_database: vec!["default".into()],
+            global_temporary_database: vec!["global_temp".into()],
+        })
+        .unwrap();
+        let table = vec!["unity".to_string(), "default".into(), "items".into()];
+        let owner = format!(
+            "{:?}",
+            manager.resolve_fully_qualified_object_name(&table).unwrap()
+        );
+        let store = Arc::new(InMemory::new());
+        let factory: VendedStoreFactory = {
+            let store = store.clone();
+            Arc::new(move |_| Ok(store.clone() as Arc<dyn ObjectStore>))
+        };
+        let stores = Arc::new(VendedObjectStores::with_factory(factory));
+        let session = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_extension(Arc::new(manager))
+                .with_extension(stores.clone()),
+        );
+        let table_url = Url::parse("memory:///items/").unwrap();
+        session
+            .runtime_env()
+            .register_object_store(&table_url, Arc::new(InMemory::new()));
+        stores
+            .install(
+                session.runtime_env().object_store_registry.as_ref(),
+                &table_url,
+                &owner,
+                TableStorageCredentials {
+                    credential: StorageCredential::GcsOauth {
+                        token: "token".to_string(),
+                    },
+                    expires_at_ms: None,
+                },
+                Arc::new(|_| Box::pin(async { Err("not expected".to_string()) })),
+            )
+            .unwrap();
+        assert!(stores.contains(&table_url, &owner));
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".into()),
+            table,
+            CatalogTableIdentity {
+                table_id: Some("table-id".into()),
+                table_uri: Some(table_url.to_string()),
+            },
+            LakehouseOperation::Create,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientLakeSource,
+        );
+        context.commit = CommitAuthority::DeltaRatifiedCommit;
+        let schema = input.schema();
+        let input = MemorySourceConfig::try_new_exec(&[vec![input]], schema, None).unwrap();
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaCommitExec::new(
+            input,
+            table_url.clone(),
+            vec![],
+            false,
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)])),
+            PhysicalSinkMode::ErrorIfExists,
+            None,
+            DeltaCommitContext::default(),
+            Some(context),
+        ));
+        let error = collect(exec, session.task_ctx()).await.unwrap_err();
+        (error, stores.contains(&table_url, &owner), store)
+    }
+
+    #[tokio::test]
+    async fn failed_write_of_staged_table_stops_using_its_storage_credentials() {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+
+        // The write fails before the table is created.
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let input =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1]))]).unwrap();
+        let (error, uses_credentials, store) = write_staged_unity_table(input).await;
+        assert!(
+            error.to_string().contains("must be delta action rows"),
+            "{error}"
+        );
+        assert!(!uses_credentials);
+        let path = Path::from(format!("items/_delta_log/{}", published_commit(0)));
+        assert!(store.head(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn staged_table_that_the_catalog_fails_to_register_stops_using_its_storage_credentials() {
+        use crate::physical_plan::encode_actions;
+        use crate::schema::metadata_for_create_with_struct_type;
+        use crate::spec::{
+            Action, DataType as DeltaDataType, Protocol, StructField, StructType, TableFeature,
+        };
+
+        // Version 0 of the table is written, and the catalog then fails to register the
+        // table, so the error is the error of the catalog.
+        let schema =
+            StructType::try_new([StructField::nullable("id", DeltaDataType::LONG)]).unwrap();
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![],
+            0,
+            HashMap::from([(
+                "delta.enableInCommitTimestamps".to_string(),
+                "true".to_string(),
+            )]),
+        )
+        .unwrap();
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![]),
+            Some(vec![TableFeature::InCommitTimestamp]),
+        );
+        let input = encode_actions(
+            vec![Action::Protocol(protocol), Action::Metadata(metadata)],
+            None,
+        )
+        .unwrap();
+        let (error, uses_credentials, store) = write_staged_unity_table(input).await;
+        assert!(
+            error.to_string().contains("unused test catalog operation"),
+            "{error}"
+        );
+        assert!(!uses_credentials);
+        let path = Path::from(format!("items/_delta_log/{}", published_commit(0)));
+        assert!(store.head(&path).await.is_ok());
+    }
 }

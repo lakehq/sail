@@ -175,16 +175,17 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         base: Option<&DeltaSnapshot>,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
-        mut latest_backfilled_version: Option<i64>,
+        latest_backfilled_version: Option<i64>,
     ) -> Result<StagedCommitOutcome> {
         let manager = self.context.extension::<CatalogManager>()?;
-        let mut update = match delta_catalog_managed_commit_update(
+        let mut commit = delta_catalog_managed_commit(
             table,
             base.map(|base| (base.metadata(), base.protocol())),
             staged,
             actions,
             latest_backfilled_version,
-        ) {
+        );
+        let mut update = match delta_catalog_commit_update(&commit) {
             Ok(update) => update,
             Err(error) => {
                 delete_staged_commit(log_store, staged).await;
@@ -209,7 +210,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 )
                 .await;
             let Some(error) = commit_outcome_error(outcome) else {
-                return Ok(StagedCommitOutcome::Committed(latest_backfilled_version));
+                return Ok(StagedCommitOutcome::Committed(
+                    commit.latest_backfilled_version,
+                ));
             };
             let unknown = matches!(error, CatalogError::CommitStateUnknown(_));
             outcome_unknown |= unknown;
@@ -227,7 +230,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     .await
                 {
                     Ok(StagedCommitState::Ratified) => {
-                        return Ok(StagedCommitOutcome::Committed(latest_backfilled_version));
+                        return Ok(StagedCommitOutcome::Committed(
+                            commit.latest_backfilled_version,
+                        ));
                     }
                     Ok(StagedCommitState::Lost) => {
                         delete_staged_commit(log_store, staged).await;
@@ -266,10 +271,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                         // request is sent again with the backfill even after an unknown outcome.
                         // The catalog checks for a replay of the staged commit before its limit,
                         // so the refusal shows that no earlier request was ratified.
-                        if published.version > latest_backfilled_version {
-                            latest_backfilled_version = published.version;
-                            update["latest_backfilled_version"] =
-                                serde_json::json!(published.version);
+                        if published.version > commit.latest_backfilled_version {
+                            commit.latest_backfilled_version = published.version;
+                            update = delta_catalog_commit_update(&commit)?;
                             continue;
                         }
                     }
@@ -997,14 +1001,14 @@ async fn delete_staged_commit(log_store: &LogStoreRef, staged: &CatalogManagedSt
     }
 }
 
-fn delta_catalog_managed_commit_update(
+fn delta_catalog_managed_commit(
     table: &DeltaCatalogManagedTable,
     base: Option<(&Metadata, &Protocol)>,
     staged: &CatalogManagedStagedCommit,
     actions: &[CommitAction],
     latest_backfilled_version: Option<i64>,
-) -> Result<serde_json::Value> {
-    let commit = DeltaCatalogCommit {
+) -> DeltaCatalogCommit {
+    DeltaCatalogCommit {
         table_id: table.table_id.clone(),
         table_uri: table.table_uri.clone(),
         commit_info: DeltaCatalogCommitInfo {
@@ -1016,7 +1020,10 @@ fn delta_catalog_managed_commit_update(
         },
         latest_backfilled_version,
         delta_log: delta_commit_actions(base, actions, &staged.domain_metadata),
-    };
+    }
+}
+
+fn delta_catalog_commit_update(commit: &DeltaCatalogCommit) -> Result<serde_json::Value> {
     serde_json::to_value(commit).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
@@ -1227,7 +1234,13 @@ mod tests {
         let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
         let base = Some((&base_metadata, &base_protocol));
 
-        let update = delta_catalog_managed_commit_update(&table, base, &staged, &[], None)?;
+        let update = delta_catalog_commit_update(&delta_catalog_managed_commit(
+            &table,
+            base,
+            &staged,
+            &[],
+            None,
+        ))?;
         assert_eq!(
             update,
             serde_json::json!({
@@ -1246,7 +1259,13 @@ mod tests {
 
         let variant = metadata(DeltaDataType::unshredded_variant()).map_err(external)?;
         let actions = vec![CommitAction::Metadata(variant.clone())];
-        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, Some(0))?;
+        let update = delta_catalog_commit_update(&delta_catalog_managed_commit(
+            &table,
+            base,
+            &staged,
+            &actions,
+            Some(0),
+        ))?;
         assert_eq!(update["latest_backfilled_version"], serde_json::json!(0));
         assert_eq!(update.get("metadata"), None);
         assert_eq!(

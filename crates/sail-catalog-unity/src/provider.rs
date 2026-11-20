@@ -61,6 +61,10 @@ const MAX_LIST_PAGES: usize = 10_000;
 /// Delta commit is sent again after one.
 const MAX_LOAD_TABLE_RESENDS: u32 = 3;
 
+/// The number of times that a Delta table is loaded again after a request timeout, so a
+/// server that does not answer delays the load by about twice the request timeout at most.
+const MAX_LOAD_TABLE_TIMEOUT_RESENDS: u32 = 1;
+
 /// The time before a Delta table is loaded again for the first time. The time doubles for
 /// each of the following requests.
 const LOAD_TABLE_RESEND_BACKOFF: Duration = Duration::from_millis(200);
@@ -96,6 +100,33 @@ fn transient_failure_delay<E>(error: &delta_gen::ApiError<E>, resends: u32) -> O
     Some(retry_after.unwrap_or(LOAD_TABLE_RESEND_BACKOFF * (1 << resends)))
 }
 
+/// Loads a Delta table, again after a transient failure since loading the table is
+/// idempotent.
+async fn load_table_with_resends<T, E, F, Fut>(mut load: F) -> Result<T, delta_gen::ApiError<E>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, delta_gen::ApiError<E>>>,
+{
+    let mut resends = 0;
+    let mut timeout_resends = 0;
+    loop {
+        let result = load().await;
+        if let Err(error) = &result
+            && resends < MAX_LOAD_TABLE_RESENDS
+            && let Some(delay) = transient_failure_delay(error, resends)
+        {
+            let timeout = matches!(error, delta_gen::ApiError::Request(e) if e.is_timeout());
+            if !timeout || timeout_resends < MAX_LOAD_TABLE_TIMEOUT_RESENDS {
+                timeout_resends += u32::from(timeout);
+                tokio::time::sleep(delay).await;
+                resends += 1;
+                continue;
+            }
+        }
+        return result;
+    }
+}
+
 /// The highest version of the Unity Catalog Delta REST API supported by the client.
 const DELTA_API_PROTOCOL_VERSIONS: &str = "1.0";
 
@@ -112,6 +143,8 @@ enum DeltaCommitApi {
 struct DeltaCommitApiUnknown {
     /// Whether the server failed or did not answer, as opposed to refusing the request.
     server_failure: bool,
+    /// The status of the response, if the server answered.
+    status: Option<reqwest::StatusCode>,
     message: String,
 }
 
@@ -306,6 +339,7 @@ impl UnityCatalogProvider {
             Err(e) => {
                 return Ok(Err(DeltaCommitApiUnknown {
                     server_failure: e.status().is_none_or(|status| status.is_server_error()),
+                    status: e.status(),
                     message: e.to_string(),
                 }));
             }
@@ -1374,10 +1408,16 @@ impl CatalogProvider for UnityCatalogProvider {
             Ok(DeltaCommitApi::V1) => {}
             Ok(DeltaCommitApi::Preview) => return Ok(None),
             Err(unknown) => {
-                return Err(CatalogError::External(format!(
+                let message = format!(
                     "Unity Catalog Delta API configuration of catalog {catalog_name} is not available: {}",
                     unknown.message
-                )));
+                );
+                // A refusal of the configuration request is a refusal to issue credentials.
+                return Err(match unknown.status {
+                    Some(reqwest::StatusCode::UNAUTHORIZED) => CatalogError::Unauthorized(message),
+                    Some(reqwest::StatusCode::FORBIDDEN) => CatalogError::Forbidden(message),
+                    _ => CatalogError::External(message),
+                });
             }
         }
         let staging_table_id = self
@@ -1518,59 +1558,53 @@ impl CatalogProvider for UnityCatalogProvider {
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
             let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-            // A table staged with the Delta REST API is not staged again when the table
-            // is planned as a write precondition.
-            let staged = plan.staged.is_some();
             let delta_client = self
                 .get_delta_client()
                 .await
                 .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-            if staged
-                || self
-                    .get_delta_commit_api(&delta_client, &catalog_name)
-                    .await?
-                    == DeltaCommitApi::V1
+            if self
+                .get_delta_commit_api(&delta_client, &catalog_name)
+                .await?
+                == DeltaCommitApi::V1
             {
-                if !staged {
-                    let ignore_if_exists = request.options.mode.ignore_if_exists();
-                    let Some((location, properties, required_protocol)) = self
-                        .create_delta_staging_table(
-                            &delta_client,
-                            &catalog_name,
-                            &schema_name,
-                            table,
-                            request.options.properties,
-                        )
-                        .await?
-                    else {
-                        if !ignore_if_exists {
-                            return Err(CatalogError::AlreadyExists(
-                                CatalogObject::Table,
-                                quote_names_if_needed(&[&catalog_name, &schema_name, table]),
-                            ));
-                        }
-                        // The table is created concurrently, so the existing table is used.
-                        let status = self.get_table(database, table).await?;
-                        if let TableKind::Table {
-                            location: Some(location),
-                            ..
-                        } = status.kind
-                        {
-                            plan.table.status.location = Some(location.clone());
-                            plan.table.execution.table_identity.table_uri = Some(location);
-                        }
-                        plan.materialization = LakehouseCreateMaterialization::None;
-                        return Ok(plan);
-                    };
-                    plan.table.status.location = Some(location.clone());
-                    plan.table.status.display_properties = properties.clone();
-                    plan.table.execution.table_identity.table_uri = Some(location);
-                    plan.staged = Some(Box::new(StagedTableCreate {
-                        properties,
-                        required_protocol: Some(required_protocol),
-                        created_metadata: None,
-                    }));
-                }
+                let ignore_if_exists = request.options.mode.ignore_if_exists();
+                let Some((location, properties, required_protocol)) = self
+                    .create_delta_staging_table(
+                        &delta_client,
+                        &catalog_name,
+                        &schema_name,
+                        table,
+                        request.options.properties,
+                    )
+                    .await?
+                else {
+                    if !ignore_if_exists {
+                        return Err(CatalogError::AlreadyExists(
+                            CatalogObject::Table,
+                            quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+                        ));
+                    }
+                    // The table is created concurrently, so the existing table is used.
+                    let status = self.get_table(database, table).await?;
+                    if let TableKind::Table {
+                        location: Some(location),
+                        ..
+                    } = status.kind
+                    {
+                        plan.table.status.location = Some(location.clone());
+                        plan.table.execution.table_identity.table_uri = Some(location);
+                    }
+                    plan.materialization = LakehouseCreateMaterialization::None;
+                    return Ok(plan);
+                };
+                plan.table.status.location = Some(location.clone());
+                plan.table.status.display_properties = properties.clone();
+                plan.table.execution.table_identity.table_uri = Some(location);
+                plan.staged = Some(Box::new(StagedTableCreate {
+                    properties,
+                    required_protocol: Some(required_protocol),
+                    created_metadata: None,
+                }));
                 // Version 0 of the table is written before the table is registered.
                 plan.materialization = LakehouseCreateMaterialization::BeforeCatalogLakeSource {
                     mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
@@ -1743,6 +1777,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(DeltaCommitApiUnknown {
                 server_failure: true,
                 message,
+                ..
             }) if request.discover => {
                 return Err(CatalogError::External(format!(
                     "Failed to get Delta API configuration from Unity Catalog: {message}"
@@ -1819,22 +1854,14 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let (status, error) = match api {
             DeltaCommitApi::V1 => {
-                // Loading the table is idempotent, so a transient failure is retried.
-                let mut resends = 0;
-                let result = loop {
-                    let result = delta_client
-                        .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
-                        .await;
-                    if let Err(error) = &result
-                        && resends < MAX_LOAD_TABLE_RESENDS
-                        && let Some(delay) = transient_failure_delay(error, resends)
-                    {
-                        tokio::time::sleep(delay).await;
-                        resends += 1;
-                        continue;
-                    }
-                    break result;
-                };
+                let result = load_table_with_resends(|| {
+                    delta_client.load_table(
+                        catalog_name.clone(),
+                        schema_name.clone(),
+                        table.to_string(),
+                    )
+                })
+                .await;
                 match result {
                     Ok(response) => {
                         return delta_ratified_commits_from_load_table(
@@ -2608,6 +2635,8 @@ fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceForm
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
     use sail_common_datafusion::catalog::delta::DeltaMetadataInfo;
     use sail_common_datafusion::catalog::{
@@ -3640,6 +3669,59 @@ mod tests {
         );
         assert_eq!(
             table_requests(&server).await,
+            1 + MAX_LOAD_TABLE_RESENDS as usize
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_table_load_retries_a_timeout_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let requests = AtomicUsize::new(0);
+        let load = |url: String| {
+            let client = &client;
+            let requests = &requests;
+            move || {
+                let url = url.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    let error = client.get(url).send().await.unwrap_err();
+                    Err::<(), _>(delta_gen::ApiError::<()>::Request(error))
+                }
+            }
+        };
+
+        // A request timeout is retried once, so a server that does not answer delays
+        // the load by about twice the request timeout at most.
+        let error = load_table_with_resends(load(server.uri()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, delta_gen::ApiError::Request(e) if e.is_timeout()),
+            "{error:?}"
+        );
+        assert_eq!(
+            requests.swap(0, Ordering::SeqCst),
+            1 + MAX_LOAD_TABLE_TIMEOUT_RESENDS as usize
+        );
+
+        // A connection failure is retried as many times as the other transient failures.
+        let error = load_table_with_resends(load("http://127.0.0.1:1".to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, delta_gen::ApiError::Request(e) if e.is_connect()),
+            "{error:?}"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
             1 + MAX_LOAD_TABLE_RESENDS as usize
         );
     }
@@ -5124,20 +5206,6 @@ mod tests {
                 created_metadata: None,
             }))
         );
-
-        // The staging table is not created again when the staged table is planned
-        // as a write precondition.
-        let mut options = managed_delta_create_options(vec![], true);
-        options.location = plan.table.status.location.clone();
-        options.properties = plan.table.status.display_properties.clone();
-        options.staged = plan.staged.clone();
-        let precondition = provider
-            .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
-            .await
-            .unwrap();
-        assert_eq!(precondition.table.status, plan.table.status);
-        assert_eq!(precondition.materialization, plan.materialization);
-        assert_eq!(precondition.staged, plan.staged);
 
         provider
             .create_table(&database, "events", staged_delta_create_options())
@@ -6837,19 +6905,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_table_storage_credentials_fail_when_the_delta_api_configuration_is_unknown() {
-        for status in [401, 429, 503] {
+        for status in [401, 403, 429, 503] {
             let server = MockServer::start().await;
             mount_delta_config(&server, ResponseTemplate::new(status)).await;
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
             let request = || storage_credentials_request(StorageAccess::Read);
-            // The failure is not an answer that the catalog does not issue credentials.
+            // The failure is not an answer that the catalog does not issue credentials,
+            // and a refusal is reported as a refusal.
             let result = provider
                 .get_table_storage_credentials(&database, "events", request())
                 .await;
             assert!(
-                matches!(&result, Err(CatalogError::External(message))
-                    if message.contains("main") && message.contains(&status.to_string())),
+                matches!(
+                    (status, &result),
+                    (401, Err(CatalogError::Unauthorized(message)))
+                        | (403, Err(CatalogError::Forbidden(message)))
+                        | (429 | 503, Err(CatalogError::External(message)))
+                        if message.contains("main") && message.contains(&status.to_string())
+                ),
                 "status {status}: {result:?}"
             );
             let targets = received_targets(&server).await;

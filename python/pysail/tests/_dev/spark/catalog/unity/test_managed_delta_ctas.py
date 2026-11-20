@@ -13,11 +13,13 @@ import pytest
 import requests
 
 from pysail.tests._dev.spark.catalog.unity.conftest import (
+    _create_unity_managed_delta_table_with_delta_api,
     _delta_commit_actions,
     _location_to_path,
     _qualified_table_name,
     _table_location,
     _unique_database,
+    _unity_column,
     _unity_table_info,
 )
 
@@ -178,3 +180,61 @@ def test_failed_save_as_table_does_not_register_the_table(
 
     spark.createDataFrame([(1, "one")], schema="id INT, name STRING").write.format("delta").saveAsTable(table)
     _assert_created_with_data(spark, unity_rest_url, table, 1)
+
+
+def _register_create_table_during_query(spark: SparkSession, unity_rest_url: str, table: str) -> str:
+    """Registers a function that creates the table in the catalog while a query that
+    calls it writes the data of the statement, and returns the name of the function."""
+    full_name = quote(_qualified_table_name(table), safe="")
+
+    def create_table(value: int) -> int:
+        response = requests.get(f"{unity_rest_url}/tables/{full_name}", timeout=10)
+        if response.status_code == 404:  # noqa: PLR2004
+            _create_unity_managed_delta_table_with_delta_api(table, unity_rest_url, [_unity_column("id", "LONG", 0)])
+        return value
+
+    spark.udf.register("create_table_during_query", create_table, "bigint")
+    return "create_table_during_query"
+
+
+def _assert_concurrently_created(spark: SparkSession, unity_rest_url: str, table: str) -> None:
+    """Asserts that the table is the one created during the query, without the data of the statement."""
+    assert spark.table(table).collect() == []
+    location = _location_to_path(_table_location(spark, table))
+    assert _published_versions(location) == [0]
+    assert _unity_table_info(unity_rest_url, table)["table_type"] == "MANAGED"
+
+
+def test_ctas_if_not_exists_does_nothing_when_the_table_is_created_during_the_write(
+    spark: SparkSession, unity_rest_url: str, database: str
+) -> None:
+    table = f"{database}.t"
+    function = _register_create_table_during_query(spark, unity_rest_url, table)
+    spark.sql(f"CREATE TABLE IF NOT EXISTS {table} USING delta AS SELECT {function}(id) AS id FROM range(3)")
+    _assert_concurrently_created(spark, unity_rest_url, table)
+
+
+def test_ctas_fails_when_the_table_is_created_during_the_write(
+    spark: SparkSession, unity_rest_url: str, database: str
+) -> None:
+    table = f"{database}.t"
+    function = _register_create_table_during_query(spark, unity_rest_url, table)
+    # The data is written before the catalog refuses to register the table.
+    with pytest.raises(Exception, match="(?i)already exists"):
+        spark.sql(f"CREATE TABLE {table} USING delta AS SELECT {function}(id) AS id FROM range(3)")
+    _assert_concurrently_created(spark, unity_rest_url, table)
+
+
+@pytest.mark.parametrize(("mode", "error"), [("ignore", None), ("error", "(?i)already exists")])
+def test_save_as_table_when_the_table_is_created_during_the_write(
+    spark: SparkSession, unity_rest_url: str, database: str, mode: str, error: str | None
+) -> None:
+    table = f"{database}.t"
+    function = _register_create_table_during_query(spark, unity_rest_url, table)
+    writer = spark.range(3).selectExpr(f"{function}(id) AS id").write.format("delta").mode(mode)
+    if error is None:
+        writer.saveAsTable(table)
+    else:
+        with pytest.raises(Exception, match=error):
+            writer.saveAsTable(table)
+    _assert_concurrently_created(spark, unity_rest_url, table)

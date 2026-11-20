@@ -261,10 +261,13 @@ impl DeltaCommitExec {
     /// Registers the table that the catalog staged, after the first commit of the write
     /// created the table at the staged location. The catalog registers the table with the
     /// protocol and the metadata of version 0, which also has the data of the write.
+    /// A write that ignores an existing table does nothing when the table is created
+    /// concurrently, and the staged table is abandoned.
     async fn register_staged_table(
         context: &Arc<TaskContext>,
         staged_table: &LakehouseExecutionContext,
         log_store: &LogStoreRef,
+        sink_mode: &PhysicalSinkMode,
     ) -> Result<()> {
         let location = staged_table
             .table_identity
@@ -283,10 +286,13 @@ impl DeltaCommitExec {
             partition_by: vec![],
             sort_by: vec![],
             bucket_by: None,
-            mode: CreateTableMode::Create,
+            mode: match sink_mode {
+                PhysicalSinkMode::IgnoreIfExists => CreateTableMode::CreateIfNotExists,
+                _ => CreateTableMode::Create,
+            },
             properties: vec![],
             is_external: false,
-            is_write_precondition: true,
+            is_write_precondition: false,
             staged: Some(Box::new(StagedTableCreate {
                 properties: vec![],
                 required_protocol: None,
@@ -1092,7 +1098,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
             if let Some(staged_table) = &staged_table {
-                Self::register_staged_table(&context, staged_table, &log_store).await?;
+                Self::register_staged_table(&context, staged_table, &log_store, &sink_mode).await?;
             }
 
             let retries =
