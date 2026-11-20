@@ -464,7 +464,19 @@ impl DeltaCommitExec {
                 .metadata()
                 .parse_schema()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let metadata_matches = create_schema == existing_schema
+            // The catalog creates the table from the column names and types, so the
+            // field metadata of the written data is not part of the comparison.
+            let schema_matches = if catalog_managed {
+                let fields = |schema| {
+                    serde_json::to_value(schema)
+                        .map(without_field_metadata)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))
+                };
+                fields(&create_schema)? == fields(&existing_schema)?
+            } else {
+                create_schema == existing_schema
+            };
+            let metadata_matches = schema_matches
                 && metadata.partition_columns() == snapshot.metadata().partition_columns()
                 && (catalog_managed
                     || crate::transaction::row_tracking::same_configuration_for_create(
@@ -1518,6 +1530,25 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
         MetadataValue::String(value) => value.parse().ok(),
         _ => None,
     }
+}
+
+/// Returns the JSON form of a Delta schema with the metadata of every field removed.
+fn without_field_metadata(mut schema: serde_json::Value) -> serde_json::Value {
+    match &mut schema {
+        serde_json::Value::Object(object) => {
+            object.remove("metadata");
+            for value in object.values_mut() {
+                *value = without_field_metadata(value.take());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                *item = without_field_metadata(item.take());
+            }
+        }
+        _ => {}
+    }
+    schema
 }
 
 #[cfg(test)]

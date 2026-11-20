@@ -322,21 +322,39 @@ impl LakeSource for DeltaLakeSource {
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let existing_table = match open_table_with_object_store_and_table_config(
-            table_url.clone(),
-            object_store.clone(),
-            Default::default(),
-            DeltaSnapshotConfig {
-                require_files: replace,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            Ok(table) => Some(table),
-            Err(DeltaTableError::InvalidTableLocation(_))
-            | Err(DeltaTableError::FileNotFound(_)) => None,
-            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        // The replacement of a table that exists in the catalog reads the commits that
+        // the catalog ratified.
+        let replace_context =
+            catalog_managed_commit_context(lakehouse_table.as_ref()).filter(|context| {
+                replace
+                    && context.table_identity.table_id.is_some()
+                    && !matches!(
+                        context.operation,
+                        LakehouseOperation::Create | LakehouseOperation::Register
+                    )
+            });
+        let task_context = datafusion::execution::TaskContext::default()
+            .with_session_config(config.clone())
+            .with_runtime(runtime_env.clone());
+        let existing_table = if replace_context.is_some() {
+            Some(crate::ddl::open_table_with_files(&task_context, &path, replace_context).await?)
+        } else {
+            match open_table_with_object_store_and_table_config(
+                table_url.clone(),
+                object_store.clone(),
+                Default::default(),
+                DeltaSnapshotConfig {
+                    require_files: replace,
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                Ok(table) => Some(table),
+                Err(DeltaTableError::InvalidTableLocation(_))
+                | Err(DeltaTableError::FileNotFound(_)) => None,
+                Err(err) => return Err(DataFusionError::External(Box::new(err))),
+            }
         };
 
         let declared_schema = delta_create_table_arrow_schema(&columns)?;
@@ -408,14 +426,44 @@ impl LakeSource for DeltaLakeSource {
             None
         };
 
+        // A catalog-managed table is replaced with a commit to the catalog. Any other
+        // table is replaced with a commit to the file system, which is not allowed for
+        // a table with the catalog-managed protocol.
+        let replace_context = replace_context.filter(|_| {
+            replace_snapshot.as_ref().is_some_and(|snapshot| {
+                let protocol = snapshot.protocol();
+                protocol.has_reader_feature(&TableFeature::CatalogManaged)
+                    && protocol.has_writer_feature(&TableFeature::CatalogManaged)
+            })
+        });
+        if let Some(snapshot) = replace_snapshot.as_ref()
+            && replace_context.is_none()
+        {
+            ensure_not_catalog_managed_delta(snapshot, "REPLACE TABLE without the catalog")?;
+        }
+
         let properties = if catalog_managed_table_id.is_some() {
             delta_catalog_managed_create_table_properties(properties)
         } else {
             properties
         };
-        let metadata_configuration = delta_create_table_metadata_configuration(properties)
+        let mut metadata_configuration = delta_create_table_metadata_configuration(properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         validate_delta_retention_properties(config, &metadata_configuration)?;
+        if let (Some(_), Some(snapshot)) = (replace_context, replace_snapshot.as_ref()) {
+            // The table keeps its identity in the catalog and the Delta properties that
+            // the statement does not set, since the protocol of the table and the
+            // catalog depend on them. All the other properties are replaced.
+            for (key, value) in snapshot.metadata().configuration() {
+                if (key.to_ascii_lowercase().starts_with("delta.")
+                    || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+                    || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY))
+                    && !metadata_configuration.contains_key(key)
+                {
+                    metadata_configuration.insert(key.clone(), value.clone());
+                }
+            }
+        }
         let normalized_schema = normalize_delta_schema(&declared_schema);
         let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -438,16 +486,41 @@ impl LakeSource for DeltaLakeSource {
             .unwrap_or_default();
 
         let mut configuration = metadata_configuration;
+        let mapped_snapshot = replace_snapshot.as_ref().filter(|snapshot| {
+            replace_context.is_some()
+                && !matches!(
+                    snapshot.effective_column_mapping_mode(),
+                    ColumnMappingMode::None
+                )
+        });
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-            let annotated = annotate_for_column_mapping(&kernel_schema);
+            let (annotated, max_column_id) = if let Some(snapshot) = mapped_snapshot {
+                // The column IDs continue after the IDs that the table has used.
+                let current = StructType::try_from(snapshot.schema())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let (annotated, evolved) = evolve_schema(
+                    &current,
+                    &kernel_schema,
+                    snapshot.metadata(),
+                    effective_mode,
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let max_column_id = evolved
+                    .configuration()
+                    .get("delta.columnMapping.maxColumnId")
+                    .cloned()
+                    .unwrap_or_else(|| compute_max_column_id(&annotated).to_string());
+                (annotated, max_column_id)
+            } else {
+                let annotated = annotate_for_column_mapping(&kernel_schema);
+                let max_column_id = compute_max_column_id(&annotated).to_string();
+                (annotated, max_column_id)
+            };
             configuration.insert(
                 "delta.columnMapping.mode".to_string(),
                 effective_mode.as_ref().to_string(),
             );
-            configuration.insert(
-                "delta.columnMapping.maxColumnId".to_string(),
-                compute_max_column_id(&annotated).to_string(),
-            );
+            configuration.insert("delta.columnMapping.maxColumnId".to_string(), max_column_id);
             annotated
         } else {
             kernel_schema
@@ -469,10 +542,12 @@ impl LakeSource for DeltaLakeSource {
         }
         let mut protocol =
             protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if catalog_managed_table_id.is_some() {
+        // A replaced table keeps the protocol and the catalog properties that it has.
+        if let Some(table_id) = catalog_managed_table_id
+            .as_ref()
+            .filter(|_| replace_snapshot.is_none())
+        {
             protocol = protocol_with_catalog_managed(&protocol);
-        }
-        if let Some(table_id) = &catalog_managed_table_id {
             metadata = metadata_with_catalog_managed(metadata, table_id);
         }
         if let Some(required_protocol) = &unity_required_protocol {
@@ -539,6 +614,18 @@ impl LakeSource for DeltaLakeSource {
             );
         }
 
+        if let (Some(context), Some(snapshot)) = (replace_context, replace_snapshot.as_ref()) {
+            crate::ddl::commit(
+                &task_context,
+                Some(context),
+                snapshot.clone(),
+                log_store,
+                actions,
+                operation,
+            )
+            .await?;
+            return Ok(LakeSourceCreateTableResult::default());
+        }
         CommitBuilder::from(CommitProperties::from_session_config(config)?)
             .with_actions(actions)
             .build(replace_snapshot, log_store.clone(), operation)
@@ -2858,6 +2945,90 @@ mod tests {
                 "delta.feature.catalogManaged": "supported",
                 "io.unitycatalog.tableId": "table-id"
             })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replace_without_catalog_is_refused_for_catalog_managed_table() -> Result<()> {
+        use object_store::ObjectStore;
+        use sail_common_datafusion::catalog::{
+            CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseFormat,
+            MetadataPointerAuthority, ScanAuthority, TableLifecycle,
+        };
+
+        let location = "memory:///managed/t";
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        runtime_env.register_object_store(&parse_location_to_url(location)?, store.clone());
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".to_string()),
+            vec!["main".to_string(), "default".to_string(), "t".to_string()],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: Some(location.to_string()),
+            },
+            LakehouseOperation::Create,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
+                commit: CommitAuthority::DeltaRatifiedCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        let info = |replace, lakehouse_table| LakeSourceCreateTableInfo {
+            path: location.to_string(),
+            columns: vec![LakeSourceCreateTableColumn {
+                metadata: Default::default(),
+                name: "id".to_string(),
+                data_type: ArrowDataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            partition_by: vec![],
+            properties: vec![(
+                "io.unitycatalog.tableId".to_string(),
+                "table-id".to_string(),
+            )],
+            replace,
+            lakehouse_table,
+            required_protocol: None,
+        };
+        DeltaLakeSource
+            .create_table_metadata(
+                runtime_env.clone(),
+                &SessionConfig::new(),
+                info(false, Some(context)),
+            )
+            .await?;
+
+        // A replacement that does not go through the catalog must not commit to the log.
+        let result = DeltaLakeSource
+            .create_table_metadata(runtime_env, &SessionConfig::new(), info(true, None))
+            .await;
+        let error = match result {
+            Ok(_) => return plan_err!("the replacement is expected to fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("catalog-managed Delta tables"), "{error}");
+        let commits = store
+            .list_with_delimiter(Some(&object_store::path::Path::from(
+                "managed/t/_delta_log",
+            )))
+            .await?
+            .objects
+            .into_iter()
+            .map(|object| object.location.to_string())
+            .filter(|location| location.ends_with(".json"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commits,
+            vec!["managed/t/_delta_log/00000000000000000000.json"]
         );
         Ok(())
     }

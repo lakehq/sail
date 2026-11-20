@@ -753,12 +753,30 @@ pub(crate) async fn open_table(
     path: &str,
     lakehouse: Option<&LakehouseExecutionContext>,
 ) -> Result<DeltaTable> {
+    open_table_with_config(ctx, path, lakehouse, false).await
+}
+
+/// Opens the table with the files of its snapshot.
+pub(crate) async fn open_table_with_files(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+) -> Result<DeltaTable> {
+    open_table_with_config(ctx, path, lakehouse, true).await
+}
+
+async fn open_table_with_config(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+    require_files: bool,
+) -> Result<DeltaTable> {
     let url = crate::lake_source::parse_location_to_url(path)?;
     let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
     let log_store = create_logstore_with_object_store(store, url.clone(), StorageConfig)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
     let mut config = DeltaSnapshotConfig {
-        require_files: false,
+        require_files,
         ..Default::default()
     };
     if let Some(lakehouse) = catalog_managed_commit_context(lakehouse) {

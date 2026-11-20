@@ -24,7 +24,8 @@ use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
+    CommitAuthority, DatabaseStatus, LakehouseOperation, TableColumnStatus, TableKind, TableStatus,
+    identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
@@ -387,6 +388,97 @@ impl UnityCatalogProvider {
     ///
     /// Names are joined without SQL quoting. Unity Catalog does not parse backticks in
     /// full names, so `` main.`a-b` `` would refer to a schema named `` `a-b` `` instead of `a-b`.
+    /// Returns the existing table that a `REPLACE` targets, or `None` when the table
+    /// is created instead.
+    async fn get_table_to_replace(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<Option<TableStatus>> {
+        if !options.mode.is_replace() {
+            return Ok(None);
+        }
+        let status = match self.get_table(database, table).await {
+            Ok(status) => status,
+            Err(CatalogError::NotFound(_, _)) if !options.mode.replace_requires_existing() => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        ensure_table_access(&status)?;
+        let TableKind::Table {
+            format, location, ..
+        } = &status.kind
+        else {
+            return Err(CatalogError::NotSupported(
+                "Unity Catalog supports REPLACE for Delta tables only".to_string(),
+            ));
+        };
+        if !format.eq_ignore_ascii_case("delta") || !options.format.eq_ignore_ascii_case("delta") {
+            return Err(CatalogError::NotSupported(
+                "Unity Catalog supports REPLACE for Delta tables only".to_string(),
+            ));
+        }
+        if options.is_external
+            && let (Some(requested), Some(existing)) = (&options.location, location)
+            && !is_same_location(requested, existing)
+        {
+            return Err(CatalogError::NotSupported(format!(
+                "Unity Catalog does not support REPLACE with a different table location: \
+                 the table is at {existing}"
+            )));
+        }
+        Ok(Some(status))
+    }
+
+    /// Plans the replacement of an existing Delta table. The table keeps its identity
+    /// and its location, and the replacement is a commit to its Delta log.
+    fn plan_delta_table_replace(
+        &self,
+        status: &TableStatus,
+        request: LakehouseCreateRequest,
+    ) -> LakehouseCreatePlan {
+        let LakehouseCreateRequest {
+            catalog_table,
+            options,
+        } = request;
+        let mut table = resolve_lakehouse_table_status(
+            self.get_name(),
+            catalog_table,
+            status,
+            LakehouseOperation::Write,
+            &self.lakehouse_capabilities(),
+        );
+        let catalog_managed = table.execution.commit == CommitAuthority::DeltaRatifiedCommit;
+        table.status.display_properties = options.properties;
+        if catalog_managed && let Some(table_id) = &table.execution.table_identity.table_id {
+            table
+                .status
+                .display_properties
+                .push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id.clone()));
+        }
+        let materialization = if options.is_write_precondition {
+            // The writer commits the replacement together with the data.
+            LakehouseCreateMaterialization::None
+        } else if catalog_managed {
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+                context: Some(Box::new(table.execution.clone())),
+            }
+        } else {
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::PathManaged,
+                context: None,
+            }
+        };
+        LakehouseCreatePlan {
+            table,
+            materialization,
+            staged: None,
+        }
+    }
+
     fn full_name(names: &[&str]) -> String {
         names.join(".")
     }
@@ -785,6 +877,12 @@ impl CatalogProvider for UnityCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         self.create_table_metadata_requirement(&options)?;
+        // The replacement of an existing Delta table is a commit to its Delta log. The
+        // commit of a managed table updates the catalog, and the catalog has no metadata
+        // to update for an external table.
+        if let Some(status) = self.get_table_to_replace(database, table, &options).await? {
+            return Ok(status);
+        }
         let CreateTableOptions {
             columns,
             comment,
@@ -1111,12 +1209,6 @@ impl CatalogProvider for UnityCatalogProvider {
         &self,
         options: &CreateTableOptions,
     ) -> CatalogResult<CreateTableMetadataRequirement> {
-        if options.mode.is_replace() {
-            return Err(CatalogError::NotSupported(
-                "Open source Unity Catalog does not support REPLACE option".to_string(),
-            ));
-        }
-
         if !options.sort_by.is_empty() {
             return Err(CatalogError::NotSupported(
                 "Open source Unity Catalog does not support SORT BY option".to_string(),
@@ -1168,11 +1260,18 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         request: LakehouseCreateRequest,
     ) -> CatalogResult<LakehouseCreatePlan> {
+        let requirement = self.create_table_metadata_requirement(&request.options)?;
+        if let Some(status) = self
+            .get_table_to_replace(database, table, &request.options)
+            .await?
+        {
+            return Ok(self.plan_delta_table_replace(&status, request));
+        }
         let mut plan = sail_catalog::lakehouse::plan_lakehouse_create_from_requirement(
             self.get_name(),
             request.catalog_table,
             &request.options,
-            self.create_table_metadata_requirement(&request.options)?,
+            requirement,
             &self.lakehouse_capabilities(),
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
@@ -1559,6 +1658,20 @@ impl CatalogProvider for UnityCatalogProvider {
             "Open source Unity Catalog does not support dropping views".to_string(),
         ))
     }
+}
+
+/// Whether the two locations refer to the same directory. A local path is compared
+/// with and without the `file` scheme.
+fn is_same_location(left: &str, right: &str) -> bool {
+    let normalize = |location: &str| {
+        let location = location.trim_end_matches('/');
+        let location = location
+            .strip_prefix("file://")
+            .or_else(|| location.strip_prefix("file:"))
+            .unwrap_or(location);
+        location.to_string()
+    };
+    normalize(left) == normalize(right)
 }
 
 /// Converts the table loaded via the Delta REST API to the ratified commits
@@ -4316,6 +4429,249 @@ mod tests {
             bodies[0]["properties"],
             serde_json::json!({"owner": "sail"})
         );
+    }
+
+    async fn mount_existing_table(server: &MockServer, table_type: &str, format: &str) {
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "catalog_name": "main",
+                "schema_name": "default",
+                "name": "events",
+                "table_type": table_type,
+                "data_source_format": format,
+                "storage_location": DELTA_TABLE_URI,
+                "table_id": DELTA_TABLE_ID,
+                "columns": []
+            })))
+            .mount(server)
+            .await;
+    }
+
+    fn replace_options(
+        mode: sail_catalog::provider::CreateTableMode,
+        is_write_precondition: bool,
+    ) -> CreateTableOptions {
+        CreateTableOptions {
+            mode,
+            ..managed_delta_create_options(vec![("owner", "sail")], is_write_precondition)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_of_managed_delta_table_is_a_commit_to_the_existing_table() {
+        use sail_catalog::provider::CreateTableMode;
+
+        let server = MockServer::start().await;
+        mount_existing_table(&server, "MANAGED", "DELTA").await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+
+        for mode in [CreateTableMode::CreateOrReplace, CreateTableMode::Replace] {
+            // The statement without a query replaces the metadata with a catalog commit.
+            let plan = provider
+                .plan_lakehouse_create(
+                    &database,
+                    "events",
+                    lakehouse_create_request(replace_options(mode, false)),
+                )
+                .await
+                .unwrap();
+            let context = &plan.table.execution;
+            assert_eq!(
+                plan.materialization,
+                LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                    mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+                    context: Some(Box::new(context.clone())),
+                }
+            );
+            assert_eq!(context.commit, CommitAuthority::DeltaRatifiedCommit);
+            assert_eq!(context.operation, LakehouseOperation::Write);
+            assert_eq!(
+                context.table_identity.table_id.as_deref(),
+                Some(DELTA_TABLE_ID)
+            );
+            assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+            assert_eq!(
+                plan.table.status.display_properties,
+                vec![
+                    ("owner".to_string(), "sail".to_string()),
+                    (
+                        DELTA_UNITY_TABLE_ID_KEY.to_string(),
+                        DELTA_TABLE_ID.to_string()
+                    ),
+                ]
+            );
+            assert_eq!(plan.staged, None);
+
+            // The writer of the statement with a query commits the replacement.
+            let plan = provider
+                .plan_lakehouse_create(
+                    &database,
+                    "events",
+                    lakehouse_create_request(replace_options(mode, true)),
+                )
+                .await
+                .unwrap();
+            assert_eq!(plan.materialization, LakehouseCreateMaterialization::None);
+            assert_eq!(
+                plan.table.execution.commit,
+                CommitAuthority::DeltaRatifiedCommit
+            );
+            assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+
+            let status = provider
+                .create_table(&database, "events", replace_options(mode, true))
+                .await
+                .unwrap();
+            assert_eq!(status.name, "events");
+        }
+
+        // The table is neither staged, created, nor dropped.
+        let targets = received_targets(&server).await;
+        assert_eq!(targets.len(), 6);
+        assert!(
+            targets
+                .iter()
+                .all(|target| target == "GET /tables/main.default.events"),
+            "{targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_of_external_delta_table_is_a_commit_to_its_location() {
+        use sail_catalog::provider::CreateTableMode;
+
+        let server = MockServer::start().await;
+        mount_existing_table(&server, "EXTERNAL", "DELTA").await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+
+        let external = |location: &str, is_write_precondition| CreateTableOptions {
+            location: Some(location.to_string()),
+            is_external: true,
+            ..replace_options(CreateTableMode::CreateOrReplace, is_write_precondition)
+        };
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(external(&format!("{DELTA_TABLE_URI}/"), false)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            plan.materialization,
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::PathManaged,
+                context: None,
+            }
+        );
+        assert_eq!(plan.table.execution.commit, CommitAuthority::Filesystem);
+        assert_eq!(
+            plan.table.status.display_properties,
+            vec![("owner".to_string(), "sail".to_string())]
+        );
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(external(DELTA_TABLE_URI, true)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.materialization, LakehouseCreateMaterialization::None);
+
+        let result = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(external("s3://bucket/tables/other", false)),
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(CatalogError::NotSupported(message)) if message.contains("different table location")),
+            "{result:?}"
+        );
+        assert!(
+            received_targets(&server)
+                .await
+                .iter()
+                .all(|target| target == "GET /tables/main.default.events")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_of_other_tables_and_missing_tables() {
+        use sail_catalog::provider::CreateTableMode;
+
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+
+        let server = MockServer::start().await;
+        mount_existing_table(&server, "EXTERNAL", "PARQUET").await;
+        let provider = mock_provider(&server, "main");
+        for is_write_precondition in [false, true] {
+            let options = replace_options(CreateTableMode::CreateOrReplace, is_write_precondition);
+            let result = provider
+                .plan_lakehouse_create(
+                    &database,
+                    "events",
+                    lakehouse_create_request(options.clone()),
+                )
+                .await;
+            assert!(
+                matches!(&result, Err(CatalogError::NotSupported(message)) if message.contains("Delta tables only")),
+                "{result:?}"
+            );
+            let result = provider.create_table(&database, "events", options).await;
+            assert!(
+                matches!(&result, Err(CatalogError::NotSupported(_))),
+                "{result:?}"
+            );
+        }
+
+        // A missing table is an error for `REPLACE` and is created for `CREATE OR REPLACE`.
+        let server = MockServer::start().await;
+        mount_delta_config(&server, ResponseTemplate::new(404)).await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/staging-tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "staging_location": DELTA_TABLE_URI
+            })))
+            .mount(&server)
+            .await;
+        let provider = mock_provider(&server, "main");
+        let result = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(replace_options(CreateTableMode::Replace, false)),
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(CatalogError::NotFound(_, _))),
+            "{result:?}"
+        );
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(replace_options(CreateTableMode::CreateOrReplace, true)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            plan.materialization,
+            LakehouseCreateMaterialization::AfterCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+            }
+        );
+        assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
     }
 
     #[tokio::test]
