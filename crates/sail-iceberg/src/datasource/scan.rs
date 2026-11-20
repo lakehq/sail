@@ -1419,8 +1419,7 @@ impl IcebergScan {
         let mut dirty_units = Vec::new();
 
         for task in planned.tasks {
-            let data_file = task.data_file;
-            match data_file.file_format {
+            match task.data_file.file_format {
                 DataFileFormat::Avro | DataFileFormat::Orc => {
                     return Ok(Arc::new(UnsupportedIcebergRowScanExec::new(
                         self.projected_arrow_schema(projection)?,
@@ -1431,27 +1430,19 @@ impl IcebergScan {
                 }
                 DataFileFormat::Parquet => {}
             }
-            let sequence_number = task.data_sequence_number;
-            let matched = task.deletes;
-            if matched.is_empty() {
+            if task.deletes.is_empty() {
                 if self.has_row_lineage() {
                     file_lineage.insert(
-                        data_file.file_path.clone(),
+                        task.data_file.file_path.clone(),
                         crate::row_lineage::RowLineage {
-                            first_row_id: data_file.first_row_id,
-                            data_sequence_number: sequence_number,
+                            first_row_id: task.data_file.first_row_id,
+                            data_sequence_number: task.data_sequence_number,
                         },
                     );
                 }
-                clean_files.push((data_file, task.added_snapshot_id));
+                clean_files.push((task.data_file, task.added_snapshot_id));
             } else {
-                dirty_units.push((
-                    data_file,
-                    sequence_number,
-                    task.added_snapshot_id,
-                    matched.positional,
-                    matched.equality,
-                ));
+                dirty_units.push(task);
             }
         }
 
@@ -1517,15 +1508,16 @@ impl IcebergScan {
             ));
         }
 
-        for (df, sequence_number, added_snapshot_id, positional_deletes, equality_deletes) in
-            dirty_units
-        {
+        for task in dirty_units {
+            let df = task.data_file;
+            let positional_deletes = task.deletes.positional;
+            let equality_deletes = task.deletes.equality;
             let mut delete_scan = self.equality_scan(&equality_deletes)?;
             let row_lineage = self
                 .has_row_lineage()
                 .then_some(crate::row_lineage::RowLineage {
                     first_row_id: df.first_row_id,
-                    data_sequence_number: sequence_number,
+                    data_sequence_number: task.data_sequence_number,
                 });
             if row_lineage.is_some() {
                 delete_scan.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
@@ -1533,7 +1525,7 @@ impl IcebergScan {
                 )?);
             }
             let partitioned = delete_scan
-                .create_partitioned_files(&store_ctx, vec![(df.clone(), added_snapshot_id)])?;
+                .create_partitioned_files(&store_ctx, vec![(df.clone(), task.added_snapshot_id)])?;
             let parquet_source =
                 delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =

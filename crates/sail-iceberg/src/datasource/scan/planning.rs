@@ -21,7 +21,7 @@ use crate::spec::{DataFile, ManifestContentType, ManifestList, ManifestStatus, P
 use crate::utils::get_object_store_from_session;
 
 /// A live data file loaded from a manifest.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct ManifestDataFile {
     pub data_file: DataFile,
     pub data_sequence_number: i64,
