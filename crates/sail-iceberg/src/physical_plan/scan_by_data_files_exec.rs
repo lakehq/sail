@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
@@ -252,10 +253,13 @@ impl ScanByDataFilesState {
         };
         let reader = Arc::new(CachedParquetFileReaderFactory::new(
             store,
-            self.context
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            object_store_scoped_file_metadata_cache(
+                self.context
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?,
+            ),
         ));
         let source = ParquetSource::new(table_schema)
             .with_table_parquet_options(crate::datasource::parquet::parquet_options(
@@ -453,6 +457,7 @@ impl ScanByDataFilesState {
                     self.predicate.as_ref(),
                     file_groups,
                     object_store,
+                    &object_store_url,
                     files.iter().all(|file| file.nan_free),
                 )
                 .await?
@@ -521,6 +526,7 @@ impl ScanByDataFilesState {
         predicate: Option<&Arc<dyn PhysicalExpr>>,
         file_groups: Vec<FileGroup>,
         object_store: Arc<dyn object_store::ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         nan_free: bool,
     ) -> Result<(Vec<FileGroup>, Arc<dyn FileSource>)> {
         // Use session Parquet options for parity with the driver-based scan path.
@@ -529,10 +535,13 @@ impl ScanByDataFilesState {
             nan_free,
             context.session_config().options().execution.parquet.clone(),
         );
-        let metadata_cache = context
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
+        let metadata_cache = object_store_scoped_file_metadata_cache(
+            context
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+            object_store_url,
+        );
         let file_groups = load_parquet_scan_metadata(
             file_groups,
             &object_store,

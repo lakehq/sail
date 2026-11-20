@@ -100,6 +100,7 @@ use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
+use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
@@ -745,8 +746,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )?,
                     true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
                 };
-                let store = ctx.runtime_env().object_store(object_store_url)?;
-                let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+                let store = ctx.runtime_env().object_store(&object_store_url)?;
+                let metadata_cache = object_store_scoped_file_metadata_cache(
+                    ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+                    &object_store_url,
+                );
                 let reader_factory =
                     Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
                 let mut source = ParquetSource::new(table_schema)

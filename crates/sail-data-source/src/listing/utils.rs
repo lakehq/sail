@@ -18,6 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::cache_scope::object_store_scoped_path;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -283,7 +284,7 @@ pub async fn list_all_files<'a>(
             Some(cache) => {
                 let key = TableScopedPath {
                     table: None,
-                    path: url.prefix().clone(),
+                    path: object_store_scoped_path(&url.object_store(), url.prefix()),
                 };
                 if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");
@@ -603,5 +604,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(merged.field(0).data_type(), &us);
+    }
+
+    #[tokio::test]
+    async fn file_listing_cache_keeps_object_stores_apart() -> Result<()> {
+        use datafusion::prelude::SessionContext;
+        use object_store::PutPayload;
+        use object_store::memory::InMemory;
+
+        let ctx = SessionContext::new();
+        assert!(
+            ctx.runtime_env()
+                .cache_manager
+                .get_list_files_cache()
+                .is_some()
+        );
+        let state = ctx.state();
+        let mut listed = vec![];
+        for (bucket, file) in [("bucket-a", "a.parquet"), ("bucket-b", "b.parquet")] {
+            let store = InMemory::new();
+            store
+                .put(
+                    &Path::from(format!("data/{file}")),
+                    PutPayload::from_static(b"x"),
+                )
+                .await?;
+            let url = ListingTableUrl::parse(format!("s3://{bucket}/data/"))?;
+            let files = list_all_files(&url, &state, &store, None)
+                .await?
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect::<Vec<_>>()
+                .await?;
+            listed.push(files);
+        }
+        assert_eq!(
+            listed,
+            vec![
+                vec!["data/a.parquet".to_string()],
+                vec!["data/b.parquet".to_string()]
+            ]
+        );
+        Ok(())
     }
 }

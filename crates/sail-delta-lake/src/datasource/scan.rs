@@ -26,6 +26,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
+use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
@@ -459,10 +460,13 @@ pub async fn build_file_scan_config(
     let object_store_url = create_object_store_url(&log_store.config().location)?;
     let metadata_size_hint = parquet_options.global.metadata_size_hint;
     let store = session.runtime_env().object_store(&object_store_url)?;
-    let metadata_cache = session
-        .runtime_env()
-        .cache_manager
-        .get_file_metadata_cache();
+    let metadata_cache = object_store_scoped_file_metadata_cache(
+        session
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache(),
+        &object_store_url,
+    );
     let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
         Arc::clone(&store),
         Arc::clone(&metadata_cache),

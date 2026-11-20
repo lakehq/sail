@@ -13,6 +13,7 @@ use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
@@ -32,6 +33,7 @@ use datafusion_datasource::file_scan_config::{
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
+use sail_common_datafusion::cache_scope::object_store_scoped_path;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
@@ -344,8 +346,8 @@ async fn list_files_for_scan<'a>(
     filters: &'a [Expr],
     limit: Option<usize>,
 ) -> datafusion_common::Result<ListFilesResult> {
-    let store = if let Some(url) = source.config().table_paths.first() {
-        ctx.runtime_env().object_store(url)?
+    let (store, object_store_url) = if let Some(url) = source.config().table_paths.first() {
+        (ctx.runtime_env().object_store(url)?, url.object_store())
     } else {
         return Ok(ListFilesResult {
             file_groups: vec![],
@@ -391,7 +393,14 @@ async fn list_files_for_scan<'a>(
         .map(|part_file| async {
             let part_file = part_file?;
             let (statistics, ordering) = if source.config().collect_stat {
-                do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
+                do_collect_statistics_and_ordering(
+                    source,
+                    ctx,
+                    &store,
+                    &object_store_url,
+                    &part_file,
+                )
+                .await?
             } else {
                 (
                     Arc::new(Statistics::new_unknown(
@@ -448,6 +457,7 @@ async fn do_collect_statistics_and_ordering(
     source: &ListingTableSource,
     ctx: &dyn Session,
     store: &Arc<dyn ObjectStore>,
+    object_store_url: &ObjectStoreUrl,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let meta = &part_file.object_meta;
@@ -459,7 +469,7 @@ async fn do_collect_statistics_and_ordering(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
         )),
-        path: meta.location.clone(),
+        path: object_store_scoped_path(object_store_url, &meta.location),
     };
 
     if let Some(cached) = file_statistic_cache
@@ -480,6 +490,7 @@ async fn do_collect_statistics_and_ordering(
         .infer_file_meta(
             ctx,
             store,
+            object_store_url,
             meta,
             source.config().schema.file_schema().clone(),
             source.config().compression,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod array;
+pub mod cache_scope;
 pub mod catalog;
 pub mod column_change;
 pub mod column_features;

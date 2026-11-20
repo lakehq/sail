@@ -28,6 +28,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -1263,10 +1264,13 @@ impl IcebergScan {
         }
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            object_store_scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+            ),
         ));
 
         if dirty_units.is_empty() && clean_avro.is_empty() && clean_orc.is_empty() {
@@ -1519,10 +1523,13 @@ impl IcebergScan {
 
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            object_store_scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+            ),
         ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
