@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 from typing import TYPE_CHECKING
 
@@ -79,7 +80,7 @@ def _row_tracking_state(path: Path) -> dict:
     ranges = sorted(
         (add["baseRowId"], add["baseRowId"] + json.loads(add["stats"])["numRecords"] - 1) for add in active.values()
     )
-    for (_, end), (start, _) in zip(ranges, ranges[1:]):
+    for (_, end), (start, _) in itertools.pairwise(ranges):
         assert end < start, ranges
     return {"active": active, "high_water_mark": high_water_mark, "preserved": preserved}
 
@@ -102,7 +103,7 @@ def row_tracking_table(spark, tmp_path, request):
 def test_row_tracking_table_creation(spark, row_tracking_table):
     name, path = row_tracking_table
     protocol = _effective(path, "protocol")
-    assert protocol["minWriterVersion"] == 7  # noqa: PLR2004
+    assert protocol["minWriterVersion"] == 7
     assert {"rowTracking", "domainMetadata"} <= set(protocol["writerFeatures"])
     assert "rowTracking" not in (protocol.get("readerFeatures") or [])
     configuration = _effective(path, "metaData")["configuration"]
@@ -128,7 +129,7 @@ def test_row_tracking_writes(spark, row_tracking_table):
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a'), (2, 'b'), (3, 'c')").collect()
     spark.sql(f"INSERT INTO {name} VALUES (4, 'd'), (5, 'e')").collect()
     state = _row_tracking_state(path)
-    assert state["high_water_mark"] == 4  # noqa: PLR2004
+    assert state["high_water_mark"] == 4
     assert state["preserved"] == {0: "true", 1: "true", 2: "true"}
     assert sorted(add["defaultRowCommitVersion"] for add in state["active"].values()) == [1, 2]
 
@@ -136,11 +137,11 @@ def test_row_tracking_writes(spark, row_tracking_table):
     state = _row_tracking_state(path)
     if deletion_vectors:
         # The file with the deleted row is committed again with a deletion vector.
-        assert state["high_water_mark"] == 4  # noqa: PLR2004
+        assert state["high_water_mark"] == 4
         assert state["preserved"][3] == "true"
     else:
         # The rows that the delete copies to a new file get fresh row IDs.
-        assert state["high_water_mark"] == 6  # noqa: PLR2004
+        assert state["high_water_mark"] == 6
         assert state["preserved"][3] == "false"
 
     spark.sql(f"UPDATE {name} SET value = 'x' WHERE id = 4").collect()
@@ -181,11 +182,11 @@ def test_row_tracking_dataframe_writes(spark, tmp_path):
     df.write.format("delta").option("delta.enableRowTracking", "true").save(str(path))
     df.write.format("delta").mode("append").save(str(path))
     state = _row_tracking_state(path)
-    assert state["high_water_mark"] == 3  # noqa: PLR2004
+    assert state["high_water_mark"] == 3
     df.write.format("delta").mode("overwrite").save(str(path))
     state = _row_tracking_state(path)
-    assert state["high_water_mark"] == 5  # noqa: PLR2004
-    assert sum(json.loads(add["stats"])["numRecords"] for add in state["active"].values()) == 2  # noqa: PLR2004
+    assert state["high_water_mark"] == 5
+    assert sum(json.loads(add["stats"])["numRecords"] for add in state["active"].values()) == 2
     assert spark.read.format("delta").load(str(path)).orderBy("id").collect() == [
         Row(id=1, value="a"),
         Row(id=2, value="b"),
@@ -306,7 +307,9 @@ def test_delta_spark_reads_row_tracking_written_by_sail(spark, delta_jvm_spark: 
 
 
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["copy-on-write", "deletion-vectors"])
-def test_sail_writes_row_tracking_table_of_delta_spark(spark, delta_jvm_spark: SparkSession, tmp_path, deletion_vectors):
+def test_sail_writes_row_tracking_table_of_delta_spark(
+    spark, delta_jvm_spark: SparkSession, tmp_path, deletion_vectors
+):
     path = tmp_path / "row_tracking"
     table = f"delta.`{escape_sql_identifier(str(path))}`"
     properties = f"{_ROW_TRACKING}, 'delta.enableDeletionVectors' = '{str(deletion_vectors).lower()}'"

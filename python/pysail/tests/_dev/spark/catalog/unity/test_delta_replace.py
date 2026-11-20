@@ -102,7 +102,7 @@ def test_write_to_replace_managed_delta_table(spark: SparkSession, unity_rest_ur
         frame = spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
         with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
             frame.writeTo(table).using("delta").replace()
-        with pytest.raises(Exception, match="(?i)not found|does not exist|cannot be found"):
+        with pytest.raises(Exception, match=r"(?i)not found|does not exist|cannot be found"):
             spark.table(table).collect()
 
         frame.writeTo(table).using("delta").createOrReplace()
@@ -132,9 +132,9 @@ def test_sql_replace_managed_delta_table(spark: SparkSession, unity_rest_url: st
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
-        with pytest.raises(Exception, match="(?i)not found|cannot be found"):
+        with pytest.raises(Exception, match=r"(?i)not found|cannot be found"):
             spark.sql(f"REPLACE TABLE {table} (id INT) USING delta")
-        with pytest.raises(Exception, match="(?i)not found|cannot be found"):
+        with pytest.raises(Exception, match=r"(?i)not found|cannot be found"):
             spark.sql(f"REPLACE TABLE {table} USING delta AS SELECT 1 AS id")
 
         spark.sql(f"CREATE OR REPLACE TABLE {table} (id INT, name STRING) USING delta TBLPROPERTIES ('team'='a')")
