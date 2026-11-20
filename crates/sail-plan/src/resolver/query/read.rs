@@ -199,18 +199,14 @@ impl PlanResolver<'_> {
                         .await;
                 let (base_status, base_resolved) = match base_lookup {
                     Ok(lookup) => lookup,
-                    Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {
-                        return Err(error.into());
-                    }
                     // A base that names no table, such as `catalog.database` left by
                     // `catalog.database.table`, is not a lake relation either: the
                     // table is what is missing.
-                    // Other errors, such as an invalid scan-planning-mode, are not masked.
-                    Err(CatalogError::InvalidArgument(_))
-                        if manager
-                            .resolve_fully_qualified_object_name(base_reference)
-                            .is_err() =>
-                    {
+                    Err(
+                        CatalogError::NotFound(_, _)
+                        | CatalogError::NotSupported(_)
+                        | CatalogError::InvalidArgument(_),
+                    ) => {
                         return Err(error.into());
                     }
                     Err(base_error) => return Err(base_error.into()),

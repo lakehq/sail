@@ -153,3 +153,28 @@ def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view}")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_invalid_scan_planning_mode_is_reported_after_read_validation(
+    spark, recording_catalog, catalog_config_overrides, seaweedfs_host_endpoint
+):
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.planned"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        catalog_config_overrides["scan-planning-mode"] = "unknown"
+        with (
+            _server(recording_catalog, seaweedfs_host_endpoint) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            with pytest.raises(Exception, match="Invalid Iceberg REST scan-planning-mode: unknown"):
+                session.table(name).collect()
+            # Missing tables and invalid time travel are reported first.
+            with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+                session.sql(f"SELECT * FROM {name}.unknown").collect()
+            with pytest.raises(Exception, match="expression must be deterministic"):
+                session.sql(f"SELECT * FROM {name} VERSION AS OF rand()").collect()
+    finally:
+        catalog_config_overrides.clear()
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

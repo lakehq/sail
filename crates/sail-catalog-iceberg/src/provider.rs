@@ -376,10 +376,11 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn effective_scan_planning_mode(
+    /// Returns the configured scan planning mode without validating it.
+    fn configured_scan_planning_mode(
         table_config: Option<&HashMap<String, String>>,
         catalog_config: &CatalogConfig<'_>,
-    ) -> CatalogResult<Option<String>> {
+    ) -> Option<String> {
         table_config
             .and_then(|config| config.get(REST_TABLE_SCAN_PLANNING_MODE_KEY))
             .or_else(|| {
@@ -387,7 +388,15 @@ impl IcebergRestCatalogProvider {
                     .properties
                     .get(REST_TABLE_SCAN_PLANNING_MODE_KEY)
             })
-            .map(|value| Self::normalize_scan_planning_mode(value))
+            .map(|value| value.trim().to_ascii_lowercase())
+    }
+
+    fn effective_scan_planning_mode(
+        table_config: Option<&HashMap<String, String>>,
+        catalog_config: &CatalogConfig<'_>,
+    ) -> CatalogResult<Option<String>> {
+        Self::configured_scan_planning_mode(table_config, catalog_config)
+            .map(|value| Self::normalize_scan_planning_mode(&value))
             .transpose()
     }
 
@@ -460,10 +469,12 @@ impl IcebergRestCatalogProvider {
         table: &str,
         catalog_config: &CatalogConfig<'_>,
         result: &crate::r#gen::LoadTableResult,
-    ) -> CatalogResult<IcebergRestTableSessionRef> {
+    ) -> IcebergRestTableSessionRef {
         let config = result.config.as_ref();
         let credentials = result.storage_credentials.as_deref();
-        let scan_planning_mode = Self::effective_scan_planning_mode(config, catalog_config)?;
+        // The mode is validated when table access begins, so that a table lookup
+        // does not fail on it.
+        let scan_planning_mode = Self::configured_scan_planning_mode(config, catalog_config);
         let remote_signing_enabled = Self::remote_signing_enabled(config, catalog_config);
         let fingerprint = Self::rest_table_session_fingerprint(
             catalog,
@@ -473,14 +484,14 @@ impl IcebergRestCatalogProvider {
             remote_signing_enabled,
             result,
         );
-        Ok(IcebergRestTableSessionRef {
+        IcebergRestTableSessionRef {
             fingerprint,
             scan_planning_mode,
             storage_credential_count: credentials
                 .map(|credentials| credentials.len())
                 .unwrap_or(0),
             remote_signing_enabled,
-        })
+        }
     }
 
     fn validate_create_table_access_session_requirements(
@@ -1055,7 +1066,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .load_table_result(database, table, config.access_delegation())
             .await?;
-        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result)?;
+        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result);
         let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
         let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
             &self.name,
@@ -1832,9 +1843,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     .await?;
                 // TODO: Convert preserved REST table-session credentials into operation-scoped
                 // FileIO/object-store access instead of only fingerprinting the session.
-                Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?
+                Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)
             }
         };
+        if let Some(mode) = &rest_session.scan_planning_mode {
+            Self::normalize_scan_planning_mode(mode)?;
+        }
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
             context.scan = ScanAuthority::IcebergRestServerSide;
         } else {
@@ -5265,7 +5279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_lakehouse_table_rejects_invalid_scan_planning_mode() {
+    async fn begin_table_access_rejects_invalid_scan_planning_mode_from_table_lookup() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let mut response = create_table_response_with_access_session_hints();
@@ -5278,7 +5292,8 @@ mod tests {
             .mount(&ctx.server)
             .await;
 
-        let err = ctx
+        // The lookup succeeds, so that lookup and read validation errors come first.
+        let (_, resolved) = ctx
             .catalog
             .get_lakehouse_table(
                 &namespace,
@@ -5288,6 +5303,18 @@ mod tests {
                     operation: LakehouseOperation::Read,
                     requested_format: None,
                     options: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let err = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
                 },
             )
             .await

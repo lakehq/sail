@@ -301,7 +301,15 @@ class RecordedRequest(NamedTuple):
 
 
 @pytest.fixture(scope="module")
-def recording_catalog(iceberg_rest_endpoint: str) -> Generator[tuple[str, list[RecordedRequest]], None, None]:
+def catalog_config_overrides() -> dict[str, str]:
+    """Catalog properties that the recording catalog proxy adds as config overrides."""
+    return {}
+
+
+@pytest.fixture(scope="module")
+def recording_catalog(
+    iceberg_rest_endpoint: str, catalog_config_overrides: dict[str, str]
+) -> Generator[tuple[str, list[RecordedRequest]], None, None]:
     """Forward requests to the REST catalog and record each of them."""
     records = []
 
@@ -327,12 +335,17 @@ def recording_catalog(iceberg_rest_endpoint: str) -> Generator[tuple[str, list[R
                     self.headers.get(ACCESS_DELEGATION),
                 )
             )
+            content = response.content
+            if catalog_config_overrides and urllib.parse.urlsplit(self.path).path == "/v1/config":
+                config = response.json()
+                config.setdefault("overrides", {}).update(catalog_config_overrides)
+                content = json.dumps(config).encode()
             self.send_response(response.status_code)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(response.content)))
+            self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             if self.command != "HEAD":
-                self.wfile.write(response.content)
+                self.wfile.write(content)
 
         do_GET = forward  # noqa: N815
         do_POST = forward  # noqa: N815
