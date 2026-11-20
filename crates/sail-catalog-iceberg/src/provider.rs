@@ -4443,12 +4443,12 @@ mod tests {
                 options: vec![],
             };
             ctx.catalog
-                .resolve_lakehouse_table(&namespace, "table1", request.clone())
+                .get_lakehouse_table(&namespace, "table1", request.clone())
                 .await
                 .unwrap();
-            let resolved = ctx
+            let (_, resolved) = ctx
                 .catalog
-                .resolve_lakehouse_table(&namespace, "table1", request)
+                .get_lakehouse_table(&namespace, "table1", request)
                 .await
                 .unwrap();
             assert_eq!(

@@ -121,16 +121,6 @@ pub trait CatalogProvider: Send + Sync {
         Vec::new()
     }
 
-    async fn resolve_lakehouse_table(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
-        let (_, resolved) = self.get_lakehouse_table(database, table, request).await?;
-        Ok(resolved)
-    }
-
     /// Returns the table status together with its lakehouse resolution.
     /// Providers whose resolution needs more than the table status should load both
     /// from one catalog response.

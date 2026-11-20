@@ -154,9 +154,10 @@ impl CatalogManager {
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<LakehouseResolvedTable> {
         let (provider, database, name) = self.resolve_object(table)?;
-        provider
-            .resolve_lakehouse_table(&database, &name, request)
-            .await
+        let (_, resolved) = provider
+            .get_lakehouse_table(&database, &name, request)
+            .await?;
+        Ok(resolved)
     }
 
     pub async fn resolve_lakehouse_table_status<T: AsRef<str>>(
