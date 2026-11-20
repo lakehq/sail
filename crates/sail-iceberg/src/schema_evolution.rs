@@ -866,7 +866,7 @@ impl SchemaEvolver {
         })
     }
 
-    fn next_schema_id(table_meta: &TableMetadata) -> i32 {
+    pub(crate) fn next_schema_id(table_meta: &TableMetadata) -> i32 {
         table_meta
             .schemas
             .iter()
