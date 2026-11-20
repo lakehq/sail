@@ -473,6 +473,8 @@ async fn do_collect_statistics_and_ordering(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
         )),
+        // Scope the path explicitly, since the store in the table reference above depends on
+        // DataFusion's `pruned_partition_list` copying it from the scoped listing URL.
         path: scoped_path(object_store_url, &meta.location),
     };
 
