@@ -1719,6 +1719,8 @@ pub(crate) async fn check_catalog_managed_commit_conflicts(
             .unwrap_or_else(|| commit_path(version));
         let bytes = store.get(&path).await?.bytes().await?;
         let summary = WinningCommitSummary::try_from_bytes(version, &bytes)?;
+        row_tracking::check_files_added_concurrently(read_snapshot, actions, &summary)
+            .map_err(TransactionError::CommitConflict)?;
         let transaction_info =
             TransactionInfo::try_new(read_snapshot, actions, operation.read_whole_table())?;
         ConflictChecker::new(transaction_info, summary, Some(operation))
@@ -4640,6 +4642,175 @@ mod tests {
             row_tracking_high_water_mark(&actions).as_deref(),
             Some(r#"{"rowIdHighWaterMark":1}"#)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_tracking_enabled_by_an_overwrite_conflicts_with_concurrently_added_files()
+    -> DeltaResult<()> {
+        // The overwrite removes the files that it read, so a file that a concurrent commit
+        // appended would stay in a table with row tracking enabled, without row IDs.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created =
+            create_row_tracking_table(&log_store, &[], vec![row_tracking_add("a", 3)]).await?;
+        let read_snapshot = created.snapshot.clone();
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 1))])
+            .build(read_snapshot.clone(), log_store.clone(), append_operation())
+            .await?;
+
+        let metadata = test_metadata(vec![
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-x",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-x",
+            ),
+        ]);
+        let snapshot = read_snapshot.as_ref().unwrap();
+        let protocol = snapshot
+            .protocol()
+            .merge_upgrade_requirements(&crate::schema::protocol_for_metadata(&metadata)?);
+        let overwrite = DeltaOperation::Write {
+            mode: SaveMode::Overwrite,
+            partition_by: None,
+            predicate: None,
+        };
+        let overwrite_actions = |metadata: Option<Metadata>| {
+            metadata
+                .into_iter()
+                .flat_map(|metadata| {
+                    [
+                        CommitAction::Protocol(protocol.clone()),
+                        CommitAction::Metadata(metadata),
+                    ]
+                })
+                .chain([
+                    CommitAction::Remove(row_tracking_add("a", 3).into_remove(0)),
+                    CommitAction::Add(row_tracking_add("c", 2)),
+                ])
+                .collect::<Vec<_>>()
+        };
+        let is_concurrent_append = |result: &DeltaResult<()>| {
+            matches!(
+                result,
+                Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                    CommitConflictError::ConcurrentAppend
+                )))
+            )
+        };
+
+        // The catalog rebase checks the commits that the catalog ratified after the read
+        // snapshot.
+        let result = check_catalog_managed_commit_conflicts(
+            &log_store,
+            snapshot,
+            None,
+            1,
+            &overwrite_actions(Some(metadata.clone())),
+            &overwrite,
+        )
+        .await;
+        assert!(is_concurrent_append(&result), "{result:?}");
+
+        // An overwrite that does not enable row tracking keeps its isolation.
+        check_catalog_managed_commit_conflicts(
+            &log_store,
+            snapshot,
+            None,
+            1,
+            &overwrite_actions(None),
+            &overwrite,
+        )
+        .await?;
+
+        // A commit to the file system that is not a blind append is not retried after
+        // another commit wins, so it cannot keep the concurrently added file either.
+        let result = CommitBuilder::default()
+            .with_actions(overwrite_actions(Some(metadata)))
+            .build(read_snapshot, log_store.clone(), overwrite)
+            .await
+            .map(|_| ());
+        assert!(
+            matches!(
+                result,
+                Err(DeltaError::Transaction(
+                    TransactionError::MaxCommitAttempts(0)
+                ))
+            ),
+            "{result:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_tracking_suspended_does_not_require_the_feature() -> DeltaResult<()> {
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created = create_row_tracking_table(
+            &log_store,
+            &[("delta.rowTrackingSuspended", "true")],
+            vec![row_tracking_add("a", 3)],
+        )
+        .await?;
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 1))])
+            .build(created.snapshot, log_store.clone(), append_operation())
+            .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("b", None, None)]);
+        assert_eq!(row_tracking_high_water_mark(&actions), None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_tracking_is_not_enabled_on_a_table_without_the_feature() -> DeltaResult<()> {
+        // An earlier version of Sail created tables that set `delta.enableRowTracking`
+        // without the rowTracking feature. Such a table is written without row IDs.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let metadata = test_metadata(vec![("delta.enableRowTracking", "true")]);
+        let bytes = actions_to_log_bytes(&[
+            CommitAction::Protocol(Protocol::new(1, 2, None, None)),
+            CommitAction::Metadata(metadata.clone()),
+            CommitAction::Add(row_tracking_add("a", 3)),
+        ])
+        .unwrap();
+        log_store
+            .write_commit_entry(0, CommitOrBytes::LogBytes(bytes), Uuid::new_v4())
+            .await?;
+        let snapshot = Arc::new(
+            DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None).await?,
+        );
+        let created = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 1))])
+            .build(Some(snapshot), log_store.clone(), append_operation())
+            .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("b", None, None)]);
+        assert_eq!(row_tracking_high_water_mark(&actions), None);
+
+        // A commit that keeps the property, such as an overwrite with a new definition
+        // that keeps the protocol, is not rejected either.
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Metadata(metadata),
+                CommitAction::Remove(row_tracking_add("a", 3).into_remove(0)),
+                CommitAction::Add(row_tracking_add("c", 2)),
+            ])
+            .build(
+                created.snapshot,
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        let actions = read_commit_actions(&log_store, 2).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("c", None, None)]);
         Ok(())
     }
 

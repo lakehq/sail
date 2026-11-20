@@ -10,9 +10,11 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::conflict_checker::WinningCommitSummary;
 use crate::spec::{
-    Add, ColumnMappingMode, CommitAction, DeltaError, DeltaOperation, DeltaResult, DomainMetadata,
-    Metadata, Protocol, SaveMode, StructType, TableFeature, TransactionError,
+    Add, ColumnMappingMode, CommitAction, CommitConflictError, DeltaError, DeltaOperation,
+    DeltaResult, DomainMetadata, Metadata, Protocol, SaveMode, StructType, TableFeature,
+    TransactionError,
 };
 use crate::table::DeltaSnapshot;
 
@@ -230,6 +232,39 @@ pub(super) fn assign_row_tracking(
     Ok(())
 }
 
+/// Fails if a winning commit added files while the commit turns row tracking on for a
+/// table that did not support it. Such a commit assigns row IDs to the files that it adds
+/// and removes the files of the table that it read, so a file that the winning commit
+/// added would stay in the table without row IDs.
+pub(super) fn check_files_added_concurrently(
+    read_snapshot: &DeltaSnapshot,
+    actions: &[CommitAction],
+    winning_commit: &WinningCommitSummary,
+) -> Result<(), CommitConflictError> {
+    if supports_row_tracking(read_snapshot.protocol()) {
+        return Ok(());
+    }
+    let protocol = actions.iter().rev().find_map(|action| match action {
+        CommitAction::Protocol(protocol) => Some(protocol),
+        _ => None,
+    });
+    let metadata = actions
+        .iter()
+        .rev()
+        .find_map(|action| match action {
+            CommitAction::Metadata(metadata) => Some(metadata),
+            _ => None,
+        })
+        .unwrap_or_else(|| read_snapshot.metadata());
+    if protocol.is_some_and(supports_row_tracking)
+        && row_tracking_enabled(metadata.configuration())
+        && !winning_commit.added_files().is_empty()
+    {
+        return Err(CommitConflictError::ConcurrentAppend);
+    }
+    Ok(())
+}
+
 /// Validates the row tracking state of the table that a commit results in.
 pub(super) fn validate_row_tracking(
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
@@ -240,7 +275,15 @@ pub(super) fn validate_row_tracking(
 ) -> DeltaResult<()> {
     let configuration = metadata.configuration();
     let supported = supports_row_tracking(protocol);
-    let enabled = row_tracking_enabled(configuration);
+    // A table that sets `delta.enableRowTracking` without the feature, such as one that an
+    // earlier version of Sail created, is written without row IDs, as before. Only a commit
+    // that enables row tracking on the table requires the feature.
+    let enabled = row_tracking_enabled(configuration)
+        && (supported
+            || read_snapshot.is_none_or(|snapshot| {
+                supports_row_tracking(snapshot.protocol())
+                    || !row_tracking_enabled(snapshot.metadata().configuration())
+            }));
     let suspended = property_enabled(configuration, ROW_TRACKING_SUSPENDED);
     if enabled && suspended {
         return Err(DeltaError::generic(format!(
@@ -265,7 +308,7 @@ pub(super) fn validate_row_tracking(
             }
         }
     }
-    if enabled || suspended {
+    if enabled {
         if !supported {
             return Err(TransactionError::TableFeaturesRequired(TableFeature::RowTracking).into());
         }

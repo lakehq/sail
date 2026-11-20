@@ -146,8 +146,11 @@ impl DeltaTableReplacement {
     /// Replaces the configuration and the description of the metadata that the write
     /// commits, and upgrades the protocol for the new configuration. The schema and the
     /// partitioning stay the ones of the write.
+    ///
+    /// A new column mapping mode in the configuration is applied to the data that the
+    /// write produces, as Delta Spark allows any change of the mode on REPLACE.
     pub fn apply(&self, context: &mut DeltaWriteContext, snapshot: &DeltaSnapshot) -> Result<()> {
-        let metadata = context
+        let mut metadata = context
             .schema_actions
             .iter()
             .rev()
@@ -157,15 +160,29 @@ impl DeltaTableReplacement {
             })
             .unwrap_or_else(|| snapshot.metadata().clone());
         let mut configuration = self.configuration.clone();
-        // The data is written with the column mapping of the table.
-        for key in [
-            "delta.columnMapping.mode",
-            "delta.columnMapping.maxColumnId",
-        ] {
-            match metadata.configuration().get(key) {
-                Some(value) => configuration.insert(key.to_string(), value.clone()),
-                None => configuration.remove(key),
-            };
+        let mode = configuration
+            .get("delta.columnMapping.mode")
+            .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
+            .unwrap_or_default();
+        if mode == context.effective_column_mapping_mode {
+            // The data is written with the column mapping of the table.
+            for key in [
+                "delta.columnMapping.mode",
+                "delta.columnMapping.maxColumnId",
+            ] {
+                match metadata.configuration().get(key) {
+                    Some(value) => configuration.insert(key.to_string(), value.clone()),
+                    None => configuration.remove(key),
+                };
+            }
+        } else {
+            metadata = self.apply_column_mapping_mode(
+                mode,
+                metadata,
+                &mut configuration,
+                context,
+                snapshot,
+            )?;
         }
         let metadata = metadata
             .with_configuration(configuration)
@@ -185,6 +202,82 @@ impl DeltaTableReplacement {
             .chain([Action::Metadata(metadata)])
             .collect();
         Ok(())
+    }
+}
+
+impl DeltaTableReplacement {
+    /// Gives the replaced table the column mapping mode of the statement, and writes the
+    /// data with it. As in REPLACE without a query, the columns get new physical names, and
+    /// column IDs after the IDs that the table has used.
+    fn apply_column_mapping_mode(
+        &self,
+        mode: ColumnMappingMode,
+        metadata: Metadata,
+        configuration: &mut HashMap<String, String>,
+        context: &mut DeltaWriteContext,
+        snapshot: &DeltaSnapshot,
+    ) -> Result<Metadata> {
+        let schema = crate::schema::without_column_mapping_metadata(
+            &metadata
+                .parse_schema()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        );
+        let schema = if matches!(mode, ColumnMappingMode::None) {
+            configuration.remove("delta.columnMapping.maxColumnId");
+            schema
+        } else {
+            let used_column_id =
+                if snapshot.effective_column_mapping_mode() != ColumnMappingMode::None {
+                    let current = StructType::try_from(snapshot.schema())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    snapshot
+                        .metadata()
+                        .configuration()
+                        .get("delta.columnMapping.maxColumnId")
+                        .and_then(|id| id.parse::<i64>().ok())
+                        .unwrap_or_default()
+                        .max(compute_max_column_id(&current))
+                } else {
+                    0
+                };
+            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
+                &StructType::try_new(Vec::<crate::spec::StructField>::new())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                &schema,
+                used_column_id + 1,
+            );
+            configuration.insert(
+                "delta.columnMapping.mode".to_string(),
+                mode.as_ref().to_string(),
+            );
+            configuration.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                max_column_id.to_string(),
+            );
+            annotated
+        };
+        context.physical_partition_columns = metadata
+            .partition_columns()
+            .iter()
+            .map(|name| {
+                schema
+                    .field(name)
+                    .map(|field| field.physical_name(mode).to_string())
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "Partition column '{name}' not found in logical schema"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        context.final_schema =
+            crate::schema::without_column_mapping_metadata(&context.final_schema);
+        context.effective_column_mapping_mode = mode;
+        context.logical_kernel_for_mapping =
+            (!matches!(mode, ColumnMappingMode::None)).then(|| schema.clone());
+        metadata
+            .with_schema(&schema)
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }
 
@@ -770,6 +863,165 @@ mod tests {
         assert_eq!(new_metadata.description(), None);
         assert_eq!(new_metadata.id(), metadata.id());
         assert_eq!(new_metadata.schema_string(), metadata.schema_string());
+        Ok(())
+    }
+
+    /// REPLACE with a query gives the table the column mapping mode of the statement, as
+    /// Delta Spark does, and the data is written with the new physical names.
+    #[test]
+    fn table_replacement_applies_the_column_mapping_mode_of_the_statement() -> Result<()> {
+        let replace = |schema: StructType,
+                       configuration: HashMap<String, String>,
+                       mode: Option<&'static str>| {
+            let metadata = metadata_for_create_with_struct_type(
+                schema.clone(),
+                vec!["p".to_string()],
+                0,
+                configuration,
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let snapshot = metadata_only_snapshot(
+                protocol_for_metadata(&metadata)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                metadata,
+            )?;
+            let mut context = DeltaWriteContext {
+                commit_context: DeltaCommitContext::from_snapshot(&snapshot),
+                final_schema: schema.clone(),
+                effective_column_mapping_mode: snapshot.effective_column_mapping_mode(),
+                initial_actions: Vec::new(),
+                schema_actions: Vec::new(),
+                operation: None,
+                logical_kernel_for_mapping: (snapshot.effective_column_mapping_mode()
+                    != ColumnMappingMode::None)
+                    .then_some(schema),
+                physical_partition_columns: vec!["p".to_string()],
+            };
+            DeltaTableReplacement {
+                configuration: HashMap::from_iter(
+                    mode.map(|mode| ("delta.columnMapping.mode".to_string(), mode.to_string())),
+                ),
+                description: None,
+            }
+            .apply(&mut context, &snapshot)?;
+            let metadata = context
+                .schema_actions
+                .iter()
+                .find_map(|action| match action {
+                    Action::Metadata(metadata) => Some(metadata.clone()),
+                    _ => None,
+                })
+                .expect("metadata");
+            Ok::<_, DataFusionError>((context, metadata))
+        };
+
+        let unmapped = StructType::try_new(vec![
+            StructField::new("id", DataType::LONG, true),
+            StructField::new("p", DataType::STRING, true),
+        ])
+        .expect("schema");
+        let (context, metadata) = replace(unmapped.clone(), HashMap::new(), Some("name"))?;
+        let protocol = context
+            .schema_actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            });
+        // The protocol is upgraded for column mapping.
+        assert!(protocol.is_some_and(|protocol| protocol.min_writer_version() >= 5));
+        assert_eq!(
+            context.effective_column_mapping_mode,
+            ColumnMappingMode::Name
+        );
+        assert_eq!(
+            metadata.configuration().get("delta.columnMapping.mode"),
+            Some(&"name".to_string())
+        );
+        assert_eq!(
+            metadata
+                .configuration()
+                .get("delta.columnMapping.maxColumnId"),
+            Some(&"2".to_string())
+        );
+        let schema = metadata.parse_schema().expect("schema");
+        assert_eq!(context.logical_kernel_for_mapping.as_ref(), Some(&schema));
+        let physical_names = schema
+            .fields()
+            .map(|field| field.physical_name(ColumnMappingMode::Name).to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            physical_names.iter().all(|name| name.starts_with("col-")),
+            "{physical_names:?}"
+        );
+        assert_eq!(context.physical_partition_columns, physical_names[1..]);
+        assert_eq!(
+            context
+                .writer_schema()?
+                .fields()
+                .iter()
+                .map(|field| field.name().clone())
+                .collect::<Vec<_>>(),
+            physical_names
+        );
+
+        // A table with column mapping that is replaced without a mode has no column mapping,
+        // and a new mode gives the columns new physical names and IDs.
+        let mapped = StructType::try_new(vec![
+            mapped_field("id", "col-id", 1, DataType::LONG),
+            mapped_field("p", "col-p", 5, DataType::STRING),
+        ])
+        .expect("schema");
+        let mapped_configuration = HashMap::from([
+            ("delta.columnMapping.mode".to_string(), "name".to_string()),
+            (
+                "delta.columnMapping.maxColumnId".to_string(),
+                "7".to_string(),
+            ),
+        ]);
+        let (context, metadata) = replace(mapped.clone(), mapped_configuration.clone(), None)?;
+        assert_eq!(
+            context.effective_column_mapping_mode,
+            ColumnMappingMode::None
+        );
+        assert!(
+            !metadata
+                .configuration()
+                .keys()
+                .any(|key| key.starts_with("delta.columnMapping.")),
+            "{:?}",
+            metadata.configuration()
+        );
+        assert_eq!(metadata.parse_schema().expect("schema"), unmapped);
+        assert_eq!(context.logical_kernel_for_mapping, None);
+        assert_eq!(context.physical_partition_columns, vec!["p".to_string()]);
+        assert_eq!(
+            context
+                .writer_schema()?
+                .fields()
+                .iter()
+                .map(|field| field.name().clone())
+                .collect::<Vec<_>>(),
+            vec!["id".to_string(), "p".to_string()]
+        );
+
+        let (context, metadata) = replace(mapped, mapped_configuration, Some("id"))?;
+        assert_eq!(context.effective_column_mapping_mode, ColumnMappingMode::Id);
+        assert_eq!(
+            metadata
+                .configuration()
+                .get("delta.columnMapping.maxColumnId"),
+            Some(&"9".to_string())
+        );
+        let schema = metadata.parse_schema().expect("schema");
+        for field in schema.fields() {
+            assert!(
+                field
+                    .physical_name(ColumnMappingMode::Id)
+                    .starts_with("col-")
+            );
+            assert!(!["col-id", "col-p"].contains(&field.physical_name(ColumnMappingMode::Id)));
+        }
         Ok(())
     }
 

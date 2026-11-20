@@ -137,41 +137,57 @@ fn with_nested_column_mapping_of(
 /// fields, so that merging it with `annotate_new_fields_for_column_mapping` adds the
 /// column mapping and nothing else.
 pub fn column_mapping_metadata_only(schema: &StructType) -> StructType {
-    fn map_field(field: &StructField) -> StructField {
+    retain_field_metadata(schema, &|key| {
+        key == ColumnMetadataKey::ColumnMappingId.as_ref()
+            || key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
+    })
+}
+
+/// Returns the schema without the column mapping metadata of the fields, including the
+/// Parquet field IDs.
+pub fn without_column_mapping_metadata(schema: &StructType) -> StructType {
+    retain_field_metadata(schema, &|key| {
+        !key.starts_with("delta.columnMapping.")
+            && key != PARQUET_FIELD_ID_META_KEY
+            && key != ColumnMetadataKey::ParquetFieldId.as_ref()
+            && key != "parquet.field.nested.ids"
+    })
+}
+
+fn retain_field_metadata(schema: &StructType, keep: &dyn Fn(&str) -> bool) -> StructType {
+    fn map_field(field: &StructField, keep: &dyn Fn(&str) -> bool) -> StructField {
         StructField {
             name: field.name().clone(),
-            data_type: map_type(field.data_type()),
+            data_type: map_type(field.data_type(), keep),
             nullable: field.is_nullable(),
             metadata: field
                 .metadata()
                 .iter()
-                .filter(|(key, _)| {
-                    *key == ColumnMetadataKey::ColumnMappingId.as_ref()
-                        || *key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
-                })
+                .filter(|(key, _)| keep(key))
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         }
     }
-    fn map_type(data_type: &DataType) -> DataType {
+    fn map_type(data_type: &DataType, keep: &dyn Fn(&str) -> bool) -> DataType {
         match data_type {
             DataType::Struct(st) => DataType::Struct(Box::new(
-                StructType::try_new(st.fields().map(map_field))
+                StructType::try_new(st.fields().map(|field| map_field(field, keep)))
                     .unwrap_or_else(|_| empty_struct_type()),
             )),
             DataType::Array(at) => DataType::Array(Box::new(ArrayType::new(
-                map_type(at.element_type()),
+                map_type(at.element_type(), keep),
                 at.contains_null(),
             ))),
             DataType::Map(mt) => DataType::Map(Box::new(MapType::new(
-                map_type(mt.key_type()),
-                map_type(mt.value_type()),
+                map_type(mt.key_type(), keep),
+                map_type(mt.value_type(), keep),
                 mt.value_contains_null(),
             ))),
             other => other.clone(),
         }
     }
-    StructType::try_new(schema.fields().map(map_field)).unwrap_or_else(|_| empty_struct_type())
+    StructType::try_new(schema.fields().map(|field| map_field(field, keep)))
+        .unwrap_or_else(|_| empty_struct_type())
 }
 
 /// Annotate only new fields (compared to `existing`) within `candidate` with
