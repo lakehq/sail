@@ -147,6 +147,9 @@ async fn head_many(
         .await
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/datasource-parquet/src/file_format.rs#L331-L412
 /// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
 /// file metadata cache.
 ///
@@ -206,6 +209,7 @@ async fn infer_parquet_checkpoint_schema(
     };
     Ok(Arc::new(schema))
 }
+// SPDX-SnippetEnd
 
 fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> {
     metas
