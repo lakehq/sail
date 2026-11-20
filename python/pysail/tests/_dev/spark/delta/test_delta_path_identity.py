@@ -50,10 +50,10 @@ def _assert_removes_match(actions, original):
 @pytest.mark.integration
 @pytest.mark.parametrize("partition", ["日本語", "café", "a%2Fb % #?"], ids=["unicode", "accent", "escaped"])
 @pytest.mark.parametrize("dv", [False, True], ids=["no-dv", "dv"])
-def test_optimize_preserves_spark_uri_and_dv_identity(spark, delta_jvm_spark, tmp_path, partition, dv):
+def test_optimize_preserves_spark_uri_and_dv_identity(spark, uri_jvm_spark, tmp_path, partition, dv):
     # Delta v4.0.1 AddFile.removeWithTimestamp preserves path and DV verbatim;
     # DeltaLogSuite's "do not relativize paths in RemoveFiles" asserts URI retention.
-    jvm = delta_jvm_spark
+    jvm = uri_jvm_spark
     reference = tmp_path / "reference"
     path = tmp_path / "sail"
     for start in (0, 4):
@@ -138,8 +138,8 @@ def test_optimize_preserves_spark_uri_and_dv_identity(spark, delta_jvm_spark, tm
 @pytest.mark.integration
 @pytest.mark.parametrize("dv", [False, True], ids=["cow", "mor"])
 @pytest.mark.parametrize("operation", ["update", "delete", "merge"])
-def test_dml_routes_decoded_paths_but_removes_stored_uris(spark, delta_jvm_spark, tmp_path, dv, operation):
-    jvm = delta_jvm_spark
+def test_dml_routes_decoded_paths_but_removes_stored_uris(spark, uri_jvm_spark, tmp_path, dv, operation):
+    jvm = uri_jvm_spark
     reference = tmp_path / "reference"
     path = tmp_path / "sail"
     partitions = ["日本語", "café", "a%2Fb % #?"]
@@ -234,17 +234,11 @@ def test_dv_writer_rejects_decoded_path_collision_without_commit(spark, tmp_path
 
 @pytest.fixture
 def uri_jvm_spark(delta_jvm_spark):
-    # Keep Spark's snapshot repartitioning separate from Java URI equality.
-    key = "spark.databricks.delta.snapshotPartitions"
-    previous = delta_jvm_spark.conf.get(key)
-    delta_jvm_spark.conf.set(key, "1")
-    try:
-        yield delta_jvm_spark
-    finally:
-        if previous is None:
-            delta_jvm_spark.conf.unset(key)
-        else:
-            delta_jvm_spark.conf.set(key, previous)
+    # These reference tables contain only a handful of rows and run on local[1].
+    session = delta_jvm_spark.newSession()
+    session.conf.set("spark.databricks.delta.snapshotPartitions", "1")
+    session.conf.set("spark.sql.shuffle.partitions", "1")
+    return session
 
 
 def _write_commit(path, version, actions):
