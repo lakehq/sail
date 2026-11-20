@@ -14,7 +14,15 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 NAMESPACE = "load_table_requests"
-TABLE_PATH = f"/v1/namespaces/{NAMESPACE}/tables/"
+
+
+def _requests(records, start):
+    """Returns the table and view loads recorded since `start`."""
+    return [
+        (record.path.removeprefix("/v1/namespaces/"), record.status, record.access_delegation)
+        for record in records[start:]
+        if record.method == "GET" and ("/tables/" in record.path or "/views/" in record.path)
+    ]
 
 
 def _server(recording_catalog, seaweedfs_host_endpoint, options=""):
@@ -38,14 +46,6 @@ def remote(recording_catalog, seaweedfs_host_endpoint) -> Generator[str, None, N
         yield server.remote
 
 
-def _table_loads(records, start):
-    return [
-        (record.path.removeprefix(TABLE_PATH), record.access_delegation)
-        for record in records[start:]
-        if record.method == "GET" and record.path.startswith(TABLE_PATH)
-    ]
-
-
 def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
     _, records = recording_catalog
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
@@ -59,7 +59,7 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
 
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2]
-        assert _table_loads(records, start) == [("first", None)]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, None)]
 
         start = len(records)
         # Repeated references to a table also load it once.
@@ -72,27 +72,19 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
             .collect()
         )
         assert [row.id for row in rows] == [2]
-        assert sorted(_table_loads(records, start)) == [
-            ("first", None),
-            ("second", None),
+        assert sorted(_requests(records, start)) == [
+            (f"{NAMESPACE}/tables/first", 200, None),
+            (f"{NAMESPACE}/tables/second", 200, None),
         ]
 
         # Each statement loads the table again and sees its latest version.
         spark.sql(f"INSERT INTO {first} VALUES (3)")
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2, 3]
-        assert _table_loads(records, start) == [("first", None)]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, None)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {first}")
         spark.sql(f"DROP TABLE IF EXISTS {second}")
-
-
-def _requests(records, start):
-    return [
-        (record.path.removeprefix("/v1/namespaces/"), record.status, record.access_delegation)
-        for record in records[start:]
-        if record.method == "GET" and ("/tables/" in record.path or "/views/" in record.path)
-    ]
 
 
 def test_read_sends_configured_access_delegation_once(spark, recording_catalog, seaweedfs_host_endpoint):
@@ -109,7 +101,7 @@ def test_read_sends_configured_access_delegation_once(spark, recording_catalog, 
         ):
             start = len(records)
             assert [row.id for row in sessions.create().table(name).collect()] == [1]
-            assert _table_loads(records, start) == [("delegated", "vended-credentials")]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/delegated", 200, "vended-credentials")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 

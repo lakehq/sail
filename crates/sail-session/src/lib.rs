@@ -492,7 +492,6 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         session.execute_logical_plan(plan).await?.collect().await?;
 
-        // The two spellings are looked up separately within the statement.
         let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t)";
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let lookups = catalog.lookups.load(Ordering::SeqCst);
