@@ -648,14 +648,17 @@ impl CatalogCommand {
                         ))
                     })?;
                     let storage_operation = (&options).into();
-                    let lakehouse_table = manager
+                    let resolved = manager
                         .resolve_lakehouse_table_status(
                             &table,
                             &table_status,
                             LakehouseOperation::Alter,
                         )
-                        .await?
-                        .execution;
+                        .await?;
+                    // The storage metadata is read and written with the credentials
+                    // that the catalog issues.
+                    install_table_storage_credentials(ctx, &table, &resolved).await?;
+                    let lakehouse_table = resolved.execution;
                     if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
                         && matches!(lakehouse_table.commit,
                         sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
@@ -1958,6 +1961,294 @@ mod tests {
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
     }
+    /// A catalog that coordinates the commits of a managed Delta table and issues
+    /// storage credentials for it.
+    struct VendingProvider {
+        location: String,
+    }
+
+    #[async_trait]
+    impl CatalogProvider for VendingProvider {
+        fn get_name(&self) -> &str {
+            "unity"
+        }
+
+        fn lakehouse_capabilities(&self) -> Vec<crate::lakehouse::LakehouseCapability> {
+            vec![crate::lakehouse::LakehouseCapability::DeltaRatifiedCommits]
+        }
+
+        async fn get_table_storage_credentials(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _request: crate::lakehouse::TableStorageCredentialsRequest,
+        ) -> CatalogResult<Option<sail_common_datafusion::catalog::TableStorageCredentials>>
+        {
+            Ok(Some(
+                sail_common_datafusion::catalog::TableStorageCredentials {
+                    credential: sail_common_datafusion::catalog::StorageCredential::GcsOauth {
+                        token: "secret-token".to_string(),
+                    },
+                    expires_at_ms: None,
+                },
+            ))
+        }
+
+        async fn create_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: CreateDatabaseOptions,
+        ) -> CatalogResult<DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn get_database(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn list_databases(
+            &self,
+            _prefix: Option<&crate::provider::Namespace>,
+        ) -> CatalogResult<Vec<DatabaseStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: DropDatabaseOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: CreateTableOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            table: &str,
+        ) -> CatalogResult<TableStatus> {
+            Ok(TableStatus {
+                catalog: Some("unity".to_string()),
+                database: vec!["default".to_string()],
+                name: table.to_string(),
+                kind: TableKind::Table {
+                    columns: vec![],
+                    comment: None,
+                    constraints: vec![],
+                    location: Some(self.location.clone()),
+                    format: "delta".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    properties: vec![(
+                        sail_common_datafusion::catalog::delta::DELTA_UNITY_TABLE_ID_KEY
+                            .to_string(),
+                        "table-id".to_string(),
+                    )],
+                    is_external: false,
+                },
+            })
+        }
+
+        async fn list_tables(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: DropTableOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn alter_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: AlterTableOptions,
+        ) -> CatalogResult<()> {
+            Ok(())
+        }
+
+        async fn create_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: CreateViewOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn list_views(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: DropViewOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+    }
+
+    /// A lake source that reads a file of the table when it alters the table.
+    struct ReadingLakeSource {
+        file: object_store::path::Path,
+        read: std::sync::Mutex<Option<bool>>,
+    }
+
+    #[async_trait]
+    impl DataSource for ReadingLakeSource {
+        fn name(&self) -> &str {
+            "delta"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+            not_impl_err!("unused in test")
+        }
+
+        async fn create_writer(
+            &self,
+            _ctx: &dyn Session,
+            _info: SinkInfo,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    #[async_trait]
+    impl LakeSource for ReadingLakeSource {
+        async fn alter_table(
+            &self,
+            ctx: &datafusion::execution::TaskContext,
+            path: &str,
+            _operation: LakeSourceAlterTableOperation,
+            _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+        ) -> datafusion_common::Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult>
+        {
+            use object_store::ObjectStoreExt;
+
+            let url = url::Url::parse(path)
+                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+            let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
+            let read = store.get(&self.file).await.is_ok();
+            *self
+                .read
+                .lock()
+                .map_err(|e| datafusion_common::DataFusionError::Internal(e.to_string()))? =
+                Some(read);
+            Ok(Default::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn alter_table_accesses_catalog_managed_storage_with_vended_credentials() {
+        use object_store::memory::InMemory;
+        use object_store::{ObjectStore, ObjectStoreExt};
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        let location = "memory:///warehouse/items";
+        let file = object_store::path::Path::from("warehouse/items/_delta_log/0.json");
+        // Only the store that uses the vended credentials has the file.
+        let vended = Arc::new(InMemory::new());
+        let put = vended.put(&file, "{}".into()).await;
+        assert!(put.is_ok(), "{put:?}");
+        let factory: VendedStoreFactory = {
+            let vended = vended.clone();
+            Arc::new(move |_| Ok(vended.clone() as Arc<dyn ObjectStore>))
+        };
+        let lake_source = Arc::new(ReadingLakeSource {
+            file,
+            read: std::sync::Mutex::new(None),
+        });
+        let registry = Arc::new(DataSourceRegistry::new());
+        let registered = registry.register_data_source(lake_source.clone());
+        assert!(registered.is_ok(), "{registered:?}");
+        let plan_service = Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
+            Box::new(TestPlanFormatter),
+        ));
+        let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
+            catalogs: std::iter::once((
+                "unity".to_string(),
+                Arc::new(VendingProvider {
+                    location: location.to_string(),
+                }) as Arc<dyn CatalogProvider>,
+            ))
+            .collect(),
+            default_catalog: "unity".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        });
+        assert!(manager.is_ok());
+        let Ok(manager) = manager else {
+            unreachable!();
+        };
+        let manager = Arc::new(manager);
+        let config = SessionConfig::new()
+            .with_extension(registry)
+            .with_extension(plan_service)
+            .with_extension(manager.clone())
+            .with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
+        let ctx = SessionContext::new_with_config(config);
+        let url = url::Url::parse(location);
+        assert!(url.is_ok());
+        let Ok(url) = url else {
+            unreachable!();
+        };
+        ctx.runtime_env()
+            .register_object_store(&url, Arc::new(InMemory::new()));
+
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+        let result = command.execute(ctx.task_ctx().as_ref(), &manager).await;
+        assert!(result.is_ok(), "{result:?}");
+        let read = lake_source.read.lock().map(|read| *read);
+        assert!(matches!(read, Ok(Some(true))), "{read:?}");
+    }
+
     #[test]
     fn test_local_table_dir_converts_file_uris_only() {
         let dir = |location: &str| local_table_dir(location).ok().flatten();

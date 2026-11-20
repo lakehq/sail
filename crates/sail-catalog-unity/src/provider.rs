@@ -2417,6 +2417,10 @@ fn storage_location_key(location: &str) -> &str {
     location.trim_end_matches('/')
 }
 
+/// The keys of a storage credential that the client does not support.
+/// A credential with any of these keys is not used.
+const UNSUPPORTED_STORAGE_CREDENTIAL_KEYS: [&str; 2] = ["s3.endpoint", "client.region"];
+
 /// Selects the credential with the longest prefix that covers the storage location
 /// among the credentials issued for the access, preferring a credential issued for
 /// exactly the access. A credential for reading and writing can be used for reading,
@@ -2447,6 +2451,17 @@ fn select_storage_credentials(
             };
             let length = prefix.len();
             let mut config = item.config?;
+            // The credential is for an S3-compatible storage that the client does not
+            // support, so the client must not use it and must not send its requests to AWS S3.
+            if let Some(key) = UNSUPPORTED_STORAGE_CREDENTIAL_KEYS
+                .iter()
+                .find(|key| config.get(**key).is_some_and(|x| x.is_some()))
+            {
+                log::warn!(
+                    "ignoring the storage credential for {prefix} since it has the unsupported key {key}"
+                );
+                return None;
+            }
             let mut take = |key: &str| config.remove(key).flatten().filter(|x| !x.is_empty());
             let credential = if let Some(access_key_id) = take("s3.access-key-id")
                 && let Some(secret_access_key) = take("s3.secret-access-key")
@@ -6486,6 +6501,25 @@ mod tests {
             serde_json::json!({"storage-credentials": [{
                 "prefix": "s3://bucket/other", "operation": "READ",
                 "config": {"gcs.oauth-token": "token"}
+            }]}),
+            // The credentials for an S3-compatible storage are not supported.
+            serde_json::json!({"storage-credentials": [{
+                "prefix": DELTA_TABLE_URI, "operation": "READ",
+                "config": {
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret",
+                    "s3.endpoint": "https://minio.example.com:9000", "client.region": "us-east-1"
+                }
+            }]}),
+            serde_json::json!({"storage-credentials": [{
+                "prefix": DELTA_TABLE_URI, "operation": "READ",
+                "config": {"s3.endpoint": "https://minio.example.com:9000"}
+            }]}),
+            serde_json::json!({"storage-credentials": [{
+                "prefix": DELTA_TABLE_URI, "operation": "READ",
+                "config": {
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret",
+                    "s3.session-token": "token", "client.region": "us-east-1"
+                }
             }]}),
         ] {
             let credentials = table_storage_credentials(

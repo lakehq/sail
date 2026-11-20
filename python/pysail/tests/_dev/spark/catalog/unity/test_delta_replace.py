@@ -339,6 +339,25 @@ def test_sql_replace_keeps_the_unity_required_properties(
         assert _UNITY_REQUIRED_PROPERTIES.items() <= properties.items()
         assert properties["delta.enableChangeDataFeed"] == "true"
 
+        # The required properties cannot be changed or removed, since the catalog
+        # does not check them again unless the protocol changes.
+        required = "requires the table property delta.checkpointPolicy=v2"
+        with pytest.raises(Exception, match=required):
+            spark.sql(
+                f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta "
+                "TBLPROPERTIES ('delta.checkpointPolicy' = 'classic')"
+            )
+        with pytest.raises(Exception, match=required):
+            spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.checkpointPolicy' = 'classic')")
+        with pytest.raises(Exception, match="requires the table property delta.enableDeletionVectors=true"):
+            spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('delta.enableDeletionVectors')")
+        spark.sql(
+            f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"
+        )
+        spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')")
+        properties = _delta_api_table_properties(unity_rest_url, table)
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= properties.items()
+
         spark.sql(f"INSERT INTO {table} VALUES (1), (2)")
         spark.sql(f"DELETE FROM {table} WHERE id = 1")
         assert _rows(spark, table, "id") == [(2,)]

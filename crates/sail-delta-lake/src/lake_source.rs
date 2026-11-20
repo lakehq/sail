@@ -479,6 +479,12 @@ impl LakeSource for DeltaLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         validate_delta_retention_properties(config, &metadata_configuration)?;
         if let (Some(_), Some(snapshot)) = (replace_context, replace_snapshot.as_ref()) {
+            ensure_unity_fixed_properties_kept(
+                snapshot.metadata().configuration(),
+                metadata_configuration
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), Some(value.as_str()))),
+            )?;
             // A catalog-managed table keeps its identity in the catalog, the catalog
             // coordination, and the in-commit timestamps that the coordination requires,
             // as Delta Spark retains them on REPLACE. It also keeps the properties that
@@ -1291,6 +1297,15 @@ impl DeltaLakeSource {
         validate_delta_retention_properties(ctx.session_config(), &validated_sets)?;
 
         let existing_config = snapshot.metadata().configuration().clone();
+        if catalog_managed_commit_context(lakehouse_table).is_some() {
+            ensure_unity_fixed_properties_kept(
+                &existing_config,
+                validated_sets
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), Some(value.as_str())))
+                    .chain(canonical_unsets.iter().map(|key| (key.as_str(), None))),
+            )?;
+        }
 
         // Enforce existence of UNSET keys unless `IF EXISTS` was specified.
         if !if_exists {
@@ -2226,6 +2241,16 @@ fn delta_feature_names(features: Option<&[TableFeature]>) -> Option<Vec<String>>
     })
 }
 
+/// The properties with fixed values that Unity Catalog requires for managed tables.
+/// The catalog does not check them again unless the protocol changes.
+const UNITY_FIXED_PROPERTIES: [&str; 5] = [
+    "delta.enableInCommitTimestamps",
+    "delta.enableDeletionVectors",
+    "delta.checkpointPolicy",
+    "delta.checkpoint.writeStatsAsStruct",
+    "delta.checkpoint.writeStatsAsJson",
+];
+
 /// Whether REPLACE keeps a property of a catalog-managed table that the statement
 /// does not set.
 fn is_delta_replace_retained_property(key: &str) -> bool {
@@ -2233,17 +2258,49 @@ fn is_delta_replace_retained_property(key: &str) -> bool {
         DELTA_UNITY_TABLE_ID_KEY,
         DELTA_UNITY_TABLE_ID_LEGACY_KEY,
         "delta.feature.catalogManaged",
-        "delta.enableInCommitTimestamps",
         "delta.inCommitTimestampEnablementVersion",
         "delta.inCommitTimestampEnablementTimestamp",
-        // The properties with fixed values that Unity Catalog requires for managed tables.
-        "delta.enableDeletionVectors",
-        "delta.checkpointPolicy",
-        "delta.checkpoint.writeStatsAsStruct",
-        "delta.checkpoint.writeStatsAsJson",
     ]
     .iter()
+    .chain(UNITY_FIXED_PROPERTIES.iter())
     .any(|retained| key.eq_ignore_ascii_case(retained))
+}
+
+/// Fails if the changes to the properties of a catalog-managed table set a property
+/// with a fixed value that the table has to another value, or remove it.
+/// A removal is a change with no value.
+fn ensure_unity_fixed_properties_kept<'a>(
+    existing: &HashMap<String, String>,
+    changes: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Result<()> {
+    for (key, value) in changes {
+        if !UNITY_FIXED_PROPERTIES
+            .iter()
+            .any(|fixed| key.eq_ignore_ascii_case(fixed))
+        {
+            continue;
+        }
+        let Some((key, required)) = existing.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))
+        else {
+            continue;
+        };
+        match value {
+            Some(value) if value == required => {}
+            Some(value) => {
+                return plan_err!(
+                    "Unity Catalog requires the table property {key}={required} \
+                     for managed Delta tables, but it is set to {value}"
+                );
+            }
+            None => {
+                return plan_err!(
+                    "Unity Catalog requires the table property {key}={required} \
+                     for managed Delta tables"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn delta_catalog_managed_create_table_properties(
@@ -2472,6 +2529,41 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use super::*;
+
+    #[test]
+    fn unity_fixed_properties_are_kept() {
+        let existing = HashMap::from([
+            ("delta.checkpointPolicy".to_string(), "v2".to_string()),
+            (
+                "delta.enableDeletionVectors".to_string(),
+                "true".to_string(),
+            ),
+        ]);
+        let check = |changes: &[(&str, Option<&str>)]| {
+            ensure_unity_fixed_properties_kept(&existing, changes.iter().copied())
+                .map_err(|e| e.to_string())
+        };
+        assert!(check(&[]).is_ok());
+        assert!(check(&[("delta.checkpointPolicy", Some("v2"))]).is_ok());
+        assert!(check(&[("team", Some("a")), ("team", None)]).is_ok());
+        // A fixed property that the table does not have can be set.
+        assert!(check(&[("delta.checkpoint.writeStatsAsJson", Some("false"))]).is_ok());
+        let error = check(&[("DELTA.CHECKPOINTPOLICY", Some("classic"))]);
+        assert!(
+            error.as_ref().is_err_and(|e| e.contains(
+                "requires the table property delta.checkpointPolicy=v2 \
+                 for managed Delta tables, but it is set to classic"
+            )),
+            "{error:?}"
+        );
+        let error = check(&[("delta.enableDeletionVectors", None)]);
+        assert!(
+            error.as_ref().is_err_and(
+                |e| e.contains("requires the table property delta.enableDeletionVectors=true")
+            ),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn replace_where_selects_only_column_bearing_conjuncts() {

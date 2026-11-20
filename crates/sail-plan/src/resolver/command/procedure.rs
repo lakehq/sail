@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
@@ -13,6 +14,7 @@ use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::storage_credentials::install_table_storage_credentials;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, LakehouseTableBinding,
@@ -304,6 +306,7 @@ impl PlanResolver<'_> {
                     canonical_table.extend(table_status.database.iter().cloned());
                     canonical_table.push(table_status.name.clone());
                     let planning = resolve_procedure_table_planning(
+                        self.ctx,
                         manager.as_ref(),
                         &canonical_table,
                         format,
@@ -527,6 +530,7 @@ struct ProcedureTablePlanning {
 }
 
 async fn resolve_procedure_table_planning(
+    ctx: &SessionContext,
     manager: &CatalogManager,
     table: &[String],
     format: &str,
@@ -543,6 +547,8 @@ async fn resolve_procedure_table_planning(
             },
         )
         .await?;
+    // The procedure reads the storage with the credentials that the catalog issues.
+    install_table_storage_credentials(ctx, table, &resolved).await?;
     let binding = resolved.execution;
     let access = match manager
         .begin_table_access(
