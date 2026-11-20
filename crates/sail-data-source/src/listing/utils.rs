@@ -18,7 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::cache_scope::object_store_listing_cache_scope;
+use sail_cache::scope::object_store_listing_cache_scope;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;

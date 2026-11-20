@@ -26,7 +26,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
-use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{

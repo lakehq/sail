@@ -97,10 +97,10 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
+use sail_cache::scope::object_store_scoped_file_metadata_cache;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
-use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };

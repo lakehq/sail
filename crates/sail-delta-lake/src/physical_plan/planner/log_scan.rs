@@ -24,7 +24,7 @@ use datafusion_common::extensions::Extensions;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::object_store_scoped_file_metadata_cache;
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;

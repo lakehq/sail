@@ -18,7 +18,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
-use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,

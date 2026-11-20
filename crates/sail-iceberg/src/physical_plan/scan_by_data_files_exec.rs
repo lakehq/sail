@@ -31,7 +31,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::object_store_scoped_file_metadata_cache;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
