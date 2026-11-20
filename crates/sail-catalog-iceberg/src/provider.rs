@@ -1846,10 +1846,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)
             }
         };
-        if let Some(mode) = &rest_session.scan_planning_mode {
-            Self::normalize_scan_planning_mode(mode)?;
-        }
-        if rest_session.scan_planning_mode.as_deref() == Some("server") {
+        let server_side = match &rest_session.scan_planning_mode {
+            Some(mode) => Self::normalize_scan_planning_mode(mode)? == "server",
+            None => false,
+        };
+        if server_side {
             context.scan = ScanAuthority::IcebergRestServerSide;
         } else {
             context.scan = ScanAuthority::ClientLakeSource;
