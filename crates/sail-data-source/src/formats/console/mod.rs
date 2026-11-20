@@ -53,6 +53,7 @@ impl DataSource for ConsoleDataSource {
             identity_columns_to_track: _,
             create_table_schema: _,
             replace_table_metadata: _,
+            create_table: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console data source only supports append mode");

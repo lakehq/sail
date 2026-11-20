@@ -162,6 +162,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
         true,
         &writer_input.schema(),
         None,
+        None,
         operation.clone(),
     )?;
     write_context.commit_context.identity_columns_to_track =
@@ -275,6 +276,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
         &PhysicalSinkMode::Append,
         true,
         &writer_schema,
+        None,
         None,
         operation.clone(),
     )?;

@@ -41,6 +41,10 @@ pub struct DeltaCreatedVersion {
     pub protocol: DeltaProtocolInfo,
     pub metadata: DeltaMetadataInfo,
     pub in_commit_timestamp: i64,
+    /// The row ID high-water mark of the row tracking domain, for a first version that
+    /// assigns row IDs to the data that it adds.
+    #[serde(default)]
+    pub row_id_high_water_mark: Option<i64>,
 }
 
 /// Properties that bind a Delta log to a catalog or commit coordinator.

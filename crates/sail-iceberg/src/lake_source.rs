@@ -126,6 +126,7 @@ impl DataSource for IcebergLakeSource {
             lakehouse_table,
             create_table_schema: _,
             replace_table_metadata: _,
+            create_table: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");

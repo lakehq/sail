@@ -139,6 +139,7 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
 def test_spark_sql_merge_dataframe_source_is_unity_managed(
     spark: SparkSession,
     unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
 ) -> None:
     database = _unique_database("unity_dataframe_sql_args_test")
     table = "managed_delta_sql_args_merge_t"
@@ -173,7 +174,9 @@ def test_spark_sql_merge_dataframe_source_is_unity_managed(
         rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "new"), (2, "keep"), (3, "insert")]
 
-        assert _unity_delta_commit_info(unity_rest_url, table_fqn, 2)
+        # With the Delta REST API, version 0 has the data of CREATE TABLE AS SELECT, while
+        # the table is created before the data is written otherwise.
+        assert _unity_delta_commit_info(unity_rest_url, table_fqn, 1 if unity_uses_delta_api else 2)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
@@ -199,10 +202,14 @@ def test_write_to_creates_column_mapped_managed_table(spark: SparkSession, mode:
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
 
 
-def test_save_as_table_with_delta_option_does_not_write_mismatched_data(spark: SparkSession) -> None:
-    """The table is created before the data is written, without the Delta write options
-    as table properties, while the data is written with them. The write fails instead of
-    committing data files that the table cannot read."""
+def test_save_as_table_with_delta_option_does_not_write_mismatched_data(
+    spark: SparkSession,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
+    """Without the Delta REST API, the table is created before the data is written, without
+    the Delta write options as table properties, while the data is written with them. The
+    write fails instead of committing data files that the table cannot read. With the Delta
+    REST API, the data is written with the metadata of the table that the write creates."""
     database = _unique_database("unity_dataframe_delta_option_test")
     table_fqn = f"{database}.managed_delta_option_t"
 
@@ -210,8 +217,13 @@ def test_save_as_table_with_delta_option_does_not_write_mismatched_data(spark: S
     try:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         df = spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
-        with pytest.raises(Exception, match="different metadata"):
-            df.write.format("delta").option("delta.columnMapping.mode", "name").saveAsTable(table_fqn)
+        write = df.write.format("delta").option("delta.columnMapping.mode", "name")
+        if unity_uses_delta_api:
+            write.saveAsTable(table_fqn)
+            assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
+        else:
+            with pytest.raises(Exception, match="different metadata"):
+                write.saveAsTable(table_fqn)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")

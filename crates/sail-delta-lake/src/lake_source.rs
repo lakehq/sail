@@ -67,11 +67,12 @@ use crate::schema::{
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType,
-    DeltaOperation, MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature,
-    TableProperties, canonicalize_and_validate_table_properties, route_table_property_key,
+    DeltaOperation, Metadata, MetadataValue, Protocol, SaveMode, StructField, StructType,
+    TableFeature, TableProperties, canonicalize_and_validate_table_properties,
+    route_table_property_key,
 };
 use crate::table::{
-    DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    DeltaSnapshot, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
     create_delta_table_with_object_store, create_logstore_with_object_store,
     infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
@@ -147,6 +148,7 @@ impl DataSource for DeltaLakeSource {
             lakehouse_table,
             create_table_schema,
             replace_table_metadata,
+            create_table,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
@@ -187,6 +189,7 @@ impl DataSource for DeltaLakeSource {
                     lakehouse_table,
                     create_table_schema,
                     replace_table_metadata,
+                    create_table,
                 },
             )),
         }))
@@ -473,130 +476,18 @@ impl LakeSource for DeltaLakeSource {
             ensure_not_catalog_managed_delta(snapshot, "REPLACE TABLE without the catalog")?;
         }
 
-        let properties = if catalog_managed_table_id.is_some() {
-            delta_catalog_managed_create_table_properties(properties)
-        } else {
-            properties
-        };
-        let mut metadata_configuration = delta_create_table_metadata_configuration(properties)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        validate_delta_retention_properties(config, &metadata_configuration)?;
-        if let Some(snapshot) = replace_snapshot.as_ref() {
-            metadata_configuration = delta_replace_configuration(
-                snapshot,
-                replace_context.is_some(),
-                metadata_configuration,
-            )?;
-        }
-        let normalized_schema = normalize_delta_schema(&declared_schema);
-        let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        kernel_schema = inject_generation_expressions(
-            kernel_schema,
-            &delta_create_table_generation_expressions(&columns),
-        );
-        kernel_schema = inject_default_expressions(
-            kernel_schema,
-            &delta_create_table_default_expressions(&columns),
-        );
-        kernel_schema = inject_identity_columns(
-            kernel_schema,
-            &delta_create_table_identity_columns(&columns),
-        );
-
-        let effective_mode = metadata_configuration
-            .get("delta.columnMapping.mode")
-            .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
-            .unwrap_or_default();
-
-        let mut configuration = metadata_configuration;
-        // A table that is created before the data of a write is written has the column
-        // mapping that the data is written with.
-        let assigned_column_mapping = delta_create_table_column_mapping(&columns)?;
-        let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-            let (annotated, max_column_id) = if let Some(snapshot) =
-                replace_snapshot.as_ref().filter(|snapshot| {
-                    snapshot.effective_column_mapping_mode() != ColumnMappingMode::None
-                }) {
-                // A replaced table gets new physical names, and column IDs after the IDs
-                // that the table has used.
-                let current = StructType::try_from(snapshot.schema())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let used_column_id = snapshot
-                    .metadata()
-                    .configuration()
-                    .get("delta.columnMapping.maxColumnId")
-                    .and_then(|id| id.parse::<i64>().ok())
-                    .unwrap_or_default()
-                    .max(compute_max_column_id(&current));
-                let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
-                    &StructType::try_new(Vec::<StructField>::new())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                    &kernel_schema,
-                    used_column_id + 1,
-                );
-                (annotated, max_column_id.to_string())
-            } else if let Some(assigned) = &assigned_column_mapping {
-                let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
-                    assigned,
-                    &kernel_schema,
-                    compute_max_column_id(assigned) + 1,
-                );
-                (annotated, max_column_id.to_string())
-            } else {
-                let annotated = annotate_for_column_mapping(&kernel_schema);
-                let max_column_id = compute_max_column_id(&annotated).to_string();
-                (annotated, max_column_id)
-            };
-            configuration.insert(
-                "delta.columnMapping.mode".to_string(),
-                effective_mode.as_ref().to_string(),
-            );
-            configuration.insert("delta.columnMapping.maxColumnId".to_string(), max_column_id);
-            annotated
-        } else {
-            kernel_schema
-        };
-
-        let partition_columns = partition_by
-            .iter()
-            .map(|field| field.column.clone())
-            .collect::<Vec<_>>();
-        let mut metadata = metadata_for_create_with_struct_type(
-            metadata_schema,
-            partition_columns,
-            Utc::now().timestamp_millis(),
-            configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if let Some(comment) = comment {
-            metadata = metadata.with_description(Some(comment));
-        }
-        let mut protocol =
-            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        // A replaced table keeps the protocol and the catalog properties that it has.
-        if let Some(table_id) = catalog_managed_table_id
-            .as_ref()
-            .filter(|_| replace_snapshot.is_none())
-        {
-            protocol = protocol_with_catalog_managed(&protocol);
-            metadata = metadata_with_catalog_managed(metadata, table_id);
-        }
-        if let Some(required_protocol) = &unity_required_protocol {
-            protocol = protocol.merge_upgrade_requirements(required_protocol);
-            validate_unity_required_protocol(&protocol)?;
-            // The table features are creation-time directives that belong to the protocol,
-            // so they are not written to the table configuration.
-            let feature_keys = metadata
-                .configuration()
-                .keys()
-                .filter(|key| key.to_ascii_lowercase().starts_with("delta.feature."))
-                .cloned()
-                .collect::<Vec<_>>();
-            for key in feature_keys {
-                metadata = metadata.remove_config_key(&key);
-            }
-        }
+        let (protocol, metadata) = create_table_protocol_and_metadata(
+            config,
+            &declared_schema,
+            &columns,
+            comment,
+            &partition_by,
+            properties,
+            catalog_managed_table_id.as_deref(),
+            unity_required_protocol.as_ref(),
+            replace_snapshot.as_deref(),
+            replace_context.is_some(),
+        )?;
 
         let report_create_commit = unity_required_protocol.is_some() && replace_snapshot.is_none();
         let log_store = if let Some(table) = existing_table.as_ref() {
@@ -871,6 +762,10 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialOrd(ignore))]
     pub create_table_schema: Option<SchemaRef>,
     pub replace_table_metadata: bool,
+    /// The definition of a table that the catalog staged, which the first commit of the
+    /// write creates.
+    #[educe(Hash(ignore), PartialOrd(ignore))]
+    pub create_table: Option<Box<LakeSourceCreateTableInfo>>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -945,6 +840,7 @@ pub(crate) async fn plan_delta_write(
         lakehouse_table,
         create_table_schema,
         replace_table_metadata,
+        create_table,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -1038,6 +934,21 @@ pub(crate) async fn plan_delta_write(
     if !table_exists {
         validate_delta_retention_properties(ctx.config(), &metadata_configuration)?;
     }
+    // The first commit of the write creates the table that the catalog staged, with the
+    // protocol and the metadata of the table definition.
+    let create_actions = match create_table.as_deref() {
+        Some(_) if table_exists => {
+            return plan_err!(
+                "Delta table already exists at the location that the catalog staged: {table_url}"
+            );
+        }
+        Some(table) => Some(staged_table_protocol_and_metadata(ctx.config(), table)?),
+        None => None,
+    };
+    let metadata_configuration = match &create_actions {
+        Some((_, metadata)) => metadata.configuration().clone(),
+        None => metadata_configuration,
+    };
 
     match mode {
         PhysicalSinkMode::ErrorIfExists if table_exists => {
@@ -1171,7 +1082,8 @@ pub(crate) async fn plan_delta_write(
     .with_table_snapshot(table_snapshot)
     .with_lakehouse_table(lakehouse_table)
     .with_create_table_schema(create_table_schema)
-    .with_replacement(replacement);
+    .with_replacement(replacement)
+    .with_create_actions(create_actions);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
     planner
@@ -2188,8 +2100,190 @@ fn validate_unity_required_protocol(protocol: &Protocol) -> Result<()> {
     )
 }
 
+/// Builds the protocol and the metadata of version 0 of a table that the catalog staged,
+/// which the first commit of a write creates.
+fn staged_table_protocol_and_metadata(
+    config: &SessionConfig,
+    table: &LakeSourceCreateTableInfo,
+) -> Result<(Protocol, Metadata)> {
+    if table
+        .partition_by
+        .iter()
+        .any(|field| field.transform.is_some())
+    {
+        return not_impl_err!("partition transforms for Delta CREATE TABLE");
+    }
+    let declared_schema = delta_create_table_arrow_schema(&table.columns)?;
+    if declared_schema.fields().is_empty() {
+        return plan_err!(
+            "Delta CREATE TABLE requires at least one column when no existing Delta metadata is present"
+        );
+    }
+    let table_id = unity_table_id_value(
+        table
+            .properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .ok_or_else(|| {
+        DataFusionError::Plan(
+            "catalog-managed Delta CREATE TABLE requires a Unity table id".to_string(),
+        )
+    })?;
+    let required_protocol = table
+        .required_protocol
+        .clone()
+        .map(parse_unity_required_protocol)
+        .transpose()?;
+    create_table_protocol_and_metadata(
+        config,
+        &declared_schema,
+        &table.columns,
+        table.comment.clone(),
+        &table.partition_by,
+        table.properties.clone(),
+        Some(table_id),
+        required_protocol.as_ref(),
+        None,
+        false,
+    )
+}
+
+/// Builds the protocol and the metadata of a Delta table that is created, or that replaces
+/// the table of the snapshot.
+#[expect(clippy::too_many_arguments)]
+fn create_table_protocol_and_metadata(
+    config: &SessionConfig,
+    declared_schema: &SchemaRef,
+    columns: &[LakeSourceCreateTableColumn],
+    comment: Option<String>,
+    partition_by: &[CatalogPartitionField],
+    properties: Vec<(String, String)>,
+    catalog_managed_table_id: Option<&str>,
+    unity_required_protocol: Option<&Protocol>,
+    replace_snapshot: Option<&DeltaSnapshot>,
+    catalog_replace: bool,
+) -> Result<(Protocol, Metadata)> {
+    let properties = if catalog_managed_table_id.is_some() {
+        delta_catalog_managed_create_table_properties(properties)
+    } else {
+        properties
+    };
+    let mut metadata_configuration = delta_create_table_metadata_configuration(properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    validate_delta_retention_properties(config, &metadata_configuration)?;
+    if let Some(snapshot) = replace_snapshot {
+        metadata_configuration =
+            delta_replace_configuration(snapshot, catalog_replace, metadata_configuration)?;
+    }
+    let normalized_schema = normalize_delta_schema(declared_schema);
+    let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    kernel_schema = inject_generation_expressions(
+        kernel_schema,
+        &delta_create_table_generation_expressions(columns),
+    );
+    kernel_schema = inject_default_expressions(
+        kernel_schema,
+        &delta_create_table_default_expressions(columns),
+    );
+    kernel_schema =
+        inject_identity_columns(kernel_schema, &delta_create_table_identity_columns(columns));
+
+    let effective_mode = metadata_configuration
+        .get("delta.columnMapping.mode")
+        .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
+        .unwrap_or_default();
+
+    let mut configuration = metadata_configuration;
+    // A table that is created before the data of a write is written has the column
+    // mapping that the data is written with.
+    let assigned_column_mapping = delta_create_table_column_mapping(columns)?;
+    let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
+        let (annotated, max_column_id) = if let Some(snapshot) = replace_snapshot
+            .filter(|snapshot| snapshot.effective_column_mapping_mode() != ColumnMappingMode::None)
+        {
+            // A replaced table gets new physical names, and column IDs after the IDs
+            // that the table has used.
+            let current = StructType::try_from(snapshot.schema())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let used_column_id = snapshot
+                .metadata()
+                .configuration()
+                .get("delta.columnMapping.maxColumnId")
+                .and_then(|id| id.parse::<i64>().ok())
+                .unwrap_or_default()
+                .max(compute_max_column_id(&current));
+            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
+                &StructType::try_new(Vec::<StructField>::new())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                &kernel_schema,
+                used_column_id + 1,
+            );
+            (annotated, max_column_id.to_string())
+        } else if let Some(assigned) = &assigned_column_mapping {
+            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
+                assigned,
+                &kernel_schema,
+                compute_max_column_id(assigned) + 1,
+            );
+            (annotated, max_column_id.to_string())
+        } else {
+            let annotated = annotate_for_column_mapping(&kernel_schema);
+            let max_column_id = compute_max_column_id(&annotated).to_string();
+            (annotated, max_column_id)
+        };
+        configuration.insert(
+            "delta.columnMapping.mode".to_string(),
+            effective_mode.as_ref().to_string(),
+        );
+        configuration.insert("delta.columnMapping.maxColumnId".to_string(), max_column_id);
+        annotated
+    } else {
+        kernel_schema
+    };
+
+    let partition_columns = partition_by
+        .iter()
+        .map(|field| field.column.clone())
+        .collect::<Vec<_>>();
+    let mut metadata = metadata_for_create_with_struct_type(
+        metadata_schema,
+        partition_columns,
+        Utc::now().timestamp_millis(),
+        configuration,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    if let Some(comment) = comment {
+        metadata = metadata.with_description(Some(comment));
+    }
+    let mut protocol =
+        protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // A replaced table keeps the protocol and the catalog properties that it has.
+    if let Some(table_id) = catalog_managed_table_id.filter(|_| replace_snapshot.is_none()) {
+        protocol = protocol_with_catalog_managed(&protocol);
+        metadata = metadata_with_catalog_managed(metadata, table_id);
+    }
+    if let Some(required_protocol) = unity_required_protocol {
+        protocol = protocol.merge_upgrade_requirements(required_protocol);
+        validate_unity_required_protocol(&protocol)?;
+        // The table features are creation-time directives that belong to the protocol,
+        // so they are not written to the table configuration.
+        let feature_keys = metadata
+            .configuration()
+            .keys()
+            .filter(|key| key.to_ascii_lowercase().starts_with("delta.feature."))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in feature_keys {
+            metadata = metadata.remove_config_key(&key);
+        }
+    }
+    Ok((protocol, metadata))
+}
+
 /// Reads version 0 of a staged Unity Catalog managed table to report it to the catalog.
-async fn unity_create_commit(
+pub(crate) async fn unity_create_commit(
     log_store: &dyn crate::delta_log::LogStore,
 ) -> Result<DeltaCreatedVersion> {
     let external = |e| DataFusionError::External(Box::new(e));
@@ -2237,7 +2331,35 @@ async fn unity_create_commit(
             description: metadata.description().map(str::to_string),
         },
         in_commit_timestamp,
+        row_id_high_water_mark: row_id_high_water_mark(&actions)?,
     })
+}
+
+/// The row ID high-water mark that the actions of a commit set.
+fn row_id_high_water_mark(actions: &[Action]) -> Result<Option<i64>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RowTrackingDomain {
+        row_id_high_water_mark: i64,
+    }
+
+    actions
+        .iter()
+        .find_map(|action| match action {
+            Action::DomainMetadata(domain)
+                if domain.domain == crate::transaction::row_tracking::ROW_TRACKING_DOMAIN
+                    && !domain.removed =>
+            {
+                Some(&domain.configuration)
+            }
+            _ => None,
+        })
+        .map(|configuration| {
+            serde_json::from_str::<RowTrackingDomain>(configuration)
+                .map(|domain| domain.row_id_high_water_mark)
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        })
+        .transpose()
 }
 
 fn delta_feature_names(features: Option<&[TableFeature]>) -> Option<Vec<String>> {
@@ -3183,6 +3305,156 @@ mod tests {
         assert_eq!(
             Some(create_commit.in_commit_timestamp),
             in_commit_timestamp.as_i64()
+        );
+        Ok(())
+    }
+
+    fn staged_table_info(
+        properties: Vec<(&str, &str)>,
+        required_protocol: serde_json::Value,
+    ) -> Result<LakeSourceCreateTableInfo> {
+        Ok(LakeSourceCreateTableInfo {
+            path: "memory:///staging/t".to_string(),
+            columns: vec![LakeSourceCreateTableColumn {
+                metadata: Default::default(),
+                name: "id".to_string(),
+                data_type: ArrowDataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            partition_by: vec![],
+            properties: properties
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            replace: false,
+            lakehouse_table: None,
+            required_protocol: Some(
+                serde_json::from_value(required_protocol)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            ),
+        })
+    }
+
+    /// The first commit of a write to a staged table creates the table with the protocol
+    /// and the metadata that CREATE TABLE creates it with.
+    #[tokio::test]
+    async fn unity_staged_table_write_has_the_protocol_and_metadata_of_create_table() -> Result<()>
+    {
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "deletionVectors", "v2Checkpoint"],
+            "writerFeatures": [
+                "catalogManaged", "deletionVectors", "inCommitTimestamp", "v2Checkpoint"
+            ]
+        });
+        let properties = vec![
+            ("owner", "sail"),
+            ("io.unitycatalog.tableId", "table-id"),
+            ("delta.checkpointPolicy", "v2"),
+            ("delta.enableDeletionVectors", "true"),
+            ("delta.feature.appendOnly", "supported"),
+        ];
+        let (_, actions) = create_unity_managed_table_metadata(
+            properties.clone(),
+            Some(required_protocol.clone()),
+        )
+        .await?;
+        let (protocol, metadata) = staged_table_protocol_and_metadata(
+            &SessionConfig::new(),
+            &staged_table_info(properties, required_protocol)?,
+        )?;
+
+        let protocol =
+            serde_json::to_value(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        assert_eq!(&protocol, find_action(&actions, "protocol")?);
+        let created = find_action(&actions, "metaData")?;
+        let metadata =
+            serde_json::to_value(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        for key in [
+            "schemaString",
+            "partitionColumns",
+            "configuration",
+            "description",
+        ] {
+            assert_eq!(metadata.get(key), created.get(key), "{key}");
+        }
+        Ok(())
+    }
+
+    /// Version 0 of a staged table that is written with the data of the write reports the
+    /// row ID high-water mark of the data, which the catalog registers the table with.
+    #[tokio::test]
+    async fn unity_staged_table_version_0_with_data_reports_the_row_id_high_water_mark()
+    -> Result<()> {
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged"],
+            "writerFeatures": ["catalogManaged", "domainMetadata", "inCommitTimestamp", "rowTracking"]
+        });
+        let (protocol, metadata) = staged_table_protocol_and_metadata(
+            &SessionConfig::new(),
+            &staged_table_info(
+                vec![
+                    ("io.unitycatalog.tableId", "table-id"),
+                    ("delta.enableRowTracking", "true"),
+                ],
+                required_protocol,
+            )?,
+        )?;
+        let table_url = parse_location_to_url("memory:///staging/t")?;
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let log_store =
+            create_delta_table_with_object_store(table_url.clone(), store, Default::default())
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .log_store();
+        let add = |path: &str, rows: i64| {
+            CommitAction::Add(crate::spec::Add {
+                path: path.to_string(),
+                size: 1,
+                data_change: true,
+                stats: Some(format!(r#"{{"numRecords":{rows}}}"#)),
+                ..Default::default()
+            })
+        };
+        let operation = DeltaOperation::Create {
+            mode: SaveMode::ErrorIfExists,
+            location: table_url.to_string(),
+            protocol: Box::new(protocol.clone()),
+            metadata: Box::new(metadata.clone()),
+        };
+        CommitBuilder::from(CommitProperties::default())
+            .with_actions(vec![
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(metadata),
+                add("a.parquet", 2),
+                add("b.parquet", 3),
+            ])
+            .build(None, log_store.clone(), operation)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let created = unity_create_commit(log_store.as_ref()).await?;
+        assert_eq!(created.row_id_high_water_mark, Some(4));
+        assert!(
+            created
+                .protocol
+                .writer_features
+                .is_some_and(|features| features.iter().any(|feature| feature == "rowTracking"))
+        );
+        assert_eq!(
+            created
+                .metadata
+                .configuration
+                .get("io.unitycatalog.tableId"),
+            Some(&"table-id".to_string())
         );
         Ok(())
     }

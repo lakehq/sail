@@ -650,6 +650,31 @@ def unity_delta_commit_references_staged_commit(
 
 
 @then(
+    parsers.re(
+        r"Unity Catalog (?P<api>legacy|Delta) API Delta commit for table (?P<table_name>\S+) "
+        r"version (?P<version>\d+) references staged Delta commit in (?P<location_var>\S+)"
+    )
+)
+def unity_api_delta_commit_references_staged_commit(
+    api: str,
+    table_name: str,
+    version: str,
+    location_var: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+    variables: dict,
+) -> None:
+    """Assert a commit that Sail makes through the catalog only with the given API.
+
+    With the Delta REST API, the data of CREATE TABLE AS SELECT is in version 0, which is
+    written before the table is registered, so the data is not committed through the catalog.
+    """
+    if (api == "Delta") != unity_uses_delta_api:
+        return
+    unity_delta_commit_references_staged_commit(table_name, int(version), location_var, unity_rest_url, variables)
+
+
+@then(
     parsers.parse(
         "Unity Catalog Delta commit for table {table_name} version {version:d} references staged Delta commit in {location_var} without published backfill"
     )

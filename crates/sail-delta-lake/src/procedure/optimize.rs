@@ -188,6 +188,7 @@ pub(crate) async fn plan(
         true,
         &schema,
         None,
+        None,
         Some(operation.clone()),
     )?;
     let num_bins = bins.len();

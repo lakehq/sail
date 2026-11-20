@@ -2360,6 +2360,7 @@ fn delta_create_table_request(
         protocol,
         metadata,
         in_commit_timestamp,
+        row_id_high_water_mark,
     } = create_commit;
     let schema: serde_json::Value = serde_json::from_str(&metadata.schema_string).map_err(|e| {
         CatalogError::Internal(format!(
@@ -2369,7 +2370,16 @@ fn delta_create_table_request(
     Ok(delta_gen::DeltaCreateTableRequest {
         columns: Box::new(delta_schema_to_wire_type(&schema)),
         comment: metadata.description.clone().or(comment),
-        domain_metadata: None,
+        // The catalog keeps the row tracking domain of the table, which version 0 has when
+        // it adds data to a table with row tracking.
+        domain_metadata: row_id_high_water_mark.map(|row_id_high_water_mark| {
+            Box::new(delta_gen::DeltaDomainMetadataUpdates {
+                delta_clustering: None,
+                delta_row_tracking: Some(Box::new(delta_gen::DeltaRowTrackingDomainMetadata {
+                    row_id_high_water_mark,
+                })),
+            })
+        }),
         last_commit_timestamp_ms: *in_commit_timestamp,
         location,
         name: table.to_string(),
@@ -4961,6 +4971,7 @@ mod tests {
                 description: Some("events table".to_string()),
             },
             in_commit_timestamp: 1700000000123,
+            row_id_high_water_mark: None,
         }
     }
 
@@ -5145,6 +5156,26 @@ mod tests {
                 },
                 "last-commit-timestamp-ms": 1700000000123i64
             })]
+        );
+    }
+
+    #[test]
+    fn test_delta_create_table_request_declares_row_tracking_domain() {
+        let mut create_commit = delta_create_commit();
+        let request =
+            delta_create_table_request("events", DELTA_TABLE_URI.to_string(), None, &create_commit)
+                .unwrap();
+        let body = serde_json::to_value(&request).unwrap();
+        assert!(body.get("domain-metadata").is_none());
+
+        create_commit.row_id_high_water_mark = Some(41);
+        let request =
+            delta_create_table_request("events", DELTA_TABLE_URI.to_string(), None, &create_commit)
+                .unwrap();
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            body["domain-metadata"],
+            serde_json::json!({"delta.rowTracking": {"rowIdHighWaterMark": 41}})
         );
     }
 

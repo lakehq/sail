@@ -5,7 +5,9 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::delta::DeltaProtocolInfo;
-use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
+use sail_common_datafusion::catalog::{
+    FunctionStatus, LakehouseExecutionContext, LakehouseOperation, TableKind,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
@@ -1278,16 +1280,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
                 path: location,
                 columns: columns
                     .iter()
-                    .map(|column| LakeSourceCreateTableColumn {
-                        metadata: column.metadata().clone(),
-                        name: column.name().to_string(),
-                        data_type: column.data_type().clone(),
-                        nullable: column.nullable(),
-                        comment: column.comment().cloned(),
-                        default: column.default().cloned(),
-                        generated_always_as: column.generated_always_as().cloned(),
-                        identity: column.identity().cloned(),
-                    })
+                    .map(lake_source_create_table_column)
                     .collect(),
                 comment,
                 partition_by,
@@ -1299,6 +1292,52 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
         )
         .await
         .map_err(CatalogError::DataFusionError)
+}
+
+/// The definition of a table that the catalog staged, which the first commit of a write
+/// creates at the staged location before the table is registered in the catalog.
+pub fn staged_lake_source_create_table_info(
+    options: &CreateTableOptions,
+    lakehouse_table: LakehouseExecutionContext,
+) -> CatalogResult<LakeSourceCreateTableInfo> {
+    let location = options.location.clone().ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Location is required to create storage metadata for {} tables",
+            options.format
+        ))
+    })?;
+    Ok(LakeSourceCreateTableInfo {
+        path: location,
+        columns: options
+            .columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+        comment: options.comment.clone(),
+        partition_by: options.partition_by.clone(),
+        properties: options.properties.clone(),
+        replace: false,
+        lakehouse_table: Some(lakehouse_table),
+        required_protocol: options
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.required_protocol.clone()),
+    })
+}
+
+fn lake_source_create_table_column(
+    column: &impl CreateTableColumnView,
+) -> LakeSourceCreateTableColumn {
+    LakeSourceCreateTableColumn {
+        metadata: column.metadata().clone(),
+        name: column.name().to_string(),
+        data_type: column.data_type().clone(),
+        nullable: column.nullable(),
+        comment: column.comment().cloned(),
+        default: column.default().cloned(),
+        generated_always_as: column.generated_always_as().cloned(),
+        identity: column.identity().cloned(),
+    }
 }
 
 trait CreateTableColumnView {

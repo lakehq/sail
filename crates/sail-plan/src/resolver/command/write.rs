@@ -11,7 +11,7 @@ use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
     Projection, ScalarUDF, col, lit, when,
 };
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, staged_lake_source_create_table_info};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{LakehouseCreateMaterialization, LakehouseCreateRequest};
 use sail_catalog::manager::CatalogManager;
@@ -314,6 +314,7 @@ impl PlanResolver<'_> {
             lakehouse_table: None,
             create_table_schema: None,
             replace_table_metadata: false,
+            create_table: None,
         };
         let mut preconditions = vec![];
         let mut table_replacement = None;
@@ -746,7 +747,22 @@ impl PlanResolver<'_> {
                         }
                         table_replacement = Some(replacement);
                     }
-                    if table_replacement.is_none() {
+                    if table_replacement.is_none() && create_options.staged.is_some() {
+                        // The first commit of the write creates the table that the catalog
+                        // staged, and the catalog registers the table after the commit, so
+                        // a write that fails leaves no table in the catalog.
+                        sink_info.lakehouse_table = Some(
+                            create_plan
+                                .table
+                                .execution
+                                .for_operation(LakehouseOperation::Create),
+                        );
+                        sink_info.create_table =
+                            Some(Box::new(staged_lake_source_create_table_info(
+                                &create_options,
+                                create_plan.table.execution.clone(),
+                            )?));
+                    } else if table_replacement.is_none() {
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),
                             options: create_options,

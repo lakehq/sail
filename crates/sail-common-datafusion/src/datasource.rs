@@ -275,6 +275,10 @@ pub struct SinkInfo {
     /// data, as `REPLACE TABLE ... AS SELECT` and the DataFrameWriterV2 `replace` and
     /// `createOrReplace` do. An overwrite with `saveAsTable` replaces only the data.
     pub replace_table_metadata: bool,
+    /// The definition of a table that the catalog staged for the write. The first commit
+    /// of the write creates the table at the staged location with this definition, and
+    /// the table is registered in the catalog after the commit.
+    pub create_table: Option<Box<crate::lakesource::LakeSourceCreateTableInfo>>,
 }
 
 impl SinkInfo {

@@ -20,6 +20,7 @@ use crate::physical_plan::{
     prepare_delta_write_context,
 };
 use crate::snapshot::DeltaSnapshotConfig;
+use crate::spec::{Metadata, Protocol};
 use crate::table::{
     CatalogSnapshotSource, DeltaSnapshot, DeltaTable, SnapshotIntent,
     catalog_managed_commit_context, create_delta_table_with_object_store,
@@ -60,6 +61,8 @@ pub struct DeltaPlannerConfig {
     pub create_table_schema: Option<SchemaRef>,
     /// The table definition that an overwrite gives the existing table that it replaces.
     pub replacement: Option<DeltaTableReplacement>,
+    /// The protocol and the metadata of a table that the first commit of the write creates.
+    pub create_actions: Option<(Protocol, Metadata)>,
 }
 
 impl DeltaPlannerConfig {
@@ -89,6 +92,7 @@ impl DeltaPlannerConfig {
             lakehouse_table: None,
             create_table_schema: None,
             replacement: None,
+            create_actions: None,
         }
     }
 
@@ -130,6 +134,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_replacement(mut self, replacement: Option<DeltaTableReplacement>) -> Self {
         self.replacement = replacement;
+        self
+    }
+
+    pub fn with_create_actions(mut self, create_actions: Option<(Protocol, Metadata)>) -> Self {
+        self.create_actions = create_actions;
         self
     }
 
@@ -280,6 +289,7 @@ impl<'a> PlannerContext<'a> {
             self.table_exists(),
             input_schema,
             self.config.create_table_schema.as_ref(),
+            self.config.create_actions.as_ref(),
             operation_override,
         )?;
         context.commit_context.identity_columns_to_track =

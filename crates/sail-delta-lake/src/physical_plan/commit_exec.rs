@@ -21,7 +21,11 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
+use sail_catalog::provider::{CreateTableMode, CreateTableOptions, StagedTableCreate};
+use sail_catalog::storage_credentials::remove_table_storage_credentials;
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, LakehouseOperation,
+};
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -252,6 +256,49 @@ impl DeltaCommitExec {
             table_id: table.table_id,
             table_uri: table.location.unwrap_or_else(|| table_url.to_string()),
         }))
+    }
+
+    /// Registers the table that the catalog staged, after the first commit of the write
+    /// created the table at the staged location. The catalog registers the table with the
+    /// protocol and the metadata of version 0, which also has the data of the write.
+    async fn register_staged_table(
+        context: &Arc<TaskContext>,
+        staged_table: &LakehouseExecutionContext,
+        log_store: &LogStoreRef,
+    ) -> Result<()> {
+        let location = staged_table
+            .table_identity
+            .table_uri
+            .clone()
+            .ok_or_else(|| {
+                DataFusionError::Internal("staged Delta table is missing its location".to_string())
+            })?;
+        let created = crate::lake_source::unity_create_commit(log_store.as_ref()).await?;
+        let options = CreateTableOptions {
+            columns: vec![],
+            comment: created.metadata.description.clone(),
+            constraints: vec![],
+            location: Some(location),
+            format: "delta".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode: CreateTableMode::Create,
+            properties: vec![],
+            is_external: false,
+            is_write_precondition: true,
+            staged: Some(Box::new(StagedTableCreate {
+                properties: vec![],
+                required_protocol: None,
+                created_metadata: Some(created),
+            })),
+        };
+        context
+            .extension::<CatalogManager>()?
+            .create_table(staged_table.catalog_table(), options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(())
     }
 
     async fn load_reference_snapshot(
@@ -543,6 +590,14 @@ impl ExecutionPlan for DeltaCommitExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let output = self.output;
+        // The write creates the table that the catalog staged, and the catalog registers
+        // the table after the commit.
+        let staged_table = lakehouse_table
+            .clone()
+            .filter(|context| !table_exists && context.operation == LakehouseOperation::Create);
+        let cleanup = staged_table
+            .clone()
+            .map(|staged| (staged, Arc::clone(&context)));
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
@@ -653,7 +708,8 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
                 (Some(catalog_table), Some(lakehouse_table))
-                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit =>
+                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit
+                        && staged_table.is_none() =>
                 {
                     Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
                 }
@@ -754,6 +810,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let log_store = table.log_store();
 
             if !table_exists
+                && staged_table.is_none()
                 && is_create_bootstrap_only_commit(&final_actions)
                 && Self::existing_create_bootstrap_commit_matches(
                     &log_store,
@@ -886,7 +943,12 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let commit_uses_catalog_managed_protocol =
                 crate::table::is_catalog_managed_commit(reference.as_deref(), &final_actions);
-            if commit_uses_catalog_managed_protocol && catalog_managed_table.is_none() {
+            // Version 0 of a table that the catalog staged is written to the Delta log
+            // before the table is registered.
+            if commit_uses_catalog_managed_protocol
+                && catalog_managed_table.is_none()
+                && staged_table.is_none()
+            {
                 return Err(DataFusionError::Plan(
                     "catalog-managed Delta writes require a managed catalog table reference"
                         .to_string(),
@@ -1029,6 +1091,9 @@ impl ExecutionPlan for DeltaCommitExec {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
+            if let Some(staged_table) = &staged_table {
+                Self::register_staged_table(&context, staged_table, &log_store).await?;
+            }
 
             let retries =
                 usize::try_from(finalized_commit.metrics.num_retries).unwrap_or(usize::MAX);
@@ -1052,6 +1117,17 @@ impl ExecutionPlan for DeltaCommitExec {
             Ok(result)
         };
 
+        // A table that the catalog staged is not registered when the write fails, so the
+        // write stops using the storage credentials of the staged table.
+        let future = async move {
+            let result = future.await;
+            if result.is_err()
+                && let Some((staged_table, context)) = &cleanup
+            {
+                remove_table_storage_credentials(context.as_ref(), staged_table.catalog_table());
+            }
+            result
+        };
         let stream = stream::once(future);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),

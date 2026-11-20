@@ -230,6 +230,7 @@ pub fn prepare_delta_write_context(
     table_exists: bool,
     input_schema: &SchemaRef,
     create_table_schema: Option<&SchemaRef>,
+    create_actions: Option<&(Protocol, Metadata)>,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
     let input_schema =
@@ -286,61 +287,75 @@ pub fn prepare_delta_write_context(
     let mut operation = planned_operation;
     let mut annotated_schema_opt: Option<StructType> = None;
     if !table_exists {
-        let mut kernel_schema = StructType::try_from(final_schema.as_ref())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if !options.generation_expressions.is_empty() {
-            kernel_schema =
-                inject_generation_expressions(kernel_schema, &options.generation_expressions);
-        }
-        if !options.default_expressions.is_empty() {
-            kernel_schema = inject_default_expressions(kernel_schema, &options.default_expressions);
-        }
-        if !options.identity_columns.is_empty() {
-            kernel_schema = inject_identity_columns(kernel_schema, &options.identity_columns);
-        }
-
-        let mut configuration = metadata_configuration.clone();
-        let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-            let annotated_schema = match create_table_schema {
-                // The table is created before the data is written, with the column
-                // mapping of this schema.
-                Some(create_table_schema) => {
-                    let assigned = column_mapping_metadata_only(
-                        &StructType::try_from(normalize_delta_schema(create_table_schema))
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                    );
-                    annotate_new_fields_for_column_mapping(
-                        &assigned,
-                        &kernel_schema,
-                        compute_max_column_id(&assigned) + 1,
-                    )
-                    .0
-                }
-                None => annotate_for_column_mapping(&kernel_schema),
-            };
-            configuration.insert(
-                "delta.columnMapping.mode".to_string(),
-                effective_mode.as_ref().to_string(),
-            );
-            configuration.insert(
-                "delta.columnMapping.maxColumnId".to_string(),
-                compute_max_column_id(&annotated_schema).to_string(),
-            );
-            annotated_schema_opt = Some(annotated_schema.clone());
-            annotated_schema
+        let (protocol, metadata) = if let Some((protocol, metadata)) = create_actions {
+            // The data is written with the column mapping of the table that is created.
+            if !matches!(effective_mode, ColumnMappingMode::None) {
+                annotated_schema_opt = Some(
+                    metadata
+                        .parse_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                );
+            }
+            (protocol.clone(), metadata.clone())
         } else {
-            kernel_schema
-        };
+            let mut kernel_schema = StructType::try_from(final_schema.as_ref())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            if !options.generation_expressions.is_empty() {
+                kernel_schema =
+                    inject_generation_expressions(kernel_schema, &options.generation_expressions);
+            }
+            if !options.default_expressions.is_empty() {
+                kernel_schema =
+                    inject_default_expressions(kernel_schema, &options.default_expressions);
+            }
+            if !options.identity_columns.is_empty() {
+                kernel_schema = inject_identity_columns(kernel_schema, &options.identity_columns);
+            }
 
-        let metadata = metadata_for_create_with_struct_type(
-            metadata_schema,
-            partition_columns.to_vec(),
-            chrono::Utc::now().timestamp_millis(),
-            configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let protocol =
-            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let mut configuration = metadata_configuration.clone();
+            let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
+                let annotated_schema = match create_table_schema {
+                    // The table is created before the data is written, with the column
+                    // mapping of this schema.
+                    Some(create_table_schema) => {
+                        let assigned = column_mapping_metadata_only(
+                            &StructType::try_from(normalize_delta_schema(create_table_schema))
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                        );
+                        annotate_new_fields_for_column_mapping(
+                            &assigned,
+                            &kernel_schema,
+                            compute_max_column_id(&assigned) + 1,
+                        )
+                        .0
+                    }
+                    None => annotate_for_column_mapping(&kernel_schema),
+                };
+                configuration.insert(
+                    "delta.columnMapping.mode".to_string(),
+                    effective_mode.as_ref().to_string(),
+                );
+                configuration.insert(
+                    "delta.columnMapping.maxColumnId".to_string(),
+                    compute_max_column_id(&annotated_schema).to_string(),
+                );
+                annotated_schema_opt = Some(annotated_schema.clone());
+                annotated_schema
+            } else {
+                kernel_schema
+            };
+
+            let metadata = metadata_for_create_with_struct_type(
+                metadata_schema,
+                partition_columns.to_vec(),
+                chrono::Utc::now().timestamp_millis(),
+                configuration,
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let protocol = protocol_for_metadata(&metadata)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            (protocol, metadata)
+        };
 
         initial_actions.push(Action::Protocol(protocol.clone()));
         initial_actions.push(Action::Metadata(metadata.clone()));

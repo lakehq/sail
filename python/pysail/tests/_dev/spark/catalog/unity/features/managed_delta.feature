@@ -94,7 +94,7 @@ Feature: Unity Catalog managed Delta table operations
     Then Unity Catalog table unity_table_test.managed_ctas_t table id matches Delta metadata in location
     Then Delta commit for version 0 exists in location
     Then Delta commit for version 0 in location has catalog-managed commit info
-    Then Unity Catalog Delta commit for table unity_table_test.managed_ctas_t version 1 references staged Delta commit in location
+    Then Unity Catalog legacy API Delta commit for table unity_table_test.managed_ctas_t version 1 references staged Delta commit in location
 
   Scenario: CTAS managed Delta table with column mapping by name writes the mapped columns
     Given statement
@@ -252,11 +252,16 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: Managed Delta table reads latest Unity coordinated commits
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_multi_commit_t
+      CREATE TABLE unity_table_test.managed_delta_multi_commit_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_multi_commit_t VALUES
         (1, 'one')
-      AS t(id, name)
       """
     Given statement
       """
@@ -288,12 +293,17 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: INSERT OVERWRITE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_overwrite_t
+      CREATE TABLE unity_table_test.managed_delta_overwrite_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_overwrite_t VALUES
         (1, 'old'),
         (2, 'old')
-      AS t(id, name)
       """
     Given statement
       """
@@ -316,11 +326,16 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: Managed Delta writes use Unity latest version when prior commit is unpublished
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_unpublished_latest_t
+      CREATE TABLE unity_table_test.managed_delta_unpublished_latest_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_unpublished_latest_t VALUES
         (1, 'one')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_unpublished_latest_t
     Given published Delta commit for version 1 in location is removed
@@ -335,13 +350,18 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: DELETE on managed Delta table uses Unity latest version when prior commit is unpublished
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_delete_unpublished_latest_t
+      CREATE TABLE unity_table_test.managed_delta_delete_unpublished_latest_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_delete_unpublished_latest_t VALUES
         (1, 'one'),
         (2, 'two'),
         (3, 'three')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_delete_unpublished_latest_t
     Given published Delta commit for version 1 in location is removed
@@ -363,11 +383,16 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: Managed Delta named-table reads use Unity ratified commit when published commit is corrupted
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_corrupt_published_t
+      CREATE TABLE unity_table_test.managed_delta_corrupt_published_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_corrupt_published_t VALUES
         (1, 'one')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_corrupt_published_t
     Given published Delta commit for version 1 in location is invalid JSON
@@ -383,11 +408,16 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: Managed Delta named-table reads ignore published versions beyond Unity latest
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_future_published_t
+      CREATE TABLE unity_table_test.managed_delta_future_published_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_future_published_t VALUES
         (1, 'one')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_future_published_t
     Given published Delta commit for version 2 in location is invalid JSON
@@ -403,12 +433,17 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: INSERT OVERWRITE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_overwrite_corrupt_published_t
+      CREATE TABLE unity_table_test.managed_delta_overwrite_corrupt_published_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_overwrite_corrupt_published_t VALUES
         (1, 'old'),
         (2, 'old')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_overwrite_corrupt_published_t
     Given published Delta commit for version 1 in location is invalid JSON
@@ -433,13 +468,18 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: DELETE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_delete_corrupt_published_t
+      CREATE TABLE unity_table_test.managed_delta_delete_corrupt_published_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_delete_corrupt_published_t VALUES
         (1, 'one'),
         (2, 'two'),
         (3, 'three')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_delete_corrupt_published_t
     Given published Delta commit for version 1 in location is invalid JSON
@@ -462,12 +502,17 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: MERGE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_merge_corrupt_published_t
+      CREATE TABLE unity_table_test.managed_delta_merge_corrupt_published_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_merge_corrupt_published_t VALUES
         (1, 'one'),
         (2, 'two')
-      AS t(id, name)
       """
     Given variable location for table unity_table_test.managed_delta_merge_corrupt_published_t
     Given published Delta commit for version 1 in location is invalid JSON
@@ -564,13 +609,18 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: DELETE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_delete_t
+      CREATE TABLE unity_table_test.managed_delta_delete_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_delete_t VALUES
         (1, 'one'),
         (2, 'two'),
         (3, 'three')
-      AS t(id, name)
       """
     Given statement
       """
@@ -591,13 +641,18 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: UPDATE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_update_t
+      CREATE TABLE unity_table_test.managed_delta_update_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_update_t VALUES
         (1, 'one'),
         (2, 'two'),
         (3, 'three')
-      AS t(id, name)
       """
     Given statement
       """
@@ -644,12 +699,17 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: MERGE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_merge_t
+      CREATE TABLE unity_table_test.managed_delta_merge_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_merge_t VALUES
         (1, 'one'),
         (2, 'two')
-      AS t(id, name)
       """
     Given statement
       """
@@ -685,11 +745,16 @@ Feature: Unity Catalog managed Delta table operations
   Scenario: Managed Delta table time travel replays catalog commits
     Given statement
       """
-      CREATE TABLE unity_table_test.managed_delta_time_travel_t
+      CREATE TABLE unity_table_test.managed_delta_time_travel_t (
+        id INT,
+        name STRING
+      )
       USING delta
-      AS SELECT * FROM VALUES
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_time_travel_t VALUES
         (1, 'one')
-      AS t(id, name)
       """
     Given statement
       """
