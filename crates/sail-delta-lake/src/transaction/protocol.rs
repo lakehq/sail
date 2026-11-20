@@ -103,7 +103,10 @@ impl ProtocolChecker {
         }
     }
 
-    fn validate_feature_lists(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+    pub(crate) fn validate_feature_lists(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<(), TransactionError> {
         if protocol.min_reader_version() < 1 {
             return Err(TransactionError::InvalidProtocol(format!(
                 "minReaderVersion must be at least 1, found {}",

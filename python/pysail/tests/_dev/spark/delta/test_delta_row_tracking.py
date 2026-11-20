@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 from pysail.tests._dev.spark.delta.utils import _commits, _effective
@@ -213,6 +214,30 @@ def test_row_tracking_replace_where(spark, tmp_path):
         Row(id=1, value="x"),
         Row(id=2, value="b"),
     ]
+
+
+def test_row_tracking_write_to_overwrite(spark, tmp_path):
+    name = "row_tracking_write_to_overwrite"
+    path = tmp_path / "row_tracking"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, value STRING) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ({_ROW_TRACKING})"
+    ).collect()
+    try:
+        spark.createDataFrame([(1, "a"), (2, "b")], "id BIGINT, value STRING").coalesce(1).writeTo(name).append()
+        assert len(_row_tracking_state(path)["active"]) == 1
+        # The condition has no SQL text, and the row that does not match it is copied to a
+        # new file with a new row ID.
+        spark.createDataFrame([(1, "x")], "id BIGINT, value STRING").writeTo(name).overwrite(F.col("id") == 1)
+        state = _row_tracking_state(path)
+        assert state["preserved"] == {0: "true", 1: "true", 2: "false"}
+        assert state["high_water_mark"] == 3
+        assert spark.table(name).orderBy("id").collect() == [
+            Row(id=1, value="x"),
+            Row(id=2, value="b"),
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
 def test_row_tracking_with_checkpoints(spark, tmp_path):

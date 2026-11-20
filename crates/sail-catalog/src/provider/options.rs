@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 pub use sail_common::spec::{ColumnChange, CreateTableMode};
+use sail_common_datafusion::catalog::delta::{DeltaCreatedVersion, DeltaProtocolInfo};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -57,11 +58,10 @@ pub struct StagedTableCreate {
     /// which include the properties that the catalog requires for the staged table.
     #[serde(default)]
     pub properties: Vec<(String, String)>,
-    /// The protocol that the catalog requires for the storage metadata,
-    /// in the form defined by the table format.
-    pub required_protocol: Option<String>,
-    /// The storage metadata created for the table, in the form defined by the table format.
-    pub created_metadata: Option<String>,
+    /// The Delta protocol that the catalog requires for the storage metadata.
+    pub required_protocol: Option<DeltaProtocolInfo>,
+    /// The first version of the Delta log created for the table.
+    pub created_metadata: Option<DeltaCreatedVersion>,
 }
 
 pub enum StageTableOptions {

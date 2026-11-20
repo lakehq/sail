@@ -4,6 +4,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::catalog::delta::DeltaProtocolInfo;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -1254,7 +1255,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-    required_protocol: Option<String>,
+    required_protocol: Option<DeltaProtocolInfo>,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
     let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(

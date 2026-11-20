@@ -24,7 +24,8 @@ use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_i
 use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaCreatedVersion,
+    DeltaProtocolInfo, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CommitAuthority, DatabaseStatus, LakehouseFormat, LakehouseOperation, StorageAccess,
@@ -338,7 +339,7 @@ impl UnityCatalogProvider {
         schema_name: &str,
         table: &str,
         properties: Vec<(String, String)>,
-    ) -> CatalogResult<Option<(String, Vec<(String, String)>, String)>> {
+    ) -> CatalogResult<Option<(String, Vec<(String, String)>, DeltaProtocolInfo)>> {
         let request = delta_gen::DeltaCreateStagingTableRequest {
             name: table.to_string(),
         };
@@ -402,17 +403,20 @@ impl UnityCatalogProvider {
         );
         properties.push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id));
         let required_protocol = required_protocol.map_or_else(
-            || serde_json::json!({ "minReaderVersion": 1, "minWriterVersion": 2 }),
-            |protocol| {
-                serde_json::json!({
-                    "minReaderVersion": protocol.min_reader_version,
-                    "minWriterVersion": protocol.min_writer_version,
-                    "readerFeatures": protocol.reader_features.unwrap_or_default(),
-                    "writerFeatures": protocol.writer_features.unwrap_or_default(),
-                })
+            || DeltaProtocolInfo {
+                min_reader_version: 1,
+                min_writer_version: 2,
+                reader_features: None,
+                writer_features: None,
+            },
+            |protocol| DeltaProtocolInfo {
+                min_reader_version: protocol.min_reader_version,
+                min_writer_version: protocol.min_writer_version,
+                reader_features: protocol.reader_features,
+                writer_features: protocol.writer_features,
             },
         );
-        Ok(Some((location, properties, required_protocol.to_string())))
+        Ok(Some((location, properties, required_protocol)))
     }
 
     /// Registers a staged managed Delta table with the Delta REST API,
@@ -423,7 +427,7 @@ impl UnityCatalogProvider {
         table: &str,
         location: Option<String>,
         comment: Option<String>,
-        create_commit: &str,
+        create_commit: &DeltaCreatedVersion,
     ) -> CatalogResult<TableStatus> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let location = location.ok_or_else(|| {
@@ -1014,7 +1018,7 @@ impl CatalogProvider for UnityCatalogProvider {
         if !is_external
             && let Some(create_commit) = staged
                 .as_ref()
-                .and_then(|staged| staged.created_metadata.as_deref())
+                .and_then(|staged| staged.created_metadata.as_ref())
         {
             return match self
                 .create_staged_delta_table(database, table, location, comment, create_commit)
@@ -2278,45 +2282,38 @@ fn delta_create_table_request(
     table: &str,
     location: String,
     comment: Option<String>,
-    create_commit: &str,
+    create_commit: &DeltaCreatedVersion,
 ) -> CatalogResult<delta_gen::DeltaCreateTableRequest> {
-    let invalid = |message: &str| {
+    let DeltaCreatedVersion {
+        protocol,
+        metadata,
+        in_commit_timestamp,
+    } = create_commit;
+    let schema: serde_json::Value = serde_json::from_str(&metadata.schema_string).map_err(|e| {
         CatalogError::Internal(format!(
-            "Invalid Delta table version 0 for Unity Catalog: {message}"
+            "Invalid Delta table version 0 for Unity Catalog: invalid schema: {e}"
         ))
-    };
-    let commit: serde_json::Value =
-        serde_json::from_str(create_commit).map_err(|e| invalid(&e.to_string()))?;
-    let metadata = &commit["metaData"];
-    let schema: serde_json::Value = metadata["schemaString"]
-        .as_str()
-        .and_then(|schema| serde_json::from_str(schema).ok())
-        .ok_or_else(|| invalid("missing schema"))?;
-    let properties = metadata["configuration"]
-        .as_object()
-        .map(|configuration| {
-            configuration
-                .iter()
-                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    })?;
     Ok(delta_gen::DeltaCreateTableRequest {
         columns: Box::new(delta_schema_to_wire_type(&schema)),
-        comment: metadata["description"]
-            .as_str()
-            .map(str::to_string)
-            .or(comment),
+        comment: metadata.description.clone().or(comment),
         domain_metadata: None,
-        last_commit_timestamp_ms: commit["inCommitTimestamp"]
-            .as_i64()
-            .ok_or_else(|| invalid("missing in-commit timestamp"))?,
+        last_commit_timestamp_ms: *in_commit_timestamp,
         location,
         name: table.to_string(),
-        partition_columns: delta_strings(&metadata["partitionColumns"])
+        partition_columns: Some(metadata.partition_columns.clone())
             .filter(|columns| !columns.is_empty()),
-        properties,
-        protocol: Box::new(delta_protocol(&commit["protocol"]).map_err(|e| invalid(&e))?),
+        properties: metadata
+            .configuration
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        protocol: Box::new(delta_gen::DeltaProtocol {
+            min_reader_version: protocol.min_reader_version,
+            min_writer_version: protocol.min_writer_version,
+            reader_features: protocol.reader_features.clone(),
+            writer_features: protocol.writer_features.clone(),
+        }),
         table_type: Box::new(delta_gen::DeltaTableType::Managed),
         uniform: None,
     })
@@ -2582,6 +2579,7 @@ fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceForm
 #[cfg(test)]
 mod tests {
     use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
+    use sail_common_datafusion::catalog::delta::DeltaMetadataInfo;
     use sail_common_datafusion::catalog::{
         CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseExecutionContext,
         LakehouseFormat, LakehouseOperation, ScanAuthority,
@@ -4754,7 +4752,7 @@ mod tests {
     }
 
     /// Version 0 of the table as reported after it is written to the Delta log.
-    fn delta_create_commit() -> String {
+    fn delta_create_commit() -> DeltaCreatedVersion {
         let schema = serde_json::json!({
             "type": "struct",
             "fields": [
@@ -4779,28 +4777,32 @@ mod tests {
                 }
             ]
         });
-        serde_json::json!({
-            "protocol": {
-                "minReaderVersion": 3,
-                "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged", "deletionVectors"],
-                "writerFeatures": ["catalogManaged", "deletionVectors", "inCommitTimestamp"]
+        let strings = |values: &[&str]| values.iter().map(|value| value.to_string()).collect();
+        DeltaCreatedVersion {
+            protocol: DeltaProtocolInfo {
+                min_reader_version: 3,
+                min_writer_version: 7,
+                reader_features: Some(strings(&["catalogManaged", "deletionVectors"])),
+                writer_features: Some(strings(&[
+                    "catalogManaged",
+                    "deletionVectors",
+                    "inCommitTimestamp",
+                ])),
             },
-            "metaData": {
-                "id": "metadata-id",
-                "description": "events table",
-                "format": {"provider": "parquet", "options": {}},
-                "schemaString": schema.to_string(),
-                "partitionColumns": ["id"],
-                "createdTime": 1700000000000i64,
-                "configuration": {
-                    "delta.enableDeletionVectors": "true",
-                    "io.unitycatalog.tableId": DELTA_TABLE_ID
-                }
+            metadata: DeltaMetadataInfo {
+                schema_string: schema.to_string(),
+                partition_columns: strings(&["id"]),
+                configuration: [
+                    ("delta.enableDeletionVectors", "true"),
+                    ("io.unitycatalog.tableId", DELTA_TABLE_ID),
+                ]
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+                description: Some("events table".to_string()),
             },
-            "inCommitTimestamp": 1700000000123i64
-        })
-        .to_string()
+            in_commit_timestamp: 1700000000123,
+        }
     }
 
     fn staged_delta_create_options() -> CreateTableOptions {
@@ -4808,7 +4810,7 @@ mod tests {
         options.location = Some(DELTA_TABLE_URI.to_string());
         options.staged = Some(Box::new(StagedTableCreate {
             properties: options.properties.clone(),
-            required_protocol: Some("{}".to_string()),
+            required_protocol: Some(DeltaProtocolInfo::default()),
             created_metadata: Some(delta_create_commit()),
         }));
         options
@@ -4858,14 +4860,22 @@ mod tests {
                 context: Some(_),
             }
         ));
-        let required_protocol = serde_json::json!({
-            "minReaderVersion": 3,
-            "minWriterVersion": 7,
-            "readerFeatures": ["catalogManaged", "deletionVectors", "v2Checkpoint"],
-            "writerFeatures": [
-                "catalogManaged", "deletionVectors", "inCommitTimestamp", "v2Checkpoint"
-            ]
-        });
+        let strings = |values: &[&str]| values.iter().map(|value| value.to_string()).collect();
+        let required_protocol = DeltaProtocolInfo {
+            min_reader_version: 3,
+            min_writer_version: 7,
+            reader_features: Some(strings(&[
+                "catalogManaged",
+                "deletionVectors",
+                "v2Checkpoint",
+            ])),
+            writer_features: Some(strings(&[
+                "catalogManaged",
+                "deletionVectors",
+                "inCommitTimestamp",
+                "v2Checkpoint",
+            ])),
+        };
         assert_eq!(
             plan.table.status.display_properties,
             vec![
@@ -4885,7 +4895,7 @@ mod tests {
             plan.staged,
             Some(Box::new(StagedTableCreate {
                 properties: plan.table.status.display_properties.clone(),
-                required_protocol: Some(required_protocol.to_string()),
+                required_protocol: Some(required_protocol),
                 created_metadata: None,
             }))
         );
@@ -5331,6 +5341,53 @@ mod tests {
                 .display_properties
                 .contains(&("delta.futureProperty".to_string(), "value".to_string()))
         );
+    }
+
+    /// The protocol that the staging table requires is forwarded as it is, without feature
+    /// lists that the response does not have.
+    #[tokio::test]
+    async fn test_managed_delta_create_forwards_the_required_protocol() {
+        for (required, expected) in [
+            (
+                serde_json::json!({"min-reader-version": 1, "min-writer-version": 2}),
+                DeltaProtocolInfo {
+                    min_reader_version: 1,
+                    min_writer_version: 2,
+                    reader_features: None,
+                    writer_features: None,
+                },
+            ),
+            (
+                serde_json::json!({
+                    "min-reader-version": 1,
+                    "min-writer-version": 7,
+                    "writer-features": ["catalogManaged"]
+                }),
+                DeltaProtocolInfo {
+                    min_reader_version: 1,
+                    min_writer_version: 7,
+                    reader_features: None,
+                    writer_features: Some(vec!["catalogManaged".to_string()]),
+                },
+            ),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            let mut response = delta_staging_table_json();
+            response["required-protocol"] = required;
+            mount_delta_staging_table(&server, response).await;
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let options = managed_delta_create_options(vec![], false);
+            let plan = provider
+                .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+                .await
+                .unwrap();
+            assert_eq!(
+                plan.staged.and_then(|staged| staged.required_protocol),
+                Some(expected)
+            );
+        }
     }
 
     #[tokio::test]

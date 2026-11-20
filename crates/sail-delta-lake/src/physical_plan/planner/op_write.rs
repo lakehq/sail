@@ -164,7 +164,12 @@ async fn build_overwrite_if_plan(
     let physical_condition = ctx
         .session()
         .create_physical_expr(condition_expr.clone().is_not_true(), &table_df_schema)?;
-    let predicate_source = source.or(condition.source);
+    // The overwrite may copy the rows of the removed files that do not match the condition,
+    // so the operation has a predicate even when the condition has no SQL text, such as
+    // the condition of `DataFrameWriterV2.overwrite`.
+    let predicate_source = source
+        .or(condition.source)
+        .or_else(|| Some(condition.expr.to_string()));
 
     let old_data_plan = build_old_data_plan(
         ctx,

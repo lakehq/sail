@@ -6,12 +6,16 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 import pytest
+import requests
 
 from pysail.tests._dev.spark.catalog.unity.conftest import (
     _location_to_path,
+    _qualified_table_name,
     _table_location,
     _unity_table_info,
 )
@@ -265,5 +269,77 @@ def test_sql_replace_drops_the_delta_properties_of_the_replaced_table(spark: Spa
         spark.sql(f"INSERT INTO {table} VALUES (3), (4)")
         spark.sql(f"DELETE FROM {table} WHERE id = 3")
         assert _rows(spark, table, "id") == [(4,)]
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+# The properties with fixed values that Unity Catalog requires for managed Delta tables.
+_UNITY_REQUIRED_PROPERTIES = {
+    "delta.enableDeletionVectors": "true",
+    "delta.checkpointPolicy": "v2",
+    "delta.enableInCommitTimestamps": "true",
+    "delta.checkpoint.writeStatsAsStruct": "true",
+    "delta.checkpoint.writeStatsAsJson": "true",
+}
+
+
+def _delta_api_table_properties(unity_rest_url: str, table: str) -> dict:
+    """Loads the properties of the table with the Unity Catalog Delta REST API."""
+    catalog_name, schema_name, name = _qualified_table_name(table).split(".", 2)
+    response = requests.get(
+        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}"
+        f"/schemas/{quote(schema_name, safe='')}/tables/{quote(name, safe='')}",
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()["metadata"]["properties"]
+
+
+def test_sql_replace_keeps_the_unity_required_properties(
+    spark: SparkSession,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
+    if not unity_uses_delta_api:
+        pytest.skip("the managed table properties are required by the Unity Catalog Delta REST API")
+    database = f"unity_replace_required_{uuid.uuid4().hex[:8]}"
+    table = f"{database}.t"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING delta TBLPROPERTIES ('team' = 'a')")
+        location = _location_to_path(_table_location(spark, table))
+        _, actions = _latest_commit(location)
+        (metadata,) = _actions(actions, "metaData")
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= metadata["configuration"].items()
+
+        # The statement keeps the required properties without changing the protocol.
+        spark.sql(f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta")
+        _, actions = _latest_commit(location)
+        assert _actions(actions, "protocol") == []
+        (metadata,) = _actions(actions, "metaData")
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= metadata["configuration"].items()
+        assert "team" not in metadata["configuration"]
+        properties = _delta_api_table_properties(unity_rest_url, table)
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= properties.items()
+        assert "team" not in properties
+
+        # The statement keeps the required properties when it changes the protocol,
+        # which the catalog validates against the managed table requirements.
+        spark.sql(
+            f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta "
+            "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+        )
+        _, actions = _latest_commit(location)
+        (protocol,) = _actions(actions, "protocol")
+        assert "changeDataFeed" in protocol["writerFeatures"]
+        (metadata,) = _actions(actions, "metaData")
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= metadata["configuration"].items()
+        properties = _delta_api_table_properties(unity_rest_url, table)
+        assert _UNITY_REQUIRED_PROPERTIES.items() <= properties.items()
+        assert properties["delta.enableChangeDataFeed"] == "true"
+
+        spark.sql(f"INSERT INTO {table} VALUES (1), (2)")
+        spark.sql(f"DELETE FROM {table} WHERE id = 1")
+        assert _rows(spark, table, "id") == [(2,)]
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")

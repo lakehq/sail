@@ -94,6 +94,10 @@ impl Metadata {
         &self.configuration
     }
 
+    pub fn schema_string(&self) -> &str {
+        &self.schema_string
+    }
+
     /// Parse the schema string into a `StructType` (Delta JSON format).
     pub fn parse_schema(&self) -> DeltaResult<StructType> {
         Ok(serde_json::from_str(&self.schema_string)?)
