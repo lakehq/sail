@@ -11,15 +11,18 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::datasource::physical_plan::parquet::Int96Coercer;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use log::debug;
 use object_store::buffered::BufWriter;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::{AsyncArrowWriter, ProjectionMask};
 use parquet::errors::{ParquetError, Result as ParquetResult};
@@ -51,6 +54,7 @@ use crate::spec::{
 };
 
 mod action_fields;
+mod legacy_int96;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
@@ -1002,6 +1006,44 @@ pub(crate) async fn inspect_checkpoint_main_file(
     Ok(summary.sidecars)
 }
 
+/// Reads the batches of a checkpoint Parquet file, with INT96 timestamps as microseconds.
+///
+/// Spark writes timestamps, including the typed stats of a checkpoint, as INT96 by default.
+/// Arrow reads INT96 as nanoseconds, which overflows outside about 1677-09-21 to 2262-04-11,
+/// while microseconds cover every Spark timestamp. The values are read as timestamps without a
+/// time zone, as before, and are later parsed against the table's stats schema, so UTC instants
+/// keep their meaning. Typed stats that Spark would rebase from its legacy calendar are read as
+/// null, which means unknown.
+fn checkpoint_parquet_batches(
+    bytes: Bytes,
+) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+    let metadata = ArrowReaderMetadata::load(&bytes, ArrowReaderOptions::new())
+        .map_err(DeltaTableError::generic_err)?;
+    let metadata = match Int96Coercer::new(
+        metadata.parquet_schema(),
+        metadata.schema(),
+        &TimeUnit::Microsecond,
+    )
+    .coerce()
+    {
+        Some(schema) => ArrowReaderMetadata::try_new(
+            Arc::clone(metadata.metadata()),
+            ArrowReaderOptions::new().with_schema(Arc::new(schema)),
+        )
+        .map_err(DeltaTableError::generic_err)?,
+        None => metadata,
+    };
+    let legacy_int96_stats = legacy_int96::legacy_int96_stats_paths(metadata.metadata());
+    let batches = ParquetRecordBatchReaderBuilder::new_with_metadata(bytes, metadata)
+        .build()
+        .map_err(DeltaTableError::generic_err)?;
+    Ok(batches.map(move |batch| {
+        let batch = batch.map_err(DeltaTableError::generic_err)?;
+        legacy_int96::null_legacy_int96_stats(batch, &legacy_int96_stats)
+            .map_err(DeltaTableError::generic_err)
+    }))
+}
+
 /// Read only the main checkpoint file (without loading sidecars).
 /// Useful when callers only need non-file actions (protocol, metadata, sidecar
 /// descriptors, etc.) — for example during sidecar garbage collection.
@@ -1021,14 +1063,9 @@ pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
         decode_checkpoint_json_rows(version, &bytes)?
     } else {
         SpawnedTask::spawn_blocking(move || {
-            let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
-                .map_err(DeltaTableError::generic_err)?
-                .build()
-                .map_err(DeltaTableError::generic_err)?;
             let mut rows = Vec::new();
-            for batch in &mut batches {
-                let batch = batch.map_err(DeltaTableError::generic_err)?;
-                let mut decoded = decode_checkpoint_rows(&batch)?;
+            for batch in checkpoint_parquet_batches(bytes)? {
+                let mut decoded = decode_checkpoint_rows(&batch?)?;
                 rows.append(&mut decoded);
             }
             Ok::<_, DeltaTableError>(rows)
@@ -1086,14 +1123,9 @@ async fn read_checkpoint_rows_from_main_files(
             let sidecar_path = sidecar_file_path(&sidecar.path);
             let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
             let sidecar_rows = SpawnedTask::spawn_blocking(move || {
-                let mut batches = ParquetRecordBatchReaderBuilder::try_new(sidecar_bytes)
-                    .map_err(DeltaTableError::generic_err)?
-                    .build()
-                    .map_err(DeltaTableError::generic_err)?;
                 let mut sidecar_rows = Vec::new();
-                for batch in &mut batches {
-                    let batch = batch.map_err(DeltaTableError::generic_err)?;
-                    let mut decoded = decode_checkpoint_rows(&batch)?;
+                for batch in checkpoint_parquet_batches(sidecar_bytes)? {
+                    let mut decoded = decode_checkpoint_rows(&batch?)?;
                     sidecar_rows.append(&mut decoded);
                 }
                 Ok::<_, DeltaTableError>(sidecar_rows)

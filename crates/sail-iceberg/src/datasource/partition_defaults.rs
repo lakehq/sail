@@ -18,6 +18,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
@@ -119,10 +120,14 @@ pub(super) async fn create_data_scan(
         let store = session
             .runtime_env()
             .object_store(&config.object_store_url)?;
-        let metadata_cache = session
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
+        let metadata_cache = scoped_file_metadata_cache(
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+            &config.object_store_url,
+            session.session_id(),
+        );
         config.file_groups = load_parquet_scan_metadata(
             config.file_groups,
             &store,
@@ -321,4 +326,96 @@ pub(crate) fn create_data_scan_with_partition_defaults(
         )),
         None => scan,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+    use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_datasource::PartitionedFile;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
+    use parquet::arrow::ArrowWriter;
+
+    use super::*;
+    use crate::datasource::data_file_last_modified;
+
+    fn parquet_file(column: &str) -> Result<Vec<u8>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None)?;
+        writer.write(&batch)?;
+        Ok(writer.into_inner()?)
+    }
+
+    #[tokio::test]
+    async fn sessions_sharing_the_footer_cache_read_their_own_memory_files() -> Result<()> {
+        // Each session has its own in-memory store, so a file at the same path and size in
+        // another session must not reuse the cached footer, even with a fixed last_modified.
+        let shared =
+            CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
+        let url = ObjectStoreUrl::parse("memory://")?;
+        let path = Path::from("warehouse/table/data/file.parquet");
+        let files = [parquet_file("a")?, parquet_file("b")?];
+        assert_eq!(files[0].len(), files[1].len());
+
+        for (file, column) in files.into_iter().zip(["a", "b"]) {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let size = file.len() as u64;
+            store.put(&path, PutPayload::from(file)).await?;
+            let runtime = RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    CacheManagerConfig::default()
+                        .with_file_metadata_cache(Some(Arc::clone(&shared))),
+                )
+                .build_arc()?;
+            runtime.register_object_store(url.as_ref(), Arc::clone(&store));
+            let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+            let state = ctx.state();
+
+            let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+            let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+                store,
+                scoped_file_metadata_cache(
+                    state.runtime_env().cache_manager.get_file_metadata_cache(),
+                    &url,
+                    state.session_id(),
+                ),
+            ));
+            let source = ParquetSource::new(TableSchema::from(schema))
+                .with_parquet_file_reader_factory(reader_factory);
+            let file = PartitionedFile::new_from_meta(ObjectMeta {
+                location: path.clone(),
+                last_modified: data_file_last_modified(Some(1)),
+                size,
+                e_tag: None,
+                version: None,
+            });
+            let config = FileScanConfigBuilder::new(url.clone(), Arc::new(source))
+                .with_file_group(FileGroup::new(vec![file]))
+                .build();
+
+            let scan = create_data_scan(&state, config).await?;
+            let batches = collect(scan, state.task_ctx()).await?;
+            let values = batches
+                .iter()
+                .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().iter())
+                .collect::<Vec<_>>();
+            assert_eq!(values, vec![Some(1), Some(2), Some(3)], "column {column}");
+        }
+        // Execution reuses the footer read at planning in the same session, and sessions do not
+        // share it.
+        assert_eq!(shared.len(), 2);
+        Ok(())
+    }
 }

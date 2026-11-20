@@ -38,6 +38,7 @@ INTEGRATION_GROUPS = {
     "celeborn": ("celeborn", "spark/execution/test_shuffle_celeborn.py"),
     "glue": ("catalog/glue", "spark/catalog/glue"),
     "jdbc": ("spark/datasource/test_jdbc.py",),
+    "s3": ("spark/datasource/s3",),
 }
 SUITE_PATHS = {
     "udf": ("spark/udf", "spark/function/test_lazy_python_udf.py"),
