@@ -148,7 +148,9 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
 
 def _unity_column(name: str, type_name: str, position: int) -> dict:
     type_text = type_name.lower()
-    type_json = "integer" if type_name == "INT" else type_text
+    data_type = "integer" if type_name == "INT" else type_text
+    # Unity Catalog 0.6 requires a Delta struct field, as Sail and Spark write it.
+    type_json = {"name": name, "type": data_type, "nullable": True, "metadata": {}}
     return {
         "name": name,
         "type_name": type_name,
@@ -190,6 +192,8 @@ def _create_unity_managed_delta_table(
             "data_source_format": "DELTA",
             "storage_location": staging_location,
             "columns": columns,
+            # Unity Catalog 0.6 rejects managed tables without this property.
+            "properties": {"io.unitycatalog.tableId": table_id},
         },
         timeout=10,
     )
