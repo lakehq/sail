@@ -108,6 +108,9 @@ impl DeltaMetadataStatsExec {
     fn parse_stats_array(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         // Priority 1: if the batch already has a typed `stats_parsed` struct column
         // (e.g. read from a checkpoint that persists stats in struct form), normalize it.
+        // TODO: The log scan does not feed `stats_parsed` into this path yet. If it ever does, it
+        //   must read checkpoint INT96 timestamps as microseconds, as `checkpoint/mod.rs` does,
+        //   since INT96 read as nanoseconds overflows outside about 1677-09-21 to 2262-04-11.
         if let Some(existing) = batch.column_by_name(FIELD_NAME_STATS_PARSED) {
             let stats_struct = existing
                 .as_any()
