@@ -294,6 +294,8 @@ impl LakeSource for DeltaLakeSource {
             .map(parse_unity_required_protocol)
             .transpose()?;
 
+        // A new table gets its id from the properties of the staged table, and a
+        // replaced table keeps the id that it has in the catalog.
         let catalog_managed_table_id = if catalog_table.is_some() {
             Some(
                 unity_table_id_value(
@@ -301,6 +303,11 @@ impl LakeSource for DeltaLakeSource {
                         .iter()
                         .map(|(key, value)| (key.as_str(), value.as_str())),
                 )
+                .or_else(|| {
+                    lakehouse_table
+                        .as_ref()
+                        .and_then(|context| context.table_identity.table_id.as_deref())
+                })
                 .ok_or_else(|| {
                     DataFusionError::Plan(
                         "catalog-managed Delta CREATE TABLE requires a Unity table id".to_string(),
@@ -512,7 +519,7 @@ impl LakeSource for DeltaLakeSource {
                     .unwrap_or_else(|| compute_max_column_id(&annotated).to_string());
                 (annotated, max_column_id)
             } else {
-                let annotated = annotate_for_column_mapping(&kernel_schema);
+                let annotated = annotate_for_column_mapping(&kernel_schema, &table_url);
                 let max_column_id = compute_max_column_id(&annotated).to_string();
                 (annotated, max_column_id)
             };

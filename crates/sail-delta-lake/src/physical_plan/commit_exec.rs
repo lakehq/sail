@@ -41,8 +41,8 @@ use crate::schema::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
-    StructField, StructType, TableFeature, commit_path,
+    ColumnMappingMode, ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata,
+    MetadataValue, SaveMode, StructField, StructType, TableFeature, commit_path,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -365,8 +365,8 @@ impl DeltaCommitExec {
     ///
     /// The existing table must have the protocol and the metadata of the create actions.
     /// For a catalog-managed table, the catalog creates the table before the data is
-    /// written and decides its protocol and configuration, so only the schema and the
-    /// partition columns must be the same.
+    /// written and decides its protocol and configuration, so only the schema, the
+    /// column mapping and the partition columns must be the same.
     async fn existing_create_bootstrap_snapshot(
         log_store: &LogStoreRef,
         actions: &[CommitAction],
@@ -412,14 +412,23 @@ impl DeltaCommitExec {
                 .parse_schema()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             // The catalog creates the table from the column names and types, so the
-            // field metadata of the written data is not part of the comparison.
+            // field metadata of the written data is not part of the comparison, except
+            // for the column mapping that the data files are written with.
             let schema_matches = if catalog_managed {
                 let fields = |schema| {
                     serde_json::to_value(schema)
-                        .map(without_field_metadata)
+                        .map(with_only_column_mapping_field_metadata)
                         .map_err(|e| DataFusionError::External(Box::new(e)))
                 };
+                let mode = |metadata: &Metadata| {
+                    metadata
+                        .configuration()
+                        .get("delta.columnMapping.mode")
+                        .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
+                        .unwrap_or_default()
+                };
                 fields(&create_schema)? == fields(&existing_schema)?
+                    && mode(metadata) == mode(snapshot.metadata())
             } else {
                 create_schema == existing_schema
             };
@@ -1393,18 +1402,26 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
     }
 }
 
-/// Returns the JSON form of a Delta schema with the metadata of every field removed.
-fn without_field_metadata(mut schema: serde_json::Value) -> serde_json::Value {
+/// Returns the JSON form of a Delta schema with only the column mapping metadata of
+/// every field.
+fn with_only_column_mapping_field_metadata(mut schema: serde_json::Value) -> serde_json::Value {
     match &mut schema {
         serde_json::Value::Object(object) => {
-            object.remove("metadata");
-            for value in object.values_mut() {
-                *value = without_field_metadata(value.take());
+            if let Some(serde_json::Value::Object(metadata)) = object.get_mut("metadata") {
+                metadata.retain(|key, _| {
+                    key == ColumnMetadataKey::ColumnMappingId.as_ref()
+                        || key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
+                });
+            }
+            for (key, value) in object.iter_mut() {
+                if key != "metadata" {
+                    *value = with_only_column_mapping_field_metadata(value.take());
+                }
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                *item = without_field_metadata(item.take());
+                *item = with_only_column_mapping_field_metadata(item.take());
             }
         }
         _ => {}
@@ -1708,6 +1725,84 @@ mod create_bootstrap_tests {
             return internal_err!("expected an error for a different schema");
         };
         assert!(error.to_string().contains("different metadata"), "{error}");
+        Ok(())
+    }
+
+    /// The data files of CREATE TABLE AS SELECT are written with the column mapping that
+    /// the writer planned, so the table that the catalog created must have the same one.
+    #[tokio::test]
+    async fn catalog_managed_create_requires_the_column_mapping_of_the_data() -> Result<()> {
+        let mapped_create_actions = |table: &str, mode: &str, comment: bool| {
+            let mut field = StructField::nullable("id", DataType::LONG);
+            if comment {
+                field = field.with_metadata([("comment", MetadataValue::String("c".to_string()))]);
+            }
+            let schema =
+                StructType::try_new([field]).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let table_url =
+                url::Url::parse(table).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let schema = if mode == "none" {
+                schema
+            } else {
+                crate::schema::annotate_schema_for_column_mapping(&schema, &table_url)
+            };
+            let metadata = metadata_for_create_with_struct_type(
+                schema,
+                vec![],
+                0,
+                [("delta.columnMapping.mode".to_string(), mode.to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let features = vec![TableFeature::ColumnMapping];
+            Ok::<_, DataFusionError>(vec![
+                CommitAction::Protocol(Protocol::new(3, 7, Some(features.clone()), Some(features))),
+                CommitAction::Metadata(metadata),
+            ])
+        };
+        let store = Arc::new(InMemory::new());
+        let commit = mapped_create_actions("memory:///t", "name", false)?
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .join("\n");
+        store
+            .put(
+                &object_store::path::Path::from("t/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await?;
+        let table_url =
+            url::Url::parse("memory:///t").map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = create_delta_table_with_object_store(table_url, store, StorageConfig)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store();
+        let snapshot = |actions: Vec<CommitAction>| {
+            let log_store = log_store.clone();
+            async move {
+                DeltaCommitExec::existing_create_bootstrap_snapshot(&log_store, &actions, true)
+                    .await
+            }
+        };
+
+        // The writer annotates the same table in the same way, and the other field
+        // metadata is not compared.
+        let adopted = snapshot(mapped_create_actions("memory:///t", "name", true)?).await?;
+        assert_eq!(adopted.map(|snapshot| snapshot.version()), Some(0));
+
+        for (table, mode) in [
+            ("memory:///other", "name"),
+            ("memory:///t", "id"),
+            ("memory:///t", "none"),
+        ] {
+            let Err(error) = snapshot(mapped_create_actions(table, mode, false)?).await else {
+                return internal_err!("expected an error for {table} with column mapping {mode}");
+            };
+            assert!(error.to_string().contains("different metadata"), "{error}");
+        }
         Ok(())
     }
 

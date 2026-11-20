@@ -464,7 +464,7 @@ impl UnityCatalogProvider {
             catalog_table,
             options,
         } = request;
-        let mut table = resolve_lakehouse_table_status(
+        let table = resolve_lakehouse_table_status(
             self.get_name(),
             catalog_table,
             status,
@@ -472,13 +472,6 @@ impl UnityCatalogProvider {
             &self.lakehouse_capabilities(),
         );
         let catalog_managed = table.execution.commit == CommitAuthority::DeltaRatifiedCommit;
-        table.status.display_properties = options.properties;
-        if catalog_managed && let Some(table_id) = &table.execution.table_identity.table_id {
-            table
-                .status
-                .display_properties
-                .push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id.clone()));
-        }
         let materialization = if options.is_write_precondition {
             // The writer commits the replacement together with the data.
             LakehouseCreateMaterialization::None
@@ -1421,9 +1414,10 @@ impl CatalogProvider for UnityCatalogProvider {
                         return Ok(plan);
                     };
                     plan.table.status.location = Some(location.clone());
-                    plan.table.status.display_properties = properties;
+                    plan.table.status.display_properties = properties.clone();
                     plan.table.execution.table_identity.table_uri = Some(location);
                     plan.staged = Some(Box::new(StagedTableCreate {
+                        properties,
                         required_protocol: Some(required_protocol),
                         created_metadata: None,
                     }));
@@ -4422,6 +4416,7 @@ mod tests {
         let mut options = managed_delta_create_options(vec![("owner", "sail")], true);
         options.location = Some(DELTA_TABLE_URI.to_string());
         options.staged = Some(Box::new(StagedTableCreate {
+            properties: options.properties.clone(),
             required_protocol: Some("{}".to_string()),
             created_metadata: Some(delta_create_commit()),
         }));
@@ -4498,6 +4493,7 @@ mod tests {
         assert_eq!(
             plan.staged,
             Some(Box::new(StagedTableCreate {
+                properties: plan.table.status.display_properties.clone(),
                 required_protocol: Some(required_protocol.to_string()),
                 created_metadata: None,
             }))
@@ -4733,16 +4729,6 @@ mod tests {
                 Some(DELTA_TABLE_ID)
             );
             assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
-            assert_eq!(
-                plan.table.status.display_properties,
-                vec![
-                    ("owner".to_string(), "sail".to_string()),
-                    (
-                        DELTA_UNITY_TABLE_ID_KEY.to_string(),
-                        DELTA_TABLE_ID.to_string()
-                    ),
-                ]
-            );
             assert_eq!(plan.staged, None);
 
             // The writer of the statement with a query commits the replacement.
@@ -4809,10 +4795,6 @@ mod tests {
             }
         );
         assert_eq!(plan.table.execution.commit, CommitAuthority::Filesystem);
-        assert_eq!(
-            plan.table.status.display_properties,
-            vec![("owner".to_string(), "sail".to_string())]
-        );
         let plan = provider
             .plan_lakehouse_create(
                 &database,

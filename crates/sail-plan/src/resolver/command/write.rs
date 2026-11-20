@@ -686,7 +686,9 @@ impl PlanResolver<'_> {
                         });
                     }
                     // The catalog may stage the table and require properties for it.
-                    create_options.properties = create_plan.table.status.display_properties.clone();
+                    if let Some(staged) = &create_plan.staged {
+                        create_options.properties = staged.properties.clone();
+                    }
                     create_options.staged = create_plan.staged.clone();
                     sink_info.lakehouse_table = Some(
                         create_plan

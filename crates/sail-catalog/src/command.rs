@@ -1079,12 +1079,14 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     // The storage metadata is written with the credentials that the catalog issues.
     install_table_storage_credentials(ctx, table, &create_plan.table).await?;
 
-    // The catalog may plan the storage metadata at a location it allocated and with
-    // properties it requires.
+    // The catalog may plan the storage metadata at a location it allocated and, for a
+    // staged table, with properties it requires.
     if create_plan.table.status.location.is_some() {
         options.location = create_plan.table.status.location.clone();
     }
-    options.properties = create_plan.table.status.display_properties.clone();
+    if let Some(staged) = &create_plan.staged {
+        options.properties = staged.properties.clone();
+    }
     options.staged = create_plan.staged.clone();
     let location = options.location.clone().ok_or_else(|| {
         CatalogError::InvalidArgument(format!(

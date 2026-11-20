@@ -221,7 +221,7 @@ pub fn prepare_delta_write_context(
 
         let mut configuration = metadata_configuration.clone();
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-            let annotated_schema = annotate_for_column_mapping(&kernel_schema);
+            let annotated_schema = annotate_for_column_mapping(&kernel_schema, table_url);
             configuration.insert(
                 "delta.columnMapping.mode".to_string(),
                 effective_mode.as_ref().to_string(),

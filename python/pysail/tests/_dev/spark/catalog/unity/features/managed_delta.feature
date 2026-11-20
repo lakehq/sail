@@ -96,6 +96,48 @@ Feature: Unity Catalog managed Delta table operations
     Then Delta commit for version 0 in location has catalog-managed commit info
     Then Unity Catalog Delta commit for table unity_table_test.managed_ctas_t version 1 references staged Delta commit in location
 
+  Scenario: CTAS managed Delta table with column mapping by name writes the mapped columns
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_ctas_mapped_name_t
+      USING delta
+      PARTITIONED BY (grp)
+      TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+      AS SELECT * FROM VALUES
+        (1, 'one', 'a'),
+        (2, 'two', 'b')
+      AS t(id, name, grp)
+      """
+    When query
+      """
+      SELECT id, name, grp FROM unity_table_test.managed_ctas_mapped_name_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name | grp |
+      | 1  | one  | a   |
+      | 2  | two  | b   |
+
+  Scenario: CTAS managed Delta table with column mapping by id writes the mapped columns
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_ctas_mapped_id_t
+      USING delta
+      PARTITIONED BY (grp)
+      TBLPROPERTIES ('delta.columnMapping.mode' = 'id')
+      AS SELECT * FROM VALUES
+        (1, named_struct('x', 10, 'y', 'p'), 'a'),
+        (2, named_struct('x', 20, 'y', 'q'), 'b')
+      AS t(id, point, grp)
+      """
+    When query
+      """
+      SELECT id, point.x AS x, point.y AS y, grp FROM unity_table_test.managed_ctas_mapped_id_t ORDER BY id
+      """
+    Then query result ordered
+      | id | x  | y | grp |
+      | 1  | 10 | p | a   |
+      | 2  | 20 | q | b   |
+
   Scenario: Managed Delta table created without LOCATION accepts first INSERT
     Given statement
       """

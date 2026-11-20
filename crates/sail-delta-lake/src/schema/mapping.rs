@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use twox_hash::XxHash3_128;
+use url::Url;
 
 use crate::spec::{
     ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
@@ -11,11 +13,17 @@ use crate::spec::{
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
-pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
+///
+/// The physical names are derived from the table location and the column ids, so the
+/// annotation of the same schema for the same table is always the same. A table that
+/// is created before its data is written, such as a table that a catalog creates for
+/// CTAS, then has the physical names that the data files are written with.
+pub fn annotate_schema_for_column_mapping(schema: &StructType, table_url: &Url) -> StructType {
     let counter = AtomicI64::new(1);
+    let naming = PhysicalNaming::Table(table_url.as_str().trim_end_matches('/'));
     let annotated_fields: Vec<StructField> = schema
         .fields()
-        .map(|f| annotate_field(f, &counter))
+        .map(|f| annotate_field(f, &counter, naming))
         .collect();
     StructType::try_new(annotated_fields).unwrap_or_else(|_| empty_struct_type())
 }
@@ -110,9 +118,30 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
     merged
 }
 
-fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
+/// How the physical names of newly annotated columns are chosen.
+#[derive(Clone, Copy)]
+enum PhysicalNaming<'a> {
+    Random,
+    /// Derived from the table location and the column id.
+    Table(&'a str),
+}
+
+impl PhysicalNaming<'_> {
+    fn physical_name(self, id: i64) -> String {
+        let uuid = match self {
+            Self::Random => uuid::Uuid::new_v4(),
+            Self::Table(location) => {
+                let hash = XxHash3_128::oneshot(format!("{location}#{id}").as_bytes());
+                uuid::Builder::from_custom_bytes(hash.to_be_bytes()).into_uuid()
+            }
+        };
+        format!("col-{uuid}")
+    }
+}
+
+fn annotate_field(field: &StructField, counter: &AtomicI64, naming: PhysicalNaming) -> StructField {
     let next_id = counter.fetch_add(1, Ordering::Relaxed);
-    let physical_name = format!("col-{}", uuid::Uuid::new_v4());
+    let physical_name = naming.physical_name(next_id);
     let mut annotated = field.clone();
     strip_parquet_field_id_metadata(&mut annotated.metadata);
     let annotated = annotated.add_metadata([
@@ -126,7 +155,7 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
         ),
     ]);
 
-    let new_data_type = merge_types(None, annotated.data_type(), counter);
+    let new_data_type = merge_types(None, annotated.data_type(), counter, naming);
     StructField {
         name: annotated.name().clone(),
         data_type: new_data_type,
@@ -135,21 +164,27 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     }
 }
 
-fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
+fn annotate_nested_type(
+    data_type: &DataType,
+    counter: &AtomicI64,
+    naming: PhysicalNaming,
+) -> DataType {
     match data_type {
         DataType::Struct(st) => {
-            let fields: Vec<StructField> =
-                st.fields().map(|f| annotate_field(f, counter)).collect();
+            let fields: Vec<StructField> = st
+                .fields()
+                .map(|f| annotate_field(f, counter, naming))
+                .collect();
             let result = StructType::try_new(fields).unwrap_or_else(|_| empty_struct_type());
             DataType::Struct(Box::new(result))
         }
         DataType::Array(at) => {
-            let new_elem = annotate_nested_type(at.element_type(), counter);
+            let new_elem = annotate_nested_type(at.element_type(), counter, naming);
             DataType::Array(Box::new(ArrayType::new(new_elem, at.contains_null())))
         }
         DataType::Map(mt) => {
-            let new_key = annotate_nested_type(mt.key_type(), counter);
-            let new_value = annotate_nested_type(mt.value_type(), counter);
+            let new_key = annotate_nested_type(mt.key_type(), counter, naming);
+            let new_value = annotate_nested_type(mt.value_type(), counter, naming);
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
@@ -164,6 +199,7 @@ fn merge_types(
     existing_type: Option<&DataType>,
     new_type: &DataType,
     counter: &AtomicI64,
+    naming: PhysicalNaming,
 ) -> DataType {
     match (existing_type, new_type) {
         (Some(DataType::Struct(prev_st)), DataType::Struct(new_st)) => DataType::Struct(Box::new(
@@ -174,6 +210,7 @@ fn merge_types(
                 Some(prev_arr.element_type()),
                 new_arr.element_type(),
                 counter,
+                naming,
             );
             DataType::Array(Box::new(ArrayType::new(
                 merged_elem,
@@ -181,15 +218,25 @@ fn merge_types(
             )))
         }
         (Some(DataType::Map(prev_map)), DataType::Map(new_map)) => {
-            let new_key = merge_types(Some(prev_map.key_type()), new_map.key_type(), counter);
-            let new_value = merge_types(Some(prev_map.value_type()), new_map.value_type(), counter);
+            let new_key = merge_types(
+                Some(prev_map.key_type()),
+                new_map.key_type(),
+                counter,
+                naming,
+            );
+            let new_value = merge_types(
+                Some(prev_map.value_type()),
+                new_map.value_type(),
+                counter,
+                naming,
+            );
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
                 new_map.value_contains_null(),
             )))
         }
-        (None, new_type) => annotate_nested_type(new_type, counter),
+        (None, new_type) => annotate_nested_type(new_type, counter, naming),
         (_, _) => new_type.clone(),
     }
 }
@@ -229,8 +276,12 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
         .map(|nf| {
             let prev = find_matching_field(nf, &existing_fields);
             if let Some(prev_field) = prev {
-                let merged_dtype =
-                    merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+                let merged_dtype = merge_types(
+                    Some(prev_field.data_type()),
+                    nf.data_type(),
+                    counter,
+                    PhysicalNaming::Random,
+                );
                 let merged_metadata = merge_metadata(prev_field, nf);
                 StructField {
                     name: nf.name().clone(),
@@ -239,7 +290,7 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
                     metadata: merged_metadata,
                 }
             } else {
-                annotate_field(nf, counter)
+                annotate_field(nf, counter, PhysicalNaming::Random)
             }
         })
         .collect();
@@ -270,7 +321,8 @@ mod tests {
             .with_metadata([(PARQUET_FIELD_ID_META_KEY, MetadataValue::Number(20))]);
         let schema = StructType::try_new(vec![details]).expect("schema");
 
-        let annotated = annotate_schema_for_column_mapping(&schema);
+        let table_url = Url::parse("memory:///t").expect("table URL");
+        let annotated = annotate_schema_for_column_mapping(&schema, &table_url);
         let details = annotated.field("details").expect("details field");
         let DataType::Struct(nested) = details.data_type() else {
             panic!("details must be a struct");
@@ -286,5 +338,59 @@ mod tests {
             );
             assert!(field.metadata().contains_key("delta.columnMapping.id"));
         }
+    }
+
+    /// A table that a catalog creates before the data is written for CTAS is annotated
+    /// separately from the data files, so both must get the same physical names.
+    #[test]
+    fn annotation_of_new_table_depends_only_on_table_and_schema() {
+        let point = StructType::try_new(vec![
+            StructField::new("x", DataType::LONG, true),
+            StructField::new("y", DataType::LONG, true),
+        ])
+        .expect("point schema");
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::LONG, false),
+            StructField::new(
+                "points",
+                DataType::Array(Box::new(ArrayType::new(
+                    DataType::Struct(Box::new(point)),
+                    true,
+                ))),
+                true,
+            ),
+        ])
+        .expect("schema");
+        let table = Url::parse("file:///warehouse/tables/a").expect("table URL");
+        let same_table = Url::parse("file:///warehouse/tables/a/").expect("table URL");
+        let other_table = Url::parse("file:///warehouse/tables/b").expect("table URL");
+
+        let annotated = annotate_schema_for_column_mapping(&schema, &table);
+        assert_eq!(
+            annotated,
+            annotate_schema_for_column_mapping(&schema, &same_table)
+        );
+        assert_eq!(compute_max_column_id(&annotated), 4);
+
+        let other = annotate_schema_for_column_mapping(&schema, &other_table);
+        let physical_names = |schema: &StructType| {
+            schema
+                .fields()
+                .map(|field| column_mapping_physical_name(field).map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+        let names = physical_names(&annotated);
+        assert!(
+            names
+                .iter()
+                .all(|name| name.as_deref().is_some_and(|name| name.starts_with("col-")))
+        );
+        assert_ne!(names[0], names[1]);
+        assert!(
+            names
+                .iter()
+                .zip(physical_names(&other))
+                .all(|(name, other)| *name != other)
+        );
     }
 }

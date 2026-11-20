@@ -53,6 +53,10 @@ pub struct CreateTableOptions {
 /// before the table is created in the catalog.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct StagedTableCreate {
+    /// The table properties for the storage metadata and the table in the catalog,
+    /// which include the properties that the catalog requires for the staged table.
+    #[serde(default)]
+    pub properties: Vec<(String, String)>,
     /// The protocol that the catalog requires for the storage metadata,
     /// in the form defined by the table format.
     pub required_protocol: Option<String>,
