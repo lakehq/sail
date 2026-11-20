@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use chumsky::prelude::*;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesRef, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
@@ -22,7 +23,7 @@ pub(super) fn expand(xml: &str) -> XmlResult<Cow<'_, str>> {
     loop {
         match reader.read_event()? {
             Event::DocType(doctype) => {
-                let dtd = doctype.xml10_content()?;
+                let dtd = doctype.xml10_content();
 
                 collector.collect(
                     declarations()
@@ -163,9 +164,9 @@ impl Expansion<'_> {
         loop {
             match reader.read_event()? {
                 Event::GeneralRef(reference) => {
-                    let name = reference.decode()?;
-                    if self.entities.contains_key(name.as_ref()) {
-                        let value = self.entity(&name, false)?;
+                    let name = reference.as_ref();
+                    if self.entities.contains_key(name) {
+                        let value = self.entity(name, false)?;
                         writer.write_event(Event::Text(BytesText::from_escaped(value)))?;
                     } else {
                         writer.write_event(Event::GeneralRef(reference))?;
@@ -187,13 +188,14 @@ impl Expansion<'_> {
     }
 
     fn attributes(&mut self, element: BytesStart<'_>) -> XmlResult<BytesStart<'static>> {
-        let name = element.name();
-        let mut result = BytesStart::new(std::str::from_utf8(name.as_ref())?.to_string());
+        let mut result = BytesStart::new(element.name().as_ref().to_owned());
         for attribute in element.attributes() {
             let attribute = attribute?;
-            let value = std::str::from_utf8(&attribute.value)?;
-            let value = self.attribute(value)?.replace('"', "&quot;");
-            result.push_attribute((attribute.key.as_ref(), value.as_bytes()));
+            let value = self.attribute(&attribute.value)?.replace('"', "&quot;");
+            result.push_attribute(Attribute {
+                key: attribute.key,
+                value: Cow::Owned(value),
+            });
         }
         Ok(result)
     }

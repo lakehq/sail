@@ -22,8 +22,8 @@ pub(super) fn local_name(name: &str) -> &str {
 pub(super) fn attribute_value(attribute: &Attribute<'_>) -> XmlResult<String> {
     // Normalize literal whitespace before unescaping. Character references must
     // retain their original characters, including tabs and carriage returns.
-    validate_name(std::str::from_utf8(attribute.key.as_ref())?)?;
-    let raw = std::str::from_utf8(&attribute.value)?;
+    validate_name(attribute.key.as_ref())?;
+    let raw = &attribute.value;
     if raw.contains('<') {
         return Err("Unescaped < in XML attribute".into());
     }
@@ -42,8 +42,7 @@ pub(super) fn reference_value(reference: &BytesRef<'_>) -> XmlResult<String> {
         }
         Ok(character.to_string())
     } else {
-        let name = reference.decode()?;
-        Ok(resolve_predefined_entity(&name)
+        Ok(resolve_predefined_entity(reference)
             .ok_or("Unknown XML entity")?
             .to_string())
     }
@@ -102,8 +101,7 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                     }
                     root_seen = true;
                 }
-                let name = element.name();
-                let name = std::str::from_utf8(name.as_ref())?;
+                let name = element.name().into_inner();
                 validate_name(name)?;
                 let name = xot.add_name(name);
                 let node = xot.new_element(name);
@@ -125,10 +123,10 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                     .attributes()
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 if xpath {
-                    attributes.sort_by(|a, b| a.key.as_ref().cmp(b.key.as_ref()));
+                    attributes.sort_by_key(|attribute| attribute.key);
                 }
                 for attribute in attributes {
-                    let name = std::str::from_utf8(attribute.key.as_ref())?;
+                    let name = attribute.key.into_inner();
                     let value = attribute_value(&attribute)?;
                     if xpath && (name == "xmlns" || name.starts_with("xmlns:")) {
                         // In the Java namespace-unaware DOM, namespace declarations
@@ -172,7 +170,7 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                 parent = xot.parent(parent).ok_or("Unmatched XML end tag")?;
             }
             Event::Text(text) => {
-                let text = text.xml10_content()?;
+                let text = text.xml10_content();
                 if text.contains("]]>") {
                     return Err("Forbidden ]]> in XML text".into());
                 }
@@ -186,7 +184,7 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                 }
             }
             Event::CData(text) if parent != document => {
-                append_text(xot, parent, &text.xml10_content()?, true, &mut fragments)?;
+                append_text(xot, parent, &text.xml10_content(), true, &mut fragments)?;
             }
             Event::GeneralRef(reference) if parent != document => {
                 append_text(
@@ -198,11 +196,12 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                 )?;
             }
             Event::Comment(comment) => {
-                xot.append_comment(parent, &comment.xml10_content()?)?;
+                xot.append_comment(parent, &comment.xml10_content())?;
             }
             Event::PI(instruction) => {
-                let target = xot.add_name(std::str::from_utf8(instruction.target())?);
-                let content = std::str::from_utf8(instruction.content())?
+                let target = xot.add_name(instruction.target());
+                let content = instruction
+                    .content()
                     .trim_start_matches([' ', '\t', '\r', '\n'])
                     .replace("\r\n", "\n")
                     .replace('\r', "\n");
@@ -210,7 +209,7 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
             }
             Event::Decl(declaration) if declaration_allowed => {
                 super::parser::declaration(xpath)
-                    .parse(std::str::from_utf8(&declaration)?)
+                    .parse(&declaration)
                     .into_result()
                     .map_err(|errors| format!("Invalid XML declaration: {errors:?}"))?;
             }

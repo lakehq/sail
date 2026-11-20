@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -12,7 +13,9 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use quick_xml::Writer;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::name::QName;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::display::{
     spark_f32_to_string as format_single, spark_f64_to_string as format_double,
@@ -369,13 +372,19 @@ fn write_struct(
             if let Some(ref nv) = options.null_value {
                 let attr_name = options.strip_prefix(field.name());
                 check_name(attr_name, options)?;
-                start.push_attribute((attr_name.as_bytes(), escape_attr(nv).as_bytes()));
+                start.push_attribute(Attribute {
+                    key: QName(attr_name),
+                    value: Cow::Owned(escape_attr(nv)),
+                });
             }
         } else {
             let attr_name = options.strip_prefix(field.name());
             check_name(attr_name, options)?;
             let value = format_field_to_xml(col, row, field.data_type(), options)?;
-            start.push_attribute((attr_name.as_bytes(), escape_attr(&value).as_bytes()));
+            start.push_attribute(Attribute {
+                key: QName(attr_name),
+                value: Cow::Owned(escape_attr(&value)),
+            });
         }
     }
 
@@ -925,16 +934,17 @@ fn format_timestamp_field(
 
 /// Match the StAX escaping rules, including XML line-ending preservation and
 /// the forbidden CDATA terminator in ordinary text.
+/// StAX uses hexadecimal whitespace references.
 fn escape_text(s: &str) -> String {
     quick_xml::escape::minimal_escape(s)
         .replace("]]>", "]]&gt;")
-        .replace('\r', "&#xd;")
+        .replace("&#13;", "&#xd;")
 }
 
 fn escape_attr(s: &str) -> String {
     quick_xml::escape::minimal_escape(s)
         .replace('"', "&quot;")
-        .replace('\r', "&#xd;")
+        .replace("&#13;", "&#xd;")
         .replace('\n', "&#xa;")
         .replace('\t', "&#x9;")
 }
