@@ -106,6 +106,20 @@ jobs:
             test "$status" -eq 5
           }
 
+      # The tests above use the default Unity Catalog server image, which does not have the
+      # Unity Catalog Delta REST API. Run the Unity Catalog tests of this job again with a
+      # server image that has it, since Sail uses that API for managed Delta tables there.
+      - name: Run Unity Catalog Tests with Delta REST API
+        if: ${{ contains(fromJSON(inputs.suite_choices), 'integration-unity') }}
+        env:
+          PYSAIL_UNITY_CATALOG_IMAGE: "unitycatalog/unitycatalog:v0.7.0"
+        run: |
+          hatch run pytest --pyargs pysail.tests._dev -q --timeout=60 --durations=20 \
+            -m "suite(name='integration-unity')" || {
+            status=$?
+            test "$status" -eq 5
+          }
+
       # Generate coverage report after Python tests
       - name: Generate coverage report
         run: |

@@ -1347,6 +1347,7 @@ mod catalog_managed_tests {
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::*;
     use sail_common_datafusion::catalog::*;
+    use sail_common_datafusion::datasource::OptionLayer;
     use url::Url;
 
     use super::load_delta_read_state;
@@ -1683,6 +1684,24 @@ mod catalog_managed_tests {
         ratified: Option<DeltaRatifiedCommitResponse>,
         discover_error: Option<fn() -> CatalogError>,
     ) -> (usize, usize, datafusion_common::Result<i64>) {
+        read_unity_managed_table_with_options(
+            store,
+            catalog_managed_property,
+            ratified,
+            discover_error,
+            vec![],
+        )
+        .await
+    }
+
+    /// Reads the table like `read_unity_managed_table_with_requests` with the read options.
+    async fn read_unity_managed_table_with_options(
+        store: Arc<dyn ObjectStore>,
+        catalog_managed_property: bool,
+        ratified: Option<DeltaRatifiedCommitResponse>,
+        discover_error: Option<fn() -> CatalogError>,
+        options: Vec<(&str, &str)>,
+    ) -> (usize, usize, datafusion_common::Result<i64>) {
         let catalog = Arc::new(UnityManagedCatalog {
             catalog_managed_property,
             ratified,
@@ -1726,7 +1745,16 @@ mod catalog_managed_tests {
             &state,
             table_url,
             None,
-            DeltaReadOptions::resolve(&state, vec![]).unwrap(),
+            DeltaReadOptions::resolve(
+                &state,
+                vec![OptionLayer::OptionList {
+                    items: options
+                        .into_iter()
+                        .map(|(key, value)| (key.to_string(), value.to_string()))
+                        .collect(),
+                }],
+            )
+            .unwrap(),
             false,
             Some(context),
         )
@@ -2675,5 +2703,180 @@ mod catalog_managed_tests {
         assert!(error.contains("429"), "{error}");
         assert_eq!(backfilled_versions(&commit), vec![serde_json::json!(0)]);
         assert_eq!(commit.staged_commits().await, Vec::<String>::new());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_refused_as_a_conflict_after_it_was_ratified_is_committed() {
+        // The catalog ratifies the first request without an answer, and answers the request
+        // that is sent again with a conflict, as a catalog that does not recognize a request
+        // that it has ratified does. A blind append must not be committed a second time.
+        for blind_append in [false, true] {
+            let steps = vec![
+                CommitStep::RatifyAndFail(state_unknown),
+                CommitStep::Refuse(|| CatalogError::Conflict("409".into())),
+            ];
+            let commit = commit_with_script(steps, blind_append).await;
+            let staged = commit.result.as_ref().unwrap();
+            assert_eq!((staged.version, staged.metrics.num_retries), (1, 0));
+            let request = (1, staged.file_name.clone());
+            assert_eq!(commit.requests(), vec![request.clone(), request]);
+            assert_eq!(commit.latest_table_version(), 1);
+            assert_eq!(
+                commit.staged_commits().await,
+                vec![staged.file_name.clone()]
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_that_is_rate_limited_for_every_request_is_not_committed() {
+        let steps = (0..4)
+            .map(|_| CommitStep::Refuse(|| CatalogError::RateLimited("429".into())))
+            .collect();
+        let commit = commit_with_script(steps, true).await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        assert!(error.contains("429"), "{error}");
+        // The request is sent again three times, and the staged commit is deleted since the
+        // catalog answered that it did not ratify it.
+        let requests = commit.requests();
+        assert_eq!(requests, vec![requests[0].clone(); 4]);
+        assert_eq!(commit.staged_commits().await, Vec::<String>::new());
+        assert_eq!(commit.latest_table_version(), 0);
+    }
+
+    /// Reads the catalog-managed table with the log files as of the version, and returns the
+    /// number of the commit requests to the catalog with the version that is read.
+    async fn read_catalog_managed_table_as_of(
+        version: &str,
+        log_files: &[(String, &str)],
+        ratified: DeltaRatifiedCommitResponse,
+    ) -> (usize, datafusion_common::Result<i64>) {
+        let store = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        for (file, content) in log_files {
+            store
+                .put(
+                    &Path::from(format!("items/_delta_log/{file}")),
+                    content.to_string().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let (commit_requests, _, result) = read_unity_managed_table_with_options(
+            store,
+            true,
+            Some(ratified),
+            None,
+            vec![("versionAsOf", version)],
+        )
+        .await;
+        (commit_requests, result)
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_is_read_as_of_a_version() {
+        // Version 1 is published, the versions 2 and 3 are ratified and not published yet.
+        let files = [
+            (published_commit(1), EMPTY_COMMIT),
+            (staged_commit(2, "a"), EMPTY_COMMIT),
+            (staged_commit(3, "b"), EMPTY_COMMIT),
+        ];
+        let latest = || ratified(3, &[(2, "a"), (3, "b")]);
+        for version in [1, 2, 3] {
+            let (commit_requests, result) =
+                read_catalog_managed_table_as_of(&version.to_string(), &files, latest()).await;
+            assert_eq!(result.unwrap(), version);
+            assert_eq!(commit_requests, 1);
+        }
+        // The version is above the latest version that the catalog ratified, although a staged
+        // commit of the version exists.
+        let mut files = files.to_vec();
+        files.push((staged_commit(4, "c"), EMPTY_COMMIT));
+        let (_, result) = read_catalog_managed_table_as_of("4", &files, latest()).await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("latest ratified version is 3, but version 4 was requested"),
+            "{error}"
+        );
+        // Version 0 is read from the published log without the catalog.
+        let (commit_requests, result) =
+            read_catalog_managed_table_as_of("0", &files, latest()).await;
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!(commit_requests, 0);
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_is_read_as_of_a_version_below_an_unreadable_commit() {
+        // The staged commit of version 3 is ratified and unreadable. A read as of version 2 does
+        // not read it, and a read of the latest version fails.
+        let files = [
+            (published_commit(1), EMPTY_COMMIT),
+            (staged_commit(2, "a"), EMPTY_COMMIT),
+            (staged_commit(3, "b"), CORRUPTED_COMMIT),
+        ];
+        let latest = || ratified(3, &[(2, "a"), (3, "b")]);
+        let (_, result) = read_catalog_managed_table_as_of("2", &files, latest()).await;
+        assert_eq!(result.unwrap(), 2);
+        let (_, result) = read_catalog_managed_table_as_of("3", &files, latest()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_with_checkpoint_is_read_with_catalog_commits() {
+        use crate::checkpoint::create_checkpoint_for;
+
+        // The versions 1 to 11 are published with a checkpoint at version 10, the commits
+        // before the checkpoint are cleaned up, and version 12 is ratified and not published.
+        // A staged commit that lost the race for version 3 is unreadable.
+        let store = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        for version in 1..=11 {
+            store
+                .put(
+                    &Path::from(format!("items/_delta_log/{}", published_commit(version))),
+                    EMPTY_COMMIT.to_string().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let log_store = super::create_logstore_with_object_store(
+            store.clone(),
+            Url::parse("memory:///items/").unwrap(),
+            super::StorageConfig,
+        )
+        .unwrap();
+        create_checkpoint_for(10, log_store.as_ref(), uuid::Uuid::new_v4())
+            .await
+            .unwrap();
+        for version in 0..10 {
+            let path = Path::from(format!("items/_delta_log/{}", published_commit(version)));
+            store.delete(&path).await.unwrap();
+        }
+        for (file, content) in [
+            (staged_commit(3, "orphan"), CORRUPTED_COMMIT),
+            (staged_commit(12, "a"), EMPTY_COMMIT),
+        ] {
+            store
+                .put(
+                    &Path::from(format!("items/_delta_log/{file}")),
+                    content.to_string().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let latest = || ratified(12, &[(12, "a")]);
+        let (commit_requests, result) =
+            read_unity_managed_table_in_store(store.clone(), true, Some(latest())).await;
+        assert_eq!(result.unwrap(), 12);
+        assert_eq!(commit_requests, 1);
+        for version in [10, 11, 12] {
+            let (_, _, result) = read_unity_managed_table_with_options(
+                store.clone(),
+                true,
+                Some(latest()),
+                None,
+                vec![("versionAsOf", version.to_string().as_str())],
+            )
+            .await;
+            assert_eq!(result.unwrap(), version);
+        }
     }
 }

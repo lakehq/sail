@@ -1288,4 +1288,205 @@ mod tests {
         assert_eq!(field["type"]["elementType"], json!("variant"));
         Ok(())
     }
+
+    /// The type of the column in Unity Catalog for each Arrow type, or nothing when the
+    /// Arrow type cannot be the type of a column, and the Arrow type of the column that is
+    /// read back from the type the column is created with.
+    #[test]
+    fn arrow_types_are_converted_to_unity_types() -> CatalogResult<()> {
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let utc = || Some(Arc::from("UTC"));
+        let element = |data_type| Arc::new(Field::new(SAIL_LIST_FIELD_NAME, data_type, true));
+        let entries = |key: DataType, value: DataType| {
+            Arc::new(Field::new(
+                SAIL_MAP_FIELD_NAME,
+                DataType::Struct(Fields::from(vec![
+                    Field::new(SAIL_MAP_KEY_FIELD_NAME, key, false),
+                    Field::new(SAIL_MAP_VALUE_FIELD_NAME, value, true),
+                ])),
+                false,
+            ))
+        };
+        let nested = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "b",
+                DataType::Map(
+                    entries(DataType::Utf8, DataType::List(element(DataType::Date32))),
+                    false,
+                ),
+                true,
+            ),
+        ]));
+        let cases: Vec<(DataType, Option<&str>, Option<DataType>)> = vec![
+            (DataType::Null, Some("null"), Some(DataType::Null)),
+            (DataType::Boolean, Some("boolean"), Some(DataType::Boolean)),
+            (DataType::Int8, Some("byte"), Some(DataType::Int8)),
+            (DataType::Int16, Some("short"), Some(DataType::Int16)),
+            (DataType::Int32, Some("int"), Some(DataType::Int32)),
+            (DataType::Int64, Some("long"), Some(DataType::Int64)),
+            // Unsigned integers have the type of the next wider signed integer.
+            (DataType::UInt8, Some("short"), Some(DataType::Int16)),
+            (DataType::UInt16, Some("int"), Some(DataType::Int32)),
+            (DataType::UInt32, Some("long"), Some(DataType::Int64)),
+            (DataType::UInt64, None, None),
+            (DataType::Float16, None, None),
+            (DataType::Float32, Some("float"), Some(DataType::Float32)),
+            (DataType::Float64, Some("double"), Some(DataType::Float64)),
+            (DataType::Utf8, Some("string"), Some(DataType::Utf8)),
+            (DataType::LargeUtf8, Some("string"), Some(DataType::Utf8)),
+            (DataType::Utf8View, Some("string"), Some(DataType::Utf8)),
+            (DataType::Binary, Some("binary"), Some(DataType::Binary)),
+            (
+                DataType::LargeBinary,
+                Some("binary"),
+                Some(DataType::Binary),
+            ),
+            (DataType::BinaryView, Some("binary"), Some(DataType::Binary)),
+            (
+                DataType::FixedSizeBinary(4),
+                Some("binary"),
+                Some(DataType::Binary),
+            ),
+            (DataType::Date32, Some("date"), Some(DataType::Date32)),
+            (DataType::Date64, None, None),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                Some("timestamp_ntz"),
+                Some(DataType::Timestamp(TimeUnit::Microsecond, None)),
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+05:30"))),
+                Some("timestamp"),
+                Some(DataType::Timestamp(TimeUnit::Microsecond, utc())),
+            ),
+            (DataType::Timestamp(TimeUnit::Second, None), None, None),
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, utc()),
+                None,
+                None,
+            ),
+            (DataType::Timestamp(TimeUnit::Nanosecond, None), None, None),
+            (DataType::Time32(TimeUnit::Millisecond), None, None),
+            (DataType::Time64(TimeUnit::Microsecond), None, None),
+            (DataType::Duration(TimeUnit::Nanosecond), None, None),
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                Some("interval"),
+                Some(DataType::Interval(IntervalUnit::YearMonth)),
+            ),
+            (DataType::Interval(IntervalUnit::MonthDayNano), None, None),
+            (
+                DataType::Decimal32(9, 2),
+                Some("decimal(9,2)"),
+                Some(DataType::Decimal128(9, 2)),
+            ),
+            (
+                DataType::Decimal64(18, 3),
+                Some("decimal(18,3)"),
+                Some(DataType::Decimal128(18, 3)),
+            ),
+            (
+                DataType::Decimal128(38, 10),
+                Some("decimal(38,10)"),
+                Some(DataType::Decimal128(38, 10)),
+            ),
+            (
+                DataType::Decimal256(20, 4),
+                Some("decimal(20,4)"),
+                Some(DataType::Decimal128(20, 4)),
+            ),
+            (DataType::Decimal256(76, 4), None, None),
+            (
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                None,
+                None,
+            ),
+            (
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, true)),
+                ),
+                None,
+                None,
+            ),
+            (
+                DataType::Union(UnionFields::empty(), UnionMode::Dense),
+                None,
+                None,
+            ),
+            (
+                DataType::FixedSizeList(element(DataType::Int32), 2),
+                None,
+                None,
+            ),
+            (
+                DataType::List(element(DataType::Int32)),
+                Some("array<int>"),
+                Some(DataType::List(element(DataType::Int32))),
+            ),
+            (
+                DataType::LargeList(element(DataType::Utf8)),
+                Some("array<string>"),
+                Some(DataType::List(element(DataType::Utf8))),
+            ),
+            (
+                DataType::ListView(element(DataType::Int64)),
+                Some("array<long>"),
+                Some(DataType::List(element(DataType::Int64))),
+            ),
+            (
+                DataType::LargeListView(element(DataType::Boolean)),
+                Some("array<boolean>"),
+                Some(DataType::List(element(DataType::Boolean))),
+            ),
+            (
+                DataType::Map(entries(DataType::Utf8, DataType::Decimal128(5, 1)), false),
+                Some("map<string,decimal(5,1)>"),
+                Some(DataType::Map(
+                    entries(DataType::Utf8, DataType::Decimal128(5, 1)),
+                    false,
+                )),
+            ),
+            (
+                nested.clone(),
+                Some("struct<a:int,b:map<string,array<date>>>"),
+                Some(nested),
+            ),
+            (DataType::List(element(DataType::UInt64)), None, None),
+        ];
+        for (data_type, type_text, read_type) in cases {
+            let unity_type = data_type_to_unity_type(&data_type, false);
+            let field = unity_struct_field_type_json("c", &data_type, true, &HashMap::new(), false);
+            let Some(type_text) = type_text else {
+                assert!(unity_type.is_err(), "{data_type}");
+                assert!(field.is_err(), "{data_type}");
+                continue;
+            };
+            let unity_type = unity_type?;
+            assert_eq!(unity_type.type_text, type_text, "{data_type}");
+            let (type_precision, type_scale) = match &data_type {
+                DataType::Decimal32(precision, scale)
+                | DataType::Decimal64(precision, scale)
+                | DataType::Decimal128(precision, scale)
+                | DataType::Decimal256(precision, scale) => {
+                    (Some(*precision as i32), Some(*scale as i32))
+                }
+                _ => (None, None),
+            };
+            let type_interval_type =
+                matches!(data_type, DataType::Interval(_)).then(|| "YearMonth".to_string());
+            let actual = unity_type_to_data_type(
+                Some(unity_type.type_name),
+                Some(field?.to_string()),
+                Some(unity_type.type_text),
+                type_precision,
+                type_scale,
+                type_interval_type,
+            )?;
+            assert_eq!(Some(actual), read_type, "{data_type}");
+        }
+        Ok(())
+    }
 }

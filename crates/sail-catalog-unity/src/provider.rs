@@ -4019,6 +4019,135 @@ mod tests {
         );
     }
 
+    /// Each type of a column in the Delta log has its form in the Delta REST API, where the
+    /// properties of array types and map types are named differently at any depth.
+    #[test]
+    fn test_delta_schema_to_wire_type_for_each_delta_type() {
+        let field = |name: &str, data_type: serde_json::Value| serde_json::json!({"name": name, "type": data_type, "nullable": true, "metadata": {}});
+        let struct_of = |fields: Vec<serde_json::Value>| serde_json::json!({"type": "struct", "fields": fields});
+        for primitive in [
+            "boolean",
+            "byte",
+            "short",
+            "integer",
+            "long",
+            "float",
+            "double",
+            "string",
+            "binary",
+            "date",
+            "timestamp",
+            "timestamp_ntz",
+            "decimal(10,2)",
+            "decimal(38,0)",
+            "variant",
+        ] {
+            let schema = struct_of(vec![field("c", serde_json::json!(primitive))]);
+            assert_eq!(delta_schema_to_wire_type(&schema), schema, "{primitive}");
+        }
+
+        let schema = struct_of(vec![
+            field(
+                "m",
+                serde_json::json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": {
+                        "type": "array",
+                        "elementType": {
+                            "type": "struct",
+                            "fields": [{"name": "x", "type": "timestamp_ntz", "nullable": false}]
+                        },
+                        "containsNull": false
+                    },
+                    "valueContainsNull": true
+                }),
+            ),
+            field(
+                "a",
+                serde_json::json!({
+                    "type": "array",
+                    "elementType": {
+                        "type": "map",
+                        "keyType": {
+                            "type": "array",
+                            "elementType": "integer",
+                            "containsNull": false
+                        },
+                        "valueType": "decimal(5,1)",
+                        "valueContainsNull": false
+                    },
+                    "containsNull": true
+                }),
+            ),
+            field(
+                "s",
+                struct_of(vec![field(
+                    "v",
+                    serde_json::json!({
+                        "type": "array",
+                        "elementType": "variant",
+                        "containsNull": true
+                    }),
+                )]),
+            ),
+        ]);
+        assert_eq!(
+            delta_schema_to_wire_type(&schema),
+            struct_of(vec![
+                field(
+                    "m",
+                    serde_json::json!({
+                        "type": "map",
+                        "key-type": "string",
+                        "value-type": {
+                            "type": "array",
+                            "element-type": {
+                                "type": "struct",
+                                "fields": [{
+                                    "name": "x",
+                                    "type": "timestamp_ntz",
+                                    "nullable": false,
+                                    "metadata": {}
+                                }]
+                            },
+                            "contains-null": false
+                        },
+                        "value-contains-null": true
+                    }),
+                ),
+                field(
+                    "a",
+                    serde_json::json!({
+                        "type": "array",
+                        "element-type": {
+                            "type": "map",
+                            "key-type": {
+                                "type": "array",
+                                "element-type": "integer",
+                                "contains-null": false
+                            },
+                            "value-type": "decimal(5,1)",
+                            "value-contains-null": false
+                        },
+                        "contains-null": true
+                    }),
+                ),
+                field(
+                    "s",
+                    struct_of(vec![field(
+                        "v",
+                        serde_json::json!({
+                            "type": "array",
+                            "element-type": "variant",
+                            "contains-null": true
+                        }),
+                    )]),
+                ),
+            ])
+        );
+    }
+
     /// Commits to a server with the Delta REST API and returns the bodies of the update
     /// table requests.
     async fn delta_api_commit_bodies(commits: Vec<serde_json::Value>) -> Vec<serde_json::Value> {

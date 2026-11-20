@@ -912,8 +912,9 @@ Feature: Unity Catalog managed Delta table operations
       | 3 | three updated |
       | 4 | four merged |
       | 5 | five |
-    # The table has enough commits after the following statements for a checkpoint,
-    # where the default checkpoint interval is 10 commits.
+    # The table has more commits after the following statements than the default checkpoint
+    # interval of 10 commits. Sail does not write checkpoints for catalog-managed tables, so
+    # the reads replay every commit (test_managed_delta_catalog_state.py asserts that).
     Given statement
       """
       INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (10, 'row 10')
