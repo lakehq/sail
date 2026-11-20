@@ -9,8 +9,8 @@
 //! The scope also includes the session ID for `memory` URLs, since each session has its own
 //! object store registry, which creates a new, empty in-memory store for such a URL. Without the
 //! session ID, the same path in the in-memory stores of different sessions would share cache
-//! entries, even though the caches themselves can be shared across sessions. Other stores are
-//! shared across sessions, so their cache entries are too.
+//! entries, even though the caches themselves can be shared across sessions. Other stores refer
+//! to the same data in every session, so their cache entries are shared too.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -37,11 +37,15 @@ fn cache_scope<'a>(object_store_url: &'a ObjectStoreUrl, session_id: &str) -> Co
 /// Returns a cache key for `path` in the object store at `object_store_url` in the session with
 /// `session_id`.
 pub fn scoped_path(object_store_url: &ObjectStoreUrl, session_id: &str, path: &Path) -> Path {
-    std::iter::once(PathPart::from(
-        cache_scope(object_store_url, session_id).as_ref(),
-    ))
-    .chain(path.parts())
-    .collect()
+    prefixed(
+        PathPart::from(cache_scope(object_store_url, session_id).as_ref()),
+        path,
+    )
+}
+
+/// Returns `path` with `scope` as its first part.
+fn prefixed(scope: PathPart<'_>, path: &Path) -> Path {
+    std::iter::once(scope).chain(path.parts()).collect()
 }
 
 /// Returns the table reference that scopes the file listing cache entries of `url` to its
@@ -84,9 +88,7 @@ struct ObjectStoreScopedFileMetadataCache {
 
 impl ObjectStoreScopedFileMetadataCache {
     fn scoped(&self, key: &Path) -> Path {
-        std::iter::once(self.scope.clone())
-            .chain(key.parts())
-            .collect()
+        prefixed(self.scope.clone(), key)
     }
 
     fn unscoped(&self, key: &Path) -> Option<Path> {

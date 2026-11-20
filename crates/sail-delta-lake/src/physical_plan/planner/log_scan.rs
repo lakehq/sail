@@ -4,8 +4,6 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::config::TableParquetOptions;
-use datafusion::common::encryption::FileDecryptionProperties;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -154,20 +152,6 @@ async fn head_many(
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L370-L402
-// The `parquet_encryption` variant is left out since Sail does not enable that DataFusion feature.
-#[expect(clippy::unused_async)]
-async fn get_file_decryption_properties(
-    _state: &dyn Session,
-    _options: &TableParquetOptions,
-    _file_path: &Path,
-) -> Result<Option<Arc<FileDecryptionProperties>>> {
-    Ok(None)
-}
-// SPDX-SnippetEnd
-
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L451-L549
 /// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
 /// file metadata cache.
@@ -197,11 +181,12 @@ async fn infer_parquet_checkpoint_schema(
 
     let mut schemas: Vec<_> = futures::stream::iter(objects)
         .map(|object| async {
-            let file_decryption_properties =
-                get_file_decryption_properties(state, format.options(), &object.location).await?;
+            // For Parquet encryption, port `get_file_decryption_properties` and uncomment these.
+            // let file_decryption_properties =
+            //     get_file_decryption_properties(state, format.options(), &object.location).await?;
             let meta = DFParquetMetadata::new(store.as_ref(), object)
                 .with_metadata_size_hint(format.metadata_size_hint())
-                .with_decryption_properties(file_decryption_properties)
+                // .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
                 .with_coerce_int96(coerce_int96)
                 .with_coerce_int96_tz(coerce_int96_tz.clone())

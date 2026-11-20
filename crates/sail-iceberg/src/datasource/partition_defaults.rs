@@ -330,7 +330,8 @@ pub(crate) fn create_data_scan_with_partition_defaults(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Array, Int32Array, RecordBatch};
+    use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::Int32Type;
     use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
     use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -408,10 +409,7 @@ mod tests {
             let batches = collect(scan, state.task_ctx()).await?;
             let values = batches
                 .iter()
-                .flat_map(|batch| {
-                    let array = batch.column(0).as_any().downcast_ref::<Int32Array>();
-                    array.into_iter().flat_map(|array| array.iter())
-                })
+                .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().iter())
                 .collect::<Vec<_>>();
             assert_eq!(values, vec![Some(1), Some(2), Some(3)], "column {column}");
         }
