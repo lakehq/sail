@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use arrow::datatypes::DataType;
 use sail_catalog::credentials::CatalogCredentials;
@@ -25,7 +27,8 @@ use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, DatabaseStatus, LakehouseOperation, StorageAccess, StorageCredential,
+    CommitAuthority, DatabaseStatus, LakehouseFormat, LakehouseOperation, StorageAccess,
+    StorageCredential,
     TableColumnStatus, TableKind, TableStatus, TableStorageCredentials, identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
@@ -41,6 +44,16 @@ pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalo
 /// The path of the Unity Catalog API in a workspace.
 pub(crate) const WORKSPACE_API_PATH: &str = "/api/2.1/unity-catalog";
 
+/// The time allowed to connect to the Unity Catalog server.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The time allowed for a request to the Unity Catalog server, from sending the request
+/// to reading the whole response.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The maximum number of pages read for a list request.
+const MAX_LIST_PAGES: usize = 10_000;
+
 /// The highest version of the Unity Catalog Delta REST API supported by the client.
 const DELTA_API_PROTOCOL_VERSIONS: &str = "1.0";
 
@@ -53,6 +66,40 @@ enum DeltaCommitApi {
     Preview,
 }
 
+/// A failure to learn which API a catalog has for catalog-managed Delta commits.
+struct DeltaCommitApiUnknown {
+    /// Whether the server failed or did not answer, as opposed to refusing the request.
+    server_failure: bool,
+    message: String,
+}
+
+/// The page tokens of a list request, which stops a listing that the server never ends.
+#[derive(Default)]
+struct PageTokens {
+    seen: HashSet<String>,
+}
+
+impl PageTokens {
+    /// Returns the token of the next page, or `None` after the last page.
+    /// A page can be empty while there are more pages.
+    fn next(&mut self, token: Option<String>, list: &str) -> CatalogResult<Option<String>> {
+        let Some(token) = token.filter(|token| !token.is_empty()) else {
+            return Ok(None);
+        };
+        if self.seen.len() + 1 >= MAX_LIST_PAGES {
+            return Err(CatalogError::External(format!(
+                "Failed to list {list}: the server returned more than {MAX_LIST_PAGES} pages"
+            )));
+        }
+        if !self.seen.insert(token.clone()) {
+            return Err(CatalogError::External(format!(
+                "Failed to list {list}: the server returned a page token again"
+            )));
+        }
+        Ok(Some(token))
+    }
+}
+
 /// Provider for Unity Catalog
 pub struct UnityCatalogProvider {
     name: String,
@@ -60,6 +107,8 @@ pub struct UnityCatalogProvider {
     http_client: reqwest::Client,
     /// The negotiated Delta commit API for each catalog.
     delta_commit_apis: Mutex<HashMap<String, DeltaCommitApi>>,
+    /// Whether the warning about an unknown Delta commit API has been logged.
+    delta_commit_api_warned: AtomicBool,
     /// The IDs of the staging tables that are not registered as tables yet,
     /// by the storage location of the staging table.
     staging_table_ids: Mutex<HashMap<String, String>>,
@@ -74,12 +123,17 @@ pub struct UnityCatalogOptions {
 
 impl UnityCatalogProvider {
     pub fn new(name: String, options: UnityCatalogOptions) -> CatalogResult<Self> {
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(|e| CatalogError::External(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
             name,
             options,
             http_client,
             delta_commit_apis: Mutex::new(HashMap::new()),
+            delta_commit_api_warned: AtomicBool::new(false),
             staging_table_ids: Mutex::new(HashMap::new()),
         })
     }
@@ -130,15 +184,48 @@ impl UnityCatalogProvider {
     /// The Delta REST API is used if the server answers its configuration endpoint
     /// successfully, whatever the response body is.
     /// The legacy API is used if the server does not have the endpoint or does not
-    /// support the protocol version of the client. Other failures are returned as errors
-    /// and are not remembered.
+    /// support the protocol version of the client.
+    /// For any other answer, and when the server does not answer, the legacy API is used
+    /// for this call only, so that a server that has only the legacy API behind a proxy
+    /// that refuses the endpoint keeps working, and the legacy API reports its own error
+    /// otherwise.
     async fn get_delta_commit_api(
         &self,
         client: &delta_gen::ApiClient,
         catalog_name: &str,
     ) -> CatalogResult<DeltaCommitApi> {
+        match self.negotiate_delta_commit_api(client, catalog_name).await? {
+            Ok(api) => Ok(api),
+            Err(unknown) => Ok(self.unknown_delta_commit_api(catalog_name, unknown)),
+        }
+    }
+
+    /// Returns the legacy API for a call when the server does not tell which API the
+    /// catalog has, and logs a warning the first time.
+    fn unknown_delta_commit_api(
+        &self,
+        catalog_name: &str,
+        unknown: DeltaCommitApiUnknown,
+    ) -> DeltaCommitApi {
+        if !self.delta_commit_api_warned.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "Unity Catalog Delta API configuration of catalog {catalog_name} is not available, \
+                using the legacy API until it is: {}",
+                unknown.message
+            );
+        }
+        DeltaCommitApi::Preview
+    }
+
+    /// Asks the server which API the catalog has for catalog-managed Delta commits.
+    /// Only an answer that tells which API the catalog has is remembered.
+    async fn negotiate_delta_commit_api(
+        &self,
+        client: &delta_gen::ApiClient,
+        catalog_name: &str,
+    ) -> CatalogResult<Result<DeltaCommitApi, DeltaCommitApiUnknown>> {
         if let Some(api) = self.delta_commit_api_cache()?.get(catalog_name).copied() {
-            return Ok(api);
+            return Ok(Ok(api));
         }
         let api = match client
             .get_config(
@@ -171,25 +258,16 @@ impl UnityCatalogProvider {
             {
                 DeltaCommitApi::Preview
             }
-            Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
-                return Err(CatalogError::Unauthorized(format!(
-                    "Unity Catalog Delta API configuration unauthorized: {e}"
-                )));
-            }
-            Err(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
-                return Err(CatalogError::Forbidden(format!(
-                    "Unity Catalog Delta API configuration forbidden: {e}"
-                )));
-            }
             Err(e) => {
-                return Err(CatalogError::External(format!(
-                    "Failed to get Delta API configuration from Unity Catalog: {e}"
-                )));
+                return Ok(Err(DeltaCommitApiUnknown {
+                    server_failure: e.status().is_none_or(|status| status.is_server_error()),
+                    message: e.to_string(),
+                }));
             }
         };
         self.delta_commit_api_cache()?
             .insert(catalog_name.to_string(), api);
-        Ok(api)
+        Ok(Ok(api))
     }
 
     fn delta_commit_api_cache(
@@ -406,10 +484,6 @@ impl UnityCatalogProvider {
         }
     }
 
-    /// Returns full name of an object for the REST API (`catalog.schema.table`).
-    ///
-    /// Names are joined without SQL quoting. Unity Catalog does not parse backticks in
-    /// full names, so `` main.`a-b` `` would refer to a schema named `` `a-b` `` instead of `a-b`.
     /// Returns the existing table that a `REPLACE` targets, or `None` when the table
     /// is created instead.
     async fn get_table_to_replace(
@@ -494,6 +568,10 @@ impl UnityCatalogProvider {
         }
     }
 
+    /// Returns full name of an object for the REST API (`catalog.schema.table`).
+    ///
+    /// Names are joined without SQL quoting. Unity Catalog does not parse backticks in
+    /// full names, so `` main.`a-b` `` would refer to a schema named `` `a-b` `` instead of `a-b`.
     fn full_name(names: &[&str]) -> String {
         names.join(".")
     }
@@ -835,6 +913,7 @@ impl CatalogProvider for UnityCatalogProvider {
             }
         };
         let mut output = vec![];
+        let mut page_tokens = PageTokens::default();
         let mut page_token = None;
         loop {
             let response = client
@@ -851,8 +930,7 @@ impl CatalogProvider for UnityCatalogProvider {
                         self.schema_info_to_database_status(schema_info, &catalog_name, None)
                     }),
             );
-            // A page can be empty while there are more pages.
-            page_token = response.next_page_token.filter(|token| !token.is_empty());
+            page_token = page_tokens.next(response.next_page_token, "schemas")?;
             if page_token.is_none() {
                 return Ok(output);
             }
@@ -1132,6 +1210,7 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let mut output = vec![];
+        let mut page_tokens = PageTokens::default();
         let mut page_token = None;
         loop {
             let response = client
@@ -1147,8 +1226,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     false,
                 )?);
             }
-            // A page can be empty while there are more pages.
-            page_token = response.next_page_token.filter(|token| !token.is_empty());
+            page_token = page_tokens.next(response.next_page_token, "tables")?;
             if page_token.is_none() {
                 return Ok(output);
             }
@@ -1553,6 +1631,10 @@ impl CatalogProvider for UnityCatalogProvider {
             Some(reqwest::StatusCode::FORBIDDEN) => Err(CatalogError::Forbidden(format!(
                 "Unity Catalog Delta commit forbidden: {error}"
             ))),
+            // The table or the commit endpoint does not exist, so the commit is not ratified.
+            Some(reqwest::StatusCode::NOT_FOUND) => Err(CatalogError::CommitRejected(format!(
+                "Unity Catalog Delta commit not found: {error}"
+            ))),
             // The server refuses new commits until the ratified commits of the table are
             // published, which is not the same as a request that the server throttles.
             Some(reqwest::StatusCode::TOO_MANY_REQUESTS) if unpublished_commit_limit => {
@@ -1586,57 +1668,99 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         request: DeltaRatifiedCommitRequest,
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
-        let status = self.get_table(database, table).await?;
-        ensure_table_access(&status)?;
-        let (format, location, properties) = match &status.kind {
-            TableKind::Table {
-                format,
-                location,
-                properties,
-                ..
-            } => (format, location, properties),
-            _ => {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "Unity Catalog commit discovery expects a table: {table}"
-                )));
-            }
-        };
-        if !format.eq_ignore_ascii_case("delta") {
-            return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit discovery for {format} tables"
-            )));
-        }
-        let table_uri = if let Some(location) = location {
-            if location.trim_end_matches('/') != request.table_uri.trim_end_matches('/') {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
-                    request.table_uri
-                )));
-            }
-            location.clone()
-        } else {
-            request.table_uri
-        };
-        let table_id = unity_table_id_value(
-            properties
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        .ok_or_else(|| {
-            CatalogError::InvalidArgument(format!(
-                "Unity Catalog Delta table `{table}` is missing table id property"
-            ))
-        })?;
-
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let delta_client = self
             .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        let (status, error) = match self
-            .get_delta_commit_api(&delta_client, &catalog_name)
+        let api = match self
+            .negotiate_delta_commit_api(&delta_client, &catalog_name)
             .await?
         {
+            Ok(api) => api,
+            // The table may be catalog-managed when the server fails to tell which API
+            // the catalog has, so the table is not reported as one that is not.
+            Err(DeltaCommitApiUnknown {
+                server_failure: true,
+                message,
+            }) if request.discover => {
+                return Err(CatalogError::External(format!(
+                    "Failed to get Delta API configuration from Unity Catalog: {message}"
+                )));
+            }
+            Err(unknown) => self.unknown_delta_commit_api(&catalog_name, unknown),
+        };
+        // The legacy API serves only catalog-managed tables, so the table is not looked up.
+        if api == DeltaCommitApi::Preview && request.discover {
+            return Ok(DeltaRatifiedCommitResponse::default());
+        }
+
+        // The Delta REST API returns the ID of the table, which is compared with the ID in
+        // the resolved table, so the table is not looked up again with the legacy API.
+        let resolved_table_id = request
+            .context
+            .table_identity
+            .table_id
+            .clone()
+            .filter(|_| api == DeltaCommitApi::V1 && request.context.format == LakehouseFormat::Delta);
+        let (table_id, table_uri) = if let Some(table_id) = resolved_table_id {
+            if let Some(location) = &request.context.table_identity.table_uri
+                && location.trim_end_matches('/') != request.table_uri.trim_end_matches('/')
+            {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
+                    request.table_uri
+                )));
+            }
+            (table_id, request.table_uri)
+        } else {
+            let status = self.get_table(database, table).await?;
+            ensure_table_access(&status)?;
+            let (format, location, properties) = match status.kind {
+                TableKind::Table {
+                    format,
+                    location,
+                    properties,
+                    ..
+                } => (format, location, properties),
+                _ => {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Unity Catalog commit discovery expects a table: {table}"
+                    )));
+                }
+            };
+            if !format.eq_ignore_ascii_case("delta") {
+                return Err(CatalogError::NotSupported(format!(
+                    "Unity Catalog commit discovery for {format} tables"
+                )));
+            }
+            let table_uri = if let Some(location) = location {
+                if location.trim_end_matches('/') != request.table_uri.trim_end_matches('/') {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
+                        request.table_uri
+                    )));
+                }
+                location
+            } else {
+                request.table_uri
+            };
+            let table_id = unity_table_id_value(
+                properties
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            )
+            .ok_or_else(|| {
+                CatalogError::InvalidArgument(format!(
+                    "Unity Catalog Delta table `{table}` is missing table id property"
+                ))
+            })?
+            .to_string();
+            (table_id, table_uri)
+        };
+        let table_id = table_id.as_str();
+
+        let (status, error) = match api {
             DeltaCommitApi::V1 => {
                 match delta_client
                     .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
@@ -1652,16 +1776,24 @@ impl CatalogProvider for UnityCatalogProvider {
                             request.discover,
                         );
                     }
-                    // The table is then not known to be catalog-managed.
-                    Err(_) if request.discover => {
+                    // The server does not serve the table with the Delta REST API, so the
+                    // table is not known to be catalog-managed. Any other failure is an
+                    // error, since the table may be catalog-managed.
+                    Err(e)
+                        if request.discover
+                            && matches!(
+                                e.status(),
+                                Some(
+                                    reqwest::StatusCode::NOT_FOUND
+                                        | reqwest::StatusCode::BAD_REQUEST
+                                        | reqwest::StatusCode::NOT_IMPLEMENTED
+                                )
+                            ) =>
+                    {
                         return Ok(DeltaRatifiedCommitResponse::default());
                     }
                     Err(e) => (e.status(), e.to_string()),
                 }
-            }
-            // The legacy API serves only catalog-managed tables.
-            DeltaCommitApi::Preview if request.discover => {
-                return Ok(DeltaRatifiedCommitResponse::default());
             }
             DeltaCommitApi::Preview => {
                 let legacy_request = r#gen::DeltaGetCommits {
@@ -2026,7 +2158,8 @@ fn delta_metadata_updates(
 }
 
 /// Adds the updates of the Delta REST API for the domain metadata actions of a Delta commit.
-/// The catalog tracks the row tracking domain only.
+/// The catalog keeps the row tracking and clustering domains only, and Sail sets the row
+/// tracking domain only.
 fn delta_domain_metadata_updates(
     domain_metadata: &[serde_json::Value],
     updates: &mut Vec<delta_gen::DeltaTableUpdate>,
@@ -2041,7 +2174,10 @@ fn delta_domain_metadata_updates(
             .as_str()
             .ok_or_else(|| invalid("missing metadata domain".to_string()))?;
         if action["removed"].as_bool().unwrap_or_default() {
-            removals.push(domain.to_string());
+            // The catalog keeps only these domains and refuses the removal of any other.
+            if matches!(domain, "delta.rowTracking" | "delta.clustering") {
+                removals.push(domain.to_string());
+            }
         } else if domain == "delta.rowTracking" {
             let configuration = action["configuration"]
                 .as_str()
@@ -2258,9 +2394,6 @@ fn delta_field_metadata_to_wire(metadata: &mut serde_json::Value) {
     }
 }
 
-/// Whether the error of creating an object says that the object exists.
-/// Some servers report it as a bad request with an error code for the kind of object,
-/// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
 /// Returns the storage location in the form used to compare locations.
 fn storage_location_key(location: &str) -> &str {
     location.trim_end_matches('/')
@@ -2336,6 +2469,9 @@ fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
     Some(message.to_string())
 }
 
+/// Whether the error of creating an object says that the object exists.
+/// Some servers report it as a bad request with an error code for the kind of object,
+/// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
 fn is_already_exists_error<E>(error: &r#gen::ApiError<E>, error_code: &str) -> bool {
     let body = match error {
         r#gen::ApiError::Response(response) => response.body.as_str(),
@@ -3244,13 +3380,29 @@ mod tests {
             vec![3, 4]
         );
 
-        // The API is negotiated only once and the legacy endpoint is not used.
+        // The API is negotiated only once and the legacy endpoints are not used,
+        // since the ID of the resolved table is compared with the loaded table.
         assert_eq!(
             received_targets(&server).await,
             vec![
-                "GET /tables/main.default.events".to_string(),
                 "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
                 format!("GET {DELTA_TABLE_PATH}"),
+                format!("GET {DELTA_TABLE_PATH}"),
+            ]
+        );
+
+        // The table is looked up with the legacy API when the resolved table has no ID.
+        let mut request = delta_ratified_commit_request(3, None);
+        request.context.table_identity.table_id = None;
+        let response = provider
+            .get_delta_ratified_commits(&database, "events", request)
+            .await
+            .unwrap();
+        assert_eq!(response.latest_table_version, 5);
+        let targets = received_targets(&server).await;
+        assert_eq!(
+            targets[3..],
+            [
                 "GET /tables/main.default.events".to_string(),
                 format!("GET {DELTA_TABLE_PATH}"),
             ]
@@ -3275,7 +3427,6 @@ mod tests {
     async fn test_delta_api_states_whether_table_is_catalog_managed() {
         // The legacy table properties do not have the catalog-managed feature.
         let delta_api_targets = vec![
-            "GET /tables/main.default.events".to_string(),
             "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
             format!("GET {DELTA_TABLE_PATH}"),
         ];
@@ -3318,8 +3469,8 @@ mod tests {
         assert_eq!(response.commits, vec![]);
         assert_eq!(received_targets(&server).await, delta_api_targets);
 
-        // A table that the Delta REST API does not load is not known to be catalog-managed.
-        for status in [400, 401, 404, 500] {
+        // A table that the Delta REST API does not serve is not known to be catalog-managed.
+        for status in [400, 404, 501] {
             let server = MockServer::start().await;
             mount_delta_config_ok(&server).await;
             mount_legacy_delta_table(&server).await;
@@ -3332,6 +3483,60 @@ mod tests {
             assert!(!response.catalog_managed, "status {status}");
             assert_eq!(received_targets(&server).await, delta_api_targets);
         }
+
+        // Any other failure is an error, since the table may be catalog-managed by a commit
+        // that is not published yet, and the published Delta log would be stale.
+        for status in [401, 403, 429, 500, 503] {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(ResponseTemplate::new(status).set_body_string("failed"))
+                .mount(&server)
+                .await;
+            let error = discover_delta_catalog_managed(&server).await.unwrap_err();
+            assert!(error.to_string().contains("failed"), "status {status}: {error}");
+        }
+
+        // A server that fails to tell which API the catalog has may serve the table with
+        // the Delta REST API.
+        for status in [500, 503] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(status)).await;
+            mount_legacy_delta_table(&server).await;
+            let error = discover_delta_catalog_managed(&server).await.unwrap_err();
+            assert!(
+                matches!(&error, CatalogError::External(message) if message.contains("Delta API configuration")),
+                "status {status}: {error:?}"
+            );
+        }
+
+        // A request without a response is an error as well.
+        let options = UnityCatalogOptions {
+            uri: "http://127.0.0.1:1".to_string(),
+            ..empty_options("main")
+        };
+        let provider = UnityCatalogProvider::new("test".to_string(), options).unwrap();
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let request = DeltaRatifiedCommitRequest {
+            discover: true,
+            ..delta_ratified_commit_request(1, None)
+        };
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", request.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
+        provider
+            .delta_commit_api_cache()
+            .unwrap()
+            .insert("main".to_string(), DeltaCommitApi::V1);
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", request)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
     }
 
     #[tokio::test]
@@ -3341,14 +3546,11 @@ mod tests {
         mount_legacy_delta_table(&server).await;
         let response = discover_delta_catalog_managed(&server).await.unwrap();
         assert!(!response.catalog_managed);
-        // Neither the legacy commits of the table nor the table of the Delta REST API
+        // Neither the table nor its legacy commits nor the table of the Delta REST API
         // are requested.
         assert_eq!(
             received_targets(&server).await,
-            vec![
-                "GET /tables/main.default.events",
-                "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
-            ]
+            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"]
         );
     }
 
@@ -3508,41 +3710,60 @@ mod tests {
     async fn test_delta_api_configuration_error_is_not_cached() {
         let server = MockServer::start().await;
         mount_legacy_delta_table(&server).await;
+        for status in [500, 401, 403, 405] {
+            Mock::given(method("GET"))
+                .and(path("/delta/v1/config"))
+                .respond_with(ResponseTemplate::new(status))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+        }
         Mock::given(method("GET"))
-            .and(path("/delta/v1/config"))
-            .respond_with(ResponseTemplate::new(500))
-            .up_to_n_times(1)
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "commits": [],
+                "latest_table_version": 2
+            })))
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/delta/v1/config"))
-            .respond_with(ResponseTemplate::new(401))
-            .up_to_n_times(1)
+        Mock::given(method("POST"))
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("200 OK"))
             .mount(&server)
             .await;
 
+        // The legacy API is used for a request when the server does not tell which API
+        // the catalog has, such as a proxy that refuses the endpoint, so that the legacy
+        // API reports its own error if it fails as well.
         let provider = mock_provider(&server, "main");
         let database = Namespace::try_from(vec!["default"]).unwrap();
-        let error = provider
+        let response = provider
             .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
             .await
-            .unwrap_err();
-        assert!(
-            matches!(&error, CatalogError::External(message) if message.contains("Delta API configuration")),
-            "{error:?}"
-        );
-        let error = provider
+            .unwrap();
+        assert_eq!(response.latest_table_version, 2);
+        let outcome = provider
             .commit_lakehouse_table(
                 &database,
                 "events",
-                delta_commit_request(legacy_delta_commit(1)),
+                delta_commit_request(legacy_delta_commit(3)),
             )
             .await
-            .unwrap_err();
-        assert!(matches!(error, CatalogError::Unauthorized(_)), "{error:?}");
+            .unwrap();
+        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+        for _ in 0..2 {
+            let response = provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(1, None),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.latest_table_version, 2);
+        }
 
-        // The legacy endpoint is not used when the negotiation fails,
-        // and the negotiation is retried for the next request.
+        // The negotiation is retried for the next request.
         mount_delta_config_ok(&server).await;
         Mock::given(method("GET"))
             .and(path(DELTA_TABLE_PATH))
@@ -3560,12 +3781,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.latest_table_version, 0);
-        assert!(
-            !received_targets(&server)
-                .await
-                .iter()
-                .any(|target| target.contains("/delta/preview/commits"))
-        );
+        let config_requests = received_targets(&server)
+            .await
+            .iter()
+            .filter(|target| target.starts_with("GET /delta/v1/config"))
+            .count();
+        assert_eq!(config_requests, 5);
     }
 
     #[tokio::test]
@@ -4054,12 +4275,18 @@ mod tests {
             }],
         });
         let mut removal = legacy_delta_commit(6);
+        // The removal of a domain that the catalog does not keep is not sent,
+        // since the catalog refuses it.
         removal["delta_log"] = serde_json::json!({
-            "domainMetadata": [{
-                "domain": "delta.rowTracking",
-                "configuration": r#"{"rowIdHighWaterMark":41}"#,
-                "removed": true,
-            }],
+            "domainMetadata": [
+                {
+                    "domain": "delta.rowTracking",
+                    "configuration": r#"{"rowIdHighWaterMark":41}"#,
+                    "removed": true,
+                },
+                {"domain": "app.custom", "configuration": "{}", "removed": true},
+                {"domain": "delta.clustering", "configuration": "{}", "removed": true},
+            ],
         });
         let requirements = serde_json::json!([
             {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
@@ -4081,7 +4308,10 @@ mod tests {
                     "requirements": requirements,
                     "updates": [
                         {"action": "add-commit", "commit": delta_commit_json(6)},
-                        {"action": "remove-domain-metadata", "domains": ["delta.rowTracking"]}
+                        {
+                            "action": "remove-domain-metadata",
+                            "domains": ["delta.rowTracking", "delta.clustering"]
+                        }
                     ]
                 }),
             ]
@@ -4209,6 +4439,7 @@ mod tests {
             (10, error(429, "TooManyRequestsException")),
             (11, error(500, "CommitStateUnknownException")),
             (12, ResponseTemplate::new(503)),
+            (14, error(404, "NoSuchTableException")),
         ] {
             Mock::given(method("POST"))
                 .and(path(DELTA_TABLE_PATH))
@@ -4276,6 +4507,13 @@ mod tests {
         }
         let error = commit(10).await;
         assert!(matches!(error, CatalogError::RateLimited(_)), "{error:?}");
+        // The commit is not ratified when the table does not exist.
+        let error = commit(14).await;
+        assert!(
+            matches!(error, CatalogError::CommitRejected(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("NoSuchTableException message"));
 
         // A request without a response, such as a network error.
         let options = UnityCatalogOptions {
@@ -5121,37 +5359,43 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_api_configuration_for_missing_catalog() {
-        let server = MockServer::start().await;
-        mount_delta_config(
-            &server,
-            ResponseTemplate::new(404).set_body_json(serde_json::json!({
-                "error": {
-                    "message": "Catalog not found: main",
-                    "type": "NoSuchCatalogException",
-                    "code": 404
-                }
-            })),
-        )
-        .await;
+        // The error type is found in an error body that is longer than what is reported.
+        for message in [
+            "Catalog not found: main".to_string(),
+            format!("Catalog not found: main {}", "x".repeat(100_000)),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config(
+                &server,
+                ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": message,
+                        "type": "NoSuchCatalogException",
+                        "code": 404
+                    }
+                })),
+            )
+            .await;
 
-        let provider = mock_provider(&server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        // The legacy API is not selected, and the failure is not remembered.
-        for _ in 0..2 {
-            let options = managed_delta_create_options(vec![], false);
-            let error = provider
-                .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(error, CatalogError::NotFound(CatalogObject::Catalog, _)),
-                "{error:?}"
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            // The legacy API is not selected, and the failure is not remembered.
+            for _ in 0..2 {
+                let options = managed_delta_create_options(vec![], false);
+                let error = provider
+                    .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+                    .await
+                    .unwrap_err();
+                assert!(
+                    matches!(error, CatalogError::NotFound(CatalogObject::Catalog, _)),
+                    "{error:?}"
+                );
+            }
+            assert_eq!(
+                received_targets(&server).await,
+                vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"; 2]
             );
         }
-        assert_eq!(
-            received_targets(&server).await,
-            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"; 2]
-        );
     }
 
     #[tokio::test]
@@ -5237,6 +5481,60 @@ mod tests {
                 "GET /tables?catalog_name=main&schema_name=default&page_token=p1",
                 "GET /tables?catalog_name=main&schema_name=default&page_token=p2",
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_requests_stop_on_repeated_page_tokens() {
+        let server = MockServer::start().await;
+        // The server returns a page token that was returned before.
+        for (endpoint, key) in [("/schemas", "schemas"), ("/tables", "tables")] {
+            for (page_token, next_page_token) in [(None, "p1"), (Some("p1"), "p2"), (Some("p2"), "p1")]
+            {
+                let response = serde_json::json!({ key: [], "next_page_token": next_page_token });
+                let mock = Mock::given(method("GET")).and(path(endpoint));
+                let mock = match page_token {
+                    Some(page_token) => mock.and(query_param("page_token", page_token)),
+                    None => mock.and(query_param_is_missing("page_token")),
+                };
+                mock.respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(&server)
+                    .await;
+            }
+        }
+
+        let provider = mock_provider(&server, "main");
+        let error = provider.list_databases(None).await.unwrap_err();
+        assert!(
+            error.to_string().contains("page token again"),
+            "{error:?}"
+        );
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider.list_tables(&database).await.unwrap_err();
+        assert!(
+            error.to_string().contains("page token again"),
+            "{error:?}"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 6);
+    }
+
+    #[test]
+    fn test_page_tokens_are_bounded() {
+        let mut page_tokens = PageTokens::default();
+        assert_eq!(page_tokens.next(None, "tables").unwrap(), None);
+        assert_eq!(page_tokens.next(Some(String::new()), "tables").unwrap(), None);
+        for page in 1..MAX_LIST_PAGES {
+            assert_eq!(
+                page_tokens.next(Some(format!("p{page}")), "tables").unwrap(),
+                Some(format!("p{page}"))
+            );
+        }
+        let error = page_tokens
+            .next(Some(format!("p{MAX_LIST_PAGES}")), "tables")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("more than 10000 pages"),
+            "{error:?}"
         );
     }
 

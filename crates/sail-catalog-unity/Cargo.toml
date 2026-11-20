@@ -30,6 +30,7 @@ tokio = { workspace = true }
 percent-encoding = { workspace = true }
 secrecy = { workspace = true }
 chrono = { workspace = true }
+log = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

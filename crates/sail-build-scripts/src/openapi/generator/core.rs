@@ -82,18 +82,28 @@ impl<'a> OpenApiGenerator<'a> {
                 pub inner: T,
                 pub status: reqwest::StatusCode,
                 pub headers: reqwest::header::HeaderMap,
-                /// The response body text truncated to a bounded length, or the reason the
-                /// response body is invalid. This is empty for error responses of signed requests.
+                /// The response body text, or the reason the response body is invalid.
+                /// The text is cut at `MAX_ERROR_BODY_LENGTH` bytes of the response body.
+                /// This is empty for error responses of signed requests.
                 pub body: String,
             }
 
             impl<T> ErrorResponse<T> {
+                /// Returns the response body text to show in the error message, which is
+                /// truncated to `MAX_ERROR_MESSAGE_BODY_LENGTH`.
                 fn body_suffix(&self) -> String {
-                    if self.body.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", self.body)
+                    let text = self.body.as_str();
+                    if text.is_empty() {
+                        return String::new();
                     }
+                    if text.len() <= MAX_ERROR_MESSAGE_BODY_LENGTH {
+                        return format!(": {text}");
+                    }
+                    let mut end = MAX_ERROR_MESSAGE_BODY_LENGTH;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!(": {}...", &text[..end])
                 }
             }
 
@@ -120,16 +130,22 @@ impl<'a> OpenApiGenerator<'a> {
                 }
             }
 
-            const MAX_ERROR_BODY_LENGTH: usize = 4096;
+            /// The maximum length of an error response body that is read. The error is
+            /// parsed from the body, so the limit is well above the size of an error
+            /// that a server reports.
+            const MAX_ERROR_BODY_LENGTH: usize = 1024 * 1024;
 
-            /// Reads the error response body without buffering more than what is reported.
+            /// The maximum length of the error response body text in an error message.
+            const MAX_ERROR_MESSAGE_BODY_LENGTH: usize = 4096;
+
+            /// Reads the error response body without buffering more than
+            /// `MAX_ERROR_BODY_LENGTH` bytes.
             async fn read_error_body(mut response: reqwest::Response) -> Vec<u8> {
-                let limit = MAX_ERROR_BODY_LENGTH + 1;
                 let mut body = Vec::new();
-                while body.len() < limit {
+                while body.len() < MAX_ERROR_BODY_LENGTH {
                     match response.chunk().await {
                         Ok(Some(chunk)) => {
-                            let length = chunk.len().min(limit - body.len());
+                            let length = chunk.len().min(MAX_ERROR_BODY_LENGTH - body.len());
                             body.extend_from_slice(&chunk[..length]);
                         }
                         Ok(None) | Err(_) => break,
@@ -138,23 +154,14 @@ impl<'a> OpenApiGenerator<'a> {
                 body
             }
 
-            /// Returns the error response body text to report.
-            /// The body is not reported for signed requests since the server may echo
+            /// Returns the error response body text to keep with the error.
+            /// The body is not kept for signed requests since the server may echo
             /// the signed request, including credentials, in the error response.
             fn error_body_text(body: &[u8], signed: bool) -> String {
                 if signed {
                     return String::new();
                 }
-                let text = String::from_utf8_lossy(body);
-                let text = text.trim();
-                if text.len() <= MAX_ERROR_BODY_LENGTH {
-                    return text.to_string();
-                }
-                let mut end = MAX_ERROR_BODY_LENGTH;
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}...", &text[..end])
+                String::from_utf8_lossy(body).trim().to_string()
             }
 
             fn eager_percent_encode(value: impl AsRef<str>) -> String {

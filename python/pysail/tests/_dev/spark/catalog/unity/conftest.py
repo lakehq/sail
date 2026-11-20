@@ -67,7 +67,14 @@ def unity_uses_delta_api(unity_rest_url: str, unity_catalog_initialized: None) -
         params={"catalog": DEFAULT_CATALOG, "protocol-versions": "1.0"},
         timeout=10,
     )
-    return response.ok
+    # The server has the Delta REST API if it answers the configuration endpoint,
+    # and does not have it if the endpoint does not exist. Any other answer means
+    # that the server is broken, which must not turn the assertions into no-ops.
+    if response.status_code == 200:
+        return True
+    if response.status_code == 404:
+        return False
+    pytest.fail(f"unexpected Unity Catalog Delta API configuration response: {response.status_code} {response.text}")
 
 
 @then(

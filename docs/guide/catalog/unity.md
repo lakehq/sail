@@ -32,8 +32,6 @@ Sail automatically loads Unity Catalog configuration from environment variables 
 - `UNITY_*`: Unity Catalog configuration.
 - `UC_*`: Short-form Unity Catalog configuration.
 
-The `uri` and `token` options of the catalog provider take precedence over the environment variables.
-
 The following table lists the supported configuration keys and their corresponding environment variable names:
 
 - `DATABRICKS_HOST`, `DATABRICKS_WORKSPACE_URL`, `UNITY_HOST`, `UNITY_WORKSPACE_URL`, `UC_HOST`, `UC_WORKSPACE_URL`

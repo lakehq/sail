@@ -260,7 +260,7 @@ impl UnityCatalogConfig {
         env: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> CatalogResult<Self> {
         let mut config = Self {
-            uri: DEFAULT_URI.to_string(),
+            uri: uri.unwrap_or_else(|| DEFAULT_URI.to_string()),
             bearer_token: None,
             client_id: None,
             client_secret: None,
@@ -274,14 +274,6 @@ impl UnityCatalogConfig {
             allow_http_url: false,
         };
 
-        // The environment variables are applied first, so that they provide the defaults
-        // and the explicit configuration takes precedence.
-        config.apply_env_vars(env)?;
-
-        if let Some(uri) = uri {
-            config.uri = uri;
-        }
-
         if let Some(token) = token {
             let config_key = UnityCatalogConfigKey::from_str("token")?;
             config.set_option(config_key, token.expose_secret().to_string())?;
@@ -291,14 +283,12 @@ impl UnityCatalogConfig {
             config.apply_options(opts)?;
         }
 
+        config.apply_env(env)?;
+
         Ok(config)
     }
 
-    pub fn apply_env(&mut self) -> CatalogResult<()> {
-        self.apply_env_vars(std::env::vars_os())
-    }
-
-    fn apply_env_vars(
+    fn apply_env(
         &mut self,
         env: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> CatalogResult<()> {
@@ -451,18 +441,33 @@ mod tests {
     }
 
     #[test]
-    fn test_explicit_configuration_takes_precedence_over_env() {
+    fn test_env_takes_precedence_over_explicit_configuration() {
         let vars = env(&[
             ("DATABRICKS_HOST", "https://env.cloud.databricks.com"),
             ("DATABRICKS_TOKEN", "env-token"),
-            ("DATABRICKS_CLIENT_ID", "env-client"),
         ]);
         let token = Some(SecretString::from("config-token"));
+        let options = HashMap::from([("client_id".to_string(), "config-client".to_string())]);
+        let config = UnityCatalogConfig::new_with_env(
+            Some("https://config.cloud.databricks.com/api/2.1/unity-catalog".to_string()),
+            &token,
+            Some(options),
+            vars,
+        )
+        .unwrap();
+        assert_eq!(
+            config.uri,
+            "https://env.cloud.databricks.com/api/2.1/unity-catalog"
+        );
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "env-token");
+        // The explicit configuration is used for what the environment variables do not set.
+        assert_eq!(config.client_id.as_deref(), Some("config-client"));
+
         let config = UnityCatalogConfig::new_with_env(
             Some("https://config.cloud.databricks.com/api/2.1/unity-catalog".to_string()),
             &token,
             None,
-            vars.clone(),
+            env(&[]),
         )
         .unwrap();
         assert_eq!(
@@ -470,15 +475,6 @@ mod tests {
             "https://config.cloud.databricks.com/api/2.1/unity-catalog"
         );
         assert_eq!(config.bearer_token.unwrap().expose_secret(), "config-token");
-        assert_eq!(config.client_id.as_deref(), Some("env-client"));
-
-        // The environment variables are used for what is not configured.
-        let config = UnityCatalogConfig::new_with_env(None, &None, None, vars).unwrap();
-        assert_eq!(
-            config.uri,
-            "https://env.cloud.databricks.com/api/2.1/unity-catalog"
-        );
-        assert_eq!(config.bearer_token.unwrap().expose_secret(), "env-token");
 
         let config = UnityCatalogConfig::new_with_env(None, &None, None, env(&[])).unwrap();
         assert_eq!(config.uri, DEFAULT_URI);
