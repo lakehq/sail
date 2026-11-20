@@ -499,6 +499,13 @@ impl LakeSource for DeltaLakeSource {
                 }
             }
         }
+        if let Some(snapshot) = replace_snapshot.as_ref() {
+            crate::transaction::row_tracking::retain_for_replace(
+                snapshot.protocol(),
+                snapshot.metadata().configuration(),
+                &mut metadata_configuration,
+            );
+        }
         let normalized_schema = normalize_delta_schema(&declared_schema);
         let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -3293,6 +3300,123 @@ mod tests {
                 "io.unitycatalog.tableId": "table-id"
             })
         );
+        Ok(())
+    }
+
+    /// REPLACE can enable row tracking on a table without it, and a table with row tracking
+    /// keeps the feature and the names of its materialized columns, as in Delta Spark.
+    #[tokio::test]
+    async fn replace_enables_and_retains_row_tracking() -> Result<()> {
+        use object_store::ObjectStoreExt;
+
+        let location = "memory:///path/t";
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        runtime_env.register_object_store(&parse_location_to_url(location)?, store.clone());
+        let info = |properties: &[(&str, &str)], replace| LakeSourceCreateTableInfo {
+            path: location.to_string(),
+            columns: vec![LakeSourceCreateTableColumn {
+                metadata: Default::default(),
+                name: "id".to_string(),
+                data_type: ArrowDataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            partition_by: vec![],
+            properties: properties
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            replace,
+            lakehouse_table: None,
+            required_protocol: None,
+        };
+        let commit = |version: i64| {
+            let store = store.clone();
+            async move {
+                let commit = store
+                    .get(&object_store::path::Path::from(format!(
+                        "path/t/_delta_log/{version:020}.json"
+                    )))
+                    .await?
+                    .bytes()
+                    .await?;
+                serde_json::Deserializer::from_slice(&commit)
+                    .into_iter::<serde_json::Value>()
+                    .collect::<serde_json::Result<Vec<_>>>()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+            }
+        };
+        let replace = |properties: &'static [(&'static str, &'static str)]| {
+            let runtime_env = runtime_env.clone();
+            async move {
+                DeltaLakeSource
+                    .create_table_metadata(
+                        runtime_env,
+                        &SessionConfig::new(),
+                        info(properties, true),
+                    )
+                    .await
+            }
+        };
+        let row_id_column = "delta.rowTracking.materializedRowIdColumnName";
+        let row_commit_version_column = "delta.rowTracking.materializedRowCommitVersionColumnName";
+
+        DeltaLakeSource
+            .create_table_metadata(runtime_env.clone(), &SessionConfig::new(), info(&[], false))
+            .await?;
+        replace(&[("delta.enableRowTracking", "true")]).await?;
+        let actions = commit(1).await?;
+        let protocol = find_action(&actions, "protocol")?;
+        assert_eq!(protocol["minWriterVersion"], 7);
+        let writer_features = sorted_strings(&protocol["writerFeatures"]);
+        assert!(
+            writer_features.contains(&"rowTracking") && writer_features.contains(&"domainMetadata"),
+            "{writer_features:?}"
+        );
+        let configuration = find_action(&actions, "metaData")?["configuration"].clone();
+        assert_eq!(configuration["delta.enableRowTracking"], "true");
+        assert!(
+            configuration[row_id_column]
+                .as_str()
+                .is_some_and(|name| name.starts_with("_row-id-col-"))
+        );
+        assert!(
+            configuration[row_commit_version_column]
+                .as_str()
+                .is_some_and(|name| name.starts_with("_row-commit-version-col-"))
+        );
+        // A REPLACE without data has no row IDs to record.
+        assert!(
+            actions
+                .iter()
+                .all(|action| action.get("domainMetadata").is_none())
+        );
+
+        for (version, properties, enabled) in [
+            (2, &[][..], "true"),
+            (3, &[("delta.enableRowTracking", "false")][..], "false"),
+        ] {
+            replace(properties).await?;
+            let actions = commit(version).await?;
+            // The protocol keeps row tracking, so the commit has no protocol action.
+            assert!(
+                actions
+                    .iter()
+                    .all(|action| action.get("protocol").is_none())
+            );
+            let replaced = &find_action(&actions, "metaData")?["configuration"];
+            assert_eq!(replaced["delta.enableRowTracking"], enabled);
+            assert_eq!(replaced[row_id_column], configuration[row_id_column]);
+            assert_eq!(
+                replaced[row_commit_version_column],
+                configuration[row_commit_version_column]
+            );
+        }
         Ok(())
     }
 

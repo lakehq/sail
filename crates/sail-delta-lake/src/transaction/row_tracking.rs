@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::spec::{
     Add, CommitAction, DeltaError, DeltaOperation, DeltaResult, DomainMetadata, Metadata, Protocol,
-    TableFeature, TransactionError,
+    SaveMode, TableFeature, TransactionError,
 };
 use crate::table::DeltaSnapshot;
 
@@ -55,6 +55,33 @@ pub(crate) fn add_materialized_column_names(configuration: &mut HashMap<String, 
         configuration
             .entry(key.to_string())
             .or_insert_with(|| format!("{prefix}{}", uuid::Uuid::new_v4()));
+    }
+}
+
+/// Carries the row tracking configuration of a table that is replaced to the configuration
+/// of the new table, as Delta Spark does. If the replaced table supports row tracking, the
+/// new table keeps the names of its materialized row tracking columns, and keeps row
+/// tracking enabled unless the new configuration sets `delta.enableRowTracking`.
+pub(crate) fn retain_for_replace(
+    existing_protocol: &Protocol,
+    existing_configuration: &HashMap<String, String>,
+    configuration: &mut HashMap<String, String>,
+) {
+    if !supports_row_tracking(existing_protocol) {
+        return;
+    }
+    for key in [
+        MATERIALIZED_ROW_ID_COLUMN_NAME,
+        MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME,
+    ] {
+        if let Some(name) = existing_configuration.get(key) {
+            configuration.insert(key.to_string(), name.clone());
+        }
+    }
+    if !configuration.contains_key(ENABLE_ROW_TRACKING)
+        && let Some(value) = existing_configuration.get(ENABLE_ROW_TRACKING)
+    {
+        configuration.insert(ENABLE_ROW_TRACKING.to_string(), value.clone());
     }
 }
 
@@ -138,7 +165,9 @@ pub(super) fn assign_row_tracking(
         return Ok(());
     }
     let enabled = row_tracking_enabled(metadata.configuration());
+    // A table that did not support row tracking before this commit has no row IDs yet.
     let committed_high_water_mark = read_snapshot
+        .filter(|snapshot| supports_row_tracking(snapshot.protocol()))
         .map(|snapshot| snapshot.row_tracking_high_water_mark())
         .transpose()?
         .flatten()
@@ -206,6 +235,7 @@ pub(super) fn validate_row_tracking(
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
     protocol: &Protocol,
     metadata: &Metadata,
+    operation: &DeltaOperation,
 ) -> DeltaResult<()> {
     let configuration = metadata.configuration();
     let supported = supports_row_tracking(protocol);
@@ -220,8 +250,17 @@ pub(super) fn validate_row_tracking(
             );
         }
     }
-    // The files of an existing table need row IDs before the table can track rows.
+    // The files of an existing table need row IDs before the table can track rows. A table
+    // that is replaced removes all of its files.
+    let replaces_table = matches!(
+        operation,
+        DeltaOperation::Create {
+            mode: SaveMode::Overwrite,
+            ..
+        }
+    );
     if let Some(snapshot) = read_snapshot
+        && !replaces_table
         && supported
         && (!supports_row_tracking(snapshot.protocol())
             || (enabled && !row_tracking_enabled(snapshot.metadata().configuration())))

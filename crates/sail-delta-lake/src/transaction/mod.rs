@@ -890,6 +890,7 @@ fn validate_deletion_vector_add_stats(actions: &[Action]) -> DeltaResult<()> {
 fn validate_effective_commit_target(
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
     actions: &[CommitAction],
+    operation: &DeltaOperation,
 ) -> DeltaResult<()> {
     let actions_as_actions = actions
         .iter()
@@ -989,7 +990,7 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    row_tracking::validate_row_tracking(read_snapshot, &protocol, &metadata)?;
+    row_tracking::validate_row_tracking(read_snapshot, &protocol, &metadata, operation)?;
 
     Ok(())
 }
@@ -1518,7 +1519,11 @@ impl std::future::IntoFuture for PreparedCommit {
                     version,
                     &this.data.operation,
                 )?;
-                validate_effective_commit_target(read_snapshot.as_ref(), &finalized_actions)?;
+                validate_effective_commit_target(
+                    read_snapshot.as_ref(),
+                    &finalized_actions,
+                    &this.data.operation,
+                )?;
                 let commit_or_bytes =
                     prepare_commit_or_bytes(&this.log_store, this.operation_id, &finalized_actions)
                         .await?;
@@ -1632,7 +1637,11 @@ impl PreparedCommit {
                 version,
                 &this.data.operation,
             )?;
-            validate_effective_commit_target(read_snapshot.as_ref(), &finalized_actions)?;
+            validate_effective_commit_target(
+                read_snapshot.as_ref(),
+                &finalized_actions,
+                &this.data.operation,
+            )?;
 
             let txn_id = Uuid::new_v4().to_string();
             let in_commit_timestamp = {
@@ -3550,7 +3559,7 @@ mod tests {
         actions: &[CommitAction],
         expected_error: Option<&str>,
     ) {
-        let result = validate_effective_commit_target(read_snapshot, actions);
+        let result = validate_effective_commit_target(read_snapshot, actions, &append_operation());
         if let Some(expected) = expected_error {
             assert!(
                 result.is_err(),
@@ -4570,6 +4579,216 @@ mod tests {
                 result.err()
             );
         }
+        Ok(())
+    }
+
+    /// Commits a REPLACE of the table with the given configuration and added files. The
+    /// protocol is merged with the protocol of the replaced table.
+    async fn replace_row_tracking_table(
+        log_store: &LogStoreRef,
+        snapshot: &Arc<DeltaSnapshot>,
+        configuration: Vec<(&'static str, &'static str)>,
+        removes: Vec<Add>,
+        adds: Vec<Add>,
+    ) -> DeltaResult<FinalizedCommit> {
+        let metadata = test_metadata(configuration);
+        let protocol = snapshot
+            .protocol()
+            .merge_upgrade_requirements(&crate::schema::protocol_for_metadata(&metadata)?);
+        let mut actions = vec![
+            CommitAction::Protocol(protocol.clone()),
+            CommitAction::Metadata(metadata.clone()),
+        ];
+        actions.extend(
+            removes
+                .into_iter()
+                .map(|add| CommitAction::Remove(add.into_remove(0))),
+        );
+        actions.extend(adds.into_iter().map(CommitAction::Add));
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::Overwrite,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await
+    }
+
+    fn row_tracking_removes(actions: &[Action]) -> Vec<(&str, Option<i64>)> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Remove(remove) => Some((remove.path.as_str(), remove.base_row_id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn row_tracking_can_be_enabled_by_replacing_a_table() -> DeltaResult<()> {
+        let enabled = || {
+            vec![
+                ("delta.enableRowTracking", "true"),
+                (
+                    "delta.rowTracking.materializedRowIdColumnName",
+                    "_row-id-col-x",
+                ),
+                (
+                    "delta.rowTracking.materializedRowCommitVersionColumnName",
+                    "_row-commit-version-col-x",
+                ),
+            ]
+        };
+        // A REPLACE without data removes the files without row IDs and writes no domain.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created =
+            create_row_tracking_table(&log_store, &[], vec![row_tracking_add("a", 3)]).await?;
+        let replaced = replace_row_tracking_table(
+            &log_store,
+            created.snapshot.as_ref().unwrap(),
+            enabled(),
+            vec![row_tracking_add("a", 3)],
+            vec![],
+        )
+        .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_removes(&actions), vec![("a", None)]);
+        assert_eq!(row_tracking_high_water_mark(&actions), None);
+        let snapshot = replaced.snapshot.as_ref().unwrap();
+        assert!(
+            snapshot
+                .protocol()
+                .has_writer_feature(&TableFeature::RowTracking)
+        );
+        assert!(
+            snapshot
+                .protocol()
+                .has_writer_feature(&TableFeature::DomainMetadata)
+        );
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 2))])
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                append_operation(),
+            )
+            .await?;
+        let actions = read_commit_actions(&log_store, 2).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("b", Some(0), Some(2))]);
+        assert_eq!(
+            row_tracking_high_water_mark(&actions).as_deref(),
+            Some(r#"{"rowIdHighWaterMark":1}"#)
+        );
+
+        // A REPLACE with data assigns row IDs from zero in the same commit.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created =
+            create_row_tracking_table(&log_store, &[], vec![row_tracking_add("a", 3)]).await?;
+        replace_row_tracking_table(
+            &log_store,
+            created.snapshot.as_ref().unwrap(),
+            enabled(),
+            vec![row_tracking_add("a", 3)],
+            vec![row_tracking_add("b", 2)],
+        )
+        .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("b", Some(0), Some(1))]);
+        assert_eq!(row_tracking_removes(&actions), vec![("a", None)]);
+        assert_eq!(
+            row_tracking_high_water_mark(&actions).as_deref(),
+            Some(r#"{"rowIdHighWaterMark":1}"#)
+        );
+
+        // A REPLACE of a table with row tracking continues the high-water mark.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created = create_row_tracking_table(
+            &log_store,
+            &enabled(),
+            vec![row_tracking_add("a", 3), row_tracking_add("b", 2)],
+        )
+        .await?;
+        let tracked = |path, base_row_id| Add {
+            base_row_id: Some(base_row_id),
+            default_row_commit_version: Some(0),
+            ..row_tracking_add(path, 3)
+        };
+        replace_row_tracking_table(
+            &log_store,
+            created.snapshot.as_ref().unwrap(),
+            enabled(),
+            vec![tracked("a", 0), tracked("b", 3)],
+            vec![row_tracking_add("c", 3)],
+        )
+        .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("c", Some(5), Some(1))]);
+        assert_eq!(
+            row_tracking_high_water_mark(&actions).as_deref(),
+            Some(r#"{"rowIdHighWaterMark":7}"#)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn row_tracking_configuration_is_retained_on_replace() -> DeltaResult<()> {
+        let existing: HashMap<String, String> = [
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-old",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-old",
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        let supported = crate::schema::protocol_for_metadata(&test_metadata([(
+            "delta.enableRowTracking",
+            "true",
+        )]))?;
+        let unsupported = crate::schema::protocol_for_metadata(&test_metadata([]))?;
+
+        for (statement, expected_enabled) in [(None, "true"), (Some("false"), "false")] {
+            let mut configuration = HashMap::new();
+            if let Some(value) = statement {
+                configuration.insert("delta.enableRowTracking".to_string(), value.to_string());
+            }
+            row_tracking::retain_for_replace(&supported, &existing, &mut configuration);
+            row_tracking::add_materialized_column_names(&mut configuration);
+            assert_eq!(
+                configuration
+                    .get("delta.enableRowTracking")
+                    .map(String::as_str),
+                Some(expected_enabled)
+            );
+            assert_eq!(
+                configuration
+                    .get("delta.rowTracking.materializedRowIdColumnName")
+                    .map(String::as_str),
+                Some("_row-id-col-old")
+            );
+            assert_eq!(
+                configuration
+                    .get("delta.rowTracking.materializedRowCommitVersionColumnName")
+                    .map(String::as_str),
+                Some("_row-commit-version-col-old")
+            );
+        }
+
+        // A table without the feature has no row tracking configuration to retain.
+        let mut configuration = HashMap::new();
+        row_tracking::retain_for_replace(&unsupported, &existing, &mut configuration);
+        assert!(configuration.is_empty());
         Ok(())
     }
 }
