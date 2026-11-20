@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion_common::{DataFusionError, Result};
+use futures::StreamExt;
+use futures::future::BoxFuture;
 use log::warn;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
@@ -21,10 +23,12 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use crate::delta_log::LogStoreRef;
-use crate::snapshot::{DeltaSnapshotConfig, catalog_managed_commit_path};
+use crate::snapshot::{
+    DeltaSnapshotConfig, catalog_managed_commit_path, catalog_managed_commit_version,
+};
 use crate::spec::{
-    CommitAction, DataType as DeltaDataType, DeltaOperation, DomainMetadata, Metadata,
-    MetadataValue, PrimitiveType, Protocol, StructField, commit_path,
+    CommitAction, DataType as DeltaDataType, DeltaError, DeltaOperation, DeltaResult,
+    DomainMetadata, Metadata, MetadataValue, PrimitiveType, Protocol, StructField, commit_path,
 };
 use crate::table::{DeltaSnapshot, load_catalog_managed_commits_for_snapshot};
 use crate::transaction::{
@@ -298,7 +302,10 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         let path = response
             .commits
             .iter()
-            .find(|commit| commit.version == staged.version)
+            .find(|commit| {
+                commit.version == staged.version
+                    && catalog_managed_commit_version(&commit.file_name) == Some(staged.version)
+            })
             .map(|commit| catalog_managed_commit_path(&commit.file_name))
             .unwrap_or_else(|| commit_path(staged.version));
         if path == staged.staged_path {
@@ -387,14 +394,12 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     )
                     .await?;
             }
-            let mut staged = CommitBuilder::from(properties.clone())
+            let staging = CommitBuilder::from(properties.clone())
                 .with_actions(actions.to_vec())
                 .build(reference.clone(), log_store.clone(), operation.clone())
-                .into_staged_commit_future_with_catalog_latest_version(latest_version)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let latest_backfilled_version =
-                publish_ratified_commits_before(log_store, &response, staged.version).await;
+                .into_staged_commit_future_with_catalog_latest_version(latest_version);
+            let (mut staged, latest_backfilled_version) =
+                stage_and_publish_ratified_commits(log_store, &response, staging).await?;
             match self
                 .try_commit_staged(
                     lakehouse_table,
@@ -456,7 +461,8 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             log_store.clone(),
             Some(latest_version),
         )
-        .await?;
+        .await?
+        .commits;
         check_catalog_managed_commit_conflicts(
             log_store,
             &snapshot,
@@ -555,39 +561,95 @@ fn commit_state_unknown_error(
 /// version before the first of them, or up to the latest version of the table when there is
 /// none, is published. Any other version counts only when its published commit exists.
 /// Commits are published in the order of their versions, so the publishing stops at the
-/// first commit that cannot be published.
-pub(crate) async fn publish_ratified_commits_before(
+/// first commit that cannot be published. A commit whose file name has another version is
+/// not published, since it is not the commit of its version.
+async fn publish_ratified_commits_before(
     log_store: &LogStoreRef,
     response: &DeltaRatifiedCommitResponse,
     version: i64,
 ) -> Option<i64> {
+    let mut published = response
+        .commits
+        .iter()
+        .map(|commit| commit.version)
+        .min()
+        .map_or(response.latest_table_version, |first| first - 1)
+        .min(version - 1)
+        .max(-1);
     let ratified = response
         .commits
         .iter()
         .filter(|commit| commit.version < version)
+        .filter(|commit| {
+            let matches = catalog_managed_commit_version(&commit.file_name) == Some(commit.version);
+            if !matches {
+                warn!(
+                    "The catalog returned the Delta commit `{}` for version {}",
+                    commit.file_name, commit.version
+                );
+            }
+            matches
+        })
         .map(|commit| (commit.version, commit.file_name.as_str()))
         .collect::<BTreeMap<_, _>>();
-    let mut published = ratified
-        .keys()
-        .next()
-        .map_or(response.latest_table_version, |first| first - 1)
-        .min(version - 1)
-        .max(-1);
-    for next in (published + 1)..version {
-        let path = ratified.get(&next).map_or_else(
-            || commit_path(next),
-            |file_name| catalog_managed_commit_path(file_name),
-        );
-        if let Err(error) = ensure_commit_published(log_store, &path, next).await {
-            if ratified.contains_key(&next) {
-                warn!("Failed to publish the ratified Delta commit `{path}`: {error}");
+    // The published commits are looked up at the same time, and only the commits that are
+    // missing are published, in order.
+    let store = log_store.object_store(None);
+    let mut lookups = futures::stream::iter((published + 1)..version)
+        .map(|next| {
+            let store = store.clone();
+            async move { (next, store.head(&commit_path(next)).await) }
+        })
+        .buffered(PUBLISHED_COMMIT_LOOKUP_CONCURRENCY);
+    while let Some((next, lookup)) = lookups.next().await {
+        let path = ratified
+            .get(&next)
+            .map(|file_name| catalog_managed_commit_path(file_name));
+        let result = match (lookup, path) {
+            (Ok(_), _) => Ok(()),
+            (Err(_), None) => break,
+            (Err(ObjectStoreError::NotFound { .. }), Some(path)) if path != commit_path(next) => {
+                publish_commit(log_store, &path, next)
+                    .await
+                    .map_err(|error| (path, error))
             }
+            (Err(error), Some(path)) => Err((path, DataFusionError::External(Box::new(error)))),
+        };
+        if let Err((path, error)) = result {
+            warn!("Failed to publish the ratified Delta commit `{path}`: {error}");
             break;
         }
         published = next;
     }
     (published >= 0).then_some(published)
 }
+
+/// Stages a commit on top of the latest version of the catalog, and publishes the ratified
+/// commits before it at the same time. Returns the staged commit and the latest version up
+/// to which every commit is published.
+pub(crate) async fn stage_and_publish_ratified_commits(
+    log_store: &LogStoreRef,
+    response: &DeltaRatifiedCommitResponse,
+    staging: BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>>,
+) -> Result<(CatalogManagedStagedCommit, Option<i64>)> {
+    let to_error = |e: DeltaError| DataFusionError::External(Box::new(e));
+    if response.latest_table_version < 0 {
+        // The version of the commit is not known before it is staged.
+        let staged = staging.await.map_err(to_error)?;
+        let published = publish_ratified_commits_before(log_store, response, staged.version).await;
+        return Ok((staged, published));
+    }
+    // The staged commit has the version after the latest version of the catalog.
+    let version = response.latest_table_version + 1;
+    let (staged, published) = futures::join!(
+        staging,
+        publish_ratified_commits_before(log_store, response, version)
+    );
+    Ok((staged.map_err(to_error)?, published))
+}
+
+/// The number of published commits that are looked up at the same time before a commit.
+const PUBLISHED_COMMIT_LOOKUP_CONCURRENCY: usize = 16;
 
 /// Publishes a commit that the catalog ratified once every version before it is published,
 /// since the versions of a table are published in order. A failure to publish does not fail
@@ -609,19 +671,6 @@ async fn publish_ratified_commit(
             "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {error}",
             staged.version
         );
-    }
-}
-
-/// Publishes the commit at the path as the version unless the version is published. The
-/// path of the published commit itself is an error when the commit does not exist.
-async fn ensure_commit_published(log_store: &LogStoreRef, path: &Path, version: i64) -> Result<()> {
-    let published = commit_path(version);
-    match log_store.object_store(None).head(&published).await {
-        Ok(_) => Ok(()),
-        Err(ObjectStoreError::NotFound { .. }) if *path != published => {
-            publish_commit(log_store, path, version).await
-        }
-        Err(error) => Err(DataFusionError::External(Box::new(error))),
     }
 }
 
@@ -1203,6 +1252,172 @@ mod tests {
             "{error:?}"
         );
         assert!(error.as_ref().is_some_and(commit_is_rejected));
+        Ok(())
+    }
+
+    /// A case of publishing the ratified commits before a commit.
+    struct PublishCase {
+        name: &'static str,
+        /// The published commits and the staged commits (`<version>.<id>`) in the log.
+        files: &'static [&'static str],
+        /// The published commits whose lookup fails.
+        failing: &'static [i64],
+        latest_table_version: i64,
+        /// The versions and the file names that the catalog returns.
+        commits: &'static [(i64, &'static str)],
+        version: i64,
+        expected: Option<i64>,
+        /// The published commits after publishing.
+        published: &'static [i64],
+    }
+
+    fn log_file(name: &str) -> Path {
+        match name.split_once('.') {
+            Some((version, id)) => Path::from(format!(
+                "_delta_log/_staged_commits/{:020}.{id}.json",
+                version.parse::<i64>().unwrap_or_default()
+            )),
+            None => commit_path(name.parse().unwrap_or_default()),
+        }
+    }
+
+    #[tokio::test]
+    async fn ratified_commits_are_published_in_order() -> Result<()> {
+        use crate::delta_log::{StorageConfig, default_logstore};
+        use crate::test_store::ObservedStore;
+
+        let cases = [
+            PublishCase {
+                name: "versions up to the latest version are published without a lookup",
+                files: &[],
+                failing: &[],
+                latest_table_version: 1,
+                commits: &[],
+                version: 2,
+                expected: Some(1),
+                published: &[],
+            },
+            PublishCase {
+                name: "version 0 is looked up when the catalog has no version",
+                files: &["0"],
+                failing: &[],
+                latest_table_version: -1,
+                commits: &[],
+                version: 1,
+                expected: Some(0),
+                published: &[0],
+            },
+            PublishCase {
+                name: "a missing version 0 is not published",
+                files: &[],
+                failing: &[],
+                latest_table_version: -1,
+                commits: &[],
+                version: 1,
+                expected: None,
+                published: &[],
+            },
+            PublishCase {
+                name: "publishing stops at a version that is neither returned nor published",
+                files: &["0", "1", "2", "3.a", "5.b"],
+                failing: &[],
+                latest_table_version: 5,
+                commits: &[(3, "a"), (5, "b")],
+                version: 6,
+                expected: Some(3),
+                published: &[0, 1, 2, 3],
+            },
+            PublishCase {
+                name: "publishing stops at a failed lookup",
+                files: &["0", "1.a", "2.b"],
+                failing: &[1],
+                latest_table_version: 2,
+                commits: &[(1, "a"), (2, "b")],
+                version: 3,
+                expected: Some(0),
+                published: &[0],
+            },
+            PublishCase {
+                name: "a published commit is not written again",
+                files: &["0", "1", "1.a"],
+                failing: &[],
+                latest_table_version: 1,
+                commits: &[(1, "a")],
+                version: 2,
+                expected: Some(1),
+                published: &[0, 1],
+            },
+            PublishCase {
+                name: "a commit whose file name has another version is not published",
+                files: &["0", "1.a"],
+                failing: &[],
+                latest_table_version: 2,
+                commits: &[(2, "a")],
+                version: 3,
+                expected: Some(1),
+                published: &[0],
+            },
+        ];
+        for case in cases {
+            let store = Arc::new(ObservedStore::default());
+            for file in case.files {
+                store
+                    .put(&log_file(file), format!("{file}\n").into())
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            }
+            for version in case.failing {
+                store.fail_lookups(commit_path(*version));
+            }
+            let object_store = store.clone() as Arc<dyn object_store::ObjectStore>;
+            let url =
+                Url::parse("memory:///").map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let log_store =
+                default_logstore(object_store.clone(), object_store, &url, &StorageConfig);
+            let response = DeltaRatifiedCommitResponse {
+                latest_table_version: case.latest_table_version,
+                commits: case
+                    .commits
+                    .iter()
+                    .map(
+                        |(version, id)| sail_catalog::lakehouse::DeltaRatifiedCommit {
+                            // The file name of a misplaced commit has the version before it.
+                            version: *version,
+                            timestamp: 1,
+                            file_name: if case.name.contains("another version") {
+                                format!("{:020}.{id}.json", version - 1)
+                            } else {
+                                format!("{version:020}.{id}.json")
+                            },
+                            file_size: 1,
+                            file_modification_timestamp: 1,
+                        },
+                    )
+                    .collect(),
+                ..Default::default()
+            };
+            let actual = publish_ratified_commits_before(&log_store, &response, case.version).await;
+            assert_eq!(actual, case.expected, "{}", case.name);
+            let mut published = vec![];
+            for version in 0..case.version {
+                if !case.failing.contains(&version)
+                    && store.head(&commit_path(version)).await.is_ok()
+                {
+                    published.push(version);
+                }
+            }
+            assert_eq!(published, case.published, "{}", case.name);
+            if case.name.contains("not written again") {
+                let bytes = store
+                    .get(&commit_path(1))
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .bytes()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                assert_eq!(bytes.as_ref(), b"1\n", "{}", case.name);
+            }
+        }
         Ok(())
     }
 }

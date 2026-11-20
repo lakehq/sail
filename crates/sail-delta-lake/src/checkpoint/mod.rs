@@ -34,7 +34,7 @@ use crate::checkpoint::action_fields::{
 };
 use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::delta_log::{
-    CheckpointFileSet, LogStore, get_actions, list_log_files,
+    CheckpointFileSet, LogStore, get_actions, list_log_files, lists_keys_in_order,
     parse_checkpoint_version_from_location, read_last_checkpoint_version_from_store,
     resolve_commit_timestamp_from_actions,
 };
@@ -603,8 +603,13 @@ impl<'a> CheckpointManager<'a> {
         let offset_version = offset_version
             .map(|v| v.min(version).saturating_sub(1))
             .unwrap_or(0);
-        let (_, checkpoint, commit_entries, _) =
-            list_log_files(store.clone(), offset_version, version).await?;
+        let (_, checkpoint, commit_entries, _) = list_log_files(
+            store.clone(),
+            offset_version,
+            version,
+            lists_keys_in_order(&self.log_store.config().location),
+        )
+        .await?;
 
         let mut state = ReconciledCheckpointState::default();
         let start_commit_version = if let Some(checkpoint) = checkpoint {

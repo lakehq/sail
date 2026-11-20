@@ -41,7 +41,8 @@ use crate::spec::{
     MetadataValue, SaveMode, StructField, StructType,
 };
 use crate::table::{
-    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
+    CatalogSnapshotSource, create_delta_table_with_object_store,
+    load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{
     CommitBuilder, CommitProperties, FinalizedCommit, Metrics as CommitFinalMetrics,
@@ -265,7 +266,7 @@ impl DeltaCommitExec {
         require_files: bool,
         use_catalog_managed_replay: bool,
     ) -> Result<Arc<crate::table::DeltaSnapshot>> {
-        let catalog_managed_commits = if use_catalog_managed_replay {
+        let source = if use_catalog_managed_replay {
             let lakehouse_table = lakehouse_table.ok_or_else(|| {
                 DataFusionError::Internal(
                     "catalog-managed Delta snapshot replay missing lakehouse context".to_string(),
@@ -280,17 +281,17 @@ impl DeltaCommitExec {
             )
             .await?
         } else {
-            None
+            CatalogSnapshotSource::default()
         };
         let snapshot = crate::table::DeltaSnapshot::try_new(
             log_store.as_ref(),
             DeltaSnapshotConfig {
                 require_files,
-                catalog_managed_commits,
+                catalog_managed_commits: source.commits,
                 ..Default::default()
             },
             version,
-            None,
+            source.replay_hint.as_ref(),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;

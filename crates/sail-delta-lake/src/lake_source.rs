@@ -1183,7 +1183,7 @@ async fn open_delta_write_planning_table(
             table_url.clone(),
             StorageConfig,
         )?;
-        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+        let source = load_catalog_managed_commits_for_snapshot(
             &ctx,
             lakehouse_table,
             &table_url,
@@ -1192,7 +1192,9 @@ async fn open_delta_write_planning_table(
         )
         .await
         .map_err(DeltaTableError::from)?;
-        let mut table = DeltaTable::new(log_store, table_config);
+        table_config.catalog_managed_commits = source.commits;
+        let mut table =
+            DeltaTable::new(log_store, table_config).with_replay_hint(source.replay_hint);
         table.load().await?;
         Ok(table)
     } else {

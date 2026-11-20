@@ -57,7 +57,7 @@ mod stats;
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
-    catalog_managed_commit_path,
+    catalog_managed_commit_path, catalog_managed_commit_version,
 };
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
@@ -80,7 +80,7 @@ async fn with_staged_commit_fallbacks(
         .await
         .filter(|version| *version <= end_version)
         .unwrap_or(0);
-    let staged = unambiguous_staged_commit_files(log_store)
+    let staged = unambiguous_staged_commit_files(log_store, checkpoint_version)
         .await?
         .into_iter()
         .filter(|(version, _)| {
@@ -109,14 +109,22 @@ async fn with_staged_commit_fallbacks(
 /// of a catalog-managed table are resolved.
 const PUBLISHED_COMMIT_CHECK_CONCURRENCY: usize = 16;
 
-/// Lists the staged commits once and returns the versions that have exactly one staged commit.
+/// Lists the staged commits after the version once and returns the versions that have exactly
+/// one staged commit.
 async fn unambiguous_staged_commit_files(
     log_store: &dyn LogStore,
+    after_version: i64,
 ) -> DeltaResult<BTreeMap<i64, String>> {
     let prefix = object_store::path::Path::from("_delta_log/_staged_commits");
+    // The staged commits of a version are named `<version>.<uuid>.json` with the version
+    // padded to 20 digits, so every staged commit of a later version sorts after the offset.
+    let offset = object_store::path::Path::from(format!(
+        "_delta_log/_staged_commits/{:020}",
+        after_version.saturating_add(1)
+    ));
     let staged = log_store
         .object_store(None)
-        .list(Some(&prefix))
+        .list_with_offset(Some(&prefix), &offset)
         .try_filter_map(|meta| async move {
             let path = meta.location.as_ref();
             let file_name = path.rsplit('/').next().unwrap_or(path);
@@ -139,6 +147,37 @@ async fn unambiguous_staged_commit_files(
         .into_iter()
         .filter_map(|(version, file_name)| Some((version, file_name?)))
         .collect())
+}
+
+/// Whether the error is a failure of the object store other than a missing file, such as a
+/// server error, throttling, or a refused credential. A staged commit is read in place of a
+/// published commit only when the published commit is missing or cannot be parsed.
+fn is_storage_error(error: &DeltaTableError) -> bool {
+    let mut source = delta_error_source(error);
+    while let Some(error) = source {
+        if let Some(error) = error.downcast_ref::<object_store::Error>() {
+            return !matches!(error, object_store::Error::NotFound { .. });
+        }
+        source = match error.downcast_ref::<DeltaTableError>() {
+            Some(error) => delta_error_source(error),
+            None => error.source(),
+        };
+    }
+    false
+}
+
+/// Returns the wrapped error, which `source` skips for a transparent error.
+fn delta_error_source(error: &DeltaTableError) -> Option<&(dyn std::error::Error + 'static)> {
+    match error {
+        DeltaTableError::ObjectStore(e) => Some(e),
+        DeltaTableError::External(e) => Some(e.as_ref()),
+        DeltaTableError::DataFusion(e) => Some(e),
+        DeltaTableError::Parquet(e) => Some(e),
+        DeltaTableError::Arrow(e) => Some(e),
+        DeltaTableError::Io(e) => Some(e),
+        DeltaTableError::Transaction(e) => Some(e),
+        _ => None,
+    }
 }
 
 /// Whether the published commit of the version exists and is a sequence of JSON documents.
@@ -262,9 +301,16 @@ impl DeltaSnapshot {
                 Ok(snapshot) => return Ok(snapshot),
                 Err(error) => error,
             };
-        let Some(end_version) = version.or_else(|| commits.latest_replay_version()) else {
+        // Only the versions that the catalog has ratified are read from staged commits. A
+        // staged commit after the latest version of the catalog may be in flight, or may have
+        // lost the commit race.
+        let Some(latest_version) = commits.latest_replay_version().filter(|v| *v >= 1) else {
             return Err(error);
         };
+        if is_storage_error(&error) {
+            return Err(error);
+        }
+        let end_version = version.map_or(latest_version, |v| v.min(latest_version));
         match with_staged_commit_fallbacks(log_store, commits, end_version).await {
             Ok(Some(commits)) => {
                 debug!(
@@ -313,6 +359,8 @@ impl DeltaSnapshot {
             }
         };
 
+        // A hint of a later version does not describe the target version.
+        let replay_hint = replay_hint.filter(|hint| hint.version <= target_version);
         if !config.require_files {
             match load_replayed_table_header(
                 target_version,
@@ -426,7 +474,7 @@ impl DeltaSnapshot {
         })
     }
 
-    fn replay_hint(&self) -> ReplayedTableHeader {
+    pub(crate) fn replay_hint(&self) -> ReplayedTableHeader {
         ReplayedTableHeader {
             version: self.version,
             protocol: self.protocol.clone(),

@@ -9,7 +9,7 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::catalog::coordinator::{
-    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, publish_ratified_commits_before,
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, stage_and_publish_ratified_commits,
 };
 use crate::catalog_managed::catalog_managed_delta_table;
 use crate::delta_log::{LogStoreRef, StorageConfig};
@@ -780,8 +780,9 @@ async fn open_table_with_config(
         require_files,
         ..Default::default()
     };
+    let mut replay_hint = None;
     if let Some(lakehouse) = catalog_managed_commit_context(lakehouse) {
-        config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+        let source = load_catalog_managed_commits_for_snapshot(
             ctx,
             lakehouse,
             &url,
@@ -789,8 +790,10 @@ async fn open_table_with_config(
             None,
         )
         .await?;
+        config.catalog_managed_commits = source.commits;
+        replay_hint = source.replay_hint;
     }
-    let mut table = DeltaTable::new(log_store, config);
+    let mut table = DeltaTable::new(log_store, config).with_replay_hint(replay_hint);
     table
         .load()
         .await
@@ -833,13 +836,12 @@ pub(crate) async fn commit(
     let response = coordinator
         .get_ratified_commits(lakehouse, table.table_uri.clone(), 1, None)
         .await?;
-    let staged = CommitBuilder::from(commit_properties)
+    let staging = CommitBuilder::from(commit_properties)
         .with_actions(actions.clone())
         .build(Some(snapshot.clone()), log_store.clone(), operation)
-        .into_staged_commit_future_with_catalog_latest_version(response.latest_table_version)
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let backfilled = publish_ratified_commits_before(&log_store, &response, staged.version).await;
+        .into_staged_commit_future_with_catalog_latest_version(response.latest_table_version);
+    let (staged, backfilled) =
+        stage_and_publish_ratified_commits(&log_store, &response, staging).await?;
     // The coordinator deletes the staged file when the catalog rejects the commit. An
     // uncertain catalog response must retain the staged file for reconciliation.
     coordinator

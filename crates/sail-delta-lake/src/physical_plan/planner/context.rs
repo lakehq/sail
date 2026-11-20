@@ -339,10 +339,11 @@ impl<'a> PlannerContext<'a> {
         } else {
             let log_store = self.log_store()?;
             let mut table_config = table_config;
+            let mut replay_hint = None;
             if let Some(lakehouse_table) =
                 catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
             {
-                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                let source = load_catalog_managed_commits_for_snapshot(
                     &self.session,
                     lakehouse_table,
                     &self.config.table_url,
@@ -350,8 +351,10 @@ impl<'a> PlannerContext<'a> {
                     None,
                 )
                 .await?;
+                table_config.catalog_managed_commits = source.commits;
+                replay_hint = source.replay_hint;
             }
-            let mut table = DeltaTable::new(log_store, table_config);
+            let mut table = DeltaTable::new(log_store, table_config).with_replay_hint(replay_hint);
             table
                 .load()
                 .await

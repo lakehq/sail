@@ -514,6 +514,21 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_publish_failure_t version 1 references staged Delta commit in location without published backfill
     Then published Delta commit for version 1 in location is a directory
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_publish_failure_t VALUES
+        (2, 'two')
+      """
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_publish_failure_t version 2 references staged Delta commit in location without published backfill
+    Then published Delta commit for version 1 in location is a directory
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_publish_failure_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | one  |
+      | 2  | two  |
 
   Scenario: Managed Delta schema merge updates Unity Catalog metadata
     Given statement

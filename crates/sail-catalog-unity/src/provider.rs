@@ -3486,8 +3486,8 @@ mod tests {
             assert_eq!(received_targets(&server).await, delta_api_targets);
         }
 
-        // Any other failure is an error, since the table may be catalog-managed by a commit
-        // that is not published yet, and the published Delta log would be stale.
+        // Any other failure is an error, since the catalog did not tell. The reader then lets
+        // the published Delta protocol decide.
         for status in [401, 403, 429, 500, 503] {
             let server = MockServer::start().await;
             mount_delta_config_ok(&server).await;

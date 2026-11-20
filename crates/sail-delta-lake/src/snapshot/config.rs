@@ -51,6 +51,21 @@ pub(crate) fn catalog_managed_commit_path(file_name: &str) -> Path {
     }
 }
 
+/// Returns the version that the file name of a commit returned by the catalog starts with.
+/// The file name of a published commit is `<version>.json`, and the file name of a staged
+/// commit is `<version>.<uuid>.json`, with the version padded to 20 digits.
+pub(crate) fn catalog_managed_commit_version(file_name: &str) -> Option<i64> {
+    let path = catalog_managed_commit_path(file_name);
+    let name = path.filename()?;
+    let (version, _) = name.split_once('.')?;
+    if version.len() != 20 || !version.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    name.ends_with(".json")
+        .then(|| version.parse().ok())
+        .flatten()
+}
+
 pub(crate) fn catalog_managed_commit_file_name(file_name: &str) -> String {
     catalog_managed_commit_path(file_name)
         .as_ref()

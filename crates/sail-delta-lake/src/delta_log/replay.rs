@@ -11,7 +11,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use super::{
     CheckpointFileSet, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
-    latest_version_from_listing,
+    latest_version_from_listing, lists_keys_in_order,
 };
 use crate::checkpoint::{
     ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState, decode_checkpoint_rows,
@@ -260,7 +260,7 @@ pub(crate) async fn load_replayed_table_header(
 
 pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
     let store = log_store.object_store(None);
-    latest_version_from_listing(store)
+    latest_version_from_listing(store, lists_keys_in_order(&log_store.config().location))
         .await?
         .ok_or(crate::spec::DeltaError::MissingVersion)
 }

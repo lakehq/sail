@@ -40,7 +40,9 @@ pub use features::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
+use crate::delta_log::{
+    LogStoreRef, ReplayedTableHeader, StorageConfig, default_logstore, resolve_version_timestamp,
+};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
@@ -70,6 +72,8 @@ pub struct DeltaTable {
     pub config: DeltaSnapshotConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
+    /// The header of an earlier version of the table that the first load replays from.
+    replay_hint: Option<ReplayedTableHeader>,
 }
 
 impl DeltaTable {
@@ -82,7 +86,15 @@ impl DeltaTable {
             state: None,
             log_store,
             config,
+            replay_hint: None,
         }
+    }
+
+    /// Sets the header of an earlier version of the table that the first load of a snapshot
+    /// without files replays from, instead of reading the log up to that version again.
+    pub(crate) fn with_replay_hint(mut self, replay_hint: Option<ReplayedTableHeader>) -> Self {
+        self.replay_hint = replay_hint;
+        self
     }
 
     /// Load DeltaTable with data from latest checkpoint
@@ -127,11 +139,12 @@ impl DeltaTable {
                 Ok(())
             }
             _ => {
+                let replay_hint = self.replay_hint.take();
                 let state = DeltaSnapshot::try_new(
                     self.log_store.as_ref(),
                     self.config.clone(),
                     max_version,
-                    None,
+                    replay_hint.as_ref(),
                 )
                 .await?;
                 self.state = Some(Arc::new(state));
@@ -656,13 +669,32 @@ where
     })
 }
 
+/// What a snapshot of a Unity managed Delta table is loaded with.
+#[derive(Debug, Default)]
+pub(crate) struct CatalogSnapshotSource {
+    /// The catalog commits of a catalog-managed table.
+    pub commits: Option<CatalogManagedCommitSet>,
+    /// The header of the latest published version of a table that is not catalog-managed,
+    /// which was loaded to read its protocol.
+    pub replay_hint: Option<ReplayedTableHeader>,
+}
+
+impl CatalogSnapshotSource {
+    fn catalog_managed(commits: CatalogManagedCommitSet) -> Self {
+        Self {
+            commits: Some(commits),
+            replay_hint: None,
+        }
+    }
+}
+
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
     ctx: &C,
     lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     log_store: LogStoreRef,
     version_as_of: Option<i64>,
-) -> Result<Option<CatalogManagedCommitSet>>
+) -> Result<CatalogSnapshotSource>
 where
     C: SessionExtensionAccessor + ?Sized,
 {
@@ -679,13 +711,23 @@ where
     // The commit that enables the feature on an existing table may not be published yet, and
     // the table properties may not have the catalog property. So the catalog is asked about
     // a Unity managed table, and its answer has the ratified commits of the table as well.
-    // A catalog that does not state it answers without an error, so an error is a failure
-    // to tell, and the published Delta protocol alone must not decide then.
+    // When the catalog cannot be asked, the published Delta protocol decides, so that a table
+    // that is not catalog-managed can be read without the catalog commits. A catalog-managed
+    // table still needs them, and the failure to load them is the error then.
     let discovered = if bootstrap_info.is_some() && !catalog_managed_property {
-        let response = DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
+        match DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
             .discover_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
-            .await?;
-        response.catalog_managed.then_some(response)
+            .await
+        {
+            Ok(response) => response.catalog_managed.then_some(response),
+            Err(error) => {
+                warn!(
+                    "Failed to ask the catalog whether {table_url} is a catalog-managed Delta table, \
+                     using the published Delta protocol: {error}"
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -703,7 +745,9 @@ where
             }
             Err(err) => return Err(DataFusionError::from(err)),
         }
-        return Ok(Some(load_commits(discovered).await?));
+        return Ok(CatalogSnapshotSource::catalog_managed(
+            load_commits(discovered).await?,
+        ));
     }
 
     let mut detector = DeltaTable::new(
@@ -715,10 +759,16 @@ where
     );
     match detector.load().await {
         Ok(()) => {
-            if detector.snapshot()?.protocol().is_catalog_managed() {
-                Ok(Some(load_commits(None).await?))
+            let snapshot = detector.snapshot()?;
+            if snapshot.protocol().is_catalog_managed() {
+                Ok(CatalogSnapshotSource::catalog_managed(
+                    load_commits(None).await?,
+                ))
             } else {
-                Ok(None)
+                Ok(CatalogSnapshotSource {
+                    commits: None,
+                    replay_hint: Some(snapshot.replay_hint()),
+                })
             }
         }
         Err(err) if is_missing_delta_log_error(&err) => {
@@ -730,7 +780,9 @@ where
             )
             .await?
             {
-                Ok(Some(load_commits(None).await?))
+                Ok(CatalogSnapshotSource::catalog_managed(
+                    load_commits(None).await?,
+                ))
             } else {
                 Err(DataFusionError::from(err))
             }
@@ -745,7 +797,7 @@ where
                 "Failed to load the published Delta log of {table_url}, reading catalog commits: {err}"
             );
             match load_commits(None).await {
-                Ok(commits) => Ok(Some(commits)),
+                Ok(commits) => Ok(CatalogSnapshotSource::catalog_managed(commits)),
                 Err(catalog_err) => Err(DataFusionError::from(err).context(format!(
                     "Failed to load the published Delta log of {table_url}, and the catalog commits are not available: {catalog_err}"
                 ))),
@@ -777,7 +829,7 @@ pub(crate) async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
+    let source = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
         Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,
@@ -788,12 +840,13 @@ pub(crate) async fn load_delta_read_state(
             )
             .await?
         }
-        None => None,
+        None => CatalogSnapshotSource::default(),
     };
 
     let mut table_config = delta_read_snapshot_config(metadata_only, &options);
-    table_config.catalog_managed_commits = catalog_managed_commits;
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
+    table_config.catalog_managed_commits = source.commits;
+    let mut deltalake_table =
+        DeltaTable::new(log_store.clone(), table_config).with_replay_hint(source.replay_hint);
 
     // Load the table state according to the provided time travel options.
     load_table_by_options(&mut deltalake_table, &options).await?;
@@ -1379,6 +1432,9 @@ mod catalog_managed_tests {
         /// The catalog ratifies the commit of another writer with the actions first, and
         /// answers with a conflict.
         Lose(&'static str),
+        /// Another writer publishes the version before the commit, and the catalog does not
+        /// ratify the commit since it has too many commits that are not published.
+        PublishPredecessorAndExhaust,
     }
 
     /// The commits of a table in the catalog, and what the catalog does with the commit
@@ -1438,6 +1494,12 @@ mod catalog_managed_tests {
                     self.store.put(&path, commit.into()).await.unwrap();
                     self.ratify(winner, &file_name);
                     return Err(CatalogError::Conflict("409".into()));
+                }
+                Some(CommitStep::PublishPredecessorAndExhaust) => {
+                    let path = Path::from(format!("_delta_log/{}", published_commit(version - 1)));
+                    let commit = "{\"commitInfo\":{\"timestamp\":2,\"inCommitTimestamp\":2}}\n";
+                    self.store.put(&path, commit.into()).await.unwrap();
+                    return Err(CatalogError::ResourceExhausted("429".into()));
                 }
                 None => {}
             }
@@ -1850,10 +1912,33 @@ mod catalog_managed_tests {
     }
 
     #[tokio::test]
-    async fn unity_managed_table_is_not_read_when_discovery_fails() {
+    async fn unity_managed_table_reads_published_log_when_discovery_fails() {
         // The catalog cannot tell whether the table is catalog-managed, so the published
-        // protocol, which does not have the feature, must not decide.
-        let store = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
+        // protocol, which does not have the feature, decides. A table that is not
+        // catalog-managed is readable without the catalog, as it is with other engines.
+        for error in [
+            (|| CatalogError::External("503 Service Unavailable".into())) as fn() -> CatalogError,
+            || CatalogError::Forbidden("403 Forbidden".into()),
+            || CatalogError::Unauthorized("401 Unauthorized".into()),
+        ] {
+            let store = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
+            let (commit_requests, discover_requests, result) =
+                read_unity_managed_table_with_requests(
+                    store,
+                    false,
+                    Some(ratified(0, &[])),
+                    Some(error),
+                )
+                .await;
+            assert_eq!(result.unwrap(), 0);
+            assert_eq!((commit_requests, discover_requests), (0, 1));
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_reads_catalog_commits_when_discovery_fails() {
+        // The published protocol has the feature, so the catalog commits are read.
+        let store = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
         let (commit_requests, discover_requests, result) = read_unity_managed_table_with_requests(
             store,
             false,
@@ -1861,9 +1946,8 @@ mod catalog_managed_tests {
             Some(|| CatalogError::External("503 Service Unavailable".into())),
         )
         .await;
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("503 Service Unavailable"), "{error}");
-        assert_eq!((commit_requests, discover_requests), (0, 1));
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!((commit_requests, discover_requests), (1, 1));
     }
 
     #[tokio::test]
@@ -2878,5 +2962,160 @@ mod catalog_managed_tests {
             .await;
             assert_eq!(result.unwrap(), version);
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_commit_at_the_limit_of_the_catalog_is_sent_again_after_backfill() {
+        // Version 1 cannot be published before the first request. Another writer publishes
+        // it before the catalog refuses the request at its limit, so the request is sent
+        // again with version 1 reported as backfilled.
+        let commit = commit_with_script_after(
+            vec![CommitStep::PublishPredecessorAndExhaust],
+            true,
+            UnpublishedCommit::Missing,
+        )
+        .await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!(staged.version, 2);
+        let request = (2, staged.file_name.clone());
+        assert_eq!(commit.requests(), vec![request.clone(), request]);
+        assert_eq!(
+            backfilled_versions(&commit),
+            vec![serde_json::json!(0), serde_json::json!(1)]
+        );
+        assert_eq!(commit.latest_table_version(), 2);
+        assert!(published_commit_bytes(&commit, 2).await.is_some());
+    }
+
+    /// Returns a store with the published version 0 of a catalog-managed table and the files
+    /// of its log, and the log store of the table.
+    async fn observed_log_store(
+        log_files: Vec<(String, &str)>,
+    ) -> (
+        Arc<crate::test_store::ObservedStore>,
+        crate::delta_log::LogStoreRef,
+    ) {
+        use crate::delta_log::{StorageConfig, default_logstore};
+
+        let version_0 = Path::from(format!("_delta_log/{}", published_commit(0)));
+        let source = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        let version_0_bytes = source
+            .get(&Path::from(format!("items/{version_0}")))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let store = Arc::new(crate::test_store::ObservedStore::default());
+        store.put(&version_0, version_0_bytes.into()).await.unwrap();
+        for (file, content) in log_files {
+            store
+                .put(
+                    &Path::from(format!("_delta_log/{file}")),
+                    content.to_string().into(),
+                )
+                .await
+                .unwrap();
+        }
+        let object_store = store.clone() as Arc<dyn ObjectStore>;
+        let log_store = default_logstore(
+            object_store.clone(),
+            object_store,
+            &Url::parse("memory:///").unwrap(),
+            &StorageConfig,
+        );
+        (store, log_store)
+    }
+
+    /// Loads the snapshot of a catalog-managed table with the catalog commits.
+    async fn load_catalog_managed_snapshot(
+        log_store: &crate::delta_log::LogStoreRef,
+        latest_table_version: i64,
+        commits: &[(i64, &str)],
+        version: Option<i64>,
+    ) -> crate::spec::DeltaResult<i64> {
+        use crate::snapshot::{
+            CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+        };
+        let config = DeltaSnapshotConfig {
+            require_files: false,
+            catalog_managed_commits: Some(CatalogManagedCommitSet {
+                latest_table_version,
+                commits: commits
+                    .iter()
+                    .map(|(version, id)| CatalogManagedCommitFile {
+                        version: *version,
+                        file_name: format!("{version:020}.{id}.json"),
+                    })
+                    .collect(),
+            }),
+            ..Default::default()
+        };
+        crate::table::DeltaSnapshot::try_new(log_store.as_ref(), config, version, None)
+            .await
+            .map(|snapshot| snapshot.version())
+    }
+
+    fn lists_staged_commits(store: &crate::test_store::ObservedStore) -> usize {
+        store
+            .lists()
+            .iter()
+            .filter(|prefix| prefix.starts_with("_delta_log/_staged_commits"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn staged_commit_after_the_latest_catalog_version_is_not_read() {
+        // A legacy catalog has the latest version -1 before the first commit through it, so
+        // the staged commit of version 1 is not ratified.
+        let (_, log_store) = observed_log_store(vec![(staged_commit(1, "a"), EMPTY_COMMIT)]).await;
+        let result = load_catalog_managed_snapshot(&log_store, -1, &[], Some(1)).await;
+        assert!(result.is_err(), "{result:?}");
+
+        // Version 1 is ratified and backfilled, and the staged commit of version 2 is not
+        // ratified.
+        let (_, log_store) = observed_log_store(vec![
+            (staged_commit(1, "a"), EMPTY_COMMIT),
+            (staged_commit(2, "b"), EMPTY_COMMIT),
+        ])
+        .await;
+        let result = load_catalog_managed_snapshot(&log_store, 1, &[], Some(2)).await;
+        assert!(result.is_err(), "{result:?}");
+        let result = load_catalog_managed_snapshot(&log_store, 1, &[], None).await;
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn staged_commits_are_listed_only_when_a_published_commit_is_missing() {
+        let (store, log_store) = observed_log_store(vec![
+            (published_commit(1), EMPTY_COMMIT),
+            (staged_commit(1, "a"), EMPTY_COMMIT),
+            (staged_commit(2, "b"), EMPTY_COMMIT),
+        ])
+        .await;
+        let result = load_catalog_managed_snapshot(&log_store, 1, &[], None).await;
+        assert_eq!(result.unwrap(), 1);
+        assert_eq!(lists_staged_commits(&store), 0);
+
+        // The published commit of version 2 is missing.
+        let result = load_catalog_managed_snapshot(&log_store, 2, &[], None).await;
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(lists_staged_commits(&store), 1);
+    }
+
+    #[tokio::test]
+    async fn staged_commit_is_not_read_after_a_storage_error() {
+        let (store, log_store) = observed_log_store(vec![
+            (published_commit(1), EMPTY_COMMIT),
+            (staged_commit(1, "a"), EMPTY_COMMIT),
+        ])
+        .await;
+        store.fail_lookups(Path::from(format!("_delta_log/{}", published_commit(1))));
+        let error = load_catalog_managed_snapshot(&log_store, 1, &[], None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("503 Service Unavailable"), "{error}");
+        assert_eq!(lists_staged_commits(&store), 0);
     }
 }
