@@ -263,6 +263,16 @@ pub(crate) fn prepare_replacement(
         .iter()
         .any(|old| old.spec_id() == spec.spec_id())
     {
+        // REST assigns spec IDs at commit. A concurrent add-spec can consume the
+        // predicted ID without changing the default spec or last partition field ID.
+        if matches!(
+            catalog.authority,
+            ReplacementAuthority::IcebergRestExisting { .. }
+        ) {
+            return plan_err!(
+                "Iceberg REST replacement requires a registered partition spec; evolve the table partition spec before replacing its data"
+            );
+        }
         metadata.partition_specs.push(spec);
     }
     let fields = catalog
@@ -575,24 +585,15 @@ fn rest_replacement_changes(
     let spec = metadata
         .default_partition_spec()
         .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
-    let added = create
-        || !base
-            .partition_specs
-            .iter()
-            .any(|old| old.spec_id() == spec.spec_id());
-    if added {
+    if create {
         updates.push(TableUpdate::AddSpec { spec: spec.into() });
-        if !create {
-            requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
-                last_assigned_partition_id: base.last_partition_id,
-            });
-            requirements.push(TableRequirement::DefaultSpecIdMatch {
-                default_spec_id: base.default_spec_id,
-            });
-        }
+    } else if spec.spec_id() != base.default_spec_id {
+        requirements.push(TableRequirement::DefaultSpecIdMatch {
+            default_spec_id: base.default_spec_id,
+        });
     }
     updates.push(TableUpdate::SetDefaultSpec {
-        spec_id: if added { -1 } else { spec.spec_id() },
+        spec_id: if create { -1 } else { spec.spec_id() },
     });
     let order = metadata
         .sort_orders
@@ -901,7 +902,9 @@ mod tests {
     #[test]
     fn rest_replacement_requirements_protect_prepared_output()
     -> Result<(), Box<dyn std::error::Error>> {
-        let base = historical_metadata()?;
+        let mut base = historical_metadata()?;
+        base.partition_specs
+            .push(crate::spec::PartitionSpec::unpartitioned_spec());
         let input = ArrowSchema::new(vec![
             Field::new("old", DataType::Int32, true),
             Field::new("replacement", DataType::Int64, false),
@@ -939,11 +942,8 @@ mod tests {
                 TableRequirement::LastAssignedFieldIdMatch {
                     last_assigned_field_id: base.last_column_id
                 },
-                TableRequirement::LastAssignedPartitionIdMatch {
-                    last_assigned_partition_id: base.last_partition_id
-                },
                 TableRequirement::DefaultSpecIdMatch {
-                    default_spec_id: base.default_spec_id
+                    default_spec_id: base.default_spec_id,
                 },
                 TableRequirement::DefaultSortOrderIdMatch {
                     default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0))
@@ -975,6 +975,8 @@ mod tests {
         use sail_common_datafusion::catalog::CatalogTableSort;
 
         let mut base = historical_metadata()?;
+        base.partition_specs
+            .push(crate::spec::PartitionSpec::unpartitioned_spec());
         base.sort_orders = vec![SortOrder {
             order_id: 0,
             fields: vec![],

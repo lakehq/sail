@@ -1572,6 +1572,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     .with_fields(fields)
                     .build()
                     .map_err(|error| CatalogError::External(error.to_string()))?;
+                let mut properties: HashMap<_, _> = property_updates
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with("option."))
+                    .cloned()
+                    .collect();
+                let minimum = sail_iceberg::operations::helpers::format_version_for_schema(&schema);
+                if minimum > FormatVersion::V1 {
+                    properties.insert(
+                        "format-version".into(),
+                        (minimum.max(version) as i32).to_string(),
+                    );
+                }
                 let request = crate::r#gen::CreateTableRequest {
                     name: table.to_string(),
                     location: options.location.clone(),
@@ -1579,13 +1591,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     partition_spec: build_partition_spec(&options.partition_by, None, &names)?,
                     write_order: build_sort_order(&options.sort_by, &names)?,
                     stage_create: Some(true),
-                    properties: Some(
-                        property_updates
-                            .iter()
-                            .filter(|(key, _)| !key.starts_with("option."))
-                            .cloned()
-                            .collect(),
-                    ),
+                    properties: Some(properties),
                 };
                 let prefix = config.prefix().map(ToOwned::to_owned);
                 let namespace = config.namespace_string(database)?;
