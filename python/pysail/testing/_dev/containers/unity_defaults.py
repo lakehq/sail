@@ -2,14 +2,23 @@
 
 """Defaults shared by Unity Catalog test fixtures."""
 
-import os
+from dataclasses import dataclass
 
 DEFAULT_CATALOG = "sail_test_catalog"
-# The default server image does not have the Unity Catalog Delta REST API, so the
-# tests cover the API that Sail uses with such servers. Set
-# PYSAIL_UNITY_CATALOG_IMAGE to a server image that has the Delta REST API
-# (v0.7.0 or later) to cover the other API. CI runs the tests with both images.
-UNITY_CATALOG_IMAGE = os.environ.get(
-    "PYSAIL_UNITY_CATALOG_IMAGE",
-    "unitycatalog/unitycatalog:v0.4.0",
+
+
+@dataclass(frozen=True)
+class UnityCatalogServer:
+    """A Unity Catalog server image that the tests run against."""
+
+    id: str
+    image: str
+    # Whether the server has the Unity Catalog Delta REST API, which Sail then
+    # uses for managed Delta tables instead of the legacy API.
+    delta_api: bool
+
+
+UNITY_CATALOG_SERVERS = (
+    UnityCatalogServer("uc-0.7.0", "unitycatalog/unitycatalog:v0.7.0", delta_api=True),
+    UnityCatalogServer("uc-0.4.0", "unitycatalog/unitycatalog:v0.4.0", delta_api=False),
 )

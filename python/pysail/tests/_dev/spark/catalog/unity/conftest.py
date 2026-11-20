@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
     from pyspark.sql import SparkSession
 
+    from pysail.testing._dev.containers.unity_defaults import UnityCatalogServer
+
 
 @pytest.fixture(scope="module")
 def remote(
@@ -59,23 +61,10 @@ def _configure_unity_catalog_spark(
     )
 
 
-@pytest.fixture(scope="module")
-def unity_uses_delta_api(unity_rest_url: str, unity_catalog_initialized: None) -> bool:
+@pytest.fixture(scope="session")
+def unity_uses_delta_api(unity_server: UnityCatalogServer) -> bool:
     """Whether the server has the Unity Catalog Delta REST API, which Sail then uses for managed Delta tables."""
-    del unity_catalog_initialized
-    response = requests.get(
-        f"{unity_rest_url}/delta/v1/config",
-        params={"catalog": DEFAULT_CATALOG, "protocol-versions": "1.0"},
-        timeout=10,
-    )
-    # The server has the Delta REST API if it answers the configuration endpoint,
-    # and does not have it if the endpoint does not exist. Any other answer means
-    # that the server is broken, which must not turn the assertions into no-ops.
-    if response.status_code == 200:
-        return True
-    if response.status_code == 404:
-        return False
-    pytest.fail(f"unexpected Unity Catalog Delta API configuration response: {response.status_code} {response.text}")
+    return unity_server.delta_api
 
 
 @then(
