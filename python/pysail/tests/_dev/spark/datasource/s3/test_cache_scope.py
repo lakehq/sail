@@ -16,7 +16,7 @@ from pyspark.sql import functions as F  # noqa: N812
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
-pytestmark = pytest.mark.integration(group="s3")
+pytestmark = pytest.mark.integration
 
 _KEY = "data/part-0.parquet"
 _PUT_ATTEMPTS = 10

@@ -442,9 +442,7 @@ impl ScanByDataFilesState {
 
         let file_groups = vec![FileGroup::from(partitioned_files)];
 
-        let object_store_url = self
-            .object_store_url()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let object_store_url = self.object_store_url()?;
 
         let (file_groups, source): (_, Arc<dyn FileSource>) = match format {
             DataFileFormat::Parquet => {
