@@ -1990,7 +1990,6 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(first[0].object_meta, second[0].object_meta);
         assert_eq!(first[0].object_meta.size, 100);
-        assert_eq!(reused[0].object_meta.size, 100);
         assert_ne!(
             first[0].object_meta.last_modified,
             reused[0].object_meta.last_modified

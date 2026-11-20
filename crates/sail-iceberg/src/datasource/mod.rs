@@ -24,7 +24,7 @@ pub(crate) fn data_file_last_modified(
     added_snapshot_id: Option<i64>,
 ) -> chrono::DateTime<chrono::Utc> {
     match added_snapshot_id {
-        Some(id) => chrono::TimeZone::timestamp_nanos(&chrono::Utc, id),
+        Some(id) => chrono::DateTime::from_timestamp_nanos(id),
         None => chrono::Utc::now(),
     }
 }
