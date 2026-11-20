@@ -196,18 +196,13 @@ def test_history_optional_fields(spark, tmp_path):
         spark.sql("DROP TABLE raw_inspection")
 
 
-@pytest.mark.parametrize(
-    "statement",
-    [
-        "INSERT INTO raw_unsupported_writer VALUES (1)",
-        "UPDATE raw_unsupported_writer SET id = 2 WHERE id = 1",
-        "DELETE FROM raw_unsupported_writer WHERE id = 1",
-    ],
-)
-def test_unsupported_writer_features_are_rejected_before_data_files_are_written(spark, tmp_path, statement):
+_UNSUPPORTED_WRITER_FEATURES = ["clustering", "icebergCompatV2", "futureFeature"]
+
+
+@pytest.fixture
+def unsupported_writer_table(spark, tmp_path):
     path = tmp_path / "raw"
-    features = ["clustering", "icebergCompatV2", "futureFeature"]
-    # The table has a data file with the row that UPDATE and DELETE would rewrite.
+    # The table has a data file with a row that UPDATE, DELETE, and MERGE could rewrite.
     path.mkdir()
     data_file = path / "part-00000.parquet"
     pq.write_table(pa.table({"id": pa.array([1], type=pa.int64())}), data_file)
@@ -218,21 +213,70 @@ def test_unsupported_writer_features_are_rejected_before_data_files_are_written(
             "size": data_file.stat().st_size,
             "modificationTime": 1700000000000,
             "dataChange": True,
-            "stats": json.dumps({"numRecords": 1}),
+            "stats": json.dumps(
+                {"numRecords": 1, "minValues": {"id": 1}, "maxValues": {"id": 1}, "nullCount": {"id": 0}}
+            ),
         }
     }
-    _write_log(path, [[add]], protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": features})
+    _write_log(
+        path,
+        [[add]],
+        protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": _UNSUPPORTED_WRITER_FEATURES},
+    )
     spark.sql(f"CREATE TABLE raw_unsupported_writer USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
     try:
         assert spark.table("raw_unsupported_writer").collect() == [Row(id=1)]
-        with pytest.raises(Exception, match="Unsupported table features required") as error:
-            spark.sql(statement).collect()
-        for feature in features:
-            assert feature in str(error.value)
-        assert sorted(os.listdir(path)) == ["_delta_log", data_file.name]
-        assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
+        yield path, data_file.name
     finally:
         spark.sql("DROP TABLE raw_unsupported_writer")
+
+
+def _assert_unsupported_writer_features_error(spark, statement):
+    with pytest.raises(Exception, match="Unsupported table features required") as error:
+        spark.sql(statement).collect()
+    for feature in _UNSUPPORTED_WRITER_FEATURES:
+        assert feature in str(error.value)
+
+
+def test_unsupported_writer_features_reject_insert_before_data_files_are_written(spark, unsupported_writer_table):
+    path, data_file = unsupported_writer_table
+    _assert_unsupported_writer_features_error(spark, "INSERT INTO raw_unsupported_writer VALUES (2)")
+    assert sorted(os.listdir(path)) == ["_delta_log", data_file]
+    assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE raw_unsupported_writer SET id = 2 WHERE id = 1",
+        "DELETE FROM raw_unsupported_writer WHERE id = 1",
+        "MERGE INTO raw_unsupported_writer t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE",
+    ],
+)
+def test_unsupported_writer_features_reject_row_level_changes(spark, unsupported_writer_table, statement):
+    path, _ = unsupported_writer_table
+    _assert_unsupported_writer_features_error(spark, statement)
+    assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
+    assert spark.table("raw_unsupported_writer").collect() == [Row(id=1)]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DELETE FROM raw_unsupported_writer WHERE false",
+        "DELETE FROM raw_unsupported_writer WHERE id = 99",
+        "UPDATE raw_unsupported_writer SET id = 2 WHERE false",
+        "UPDATE raw_unsupported_writer SET id = 2 WHERE id = 99",
+        "MERGE INTO raw_unsupported_writer t USING (SELECT 99 AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE",
+    ],
+)
+def test_unsupported_writer_features_allow_row_level_no_ops(spark, unsupported_writer_table, statement):
+    path, data_file = unsupported_writer_table
+    # Like Delta Spark, a row-level operation that changes nothing skips its commit.
+    spark.sql(statement).collect()
+    assert sorted(os.listdir(path)) == ["_delta_log", data_file]
+    assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
+    assert spark.table("raw_unsupported_writer").collect() == [Row(id=1)]
 
 
 @pytest.mark.parametrize(

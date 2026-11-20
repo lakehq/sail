@@ -23,7 +23,6 @@ use crate::physical_plan::planner::{
 };
 use crate::spec::{DeltaOperation, MergePredicate};
 use crate::table::DeltaSnapshot;
-use crate::transaction::PROTOCOL;
 
 /// Creates a Delta physical execution plan for a unified `RowLevelWriteNode`.
 pub async fn create_row_level_write_physical_plan(
@@ -32,10 +31,6 @@ pub async fn create_row_level_write_physical_plan(
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let target_snapshot = find_target_snapshot(node.raw_target())?;
-    // The table is rejected here, before the operation writes any data file.
-    PROTOCOL
-        .can_write_to_protocol(target_snapshot.protocol())
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let effects = collect_physical_effects(node.effects(), physical_inputs)?;
     let target = node.target().clone();
 
