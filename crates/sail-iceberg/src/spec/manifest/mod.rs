@@ -838,6 +838,7 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+            added_snapshot_id: None,
         };
         let (legacy_schema, _) =
             super::schema::data_file_schemas(&partition_type, FormatVersion::V2);

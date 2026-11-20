@@ -196,6 +196,8 @@ impl IcebergScan {
                 }
                 let mut df = entry.data_file.clone();
                 df.partition_spec_id = partition_spec_id;
+                df.added_snapshot_id =
+                    Some(entry.snapshot_id.unwrap_or(manifest_file.added_snapshot_id));
                 if df.first_row_id.is_none() {
                     df.first_row_id = inherited_next_row_id;
                     if let Some(next_row_id) = &mut inherited_next_row_id {

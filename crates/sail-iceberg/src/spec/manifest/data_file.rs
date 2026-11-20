@@ -90,6 +90,9 @@ pub struct DataFile {
     pub content_offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_size_in_bytes: Option<i64>,
+    /// The ID of the snapshot that added the file, when loaded from a manifest for a scan.
+    #[serde(skip)]
+    pub added_snapshot_id: Option<i64>,
 }
 
 impl DataFile {

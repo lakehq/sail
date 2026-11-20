@@ -35,7 +35,7 @@ use sail_common_datafusion::schema_evolution::{
 };
 use url::Url;
 
-use crate::datasource::DATA_FILE_LAST_MODIFIED;
+use crate::datasource::data_file_last_modified;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::predicate::Predicate;
@@ -520,7 +520,7 @@ impl IcebergScan {
 
             let object_meta = ObjectMeta {
                 location: file_path,
-                last_modified: DATA_FILE_LAST_MODIFIED,
+                last_modified: data_file_last_modified(data_file.added_snapshot_id),
                 size: data_file.file_size_in_bytes(),
                 e_tag: None,
                 version: None,
@@ -1973,18 +1973,28 @@ mod tests {
     #[test]
     fn partitioned_files_describe_a_data_file_the_same_way_in_every_scan() -> Result<()> {
         // The Parquet metadata cache validates entries by size and last_modified, so two scans
-        // of the same data file must build identical object metadata for footers to be reused.
-        let (read_scan, file) = statistics_fixture()?;
+        // of the same data file must build identical object metadata for footers to be reused,
+        // while a new file that reuses the path in a later snapshot must not match.
+        let (read_scan, mut file) = statistics_fixture()?;
         let table_url = Url::parse(read_scan.table_uri())
             .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
         let store_ctx =
             StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)?;
+        file.added_snapshot_id = Some(1);
+        let mut reused = file.clone();
+        reused.added_snapshot_id = Some(2);
         let first = read_scan.create_partitioned_files(&store_ctx, vec![file.clone()])?;
         let second = read_scan.create_partitioned_files(&store_ctx, vec![file])?;
+        let reused = read_scan.create_partitioned_files(&store_ctx, vec![reused])?;
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
         assert_eq!(first[0].object_meta, second[0].object_meta);
         assert_eq!(first[0].object_meta.size, 100);
+        assert_eq!(reused[0].object_meta.size, 100);
+        assert_ne!(
+            first[0].object_meta.last_modified,
+            reused[0].object_meta.last_modified
+        );
         Ok(())
     }
 

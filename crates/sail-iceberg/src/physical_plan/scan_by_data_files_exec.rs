@@ -5,7 +5,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, BooleanArray, Int32Array, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    Array, BooleanArray, Int32Array, Int64Array, StringArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -42,7 +44,7 @@ use sail_common_datafusion::schema_evolution::{
 };
 use url::Url;
 
-use crate::datasource::DATA_FILE_LAST_MODIFIED;
+use crate::datasource::data_file_last_modified;
 use crate::datasource::imported_source::IcebergImportedFileSource;
 use crate::datasource::partition_defaults::{
     IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
@@ -54,8 +56,8 @@ use crate::physical_plan::file_tasks_exec::{
     COL_IDENTITY_PARTITION_DEFAULTS, COL_REWRITE_SCAN_CONTEXT, RewriteScanContext,
 };
 use crate::physical_plan::manifest_scan_exec::{
-    COL_FILE_FORMAT, COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_PARTITION_SPEC_ID,
-    COL_RECORD_COUNT,
+    COL_ADDED_SNAPSHOT_ID, COL_FILE_FORMAT, COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE,
+    COL_PARTITION_SPEC_ID, COL_RECORD_COUNT,
 };
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 use crate::spec::DataFileFormat;
@@ -67,6 +69,7 @@ struct ScanFile {
     records: u64,
     spec_id: i32,
     nan_free: bool,
+    added_snapshot_id: Option<i64>,
     defaults: IdentityPartitionDefaults,
     rewrite: Option<RewriteScanContext>,
 }
@@ -156,6 +159,10 @@ impl ScanByDataFilesState {
             .column_by_name(COL_NAN_FREE)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
             .ok_or_else(|| DataFusionError::Internal("Missing Iceberg NaN evidence".into()))?;
+        let added_snapshot_ids = batch
+            .column_by_name(COL_ADDED_SNAPSHOT_ID)
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| DataFusionError::Internal("Missing Iceberg added snapshot ID".into()))?;
         let defaults = batch
             .column_by_name(COL_IDENTITY_PARTITION_DEFAULTS)
             .map(|column| {
@@ -190,6 +197,8 @@ impl ScanByDataFilesState {
                     records: rows.value(i),
                     spec_id: spec_ids.value(i),
                     nan_free: nan_free.value(i),
+                    added_snapshot_id: (!added_snapshot_ids.is_null(i))
+                        .then(|| added_snapshot_ids.value(i)),
                     rewrite: rewrite_context
                         .filter(|column| !column.is_null(i))
                         .map(|column| serde_json::from_str(column.value(i)))
@@ -240,7 +249,7 @@ impl ScanByDataFilesState {
         let partitioned = PartitionedFile {
             object_meta: ObjectMeta {
                 location: store_ctx.resolve_to_absolute_path(&file.path)?,
-                last_modified: DATA_FILE_LAST_MODIFIED,
+                last_modified: data_file_last_modified(file.added_snapshot_id),
                 size: file.size,
                 e_tag: None,
                 version: None,
@@ -425,7 +434,7 @@ impl ScanByDataFilesState {
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
                     location: file_path,
-                    last_modified: DATA_FILE_LAST_MODIFIED,
+                    last_modified: data_file_last_modified(file.added_snapshot_id),
                     size: file.size,
                     e_tag: None,
                     version: None,

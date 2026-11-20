@@ -502,6 +502,7 @@ impl TryFrom<AddFileAction> for DataFile {
             referenced_data_file: a.referenced_data_file,
             content_offset: a.content_offset,
             content_size_in_bytes: a.content_size_in_bytes,
+            added_snapshot_id: None,
         })
     }
 }
@@ -749,6 +750,7 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+            added_snapshot_id: None,
         };
 
         let meta = CommitMeta {

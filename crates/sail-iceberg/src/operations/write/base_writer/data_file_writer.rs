@@ -75,6 +75,7 @@ impl DataFileWriter {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
+            added_snapshot_id: None,
         };
         Ok(WriteOutcome { data_file })
     }

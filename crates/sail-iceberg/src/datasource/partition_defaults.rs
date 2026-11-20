@@ -345,7 +345,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
 
     use super::*;
-    use crate::datasource::DATA_FILE_LAST_MODIFIED;
+    use crate::datasource::data_file_last_modified;
 
     fn parquet_file(column: &str) -> Result<Vec<u8>> {
         let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
@@ -396,7 +396,7 @@ mod tests {
                 .with_parquet_file_reader_factory(reader_factory);
             let file = PartitionedFile::new_from_meta(ObjectMeta {
                 location: path.clone(),
-                last_modified: DATA_FILE_LAST_MODIFIED,
+                last_modified: data_file_last_modified(Some(1)),
                 size,
                 e_tag: None,
                 version: None,
