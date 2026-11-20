@@ -297,9 +297,9 @@ async fn get_file_decryption_properties(
 /// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
 /// file metadata cache.
 ///
-/// This mirrors `ParquetFormat::infer_schema()` on DataFusion main with the default format
-/// options, except that it reads the footers through `file_metadata_cache` instead of the
-/// runtime's unscoped file metadata cache.
+/// This mirrors `ParquetFormat::infer_schema()` at the DataFusion commit credited above, with the
+/// default format options, except that it reads the footers through `file_metadata_cache` instead
+/// of the runtime's unscoped file metadata cache.
 async fn infer_parquet_checkpoint_schema(
     state: &dyn datafusion::catalog::Session,
     store: &Arc<dyn ObjectStore>,
@@ -533,8 +533,6 @@ pub async fn build_delta_log_datasource_scans_with_options(
         DataFusionError::External(Box::<dyn std::error::Error + Send + Sync>::from(e))
     })?;
 
-    // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
-    // This builder only materializes datasource scans from those resolved filenames.
     // The checkpoint footers are cached under keys scoped to the object store, both for schema
     // inference and for the scan, so that the two share cache entries. Workers rebuild the scan
     // with the same scoped cache.
@@ -545,6 +543,9 @@ pub async fn build_delta_log_datasource_scans_with_options(
             .get_file_metadata_cache(),
         &object_store_url,
     );
+
+    // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
+    // This builder only materializes datasource scans from those resolved filenames.
     let table_root = Path::from_url_path(log_store.config().location.path())?;
     let table_root_path = &table_root;
     let (checkpoint_metas, commit_metas, sidecar_metas) = tokio::try_join!(
