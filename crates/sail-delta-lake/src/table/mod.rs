@@ -40,7 +40,9 @@ pub use features::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
+use crate::delta_log::{
+    LogStoreRef, StorageConfig, default_logstore, get_actions, resolve_version_timestamp,
+};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
@@ -54,9 +56,9 @@ use crate::snapshot::{
     catalog_managed_commit_file_name,
 };
 use crate::spec::{
-    ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation,
-    DeltaResult, Protocol, SaveMode, StructType, TableFeature, contains_timestampntz_arrow,
-    contains_variant_arrow,
+    Action, ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError,
+    DeltaOperation, DeltaResult, Protocol, SaveMode, StructType, TableFeature,
+    contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 
@@ -433,18 +435,20 @@ fn next_catalog_commit_start_version(
     }
 }
 
-fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
-    matches!(
-        error,
-        DeltaTableError::InvalidTableLocation(message)
-            if message.contains("No commit files found in _delta_log")
-    )
-}
-
 pub(crate) fn catalog_managed_commit_context(
     lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Option<&LakehouseExecutionContext> {
     lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
+}
+
+/// Returns the catalog context when the catalog coordinates commits for this snapshot.
+/// A managed table without the `catalogManaged` feature commits to `_delta_log` instead.
+pub(crate) fn catalog_managed_snapshot_context<'a>(
+    lakehouse_table: Option<&'a LakehouseExecutionContext>,
+    snapshot: &DeltaSnapshot,
+) -> Option<&'a LakehouseExecutionContext> {
+    catalog_managed_commit_context(lakehouse_table)
+        .filter(|_| protocol_is_catalog_managed(snapshot.protocol()))
 }
 
 async fn load_catalog_managed_delta_bootstrap_info<C>(
@@ -720,85 +724,69 @@ pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
 where
     C: SessionExtensionAccessor + ?Sized,
 {
-    let catalog_table = lakehouse_table.catalog_table();
-    if load_catalog_managed_delta_bootstrap_info(ctx, catalog_table)
-        .await?
-        .is_some()
-    {
-        match log_store.get_latest_version(-1).await {
-            Ok(_) => {}
-            Err(DeltaError::MissingVersion) => {
-                bootstrap_catalog_managed_delta_table(
-                    ctx,
-                    catalog_table,
-                    table_url,
-                    log_store.clone(),
-                )
-                .await?;
-            }
-            Err(err) => return Err(DataFusionError::from(err)),
-        }
-        return Ok(Some(
-            load_catalog_managed_commits(
+    let is_catalog_managed = match log_store.get_latest_version(-1).await {
+        Ok(_) => delta_log_is_catalog_managed(&log_store).await?,
+        // Unity Catalog registers a managed table before any Delta commit exists,
+        // so the first access creates version 0 from the catalog metadata.
+        Err(DeltaError::MissingVersion) => {
+            if !bootstrap_catalog_managed_delta_table(
                 ctx,
-                lakehouse_table,
+                lakehouse_table.catalog_table(),
                 table_url,
                 log_store.clone(),
-                version_as_of,
             )
-            .await?,
-        ));
+            .await?
+            {
+                return Err(DataFusionError::from(
+                    DeltaTableError::invalid_table_location("No commit files found in _delta_log"),
+                ));
+            }
+            true
+        }
+        Err(err) => return Err(DataFusionError::from(err)),
+    };
+    // The Delta protocol decides whether the catalog coordinates commits. A managed table
+    // without the `catalogManaged` feature is read from and written to `_delta_log`.
+    if !is_catalog_managed {
+        return Ok(None);
     }
+    Ok(Some(
+        load_catalog_managed_commits(ctx, lakehouse_table, table_url, log_store, version_as_of)
+            .await?,
+    ))
+}
 
-    let mut detector = DeltaTable::new(
+/// Returns whether an existing Delta log uses catalog-managed commits.
+///
+/// Version 0 creates the table and is never ratified through the catalog, so its protocol can
+/// be trusted even when later published commits of a catalog-managed table must be ignored.
+/// The latest published version is only read for a table that did not start catalog-managed,
+/// or whose version 0 was removed by log cleanup.
+async fn delta_log_is_catalog_managed(log_store: &LogStoreRef) -> Result<bool> {
+    if let Some(bytes) = log_store.read_commit_entry(0).await? {
+        let initial_protocol =
+            get_actions(0, &bytes)?
+                .into_iter()
+                .find_map(|action| match action {
+                    Action::Protocol(protocol) => Some(protocol),
+                    _ => None,
+                });
+        if initial_protocol
+            .as_ref()
+            .is_some_and(protocol_is_catalog_managed)
+        {
+            return Ok(true);
+        }
+    }
+    let mut table = DeltaTable::new(
         log_store.clone(),
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         },
     );
-    match detector.load().await {
-        Ok(()) => {
-            if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
-                Ok(Some(
-                    load_catalog_managed_commits(
-                        ctx,
-                        lakehouse_table,
-                        table_url,
-                        log_store.clone(),
-                        version_as_of,
-                    )
-                    .await?,
-                ))
-            } else {
-                Ok(None)
-            }
-        }
-        Err(err) if is_missing_delta_log_error(&err) => {
-            if bootstrap_catalog_managed_delta_table(
-                ctx,
-                catalog_table,
-                table_url,
-                log_store.clone(),
-            )
-            .await?
-            {
-                Ok(Some(
-                    load_catalog_managed_commits(
-                        ctx,
-                        lakehouse_table,
-                        table_url,
-                        log_store.clone(),
-                        version_as_of,
-                    )
-                    .await?,
-                ))
-            } else {
-                Err(DataFusionError::from(err))
-            }
-        }
-        Err(err) => Err(DataFusionError::from(err)),
-    }
+    table.load().await?;
+    Ok(protocol_is_catalog_managed(table.snapshot()?.protocol()))
 }
 
 pub(crate) async fn load_delta_read_state(

@@ -651,6 +651,75 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then query error catalog commit replay context
 
+  Scenario: Managed Delta table without catalogManaged is read from and written to the Delta log
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_t exists with id and name columns without catalogManaged
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_t
+    Given variable location for table unity_table_test.managed_delta_filesystem_t
+    Given rows are appended one commit at a time to the Delta table path in location
+      | id | name |
+      | 1  | one  |
+      | 2  | two  |
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_filesystem_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | one  |
+      | 2  | two  |
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_filesystem_t VALUES (3, 'three')
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_filesystem_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | one   |
+      | 2  | two   |
+      | 3  | three |
+    When query template
+      """
+      SELECT id, name FROM delta.`{{ location.string }}` ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | one   |
+      | 2  | two   |
+      | 3  | three |
+    Then Delta commit for version 3 exists in location
+    Then no staged Delta commits exist in location
+
+  Scenario: Metadata ALTER on managed Delta table without catalogManaged commits to the Delta log
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_alter_t exists with id and name columns without catalogManaged
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_alter_t
+    Given variable location for table unity_table_test.managed_delta_filesystem_alter_t
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_filesystem_alter_t VALUES (1, 'one')
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_alter_t
+      SET TBLPROPERTIES ('my.tag' = 'filesystem')
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_alter_t
+      ADD COLUMNS (extra STRING)
+      """
+    When query
+      """
+      SELECT id, name, extra FROM unity_table_test.managed_delta_filesystem_alter_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name | extra |
+      | 1  | one  | NULL  |
+    Then Delta commit for version 3 exists in location
+    Then no staged Delta commits exist in location
+
   Scenario: Metadata ALTER commits through the catalog for managed Delta tables
     Given statement
       """

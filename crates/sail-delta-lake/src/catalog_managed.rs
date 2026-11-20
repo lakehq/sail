@@ -41,8 +41,9 @@ pub(crate) fn catalog_managed_delta_table(kind: TableKind) -> Option<CatalogMana
     if !is_managed {
         return None;
     }
-    // The Unity table id is the explicit marker that this table participates in
-    // Unity coordinated commits. Other managed Delta catalogs may not use UC rules.
+    // The Unity table id identifies the table to the Unity commits API. Other managed
+    // Delta catalogs may not use UC rules. Whether commits go through the catalog is
+    // decided by the `catalogManaged` feature in the table's Delta protocol.
     let table_id = unity_table_id_value(
         properties
             .iter()

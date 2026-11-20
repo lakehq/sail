@@ -91,7 +91,7 @@ def _location_to_path(location: str) -> Path:
     return Path(location)
 
 
-def _write_seed_delta_log(location: Path, table_id: str) -> None:
+def _write_seed_delta_log(location: Path, table_id: str, *, catalog_managed: bool = True) -> None:
     """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files."""
     timestamp = int(time.time() * 1000)
     schema = {
@@ -101,38 +101,41 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
             {"name": "name", "type": "string", "nullable": True, "metadata": {}},
         ],
     }
+    commit_info = {
+        "timestamp": timestamp,
+        "operation": "CREATE TABLE",
+        "operationParameters": {},
+        "isolationLevel": "Serializable",
+        "isBlindAppend": True,
+        "engineInfo": "sail-unity-catalog-test",
+        "txnId": str(uuid.uuid4()),
+    }
+    if catalog_managed:
+        commit_info["inCommitTimestamp"] = timestamp
+        protocol = {
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+            "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
+        }
+        configuration = {
+            "delta.feature.catalogManaged": "supported",
+            "delta.enableInCommitTimestamps": "true",
+            "io.unitycatalog.tableId": table_id,
+        }
+    else:
+        protocol = {"minReaderVersion": 1, "minWriterVersion": 2}
+        configuration = {}
     actions = [
-        {
-            "commitInfo": {
-                "timestamp": timestamp,
-                "operation": "CREATE TABLE",
-                "operationParameters": {},
-                "isolationLevel": "Serializable",
-                "isBlindAppend": True,
-                "engineInfo": "sail-unity-catalog-test",
-                "txnId": str(uuid.uuid4()),
-                "inCommitTimestamp": timestamp,
-            }
-        },
-        {
-            "protocol": {
-                "minReaderVersion": 3,
-                "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
-                "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
-            }
-        },
+        {"commitInfo": commit_info},
+        {"protocol": protocol},
         {
             "metaData": {
                 "id": str(uuid.uuid4()),
                 "format": {"provider": "parquet", "options": {}},
                 "schemaString": json.dumps(schema, separators=(",", ":")),
                 "partitionColumns": [],
-                "configuration": {
-                    "delta.feature.catalogManaged": "supported",
-                    "delta.enableInCommitTimestamps": "true",
-                    "io.unitycatalog.tableId": table_id,
-                },
+                "configuration": configuration,
                 "createdTime": timestamp,
             }
         },
@@ -148,7 +151,9 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
 
 def _unity_column(name: str, type_name: str, position: int) -> dict:
     type_text = type_name.lower()
-    type_json = "integer" if type_name == "INT" else type_text
+    data_type = "integer" if type_name == "INT" else type_text
+    # Unity Catalog 0.6 requires a Delta struct field, as Sail and Spark write it.
+    type_json = {"name": name, "type": data_type, "nullable": True, "metadata": {}}
     return {
         "name": name,
         "type_name": type_name,
@@ -163,6 +168,8 @@ def _create_unity_managed_delta_table(
     table_name: str,
     unity_rest_url: str,
     columns: list[dict],
+    *,
+    catalog_managed: bool = True,
 ) -> None:
     catalog_name, schema_name, name = _unity_table_parts(table_name)
     staging_response = requests.post(
@@ -178,7 +185,7 @@ def _create_unity_managed_delta_table(
     staging_table = staging_response.json()
     table_id = staging_table["id"]
     staging_location = staging_table["staging_location"]
-    _write_seed_delta_log(_location_to_path(staging_location), table_id)
+    _write_seed_delta_log(_location_to_path(staging_location), table_id, catalog_managed=catalog_managed)
 
     create_response = requests.post(
         f"{unity_rest_url}/tables",
@@ -190,6 +197,8 @@ def _create_unity_managed_delta_table(
             "data_source_format": "DELTA",
             "storage_location": staging_location,
             "columns": columns,
+            # Unity Catalog 0.6 rejects managed tables without this property.
+            "properties": {"io.unitycatalog.tableId": table_id},
         },
         timeout=10,
     )
@@ -205,6 +214,23 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
             _unity_column("id", "INT", 0),
             _unity_column("name", "STRING", 1),
         ],
+    )
+
+
+@given(
+    parsers.parse(
+        "Unity Catalog managed Delta table {table_name} exists with id and name columns without catalogManaged"
+    )
+)
+def unity_managed_delta_table_without_catalog_managed_exists(table_name: str, unity_rest_url: str) -> None:
+    _create_unity_managed_delta_table(
+        table_name,
+        unity_rest_url,
+        [
+            _unity_column("id", "INT", 0),
+            _unity_column("name", "STRING", 1),
+        ],
+        catalog_managed=False,
     )
 
 
@@ -239,6 +265,18 @@ def final_unity_managed_table_cleanup(
 def append_rows_with_merge_schema(table_name: str, spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, "one", "new")], "id INT, name STRING, extra STRING")
     df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table_name)
+
+
+@given(parsers.parse("rows are appended one commit at a time to the Delta table path in {location_var}"))
+def append_rows_to_delta_path(location_var: str, spark: SparkSession, variables: dict, datatable) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    header, *rows = datatable
+    for row in rows:
+        values = dict(zip(header, row, strict=True))
+        df = spark.createDataFrame([(int(values["id"]), values["name"])], "id INT, name STRING")
+        df.write.format("delta").mode("append").save(location.string)
 
 
 def _table_location(spark: SparkSession, table_name: str) -> str:
@@ -437,6 +475,16 @@ def staged_delta_commit_exists_without_published_backfill(version: int, location
     staged = _staged_delta_commit_files(location_path, version)
     assert not published.exists(), f"published Delta commit unexpectedly exists: {published}"
     assert staged, f"staged Delta commit for version {version} does not exist"
+
+
+@then(parsers.parse("no staged Delta commits exist in {location_var}"))
+def no_staged_delta_commits_exist(location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    staged_dir = Path(location.path) / "_delta_log" / "_staged_commits"
+    staged = sorted(staged_dir.glob("*.json"))
+    assert not staged, f"unexpected staged Delta commits: {staged}"
 
 
 @then(parsers.parse("published Delta commit for version {version:d} in {location_var} is a directory"))
