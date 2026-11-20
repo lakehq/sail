@@ -2034,6 +2034,24 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_files_describe_a_data_file_the_same_way_in_every_scan() -> Result<()> {
+        // The Parquet metadata cache validates entries by size and last_modified, so two scans
+        // of the same data file must build identical object metadata for footers to be reused.
+        let (read_scan, file) = statistics_fixture()?;
+        let table_url = Url::parse(read_scan.table_uri())
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let store_ctx =
+            StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)?;
+        let first = read_scan.create_partitioned_files(&store_ctx, vec![file.clone()])?;
+        let second = read_scan.create_partitioned_files(&store_ctx, vec![file])?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].object_meta, second[0].object_meta);
+        assert_eq!(first[0].object_meta.size, 100);
+        Ok(())
+    }
+
+    #[test]
     fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
         let (read_scan, mut file) = statistics_fixture()?;
         for nan_count in [None, Some(1), Some(0)] {
