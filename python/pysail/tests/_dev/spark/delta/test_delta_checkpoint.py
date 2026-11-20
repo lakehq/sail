@@ -1045,5 +1045,7 @@ def test_checkpoint_int96_stats_prune_far_dated_timestamps(spark, tmp_path: Path
     assert physical_types["add.stats_parsed.maxValues.ts"] == "INT96"
 
     df = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(table_path))
-    assert [row.id for row in df.where("ts >= TIMESTAMP'2021-01-01 00:00:00'").orderBy("id").collect()] == [3, 4, 5]
-    assert [row.id for row in df.where("ts < TIMESTAMP'1600-01-01 00:00:00'").collect()] == [1]
+    assert [
+        row.id for row in df.where("ts >= TIMESTAMP'2021-01-01 00:00:00'").select("id").orderBy("id").collect()
+    ] == [3, 4, 5]
+    assert [row.id for row in df.where("ts < TIMESTAMP'1600-01-01 00:00:00'").select("id").collect()] == [1]
