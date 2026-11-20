@@ -206,11 +206,13 @@ async fn infer_parquet_checkpoint_schema(
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
                 .with_coerce_int96(coerce_int96)
                 .with_coerce_int96_tz(coerce_int96_tz.clone())
-                // TODO: Uncomment after DataFusion 56
+                // TODO: Uncomment together with the `uniform_dict_schemas` branch below, which
+                //   must be ported first.
                 // .with_enable_rle_to_dictionary(
                 //     format.options().global.enable_rle_to_dictionary,
                 // )
                 ;
+            // Body of `fetch_schema_with_location()` (crate-private in DataFusion 55.2 and 56).
             let result = (object.location.clone(), meta.fetch_schema().await?);
             Ok::<_, DataFusionError>(result)
         })
