@@ -5,7 +5,9 @@ use std::sync::Arc;
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
+use sail_catalog::lakehouse::LakehouseResolvedTable;
 use sail_common::spec;
+use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -24,6 +26,14 @@ pub(super) struct TableSourceKey {
     pub properties: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
+}
+
+/// Identifies a catalog table lookup by the table reference as written and the
+/// format required by the read, if any.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct CatalogTableLookupKey {
+    pub reference: Vec<String>,
+    pub required_format: Option<String>,
 }
 
 struct SharedTableSource(Arc<dyn TableSource>);
@@ -152,7 +162,13 @@ pub(super) struct PlanResolverState {
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    /// The successful catalog table lookups so far, shared by repeated references to
+    /// the same table within the query.
+    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
 }
+
+/// A catalog table or view, with the lakehouse resolution of a catalog table.
+pub(super) type CatalogTableLookup = (TableStatus, Option<LakehouseResolvedTable>);
 
 impl Default for PlanResolverState {
     fn default() -> Self {
@@ -185,6 +201,7 @@ impl PlanResolverState {
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
+            catalog_table_lookups: HashMap::new(),
         }
     }
 
@@ -495,6 +512,21 @@ impl PlanResolverState {
 
     pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
         self.table_sources.insert(key, SharedTableSource(source));
+    }
+
+    pub fn get_catalog_table_lookup(
+        &self,
+        key: &CatalogTableLookupKey,
+    ) -> Option<CatalogTableLookup> {
+        self.catalog_table_lookups.get(key).cloned()
+    }
+
+    pub fn insert_catalog_table_lookup(
+        &mut self,
+        key: CatalogTableLookupKey,
+        lookup: CatalogTableLookup,
+    ) {
+        self.catalog_table_lookups.insert(key, lookup);
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.
