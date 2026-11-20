@@ -13,6 +13,7 @@ use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
@@ -21,6 +22,7 @@ use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
@@ -38,7 +40,7 @@ use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
-use crate::listing::table::ListingTableSource;
+use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
     can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
 };
@@ -98,111 +100,160 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let filters = unnormalize_cols(scan.filters.clone());
         let limit = scan.fetch;
 
-        let partition_column_names = source
-            .config()
-            .schema
-            .table_partition_cols()
-            .iter()
-            .map(|col| col.name().as_str())
-            .collect::<Vec<_>>();
-
-        let (partition_filters, filters): (Vec<_>, Vec<_>) =
-            filters.iter().cloned().partition(|filter| {
-                can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
-            });
-
-        let statistic_file_limit = if filters.is_empty() { limit } else { None };
-
-        let ListFilesResult {
-            mut file_groups,
-            statistics,
-            grouped_by_partition: partitioned_by_file_group,
-        } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
-
-        let table_schema = source.config().schema.table_schema();
-        if file_groups.is_empty() {
-            let projected_schema = project_schema(table_schema, projection.as_ref())?;
-            return Ok(Some(Arc::new(EmptyExec::new(projected_schema))));
+        // A scan reads from a single object store, so paths in different object stores
+        // (e.g. different S3 buckets) are planned as separate scans combined with a union.
+        let path_groups = group_table_paths_by_object_store(&source.config().table_paths);
+        if path_groups.len() > 1 {
+            let plans = future::try_join_all(path_groups.into_iter().map(|table_paths| {
+                let source = ListingTableSource::try_new(ListingTableSourceConfig {
+                    table_paths,
+                    ..source.config().clone()
+                });
+                let projection = projection.clone();
+                let filters = filters.as_slice();
+                async move {
+                    plan_listing_scan(&source?, session, projection, filters, limit, false).await
+                }
+            }))
+            .await?;
+            return Ok(Some(UnionExec::try_new(plans)?));
         }
 
-        let output_ordering =
-            try_create_output_ordering(source, session.execution_props(), &file_groups)?;
-
-        match session
-            .config_options()
-            .execution
-            .split_file_groups_by_statistics
-            .then(|| {
-                output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
-                        table_schema,
-                        &file_groups,
-                        output_ordering,
-                        source.config().target_partitions,
-                    )
-                })
-            })
-            .flatten()
-        {
-            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
-            Some(Ok(new_groups)) => {
-                if new_groups.len() <= source.config().target_partitions {
-                    file_groups = new_groups;
-                } else {
-                    log::debug!(
-                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
-                    )
-                }
-            }
-            None => {} // no ordering required
-        };
-
-        // If user specified ordering, that's already handled in `try_create_output_ordering`.
-        // When no ordering is specified and we derived ordering from files, keep it.
-        let Some(object_store_url) = source
-            .config()
-            .table_paths
-            .first()
-            .map(datafusion_datasource::ListingTableUrl::object_store)
-        else {
-            return Ok(Some(Arc::new(EmptyExec::new(Arc::new(
-                datafusion::arrow::datatypes::Schema::empty(),
-            )))));
-        };
-
-        let output_partitioning = if partitioned_by_file_group {
-            output_partitioning_from_partition_fields(
-                table_schema,
-                source.config().schema.table_partition_cols(),
-                file_groups.len(),
-            )
-        } else {
-            None
-        };
-
-        let config = source
-            .config()
-            .read_format
-            .scan(
-                session,
-                ListingScanInput {
-                    object_store_url,
-                    file_groups,
-                    constraints: source.config().constraints.clone(),
-                    projection,
-                    limit,
-                    preserve_order: false,
-                    output_ordering,
-                    statistics,
-                    output_partitioning,
-                    schema: source.config().schema.clone(),
-                    compression: source.config().compression,
-                },
-            )
-            .await?;
-
-        Ok(Some(DataSourceExec::from_data_source(config)))
+        plan_listing_scan(source, session, projection, &filters, limit, true)
+            .await
+            .map(Some)
     }
+}
+
+/// Groups table paths by object store, keeping the order in which the object stores first appear.
+fn group_table_paths_by_object_store(table_paths: &[ListingTableUrl]) -> Vec<Vec<ListingTableUrl>> {
+    let mut groups: Vec<(ObjectStoreUrl, Vec<ListingTableUrl>)> = vec![];
+    for table_path in table_paths {
+        let url = table_path.object_store();
+        match groups.iter_mut().find(|(u, _)| *u == url) {
+            Some((_, paths)) => paths.push(table_path.clone()),
+            None => groups.push((url, vec![table_path.clone()])),
+        }
+    }
+    groups.into_iter().map(|(_, paths)| paths).collect()
+}
+
+/// Plans a scan of listing table paths that are all in the same object store.
+///
+/// The output partitioning by partition values is declared only if `declare_output_partitioning`
+/// is true, since it does not hold across scans of different object stores combined with a union.
+async fn plan_listing_scan(
+    source: &ListingTableSource,
+    session: &dyn Session,
+    projection: Option<Vec<usize>>,
+    filters: &[Expr],
+    limit: Option<usize>,
+    declare_output_partitioning: bool,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    let partition_column_names = source
+        .config()
+        .schema
+        .table_partition_cols()
+        .iter()
+        .map(|col| col.name().as_str())
+        .collect::<Vec<_>>();
+
+    let (partition_filters, filters): (Vec<_>, Vec<_>) =
+        filters.iter().cloned().partition(|filter| {
+            can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
+        });
+
+    let statistic_file_limit = if filters.is_empty() { limit } else { None };
+
+    let ListFilesResult {
+        mut file_groups,
+        statistics,
+        grouped_by_partition: partitioned_by_file_group,
+    } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
+
+    let table_schema = source.config().schema.table_schema();
+    if file_groups.is_empty() {
+        let projected_schema = project_schema(table_schema, projection.as_ref())?;
+        return Ok(Arc::new(EmptyExec::new(projected_schema)));
+    }
+
+    let output_ordering =
+        try_create_output_ordering(source, session.execution_props(), &file_groups)?;
+
+    match session
+        .config_options()
+        .execution
+        .split_file_groups_by_statistics
+        .then(|| {
+            output_ordering.first().map(|output_ordering| {
+                FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                    table_schema,
+                    &file_groups,
+                    output_ordering,
+                    source.config().target_partitions,
+                )
+            })
+        })
+        .flatten()
+    {
+        Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
+        Some(Ok(new_groups)) => {
+            if new_groups.len() <= source.config().target_partitions {
+                file_groups = new_groups;
+            } else {
+                log::debug!(
+                    "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
+                )
+            }
+        }
+        None => {} // no ordering required
+    };
+
+    // If user specified ordering, that's already handled in `try_create_output_ordering`.
+    // When no ordering is specified and we derived ordering from files, keep it.
+    let Some(object_store_url) = source
+        .config()
+        .table_paths
+        .first()
+        .map(datafusion_datasource::ListingTableUrl::object_store)
+    else {
+        return Ok(Arc::new(EmptyExec::new(Arc::new(
+            datafusion::arrow::datatypes::Schema::empty(),
+        ))));
+    };
+
+    let output_partitioning = if partitioned_by_file_group && declare_output_partitioning {
+        output_partitioning_from_partition_fields(
+            table_schema,
+            source.config().schema.table_partition_cols(),
+            file_groups.len(),
+        )
+    } else {
+        None
+    };
+
+    let config = source
+        .config()
+        .read_format
+        .scan(
+            session,
+            ListingScanInput {
+                object_store_url,
+                file_groups,
+                constraints: source.config().constraints.clone(),
+                projection,
+                limit,
+                preserve_order: false,
+                output_ordering,
+                statistics,
+                output_partitioning,
+                schema: source.config().schema.clone(),
+                compression: source.config().compression,
+            },
+        )
+        .await?;
+
+    Ok(DataSourceExec::from_data_source(config))
 }
 
 async fn plan_file_write(
@@ -566,4 +617,35 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_table_paths_by_object_store() -> datafusion_common::Result<()> {
+        let paths = [
+            "s3://bucket-a/x/",
+            "s3://bucket-b/y/",
+            "s3://bucket-a/z/",
+            "file:///data/w/",
+        ]
+        .into_iter()
+        .map(ListingTableUrl::parse)
+        .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let groups = group_table_paths_by_object_store(&paths)
+            .into_iter()
+            .map(|group| group.iter().map(|p| p.to_string()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            vec![
+                vec!["s3://bucket-a/x/", "s3://bucket-a/z/"],
+                vec!["s3://bucket-b/y/"],
+                vec!["file:///data/w/"],
+            ]
+        );
+        Ok(())
+    }
 }
