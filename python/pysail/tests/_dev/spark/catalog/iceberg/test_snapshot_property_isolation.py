@@ -79,10 +79,10 @@ def test_rest_annotations_survive_workers_without_catalog_leakage(spark, recordi
         summary = _check_metadata(_load(endpoint, "lifecycle"), None, history)
         assert summary["total-records"] == "2"
         assert [row.id for row in spark.table(table).orderBy("id").collect()] == [3, 4]
-        mutations = [r for r in records if r[0] == "POST" and "/tables" in r[1]]
+        mutations = [r for r in records if r.method == "POST" and "/tables" in r.path]
         assert mutations
-        assert any(r[2].get("name") == "lifecycle" for r in mutations)
-        assert any(u.get("action") == "add-snapshot" for r in mutations for u in r[2].get("updates", []))
+        assert any(r.body.get("name") == "lifecycle" for r in mutations)
+        assert any(u.get("action") == "add-snapshot" for r in mutations for u in r.body.get("updates", []))
         for record in mutations:
             assert not any("snapshot-property." in k for k in record.body.get("properties", {}))
             for update in record.body.get("updates", []):
