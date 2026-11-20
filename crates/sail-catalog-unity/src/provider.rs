@@ -3695,8 +3695,8 @@ mod tests {
             assert_eq!(
                 received_targets(&server).await,
                 vec![
-                    "GET /tables/main.default.events",
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
                     "POST /delta/preview/commits",
                 ],
@@ -5816,7 +5816,8 @@ mod tests {
                 "unexpected error: {error:?}"
             );
 
-            // No Delta API request is made for the object.
+            // No Delta API request is made for the object, other than the configuration
+            // of the catalog.
             let mut targets = received_targets(&server).await;
             targets.dedup();
             assert_eq!(
@@ -5824,6 +5825,8 @@ mod tests {
                 vec![
                     "GET /tables/main.default.events",
                     "GET /tables?catalog_name=main&schema_name=default",
+                    "GET /tables/main.default.events",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
                     "GET /tables/main.default.events",
                 ],
                 "table type {table_type}"
@@ -5908,11 +5911,11 @@ mod tests {
             assert_eq!(
                 received_targets(&server).await,
                 vec![
-                    "GET /tables/main.default.events",
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
                     table.as_str(),
-                    "GET /tables/main.default.events",
+                    // The Delta REST API is used from then on, with the ID of the resolved table.
                     table.as_str(),
                 ],
                 "status {status}"
@@ -5968,8 +5971,8 @@ mod tests {
             assert_eq!(
                 received_targets(&server).await,
                 vec![
-                    "GET /tables/main.default.events",
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
                     table.as_str(),
                     "GET /tables/main.default.events",
@@ -6006,8 +6009,8 @@ mod tests {
             assert_eq!(
                 received_targets(&server).await,
                 vec![
-                    "GET /tables/main.default.events",
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
                 ],
                 "status {status}"
