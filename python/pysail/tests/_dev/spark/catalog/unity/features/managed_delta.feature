@@ -329,7 +329,7 @@ Feature: Unity Catalog managed Delta table operations
       INSERT INTO unity_table_test.managed_delta_unpublished_latest_t VALUES
         (2, 'two')
       """
-    Then staged Delta commit for version 1 exists in location
+    Then staged Delta commit for version 1 is published in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_unpublished_latest_t version 2 references staged Delta commit in location
 
   Scenario: DELETE on managed Delta table uses Unity latest version when prior commit is unpublished
@@ -357,7 +357,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | name  |
       | 1  | one   |
       | 3  | three |
-    Then staged Delta commit for version 1 exists in location
+    Then staged Delta commit for version 1 is published in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_unpublished_latest_t version 2 references staged Delta commit in location
 
   Scenario: Managed Delta named-table reads use Unity ratified commit when published commit is corrupted
@@ -938,8 +938,7 @@ Feature: Unity Catalog managed Delta table operations
       | 4 | four merged |
       | 5 | five |
     # The table has more commits after the following statements than the default checkpoint
-    # interval of 10 commits. Sail does not write checkpoints for catalog-managed tables, so
-    # the reads replay every commit (test_managed_delta_catalog_state.py asserts that).
+    # interval of 10 commits.
     Given statement
       """
       INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (10, 'row 10')

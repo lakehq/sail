@@ -581,6 +581,20 @@ def staged_delta_commit_exists(version: int, location_var: str, variables: dict)
     assert staged, f"staged Delta commit for version {version} does not exist in {staged_dir}"
 
 
+@then(parsers.parse("staged Delta commit for version {version:d} is published in {location_var}"))
+def staged_delta_commit_is_published(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    location_path = Path(location.path)
+    published = _delta_commit_actions(location_path, version)
+    staged = []
+    for staged_file in _staged_delta_commit_files(location_path, version):
+        with staged_file.open(encoding="utf-8") as f:
+            staged.append([json.loads(line) for line in f if line.strip()])
+    assert published in staged, f"published Delta commit for version {version} is not a staged commit"
+
+
 @then(parsers.parse("staged Delta commit for version {version:d} exists in {location_var} without published backfill"))
 def staged_delta_commit_exists_without_published_backfill(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)

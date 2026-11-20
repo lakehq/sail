@@ -832,12 +832,19 @@ where
     // that a table that is not catalog-managed can be read without the catalog commits. A
     // catalog-managed table still needs them, and the failure to load them is the error then.
     // A write fails, since the table may be catalog-managed.
+    // A catalog that registers a table only after version 0 is published serves the table
+    // with the Delta REST API, whose answer states whether the table is catalog-managed.
+    let mut catalog_states_not_catalog_managed = false;
     let discovered = if bootstrap_info.is_some() && !catalog_managed_property {
         match DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
             .discover_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
             .await
         {
-            Ok(response) => response.catalog_managed.then_some(response),
+            Ok(response) => {
+                catalog_states_not_catalog_managed =
+                    response.requires_published_log && !response.catalog_managed;
+                response.catalog_managed.then_some(response)
+            }
             Err(error) if intent == SnapshotIntent::Write => return Err(error),
             Err(error) => {
                 warn_discovery_failure(table_url, &error);
@@ -867,8 +874,15 @@ where
     }
 
     // The latest snapshot that the caller asks for is loaded at once, and is used when the
-    // table is not catalog-managed.
-    let latest_config = config.filter(|_| version_as_of.is_none());
+    // table is not catalog-managed. The files of the table are loaded only when the table is
+    // expected not to be catalog-managed, since the catalog commits of a catalog-managed table
+    // are loaded afterwards.
+    let latest_config = config.filter(|config| {
+        version_as_of.is_none()
+            && (!config.require_files
+                || bootstrap_info.is_none()
+                || catalog_states_not_catalog_managed)
+    });
     let mut detector = DeltaTable::new(
         log_store.clone(),
         match latest_config {
@@ -920,9 +934,10 @@ where
         // Under the catalog-managed protocol the catalog is authoritative for table versions,
         // and published commits may be unreadable or superseded by ratified ones. Unity tables
         // created by Sail do not carry the catalog property, so a Unity managed table whose
-        // published log cannot be loaded uses the catalog commits. When the catalog has no
-        // commits for the table either, the error of the published log is the one reported.
-        Err(err) if bootstrap_info.is_some() => {
+        // published log cannot be loaded uses the catalog commits, unless the catalog states
+        // that the table is not catalog-managed. When the catalog has no commits for the table
+        // either, the error of the published log is the one reported.
+        Err(err) if bootstrap_info.is_some() && !catalog_states_not_catalog_managed => {
             warn!(
                 "Failed to load the published Delta log of {table_url}, reading catalog commits: {err}"
             );
@@ -1724,8 +1739,14 @@ mod catalog_managed_tests {
                 if let Some(error) = self.discover_error {
                     return Err(error());
                 }
+                // A catalog that serves the table with the Delta REST API states whether the
+                // table is catalog-managed.
                 return match &self.ratified {
-                    Some(ratified) if ratified.catalog_managed => Ok(ratified.clone()),
+                    Some(ratified)
+                        if ratified.catalog_managed || ratified.requires_published_log =>
+                    {
+                        Ok(ratified.clone())
+                    }
                     _ => Ok(DeltaRatifiedCommitResponse::default()),
                 };
             }
@@ -2169,13 +2190,15 @@ mod catalog_managed_tests {
         let version_0 = Path::from("items/_delta_log/00000000000000000000.json");
         let bytes = source.get(&version_0).await.unwrap().bytes().await.unwrap();
         store.put(&version_0, bytes.into()).await.unwrap();
-        let (_, _, result) = read_unity_managed_table_with_requests(
-            store.clone(),
-            false,
-            Some(ratified(0, &[])),
-            None,
-        )
-        .await;
+        // The catalog serves the table with the Delta REST API, and states that the table is
+        // not catalog-managed.
+        let ratified = DeltaRatifiedCommitResponse {
+            requires_published_log: true,
+            ..ratified(0, &[])
+        };
+        let (_, _, result) =
+            read_unity_managed_table_with_requests(store.clone(), false, Some(ratified), None)
+                .await;
         assert_eq!(result.unwrap(), 0);
         let reads = store
             .gets()
@@ -2183,6 +2206,24 @@ mod catalog_managed_tests {
             .filter(|path| *path == version_0)
             .count();
         assert_eq!(reads, 1);
+    }
+
+    #[tokio::test]
+    async fn table_that_the_catalog_states_is_not_catalog_managed_does_not_read_catalog_commits() {
+        // The published log of a table that is not catalog-managed cannot be loaded, and its
+        // error is not replaced with the catalog commits.
+        let (commit_requests, result) = read_unity_managed_table_with_log(
+            NON_CATALOG_MANAGED_PROTOCOL,
+            vec![(published_commit(1), CORRUPTED_COMMIT)],
+            false,
+            Some(DeltaRatifiedCommitResponse {
+                requires_published_log: true,
+                ..ratified(1, &[])
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(commit_requests, 0);
     }
 
     #[tokio::test]
@@ -2605,6 +2646,30 @@ mod catalog_managed_tests {
             files.contains(&"items/_delta_log/00000000000000000000.json".to_string()),
             "{files:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn read_of_table_without_log_uses_version_0_of_a_concurrent_bootstrap() {
+        use crate::test_store::ObservedStore;
+
+        // Another reader or the creator of the table writes version 0 after the catalog is
+        // asked for the commits and before version 0 is written here.
+        let version_0 = Path::from("items/_delta_log/00000000000000000000.json");
+        let other = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        let bytes = other.get(&version_0).await.unwrap().bytes().await.unwrap();
+        let store = Arc::new(ObservedStore::default());
+        store.write_first(version_0.clone(), bytes.clone());
+        let ratified = DeltaRatifiedCommitResponse {
+            requires_published_log: false,
+            ..ratified(0, &[])
+        };
+        let (_, result) =
+            read_unity_managed_table_in_store(store.clone(), true, Some(ratified)).await;
+        assert_eq!(result.unwrap(), 0);
+        let written = store.get(&version_0).await.unwrap().bytes().await.unwrap();
+        assert_eq!(written, bytes);
+        let version_1 = Path::from("items/_delta_log/00000000000000000001.json");
+        assert!(store.head(&version_1).await.is_err());
     }
 
     #[tokio::test]

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! An in-memory object store for tests that records the listings and reads, fails lookups of
-//! chosen paths, and can list keys out of order.
+//! chosen paths, can list keys out of order, and can let another writer write a path first.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::memory::InMemory;
@@ -25,6 +26,7 @@ pub(crate) struct ObservedStore {
     gets: Mutex<Vec<Path>>,
     failing_lookups: Mutex<HashSet<Path>>,
     reverse_listings: AtomicBool,
+    racing_writes: Mutex<HashMap<Path, Bytes>>,
 }
 
 impl ObservedStore {
@@ -50,6 +52,12 @@ impl ObservedStore {
     #[expect(clippy::unwrap_used)]
     pub(crate) fn fail_lookups(&self, path: Path) {
         self.failing_lookups.lock().unwrap().insert(path);
+    }
+
+    /// Makes the first write of the path find the bytes that another writer wrote just before.
+    #[expect(clippy::unwrap_used)]
+    pub(crate) fn write_first(&self, path: Path, bytes: Bytes) {
+        self.racing_writes.lock().unwrap().insert(path, bytes);
     }
 
     #[expect(clippy::unwrap_used)]
@@ -83,12 +91,19 @@ impl fmt::Display for ObservedStore {
 
 #[async_trait]
 impl ObjectStore for ObservedStore {
+    #[expect(clippy::unwrap_used)]
     async fn put_opts(
         &self,
         location: &Path,
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let racing = self.racing_writes.lock().unwrap().remove(location);
+        if let Some(bytes) = racing {
+            self.inner
+                .put_opts(location, bytes.into(), PutOptions::default())
+                .await?;
+        }
         self.inner.put_opts(location, payload, opts).await
     }
 

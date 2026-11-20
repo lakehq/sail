@@ -1490,10 +1490,13 @@ impl std::future::IntoFuture for PreparedCommit {
                 let version: i64 = latest_version.map(|v| v + 1).unwrap_or(0);
                 // The commits of a table with the catalog-managed protocol are ratified by the
                 // catalog, and only version 0 of such a table is written to the file system.
+                // A later version written to the file system cannot add the protocol either,
+                // since only the catalog can manage the table.
                 if version > 0
-                    && read_snapshot
+                    && (read_snapshot
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.protocol().is_catalog_managed())
+                        || CommitData::actions_enable_catalog_managed(&local_actions))
                 {
                     return Err(DeltaError::generic(format!(
                         "version {version} of a catalog-managed Delta table must be committed to the catalog"
@@ -3807,6 +3810,51 @@ mod tests {
         // A concurrent creation of the same table finds version 0, and is not written as
         // version 1 of the table.
         let error = create().await.err().unwrap();
+        assert!(
+            error.to_string().contains("committed to the catalog"),
+            "{error}"
+        );
+        assert!(store.head(&commit_path(1)).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_file_system_commit_does_not_add_the_catalog_managed_protocol() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store.clone());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol.clone()),
+                    metadata: Box::new(metadata.clone()),
+                },
+            )
+            .await?;
+        let catalog_managed = crate::catalog_managed::protocol_with_catalog_managed(&protocol);
+        let error = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Protocol(catalog_managed)])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .err()
+            .unwrap();
         assert!(
             error.to_string().contains("committed to the catalog"),
             "{error}"
