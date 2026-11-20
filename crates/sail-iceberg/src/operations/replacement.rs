@@ -263,16 +263,6 @@ pub(crate) fn prepare_replacement(
         .iter()
         .any(|old| old.spec_id() == spec.spec_id())
     {
-        // REST assigns spec IDs at commit. A concurrent add-spec can consume the
-        // predicted ID without changing the default spec or last partition field ID.
-        if matches!(
-            catalog.authority,
-            ReplacementAuthority::IcebergRestExisting { .. }
-        ) {
-            return plan_err!(
-                "Iceberg REST replacement requires a registered partition spec; evolve the table partition spec before replacing its data"
-            );
-        }
         metadata.partition_specs.push(spec);
     }
     let fields = catalog
@@ -511,14 +501,9 @@ pub(crate) async fn commit_replacement(
 // [CREDIT]: https://github.com/apache/iceberg/blob/2234c549de60/core/src/main/java/org/apache/iceberg/UpdateRequirements.java#L40-L205
 fn rest_replacement_changes(
     replacement: &IcebergTableReplacement,
+    base: &TableMetadata,
 ) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
     let authority = &replacement.catalog.authority;
-    let base: TableMetadata = serde_json::from_str(
-        authority
-            .rest_metadata()
-            .ok_or_else(|| DataFusionError::Plan("Missing REST replacement authority".into()))?,
-    )
-    .map_err(|error| DataFusionError::External(Box::new(error)))?;
     let create = matches!(
         authority,
         ReplacementAuthority::IcebergRestStagedCreate { .. }
@@ -655,15 +640,144 @@ fn rest_replacement_changes(
     Ok((requirements, updates))
 }
 
+/// Register a previously unseen layout without switching the live table definition.
+/// REST assigns IDs on the server. Only after registration can manifests safely
+/// reference the layout, even if a competing writer registered a non-default spec.
+async fn register_replacement_spec(
+    context: &TaskContext,
+    replacement: &mut IcebergTableReplacement,
+    base: &mut TableMetadata,
+) -> Result<()> {
+    use crate::catalog_support::commit::{CatalogCommitOutcome, IcebergCatalogCommitCoordinator};
+    let ReplacementAuthority::IcebergRestExisting { execution, .. } =
+        &replacement.catalog.authority
+    else {
+        return Ok(());
+    };
+    let desired = &replacement.metadata;
+    let spec = desired
+        .default_partition_spec()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
+    if base
+        .partition_specs
+        .iter()
+        .any(|old| old.spec_id() == spec.spec_id())
+    {
+        return Ok(());
+    }
+    let schema = desired
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement schema".into()))?;
+    let (mut requirements, _) = rest_replacement_changes(replacement, base)?;
+    requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+        last_assigned_partition_id: base.last_partition_id,
+    });
+    let mut updates = Vec::new();
+    if schema.schema_id() != base.current_schema_id {
+        let existing = base.schemas.iter().any(|old| old == schema);
+        if !existing {
+            updates.push(TableUpdate::AddSchema {
+                schema: Box::new(schema.clone()),
+            });
+        }
+        updates.push(TableUpdate::SetCurrentSchema {
+            schema_id: if existing { schema.schema_id() } else { -1 },
+        });
+    }
+    updates.push(TableUpdate::AddSpec { spec: spec.into() });
+    if schema.schema_id() != base.current_schema_id {
+        updates.push(TableUpdate::SetCurrentSchema {
+            schema_id: base.current_schema_id,
+        });
+    }
+    let coordinator =
+        IcebergCatalogCommitCoordinator::new(context, &replacement.catalog.catalog_table);
+    let CatalogCommitOutcome::Committed(response) =
+        coordinator.commit(execution, requirements, updates).await?
+    else {
+        return Err(requires_replanning(
+            "Iceberg replacement layout registration conflicted; replan the operation",
+        ));
+    };
+    let registered: TableMetadata = response
+        .payload()
+        .and_then(|p| p.get("metadata"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| {
+            requires_replanning("Missing registered Iceberg metadata; replan the operation")
+        })?;
+    if registered.table_uuid != base.table_uuid
+        || registered.current_schema_id != base.current_schema_id
+        || registered.default_spec_id != base.default_spec_id
+    {
+        return Err(requires_replanning(
+            "Iceberg layout registration changed the base definition; replan the operation",
+        ));
+    }
+    let schema_id = registered
+        .schemas
+        .iter()
+        .find(|old| {
+            old.fields() == schema.fields()
+                && old.identifier_field_ids().eq(schema.identifier_field_ids())
+        })
+        .ok_or_else(|| {
+            requires_replanning(
+                "Registered Iceberg schema differs from the writer schema; replan the operation",
+            )
+        })?
+        .schema_id();
+    let spec_id = registered.partition_specs.iter().find(|old| old.fields() == spec.fields())
+        .ok_or_else(|| requires_replanning("Registered Iceberg partition fields differ from writer fields; replan the operation"))?.spec_id();
+    // Keep the original ref and default-spec assertions for the publishing commit.
+    base.schemas = registered.schemas;
+    base.partition_specs = registered.partition_specs;
+    base.last_column_id = registered.last_column_id;
+    base.last_partition_id = registered.last_partition_id;
+    replacement.metadata.schemas.clone_from(&base.schemas);
+    replacement
+        .metadata
+        .partition_specs
+        .clone_from(&base.partition_specs);
+    replacement.metadata.current_schema_id = schema_id;
+    replacement.metadata.default_spec_id = spec_id;
+    Ok(())
+}
+
 async fn commit_rest_replacement(
     context: &Arc<TaskContext>,
     table_url: &Url,
     store: &StoreContext,
-    replacement: IcebergTableReplacement,
+    mut replacement: IcebergTableReplacement,
     commit: &IcebergCommitInfo,
 ) -> Result<()> {
     use crate::catalog_support::commit::{CatalogCommitOutcome, IcebergCatalogCommitCoordinator};
-    let (requirements, mut updates) = rest_replacement_changes(&replacement)?;
+    let mut base: TableMetadata = serde_json::from_str(
+        replacement
+            .catalog
+            .authority
+            .rest_metadata()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST replacement authority".into()))?,
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let planned_spec_id = replacement.metadata.default_spec_id;
+    register_replacement_spec(context, &mut replacement, &mut base).await?;
+    let mut rebound_commit;
+    let commit = if replacement.metadata.default_spec_id != planned_spec_id {
+        rebound_commit = commit.clone();
+        for file in rebound_commit
+            .data_files
+            .iter_mut()
+            .chain(&mut rebound_commit.delete_files)
+        {
+            file.partition_spec_id = replacement.metadata.default_spec_id;
+        }
+        &rebound_commit
+    } else {
+        commit
+    };
+    let (requirements, mut updates) = rest_replacement_changes(&replacement, &base)?;
     let mut snapshot =
         prepare_bootstrap_snapshot(table_url, store, commit, &replacement.metadata).await?;
     updates.extend(snapshot.action_commit().updates().iter().cloned());
@@ -917,7 +1031,7 @@ mod tests {
             Some(&base),
             &input,
         )?;
-        let (requirements, updates) = rest_replacement_changes(&replacement)?;
+        let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
         assert_eq!(
             requirements,
             vec![
@@ -991,7 +1105,7 @@ mod tests {
                 ascending: true,
             }];
             let replacement = prepare_replacement(&url, request, None, Some(&base), &input)?;
-            let (requirements, updates) = rest_replacement_changes(&replacement)?;
+            let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
             let order = replacement
                 .metadata
                 .sort_orders
@@ -1047,7 +1161,7 @@ mod tests {
         );
         assert_eq!(replacement.metadata.schemas, base.schemas);
         assert_eq!(replacement.metadata.partition_specs, base.partition_specs);
-        let (requirements, updates) = rest_replacement_changes(&replacement)?;
+        let (requirements, updates) = rest_replacement_changes(&replacement, &base)?;
         assert_eq!(requirements, vec![TableRequirement::NotExist]);
         assert!(updates.contains(&TableUpdate::AssignUuid {
             uuid: base.table_uuid.ok_or("missing UUID")?

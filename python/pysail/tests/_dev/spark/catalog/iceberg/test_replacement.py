@@ -75,16 +75,17 @@ def test_rest_replacement_rejects_non_parquet_properties(
             assert not _s3_object_keys(seaweedfs_host_endpoint, location)
 
 
+@pytest.mark.parametrize("registered", [True, False])
 @pytest.mark.parametrize("set_default", [True, False])
 def test_rest_replacement_uses_registered_partition_spec_during_concurrent_update(
-    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, gated_remote, commit_gate_proxy, set_default
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, gated_remote, commit_gate_proxy, set_default, registered
 ):
     import requests
     from pyiceberg.io.pyarrow import PyArrowFileIO
     from pyiceberg.manifest import read_manifest_list
 
     _, gate = commit_gate_proxy
-    table = f"replacement_layout_partition_spec_{int(set_default)}"
+    table = f"replacement_layout_partition_spec_{int(set_default)}_{int(registered)}"
     name = f"{NAMESPACE}.{table}"
     spark.sql(
         f"CREATE TABLE {name} (a INT, b INT) USING iceberg PARTITIONED BY (a, b) TBLPROPERTIES ('format-version'='2')"
@@ -95,11 +96,6 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
     spec = next(spec for spec in base["partition-specs"] if spec["spec-id"] == base["default-spec-id"])
     source = "SELECT * FROM VALUES (7, 70), (8, 80) AS t(a, b)"
     replace = f"REPLACE TABLE {name} USING iceberg PARTITIONED BY (a) AS {source}"
-    keys = _s3_object_keys(seaweedfs_host_endpoint, base["location"])
-    with pytest.raises(PySparkException, match="requires a registered partition spec"):
-        spark.sql(replace).collect()
-    assert _load_table(iceberg_rest_endpoint, table) == before
-    assert _s3_object_keys(seaweedfs_host_endpoint, base["location"]) == keys
 
     def add_spec(column, spec_id):
         fields = [field for field in spec["fields"] if field["name"] == column]
@@ -107,10 +103,12 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
 
     endpoint = f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table}"
     requirements = [{"type": "assert-table-uuid", "uuid": base["table-uuid"]}]
-    requests.post(
-        endpoint, json={"requirements": requirements, "updates": [add_spec("a", 1)]}, timeout=30
-    ).raise_for_status()
-    updates = [add_spec("b", 2)]
+    if registered:
+        requests.post(
+            endpoint, json={"requirements": requirements, "updates": [add_spec("a", 1)]}, timeout=30
+        ).raise_for_status()
+    concurrent_id = 2 if registered else 1
+    updates = [add_spec("b", concurrent_id)]
     if set_default:
         updates.append({"action": "set-default-spec", "spec-id": -1})
     gate.arm(NAMESPACE, table, snapshot_only=False)
@@ -123,20 +121,6 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
                 if future.done():
                     future.result()
                 pytest.fail("Replacement did not reach the commit gate")
-            proposed = next(
-                update["snapshot"] for update in gate.request["updates"] if update["action"] == "add-snapshot"
-            )
-            file_io = PyArrowFileIO(
-                {
-                    "s3.endpoint": seaweedfs_host_endpoint,
-                    "s3.access-key-id": "admin",
-                    "s3.secret-access-key": "password",
-                    "s3.region": "us-east-1",
-                }
-            )
-            manifests = list(read_manifest_list(file_io.new_input(proposed["manifest-list"])))
-            assert manifests
-            assert {manifest.partition_spec_id for manifest in manifests} == {1}
             requests.post(
                 endpoint, json={"requirements": requirements, "updates": updates}, timeout=30
             ).raise_for_status()
@@ -151,7 +135,7 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
             ]:
                 assert concurrent["metadata"][key] == base[key]
             assert base["default-spec-id"] == 0
-            assert concurrent["metadata"]["default-spec-id"] == (2 if set_default else 0)
+            assert concurrent["metadata"]["default-spec-id"] == (concurrent_id if set_default else 0)
         finally:
             gate.release.set()
         if set_default:
@@ -159,15 +143,81 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
                 future.result(timeout=30)
         else:
             future.result(timeout=30)
-    assert gate.request_count == 1
+    assert gate.request_count == (1 if registered or set_default else 2)
     if set_default:
         assert gate.response_status == test_commit.HTTP_CONFLICT
         assert _load_table(iceberg_rest_endpoint, table) == concurrent
         assert spark.table(name).collect() == [(1, 10)]
     else:
-        assert _load_table(iceberg_rest_endpoint, table)["metadata"]["default-spec-id"] == 1
+        metadata = _load_table(iceberg_rest_endpoint, table)["metadata"]
+        expected_id = 1 if registered else 2
+        assert metadata["default-spec-id"] == expected_id
+        file_io = PyArrowFileIO(
+            {
+                "s3.endpoint": seaweedfs_host_endpoint,
+                "s3.access-key-id": "admin",
+                "s3.secret-access-key": "password",
+                "s3.region": "us-east-1",
+            }
+        )
+        manifests = list(read_manifest_list(file_io.new_input(_current_snapshot(metadata)["manifest-list"])))
+        assert {manifest.partition_spec_id for manifest in manifests} == {expected_id}
         assert spark.sql(f"SELECT a, b FROM {name} ORDER BY a").collect() == [(7, 70), (8, 80)]
         assert spark.sql(f"SELECT a, b FROM {name} WHERE b = 70").collect() == [(7, 70)]
+
+
+def test_rest_new_partition_spec_keeps_original_definition_until_snapshot_commit(
+    spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy
+):
+    _, gate = commit_gate_proxy
+    table = "replacement_register_before_publication"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(f"CREATE TABLE {name} USING iceberg AS SELECT 1 AS a")
+    before = _load_table(iceberg_rest_endpoint, table)["metadata"]
+    gate.arm(NAMESPACE, table, update_action="add-snapshot")
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor() as executor:
+        writer = sessions.create()
+        future = executor.submit(
+            lambda: writer.sql(
+                f"REPLACE TABLE {name} USING iceberg PARTITIONED BY (part) AS SELECT 2 AS a, 'x' AS part"
+            ).collect()
+        )
+        try:
+            if not gate.arrived.wait(30):
+                if future.done():
+                    future.result()
+                pytest.fail("Replacement did not reach snapshot publication")
+            staged = _load_table(iceberg_rest_endpoint, table)["metadata"]
+            for key in ["current-schema-id", "default-spec-id", "refs", "snapshots"]:
+                assert staged[key] == before[key]
+            assert spark.table(name).collect() == [(1,)]
+            spark.sql(f"INSERT INTO {name} VALUES (3)").collect()
+        finally:
+            gate.release.set()
+        with pytest.raises(AnalysisException, match="replan"):
+            future.result(timeout=30)
+    assert spark.sql(f"SELECT * FROM {name} ORDER BY a").collect() == [(1,), (3,)]
+    after = _load_table(iceberg_rest_endpoint, table)["metadata"]
+    assert after["current-schema-id"] == before["current-schema-id"]
+    assert after["default-spec-id"] == before["default-spec-id"]
+
+
+def test_rest_ctas_and_rtas_preserve_column_order_and_use_nullable_fields(spark, iceberg_rest_endpoint):
+    table = "nullable_partitioned_query"
+    name = f"{NAMESPACE}.{table}"
+    query = "SELECT 7 AS id, named_struct('n', 4) AS nested, array(1) AS items, map('x', 2) AS pairs"
+    for command in ["CREATE", "REPLACE"]:
+        spark.sql(f"{command} TABLE {name} USING iceberg PARTITIONED BY (id) AS {query}").collect()
+        result = spark.sql(f"SELECT * FROM {name}")
+        assert result.columns == ["id", "nested", "items", "pairs"]
+        assert result.collect()[0].id == 7
+        metadata = _load_table(iceberg_rest_endpoint, table)["metadata"]
+        schema = next(s for s in metadata["schemas"] if s["schema-id"] == metadata["current-schema-id"])
+        fields = schema["fields"]
+        assert all(not field["required"] for field in fields)
+        assert not fields[1]["type"]["fields"][0]["required"]
+        assert not fields[2]["type"]["element-required"]
+        assert not fields[3]["type"]["value-required"]
 
 
 def _replace(spark, name, api, *, empty=False):

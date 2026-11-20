@@ -1040,6 +1040,18 @@ pub(crate) async fn plan_iceberg_write(
     } else {
         writer_input_schema
     };
+    let writer_input_schema = if replacement.is_some() {
+        Arc::new(ArrowSchema::new_with_metadata(
+            writer_input_schema
+                .fields()
+                .iter()
+                .map(|field| sail_common_datafusion::schema::nullable_query_field(field))
+                .collect::<Vec<_>>(),
+            writer_input_schema.metadata().clone(),
+        ))
+    } else {
+        writer_input_schema
+    };
     let replacement = replacement
         .map(|catalog| {
             crate::operations::replacement::prepare_replacement(

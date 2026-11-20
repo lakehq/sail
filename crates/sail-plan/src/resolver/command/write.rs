@@ -577,11 +577,19 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
+                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     let columns = input
                         .schema()
                         .inner()
                         .fields()
                         .iter()
+                        .map(|f| {
+                            if is_iceberg {
+                                sail_common_datafusion::schema::nullable_query_field(f)
+                            } else {
+                                f.as_ref().clone()
+                            }
+                        })
                         .map(|f| CreateTableColumnOptions {
                             metadata: f
                                 .metadata()
@@ -597,7 +605,6 @@ impl PlanResolver<'_> {
                             identity: None,
                         })
                         .collect();
-                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
                         .options

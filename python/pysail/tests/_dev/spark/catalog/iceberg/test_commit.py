@@ -52,6 +52,7 @@ class _CommitGate:
         self._claimed = False
         self._lock = threading.Lock()
         self.snapshot_only = True
+        self.update_action: str | None = None
         self.response_fault: int | str | None = None
         self.apply_commit = True
         self.response_payload: dict | None = None
@@ -61,10 +62,11 @@ class _CommitGate:
         self.table_posts = 0
         self.refresh_status: int | None = None
 
-    def arm(self, namespace: str, table: str, *, snapshot_only: bool = True) -> None:
+    def arm(self, namespace: str, table: str, *, snapshot_only: bool = True, update_action: str | None = None) -> None:
         with self._lock:
             self._target = ([namespace], table)
             self.snapshot_only = snapshot_only
+            self.update_action = update_action
 
     def claim(self, method: str, body: bytes) -> dict[str, object] | None:
         if method != "POST":
@@ -87,6 +89,7 @@ class _CommitGate:
             if (
                 self._target is None
                 or (self.snapshot_only and not has_snapshot_requirement)
+                or (self.update_action and not any(u.get("action") == self.update_action for u in payload["updates"]))
                 or identifier.get("namespace") != self._target[0]
                 or identifier.get("name") != self._target[1]
             ):
