@@ -21,7 +21,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use log::warn;
-use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
 use sail_common_datafusion::command::CommandOutput;
@@ -29,7 +29,9 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
+use crate::catalog::coordinator::{
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, publish_commit,
+};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
@@ -258,61 +260,6 @@ impl DeltaCommitExec {
         }))
     }
 
-    async fn latest_catalog_managed_table_version(
-        context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        lakehouse_table: &LakehouseExecutionContext,
-        table: &DeltaCatalogManagedTable,
-    ) -> Result<i64> {
-        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
-            .latest_table_version(lakehouse_table, table)
-            .await
-    }
-
-    async fn refresh_catalog_managed_reference(
-        context: &Arc<TaskContext>,
-        lakehouse_table: &LakehouseExecutionContext,
-        table_url: &Url,
-        log_store: &LogStoreRef,
-        reference: Option<Arc<crate::table::DeltaSnapshot>>,
-        latest_catalog_version: i64,
-    ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
-        let Some(snapshot) = reference else {
-            return Ok(None);
-        };
-        if latest_catalog_version < 0 || snapshot.version() == latest_catalog_version {
-            return Ok(Some(snapshot));
-        }
-        if snapshot.version() > latest_catalog_version {
-            return Err(DataFusionError::Internal(format!(
-                "catalog-managed Delta commit snapshot version {} is newer than catalog latest ratified version {latest_catalog_version}",
-                snapshot.version()
-            )));
-        }
-
-        let catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-            context.as_ref(),
-            lakehouse_table,
-            table_url,
-            log_store.clone(),
-            Some(latest_catalog_version),
-        )
-        .await?;
-        let snapshot = crate::table::DeltaSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                catalog_managed_commits,
-                ..Default::default()
-            },
-            Some(latest_catalog_version),
-            None,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Some(Arc::new(snapshot)))
-    }
-
     async fn load_reference_snapshot(
         context: &Arc<TaskContext>,
         lakehouse_table: Option<&LakehouseExecutionContext>,
@@ -503,58 +450,11 @@ impl DeltaCommitExec {
             .map(|snapshot| snapshot.is_some())
     }
 
-    #[expect(clippy::too_many_arguments)]
-    async fn commit_catalog_managed_table(
-        context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        lakehouse_table: &LakehouseExecutionContext,
-        table: &DeltaCatalogManagedTable,
-        log_store: &LogStoreRef,
-        base: Option<&crate::table::DeltaSnapshot>,
-        staged: &CatalogManagedStagedCommit,
-        actions: &[CommitAction],
-        latest_backfilled_version: Option<i64>,
-    ) -> Result<()> {
-        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
-            .commit_staged(
-                lakehouse_table,
-                table,
-                log_store,
-                base,
-                staged,
-                actions,
-                latest_backfilled_version,
-            )
-            .await
-    }
-
     pub(crate) async fn publish_staged_commit(
         log_store: &LogStoreRef,
         staged: &CatalogManagedStagedCommit,
     ) -> Result<()> {
-        let store = log_store.object_store(None);
-        let bytes = store
-            .get(&staged.staged_path)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        match store
-            .put_opts(
-                &commit_path(staged.version),
-                bytes.into(),
-                PutOptions {
-                    mode: PutMode::Create,
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(ObjectStoreError::AlreadyExists { .. }) => Ok(()),
-            Err(err) => Err(DataFusionError::External(Box::new(err))),
-        }
+        publish_commit(log_store, &staged.staged_path, staged.version).await
     }
 
     /// Returns the latest version up to `end_version` for which every commit is published.
@@ -1152,60 +1052,21 @@ impl ExecutionPlan for DeltaCommitExec {
                     operation_metrics.finalize_for(&operation);
                     result =
                         commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
-                    let latest_catalog_version = Self::latest_catalog_managed_table_version(
-                        &context,
-                        catalog_table,
-                        lakehouse_context,
-                        table,
-                    )
-                    .await?;
-                    let reference = if crate::transaction::CommitData::is_blind_append(
-                        &final_actions,
-                        &operation,
-                    ) {
-                        Self::refresh_catalog_managed_reference(
-                            &context,
-                            lakehouse_context,
-                            &table_url,
-                            &log_store,
-                            reference,
-                            latest_catalog_version,
-                        )
-                        .await?
-                    } else {
-                        reference
-                    };
-                    let pre_commit = CommitBuilder::from(
-                        CommitProperties::default()
-                            .with_operation_metrics(operation_metrics)
-                            .with_user_metadata(user_metadata),
-                    )
-                    .with_actions(final_actions.clone())
-                    .build(reference.clone(), log_store.clone(), operation);
-                    let staged = pre_commit
-                        .into_staged_commit_future_with_catalog_latest_version(
-                            latest_catalog_version,
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let latest_backfilled_version = Self::latest_published_backfilled_version(
-                        &log_store,
-                        reference.as_deref(),
-                        staged.version - 1,
-                    )
-                    .await?;
-                    Self::commit_catalog_managed_table(
-                        &context,
-                        catalog_table,
-                        lakehouse_context,
-                        table,
-                        &log_store,
-                        reference.as_deref(),
-                        &staged,
-                        &final_actions,
-                        latest_backfilled_version,
-                    )
-                    .await?;
+                    let staged =
+                        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+                            .commit_actions(
+                                lakehouse_context,
+                                table,
+                                &table_url,
+                                &log_store,
+                                reference,
+                                &final_actions,
+                                &operation,
+                                CommitProperties::default()
+                                    .with_operation_metrics(operation_metrics)
+                                    .with_user_metadata(user_metadata),
+                            )
+                            .await?;
                     if let Err(err) = Self::publish_staged_commit(&log_store, &staged).await {
                         warn!(
                             "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {}",

@@ -1397,7 +1397,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        let (status, error) = match self
+        let (status, error, unpublished_commit_limit, request_failed) = match self
             .get_delta_commit_api(&delta_client, &catalog_name)
             .await?
         {
@@ -1408,7 +1408,12 @@ impl CatalogProvider for UnityCatalogProvider {
                     .await
                 {
                     Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
-                    Err(e) => (e.status(), e.to_string()),
+                    Err(e) => (
+                        e.status(),
+                        e.to_string(),
+                        delta_error_type(&e).as_deref() == Some("ResourceExhaustedException"),
+                        matches!(e, delta_gen::ApiError::Request(_)),
+                    ),
                 }
             }
             DeltaCommitApi::Preview => {
@@ -1423,7 +1428,12 @@ impl CatalogProvider for UnityCatalogProvider {
                     .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
                 match client.commit(commit).await {
                     Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
-                    Err(e) => (e.status(), e.to_string()),
+                    Err(e) => (
+                        e.status(),
+                        e.to_string(),
+                        legacy_error_code(&e).as_deref() == Some("RESOURCE_EXHAUSTED"),
+                        matches!(e, r#gen::ApiError::Request(_)),
+                    ),
                 }
             }
         };
@@ -1446,12 +1456,27 @@ impl CatalogProvider for UnityCatalogProvider {
             Some(reqwest::StatusCode::FORBIDDEN) => Err(CatalogError::Forbidden(format!(
                 "Unity Catalog Delta commit forbidden: {error}"
             ))),
+            // The server refuses new commits until the ratified commits of the table are
+            // published, which is not the same as a request that the server throttles.
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) if unpublished_commit_limit => {
+                Err(CatalogError::ResourceExhausted(format!(
+                    "Unity Catalog Delta commit refused until ratified commits are published: {error}"
+                )))
+            }
             Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Err(CatalogError::RateLimited(
                 format!("Unity Catalog Delta commit rate limited: {error}"),
             )),
             Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(CatalogError::NotSupported(format!(
                 "Unity Catalog Delta commit endpoint: {error}"
             ))),
+            // The server may have ratified the commit when it reports a server error, and
+            // when the request fails without a response (a timeout or a network error).
+            Some(s) if s.is_server_error() => Err(CatalogError::CommitStateUnknown(
+                format!("Failed to commit Delta table to Unity Catalog: {error}").into(),
+            )),
+            None if request_failed => Err(CatalogError::CommitStateUnknown(
+                format!("Failed to commit Delta table to Unity Catalog: {error}").into(),
+            )),
             _ => Err(CatalogError::External(format!(
                 "Failed to commit Delta table to Unity Catalog: {error}"
             ))),
@@ -2151,6 +2176,17 @@ fn is_already_exists_error<E>(error: &r#gen::ApiError<E>, error_code: &str) -> b
             .is_ok_and(|body| body["error_code"] == error_code),
         _ => false,
     }
+}
+
+/// Returns the error code in the error response of the legacy API.
+fn legacy_error_code<E>(error: &r#gen::ApiError<E>) -> Option<String> {
+    let body = match error {
+        r#gen::ApiError::Response(response) => response.body.as_str(),
+        r#gen::ApiError::Unknown(response) => response.body.as_str(),
+        _ => return None,
+    };
+    let body = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    body["error_code"].as_str().map(str::to_string)
 }
 
 /// Returns the error type in the error response of the Delta REST API.
@@ -3998,6 +4034,9 @@ mod tests {
             (7, error(429, "ResourceExhaustedException")),
             (8, ResponseTemplate::new(403)),
             (9, error(500, "InternalServerError")),
+            (10, error(429, "TooManyRequestsException")),
+            (11, error(500, "CommitStateUnknownException")),
+            (12, ResponseTemplate::new(503)),
         ] {
             Mock::given(method("POST"))
                 .and(path(DELTA_TABLE_PATH))
@@ -4039,7 +4078,10 @@ mod tests {
                 .contains("InvalidParameterValueException message")
         );
         let error = commit(7).await;
-        assert!(matches!(error, CatalogError::RateLimited(_)), "{error:?}");
+        assert!(
+            matches!(error, CatalogError::ResourceExhausted(_)),
+            "{error:?}"
+        );
         assert!(
             error
                 .to_string()
@@ -4047,9 +4089,44 @@ mod tests {
         );
         let error = commit(8).await;
         assert!(matches!(error, CatalogError::Forbidden(_)), "{error:?}");
-        let error = commit(9).await;
-        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
-        assert!(error.to_string().contains("InternalServerError message"));
+        // The commit may be ratified when the server fails or does not answer.
+        for (version, message) in [
+            (9, "InternalServerError message"),
+            (11, "CommitStateUnknownException message"),
+            (12, "503"),
+        ] {
+            let error = commit(version).await;
+            assert!(
+                matches!(error, CatalogError::CommitStateUnknown(_)),
+                "{error:?}"
+            );
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        let error = commit(10).await;
+        assert!(matches!(error, CatalogError::RateLimited(_)), "{error:?}");
+
+        // A request without a response, such as a network error.
+        let options = UnityCatalogOptions {
+            uri: "http://127.0.0.1:1".to_string(),
+            ..empty_options("main")
+        };
+        let provider = UnityCatalogProvider::new("test".to_string(), options).unwrap();
+        provider
+            .delta_commit_api_cache()
+            .unwrap()
+            .insert("main".to_string(), DeltaCommitApi::V1);
+        let error = provider
+            .commit_lakehouse_table(
+                &database,
+                "events",
+                delta_commit_request(legacy_delta_commit(13)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CatalogError::CommitStateUnknown(_)),
+            "{error:?}"
+        );
     }
 
     const DELTA_STAGING_PATH: &str = "/delta/v1/catalogs/main/schemas/default/staging-tables";

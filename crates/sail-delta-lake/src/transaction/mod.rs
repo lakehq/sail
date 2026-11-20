@@ -28,10 +28,10 @@ use crate::delta_log::{
     resolve_version_timestamp,
 };
 use crate::options::session_user_metadata;
-use crate::snapshot::DeltaSnapshotConfig;
+use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig, catalog_managed_commit_path};
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
-    Transaction, VersionChecksum, checksum_path, logical_file_key, staged_commit_path,
+    Transaction, VersionChecksum, checksum_path, commit_path, logical_file_key, staged_commit_path,
     temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
@@ -1676,6 +1676,34 @@ impl PreparedCommit {
             })
         })
     }
+}
+
+/// Checks the transaction against the commits that the catalog ratified after the read
+/// snapshot of the transaction, up to `latest_version`. A commit that is not published yet
+/// is read from its staged commit file in `commits`.
+pub(crate) async fn check_catalog_managed_commit_conflicts(
+    log_store: &LogStoreRef,
+    read_snapshot: &DeltaSnapshot,
+    commits: Option<&CatalogManagedCommitSet>,
+    latest_version: i64,
+    actions: &[CommitAction],
+    operation: &DeltaOperation,
+) -> DeltaResult<()> {
+    let store = log_store.object_store(None);
+    for version in (read_snapshot.version() + 1)..=latest_version {
+        let path = commits
+            .and_then(|commits| commits.commits.iter().find(|x| x.version == version))
+            .map(|commit| catalog_managed_commit_path(&commit.file_name))
+            .unwrap_or_else(|| commit_path(version));
+        let bytes = store.get(&path).await?.bytes().await?;
+        let summary = WinningCommitSummary::try_from_bytes(version, &bytes)?;
+        let transaction_info =
+            TransactionInfo::try_new(read_snapshot, actions, operation.read_whole_table())?;
+        ConflictChecker::new(transaction_info, summary, Some(operation))
+            .check_conflicts()
+            .map_err(TransactionError::CommitConflict)?;
+    }
+    Ok(())
 }
 
 /// Represents items for the post commit hook

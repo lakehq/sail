@@ -1440,9 +1440,9 @@ mod tests {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod catalog_managed_tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use datafusion::prelude::{SessionConfig, SessionContext};
     use futures::TryStreamExt;
@@ -1469,6 +1469,95 @@ mod catalog_managed_tests {
         commit_requests: AtomicUsize,
         discover_requests: AtomicUsize,
         commit_error: Option<fn() -> CatalogError>,
+        script: Option<CommitScript>,
+    }
+
+    /// What the catalog does with a commit request. The catalog ratifies the commit request
+    /// of the next version of the table when there is nothing else to do.
+    enum CommitStep {
+        /// The catalog does not ratify the commit and answers with the error.
+        Refuse(fn() -> CatalogError),
+        /// The catalog ratifies the commit and answers with the error.
+        RatifyAndFail(fn() -> CatalogError),
+        /// The catalog ratifies the commit, a writer publishes and reports it, and the
+        /// catalog answers with the error.
+        PublishAndFail(fn() -> CatalogError),
+        /// The catalog ratifies the commit of another writer with the actions first, and
+        /// answers with a conflict.
+        Lose(&'static str),
+    }
+
+    /// The commits of a table in the catalog, and what the catalog does with the commit
+    /// requests in the order of the requests.
+    struct CommitScript {
+        store: Arc<InMemory>,
+        steps: Mutex<VecDeque<CommitStep>>,
+        ratified: Mutex<DeltaRatifiedCommitResponse>,
+        requests: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl CommitScript {
+        /// Ratifies the commit if it is the next version of the table.
+        fn ratify(&self, version: i64, file_name: &str) -> bool {
+            let mut ratified = self.ratified.lock().unwrap();
+            if ratified.latest_table_version + 1 != version {
+                return false;
+            }
+            ratified.latest_table_version = version;
+            ratified.commits.push(DeltaRatifiedCommit {
+                version,
+                timestamp: 1,
+                file_name: file_name.to_string(),
+                file_size: 1,
+                file_modification_timestamp: 1,
+            });
+            true
+        }
+
+        async fn commit(&self, update: &serde_json::Value) -> CatalogResult<()> {
+            self.requests.lock().unwrap().push(update.clone());
+            let version = update["commit_info"]["version"].as_i64().unwrap();
+            let file_name = update["commit_info"]["file_name"].as_str().unwrap();
+            let step = self.steps.lock().unwrap().pop_front();
+            match step {
+                Some(CommitStep::Refuse(error)) => return Err(error()),
+                Some(CommitStep::RatifyAndFail(error)) => {
+                    self.ratify(version, file_name);
+                    return Err(error());
+                }
+                Some(CommitStep::PublishAndFail(error)) => {
+                    self.ratify(version, file_name);
+                    let staged = Path::from(format!("_delta_log/_staged_commits/{file_name}"));
+                    let published = Path::from(format!("_delta_log/{version:020}.json"));
+                    self.store.copy(&staged, &published).await.unwrap();
+                    self.ratified.lock().unwrap().commits.clear();
+                    return Err(error());
+                }
+                Some(CommitStep::Lose(actions)) => {
+                    let winner = self.ratified.lock().unwrap().latest_table_version + 1;
+                    let file_name = format!("{winner:020}.winner.json");
+                    let timestamp = winner + 1;
+                    let commit = format!(
+                        "{{\"commitInfo\":{{\"timestamp\":{timestamp},\"inCommitTimestamp\":{timestamp},\"isBlindAppend\":true}}}}\n{actions}\n"
+                    );
+                    let path = Path::from(format!("_delta_log/_staged_commits/{file_name}"));
+                    self.store.put(&path, commit.into()).await.unwrap();
+                    self.ratify(winner, &file_name);
+                    return Err(CatalogError::Conflict("409".into()));
+                }
+                None => {}
+            }
+            // The catalog recognizes the commit that it has ratified.
+            let known = |commit: &DeltaRatifiedCommit| {
+                commit.version == version && commit.file_name == file_name
+            };
+            let known = self.ratified.lock().unwrap().commits.iter().any(known);
+            if known || self.ratify(version, file_name) {
+                Ok(())
+            } else {
+                Err(CatalogError::Conflict("409".into()))
+            }
+        }
     }
 
     fn unsupported<T>() -> CatalogResult<T> {
@@ -1517,6 +1606,9 @@ mod catalog_managed_tests {
             _: &str,
             request: LakehouseCommitRequest,
         ) -> CatalogResult<LakehouseCommitOutcome> {
+            if let Some(script) = &self.script {
+                script.commit(&request.updates[0]).await?;
+            }
             match self.commit_error {
                 Some(error) => Err(error()),
                 None => Ok(LakehouseCommitOutcome::Committed {
@@ -1540,6 +1632,14 @@ mod catalog_managed_tests {
                 };
             }
             self.commit_requests.fetch_add(1, Ordering::SeqCst);
+            if let Some(script) = &self.script {
+                let mut ratified = script.ratified.lock().unwrap().clone();
+                ratified.commits.retain(|commit| {
+                    commit.version >= request.start_version
+                        && request.end_version.is_none_or(|end| commit.version <= end)
+                });
+                return Ok(ratified);
+            }
             self.ratified
                 .clone()
                 .ok_or_else(|| CatalogError::External("401 Unauthorized".into()))
@@ -1692,6 +1792,7 @@ mod catalog_managed_tests {
             commit_requests: AtomicUsize::new(0),
             discover_requests: AtomicUsize::new(0),
             commit_error: None,
+            script: None,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
             catalogs: HashMap::from([(
@@ -2033,6 +2134,7 @@ mod catalog_managed_tests {
             commit_requests: AtomicUsize::new(0),
             discover_requests: AtomicUsize::new(0),
             commit_error: Some(error),
+            script: None,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
             catalogs: HashMap::from([("unity".into(), catalog as Arc<dyn CatalogProvider>)]),
@@ -2094,7 +2196,7 @@ mod catalog_managed_tests {
         store.head(&staged_path).await.is_ok()
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn rejected_catalog_commit_deletes_staged_commit() {
         for error in [
             (|| CatalogError::Conflict("409".into())) as fn() -> CatalogError,
@@ -2148,5 +2250,317 @@ mod catalog_managed_tests {
         assert!(
             staged_commit_exists_after_catalog_error(|| CatalogError::External("503".into())).await
         );
+    }
+    const ADD_ACTION: &str = concat!(
+        r#"{"add":{"path":"winner.parquet","partitionValues":{},"size":5,"#,
+        r#""modificationTime":1,"dataChange":true}}"#
+    );
+    const METADATA_ACTION: &str = concat!(
+        r#"{"metaData":{"id":"table-id","format":{"provider":"parquet","options":{}},"#,
+        r#""schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\","#,
+        r#"\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}","#,
+        r#""partitionColumns":[],"configuration":{"io.unitycatalog.tableId":"table-id","#,
+        r#""delta.enableInCommitTimestamps":"true"},"createdTime":0}}"#
+    );
+
+    fn state_unknown() -> CatalogError {
+        CatalogError::CommitStateUnknown("503".to_string().into())
+    }
+
+    struct ScriptedCommit {
+        catalog: Arc<UnityManagedCatalog>,
+        store: Arc<InMemory>,
+        result: datafusion_common::Result<crate::transaction::CatalogManagedStagedCommit>,
+    }
+
+    impl ScriptedCommit {
+        /// Returns the version and the file name of each commit request.
+        fn requests(&self) -> Vec<(i64, String)> {
+            let requests = self.script().requests.lock().unwrap();
+            let commit = |update: &serde_json::Value| {
+                let info = &update["commit_info"];
+                let file_name = info["file_name"].as_str().unwrap();
+                (info["version"].as_i64().unwrap(), file_name.to_string())
+            };
+            requests.iter().map(commit).collect()
+        }
+
+        fn script(&self) -> &CommitScript {
+            self.catalog.script.as_ref().unwrap()
+        }
+
+        fn latest_table_version(&self) -> i64 {
+            self.script().ratified.lock().unwrap().latest_table_version
+        }
+
+        async fn staged_commits(&self) -> Vec<String> {
+            let prefix = Path::from("_delta_log/_staged_commits");
+            let files = self.store.list(Some(&prefix)).try_collect::<Vec<_>>();
+            let files = files.await.unwrap().into_iter();
+            let mut files = files
+                .map(|meta| meta.location.filename().unwrap().to_string())
+                .collect::<Vec<_>>();
+            files.sort();
+            files
+        }
+    }
+
+    /// Commits a file to a catalog-managed table at version 0, where the catalog follows the
+    /// steps for the commit requests. The commit is a blind append, or a write that depends
+    /// on what it read from the table.
+    async fn commit_with_script(steps: Vec<CommitStep>, blind_append: bool) -> ScriptedCommit {
+        use crate::catalog::coordinator::{
+            DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable,
+        };
+        use crate::delta_log::{StorageConfig, default_logstore};
+        use crate::snapshot::DeltaSnapshotConfig;
+        use crate::spec::{Add, CommitAction, DeltaOperation, SaveMode};
+        use crate::table::DeltaSnapshot;
+        use crate::transaction::CommitProperties;
+
+        let store = Arc::new(InMemory::new());
+        let version_0 = format!(
+            concat!(
+                "{{\"commitInfo\":{{\"timestamp\":1,\"inCommitTimestamp\":1}}}}\n",
+                "{{\"protocol\":{protocol}}}\n{metadata}\n"
+            ),
+            protocol = CATALOG_MANAGED_PROTOCOL,
+            metadata = METADATA_ACTION.replace(r#"\"type\":\"string\""#, r#"\"type\":\"long\""#),
+        );
+        store
+            .put(
+                &Path::from(format!("_delta_log/{}", published_commit(0))),
+                version_0.into(),
+            )
+            .await
+            .unwrap();
+        let catalog = Arc::new(UnityManagedCatalog {
+            catalog_managed_property: true,
+            ratified: None,
+            commit_requests: AtomicUsize::new(0),
+            discover_requests: AtomicUsize::new(0),
+            commit_error: None,
+            script: Some(CommitScript {
+                store: store.clone(),
+                steps: Mutex::new(steps.into()),
+                ratified: Mutex::new(ratified(0, &[])),
+                requests: Mutex::new(vec![]),
+            }),
+        });
+        let manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "unity".into(),
+                catalog.clone() as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "unity".into(),
+            default_database: vec!["default".into()],
+            global_temporary_database: vec!["global_temp".into()],
+        })
+        .unwrap();
+        let session =
+            SessionContext::new_with_config(SessionConfig::new().with_extension(Arc::new(manager)));
+        let table_url = Url::parse("memory:///").unwrap();
+        let object_store = store.clone() as Arc<dyn ObjectStore>;
+        let log_store = default_logstore(
+            object_store.clone(),
+            object_store,
+            &table_url,
+            &StorageConfig,
+        );
+        let catalog_table = vec!["unity".to_string(), "default".into(), "items".into()];
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".into()),
+            catalog_table.clone(),
+            CatalogTableIdentity {
+                table_id: Some("table-id".into()),
+                table_uri: Some(table_url.to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientLakeSource,
+        );
+        context.commit = CommitAuthority::DeltaRatifiedCommit;
+        let config = DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = DeltaSnapshot::try_new(log_store.as_ref(), config, Some(0), None)
+            .await
+            .unwrap();
+        let add = Add {
+            path: "new.parquet".to_string(),
+            size: 5,
+            data_change: true,
+            ..Default::default()
+        };
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: (!blind_append).then(|| "id > 0".to_string()),
+        };
+        let state = session.state();
+        let result = DeltaCatalogCommitCoordinator::new(&state, &catalog_table)
+            .commit_actions(
+                &context,
+                &DeltaCatalogManagedTable {
+                    table_id: "table-id".into(),
+                    table_uri: table_url.to_string(),
+                },
+                &table_url,
+                &log_store,
+                Some(Arc::new(snapshot)),
+                &[CommitAction::Add(add)],
+                &operation,
+                CommitProperties::default(),
+            )
+            .await;
+        ScriptedCommit {
+            catalog,
+            store,
+            result,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_with_unknown_outcome_is_sent_again_unchanged() {
+        for step in [
+            CommitStep::Refuse(state_unknown),
+            // The catalog recognizes the commit that it ratified for the first request.
+            CommitStep::RatifyAndFail(state_unknown),
+            CommitStep::Refuse(|| CatalogError::RateLimited("429".into())),
+        ] {
+            let commit = commit_with_script(vec![step], false).await;
+            let staged = commit.result.as_ref().unwrap();
+            assert_eq!(staged.version, 1);
+            let request = (1, staged.file_name.clone());
+            assert_eq!(commit.requests(), vec![request.clone(), request]);
+            assert_eq!(commit.latest_table_version(), 1);
+            assert_eq!(
+                commit.staged_commits().await,
+                vec![staged.file_name.clone()]
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_with_unknown_outcome_is_found_in_the_commits_of_the_table() {
+        for ratify in [CommitStep::RatifyAndFail, CommitStep::PublishAndFail] {
+            // The catalog does not answer any request, and has ratified the commit.
+            let steps = vec![
+                ratify(state_unknown),
+                CommitStep::Refuse(state_unknown),
+                CommitStep::Refuse(state_unknown),
+                CommitStep::Refuse(state_unknown),
+            ];
+            let commit = commit_with_script(steps, false).await;
+            let staged = commit.result.as_ref().unwrap();
+            assert_eq!(commit.requests(), vec![(1, staged.file_name.clone()); 4]);
+            assert_eq!(
+                commit.staged_commits().await,
+                vec![staged.file_name.clone()]
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_that_is_not_found_has_unknown_state() {
+        let steps = (0..4).map(|_| CommitStep::Refuse(state_unknown)).collect();
+        let commit = commit_with_script(steps, true).await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        assert!(error.contains("commit state unknown"), "{error}");
+        // The same commit is sent each time, and its file is kept.
+        let requests = commit.requests();
+        assert_eq!(requests, vec![requests[0].clone(); 4]);
+        assert_eq!(commit.staged_commits().await, vec![requests[0].1.clone()]);
+        assert_eq!(commit.latest_table_version(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_with_unknown_outcome_that_another_writer_won_is_a_conflict() {
+        let steps = vec![
+            CommitStep::Refuse(state_unknown),
+            CommitStep::Lose(ADD_ACTION),
+        ];
+        let commit = commit_with_script(steps, false).await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        assert!(error.contains("Delta catalog commit conflict"), "{error}");
+        assert_eq!(commit.requests().len(), 2);
+        assert_eq!(
+            commit.staged_commits().await,
+            vec![format!("{:020}.winner.json", 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn blind_append_is_committed_after_the_commit_of_another_writer() {
+        let commit = commit_with_script(vec![CommitStep::Lose(ADD_ACTION)], true).await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!((staged.version, staged.metrics.num_retries), (2, 1));
+        let requests = commit.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            (requests[0].0, &requests[1]),
+            (1, &(2, staged.file_name.clone()))
+        );
+        // The staged commit that lost is deleted.
+        assert_eq!(
+            commit.staged_commits().await,
+            vec![format!("{:020}.winner.json", 1), staged.file_name.clone()]
+        );
+    }
+
+    #[tokio::test]
+    async fn blind_append_conflicts_with_metadata_change_of_another_writer() {
+        let commit = commit_with_script(vec![CommitStep::Lose(METADATA_ACTION)], true).await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        assert!(
+            error.contains("Metadata changed since last commit"),
+            "{error}"
+        );
+        assert_eq!(commit.requests().len(), 1);
+        assert_eq!(commit.latest_table_version(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_that_is_not_a_blind_append_fails_on_conflict() {
+        let commit = commit_with_script(vec![CommitStep::Lose(ADD_ACTION)], false).await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        assert!(error.contains("Delta catalog commit conflict"), "{error}");
+        assert_eq!(commit.requests().len(), 1);
+        assert_eq!(
+            commit.staged_commits().await,
+            vec![format!("{:020}.winner.json", 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_commit_publishes_ratified_commits_at_the_limit_of_the_catalog() {
+        // The commit of another writer is not published when the catalog refuses commits.
+        let steps = vec![
+            CommitStep::Lose(ADD_ACTION),
+            CommitStep::Refuse(|| CatalogError::ResourceExhausted("429".into())),
+        ];
+        let commit = commit_with_script(steps, true).await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!(staged.version, 2);
+        let published = Path::from(format!("_delta_log/{}", published_commit(1)));
+        let published = commit.store.get(&published).await.unwrap().bytes().await;
+        assert!(
+            published
+                .unwrap()
+                .ends_with(format!("{ADD_ACTION}\n").as_bytes())
+        );
+        let requests = commit.script().requests.lock().unwrap().clone();
+        let backfilled = |request: &serde_json::Value| request["latest_backfilled_version"].clone();
+        assert_eq!(
+            requests.iter().map(backfilled).collect::<Vec<_>>(),
+            vec![
+                serde_json::json!(0),
+                serde_json::json!(0),
+                serde_json::json!(1)
+            ]
+        );
+        assert_eq!(requests[1]["commit_info"], requests[2]["commit_info"]);
     }
 }
