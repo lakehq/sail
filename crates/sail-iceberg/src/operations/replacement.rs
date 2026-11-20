@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -362,6 +362,16 @@ fn replacement_catalog_error(error: CatalogError) -> DataFusionError {
     }
 }
 
+fn replacement_commit_error(error: DataFusionError) -> DataFusionError {
+    match error {
+        DataFusionError::External(error) => match error.downcast::<CatalogError>() {
+            Ok(error) => replacement_catalog_error(*error),
+            Err(error) => DataFusionError::External(error),
+        },
+        error => error,
+    }
+}
+
 /// Reject a changed base rather than retrying writer outputs with potentially invalid IDs.
 async fn validate_base(
     store: &StoreContext,
@@ -580,11 +590,7 @@ fn rest_replacement_changes(
     updates.push(TableUpdate::SetDefaultSpec {
         spec_id: if create { -1 } else { spec.spec_id() },
     });
-    let order = metadata
-        .sort_orders
-        .iter()
-        .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
-        .ok_or_else(|| DataFusionError::Plan("Missing replacement sort order".into()))?;
+    let order = replacement_sort_order(metadata)?;
     let added = create
         || !base
             .sort_orders
@@ -594,11 +600,11 @@ fn rest_replacement_changes(
         updates.push(TableUpdate::AddSortOrder {
             sort_order: order.clone(),
         });
-        if !create {
-            requirements.push(TableRequirement::DefaultSortOrderIdMatch {
-                default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
-            });
-        }
+    }
+    if !create && metadata.default_sort_order_id != base.default_sort_order_id {
+        requirements.push(TableRequirement::DefaultSortOrderIdMatch {
+            default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
+        });
     }
     updates.push(TableUpdate::SetDefaultSortOrder {
         sort_order_id: if added { -1 } else { order.order_id },
@@ -640,10 +646,54 @@ fn rest_replacement_changes(
     Ok((requirements, updates))
 }
 
+fn replacement_sort_order(metadata: &TableMetadata) -> Result<&SortOrder> {
+    metadata
+        .sort_orders
+        .iter()
+        .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement sort order".into()))
+}
+
+/// Only layout sources need to bind before publication. Keep types and defaults that
+/// require the new format out of the live table's schema history until the upgrade.
+fn layout_source_schema(
+    schema: &crate::spec::Schema,
+    sources: &HashSet<i32>,
+) -> Result<crate::spec::Schema> {
+    use crate::spec::{NestedFieldRef, Schema, StructType, Type};
+
+    fn project(fields: &[NestedFieldRef], sources: &HashSet<i32>) -> Vec<NestedFieldRef> {
+        fields
+            .iter()
+            .filter_map(|field| {
+                let mut projected = field.as_ref().clone();
+                if !sources.contains(&field.id) {
+                    let Type::Struct(children) = field.field_type.as_ref() else {
+                        return None;
+                    };
+                    let children = project(children.fields(), sources);
+                    if children.is_empty() {
+                        return None;
+                    }
+                    *projected.field_type = Type::Struct(StructType::new(children));
+                }
+                projected.initial_default = None;
+                projected.write_default = None;
+                Some(Arc::new(projected))
+            })
+            .collect()
+    }
+
+    Schema::builder()
+        .with_fields(project(schema.fields(), sources))
+        .build()
+        .map_err(DataFusionError::Plan)
+}
+
 /// Register a previously unseen layout without switching the live table definition.
 /// REST assigns IDs on the server. Only after registration can manifests safely
-/// reference the layout, even if a competing writer registered a non-default spec.
-async fn register_replacement_spec(
+/// reference the layout, even if a competing writer registered a non-default layout.
+async fn register_replacement_layout(
     context: &TaskContext,
     replacement: &mut IcebergTableReplacement,
     base: &mut TableMetadata,
@@ -658,42 +708,94 @@ async fn register_replacement_spec(
     let spec = desired
         .default_partition_spec()
         .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
-    if base
+    let order = replacement_sort_order(desired)?;
+    let add_spec = !base
         .partition_specs
         .iter()
-        .any(|old| old.spec_id() == spec.spec_id())
-    {
+        .any(|old| old.spec_id() == spec.spec_id());
+    let add_order = !base
+        .sort_orders
+        .iter()
+        .any(|old| old.order_id == order.order_id);
+    if !add_spec && !add_order {
         return Ok(());
     }
     let schema = desired
         .current_schema()
         .ok_or_else(|| DataFusionError::Plan("Missing replacement schema".into()))?;
     let (mut requirements, _) = rest_replacement_changes(replacement, base)?;
-    requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
-        last_assigned_partition_id: base.last_partition_id,
-    });
+    if add_spec {
+        requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+            last_assigned_partition_id: base.last_partition_id,
+        });
+    }
+    let projected;
+    let binding_schema = if format_version_for_schema(schema) > base.format_version {
+        let sources = spec
+            .fields()
+            .iter()
+            .filter(|_| add_spec)
+            .map(|f| f.source_id)
+            .chain(
+                order
+                    .fields
+                    .iter()
+                    .filter(|_| add_order)
+                    .map(|f| f.source_id),
+            )
+            .collect();
+        projected = layout_source_schema(schema, &sources)?;
+        if format_version_for_schema(&projected) > base.format_version {
+            return plan_err!(
+                "Iceberg replacement layout sources require upgrading the table format before registration"
+            );
+        }
+        &projected
+    } else {
+        schema
+    };
+    let matching_schema = |candidate: &crate::spec::Schema, expected: &crate::spec::Schema| {
+        candidate.fields() == expected.fields()
+            && candidate
+                .identifier_field_ids()
+                .eq(expected.identifier_field_ids())
+    };
+    let existing_schema_id = base
+        .schemas
+        .iter()
+        .find(|old| matching_schema(old, binding_schema))
+        .map(|s| s.schema_id());
+    let switch_schema = existing_schema_id != Some(base.current_schema_id);
     let mut updates = Vec::new();
-    if schema.schema_id() != base.current_schema_id {
-        let existing = base.schemas.iter().any(|old| old == schema);
-        if !existing {
+    if switch_schema {
+        if existing_schema_id.is_none() {
             updates.push(TableUpdate::AddSchema {
-                schema: Box::new(schema.clone()),
+                schema: Box::new(binding_schema.clone()),
             });
         }
         updates.push(TableUpdate::SetCurrentSchema {
-            schema_id: if existing { schema.schema_id() } else { -1 },
+            schema_id: existing_schema_id.unwrap_or(-1),
         });
     }
-    updates.push(TableUpdate::AddSpec { spec: spec.into() });
-    if schema.schema_id() != base.current_schema_id {
+    if add_spec {
+        updates.push(TableUpdate::AddSpec { spec: spec.into() });
+    }
+    if add_order {
+        updates.push(TableUpdate::AddSortOrder {
+            sort_order: order.clone(),
+        });
+    }
+    if switch_schema {
         updates.push(TableUpdate::SetCurrentSchema {
             schema_id: base.current_schema_id,
         });
     }
     let coordinator =
         IcebergCatalogCommitCoordinator::new(context, &replacement.catalog.catalog_table);
-    let CatalogCommitOutcome::Committed(response) =
-        coordinator.commit(execution, requirements, updates).await?
+    let CatalogCommitOutcome::Committed(response) = coordinator
+        .commit(execution, requirements, updates)
+        .await
+        .map_err(replacement_commit_error)?
     else {
         return Err(requires_replanning(
             "Iceberg replacement layout registration conflicted; replan the operation",
@@ -710,26 +812,50 @@ async fn register_replacement_spec(
     if registered.table_uuid != base.table_uuid
         || registered.current_schema_id != base.current_schema_id
         || registered.default_spec_id != base.default_spec_id
+        || registered.default_sort_order_id != base.default_sort_order_id
     {
         return Err(requires_replanning(
             "Iceberg layout registration changed the base definition; replan the operation",
         ));
     }
-    let schema_id = registered
+    let registered_binding = registered
         .schemas
         .iter()
-        .find(|old| {
-            old.fields() == schema.fields()
-                && old.identifier_field_ids().eq(schema.identifier_field_ids())
-        })
+        .find(|old| matching_schema(old, binding_schema))
         .ok_or_else(|| {
             requires_replanning(
-                "Registered Iceberg schema differs from the writer schema; replan the operation",
+                "Registered Iceberg schema differs from the layout schema; replan the operation",
             )
-        })?
-        .schema_id();
+        })?;
+    let writer_schema = if matching_schema(registered_binding, schema) {
+        registered_binding.clone()
+    } else {
+        // The compatible layout schema may have consumed the originally planned schema ID.
+        crate::spec::Schema::builder()
+            .with_schema_id(SchemaEvolver::next_schema_id(&registered))
+            .with_fields(schema.fields().iter().cloned())
+            .with_identifier_field_ids(schema.identifier_field_ids())
+            .build()
+            .map_err(DataFusionError::Plan)?
+    };
     let spec_id = registered.partition_specs.iter().find(|old| old.fields() == spec.fields())
         .ok_or_else(|| requires_replanning("Registered Iceberg partition fields differ from writer fields; replan the operation"))?.spec_id();
+    let order_id = registered
+        .sort_orders
+        .iter()
+        .find(|old| old.fields == order.fields)
+        .ok_or_else(|| {
+            requires_replanning(
+                "Registered Iceberg sort fields differ from writer fields; replan the operation",
+            )
+        })?
+        .order_id;
+    base.sort_orders = registered.sort_orders;
+    replacement
+        .metadata
+        .sort_orders
+        .clone_from(&base.sort_orders);
+    replacement.metadata.default_sort_order_id = Some(order_id as i32);
     // Keep the original ref and default-spec assertions for the publishing commit.
     base.schemas = registered.schemas;
     base.partition_specs = registered.partition_specs;
@@ -740,7 +866,14 @@ async fn register_replacement_spec(
         .metadata
         .partition_specs
         .clone_from(&base.partition_specs);
-    replacement.metadata.current_schema_id = schema_id;
+    replacement.metadata.current_schema_id = writer_schema.schema_id();
+    if !base
+        .schemas
+        .iter()
+        .any(|old| old.schema_id() == writer_schema.schema_id())
+    {
+        replacement.metadata.schemas.push(writer_schema);
+    }
     replacement.metadata.default_spec_id = spec_id;
     Ok(())
 }
@@ -761,10 +894,13 @@ async fn commit_rest_replacement(
             .ok_or_else(|| DataFusionError::Plan("Missing REST replacement authority".into()))?,
     )
     .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let planned_order_id = replacement.metadata.default_sort_order_id;
     let planned_spec_id = replacement.metadata.default_spec_id;
-    register_replacement_spec(context, &mut replacement, &mut base).await?;
+    register_replacement_layout(context, &mut replacement, &mut base).await?;
     let mut rebound_commit;
-    let commit = if replacement.metadata.default_spec_id != planned_spec_id {
+    let commit = if replacement.metadata.default_spec_id != planned_spec_id
+        || replacement.metadata.default_sort_order_id != planned_order_id
+    {
         rebound_commit = commit.clone();
         for file in rebound_commit
             .data_files
@@ -772,6 +908,9 @@ async fn commit_rest_replacement(
             .chain(&mut rebound_commit.delete_files)
         {
             file.partition_spec_id = replacement.metadata.default_spec_id;
+            if file.sort_order_id.is_some() && file.sort_order_id == planned_order_id {
+                file.sort_order_id = replacement.metadata.default_sort_order_id;
+            }
         }
         &rebound_commit
     } else {
@@ -817,13 +956,7 @@ async fn commit_rest_replacement(
                     snapshot.publication_did_not_happen();
                     snapshot.cleanup().await;
                 }
-                match error {
-                    DataFusionError::External(error) => match error.downcast::<CatalogError>() {
-                        Ok(error) => Err(replacement_catalog_error(*error)),
-                        Err(error) => Err(DataFusionError::External(error)),
-                    },
-                    error => Err(error),
-                }
+                Err(replacement_commit_error(error))
             }
         }
     }).await.map_err(|error| DataFusionError::External(Box::new(CatalogError::CommitStateUnknown(error.to_string().into()))))?

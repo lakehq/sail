@@ -1936,6 +1936,20 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let response = response
             .map(|response| response.inner)
             .map_err(|e| match e {
+                e if matches!(
+                    e.status(),
+                    Some(
+                        reqwest::StatusCode::BAD_REQUEST
+                            | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+                    )
+                ) =>
+                {
+                    CatalogError::CommitRejected(format!(
+                        "Iceberg REST catalog rejected commit for {}.{}: {e}",
+                        quote_namespace_if_needed(database),
+                        quote_name_if_needed(table)
+                    ))
+                }
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
                     CatalogObject::Table,
                     format!(
@@ -5974,7 +5988,8 @@ mod tests {
                     | (404, CatalogError::NotFound(CatalogObject::Table, _))
                     | (409, CatalogError::Conflict(_))
                     | (429, CatalogError::RateLimited(_))
-                    | (400 | 422 | 501, CatalogError::External(_))
+                    | (400 | 422, CatalogError::CommitRejected(_))
+                    | (501, CatalogError::External(_))
             ));
         }
     }

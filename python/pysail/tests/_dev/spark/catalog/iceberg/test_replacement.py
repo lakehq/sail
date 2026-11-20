@@ -166,6 +166,87 @@ def test_rest_replacement_uses_registered_partition_spec_during_concurrent_updat
         assert spark.sql(f"SELECT a, b FROM {name} WHERE b = 70").collect() == [(7, 70)]
 
 
+@pytest.mark.parametrize(
+    ("status", "error_type", "exception", "message"),
+    [
+        (HTTPStatus.BAD_REQUEST, "ValidationException", AnalysisException, "commit requires replanning"),
+        (HTTPStatus.NOT_FOUND, "NoSuchTableException", AnalysisException, "commit requires replanning"),
+        (HTTPStatus.SERVICE_UNAVAILABLE, "ServiceUnavailableException", SparkRuntimeException, "may have succeeded"),
+    ],
+)
+def test_rest_replacement_layout_registration_error(
+    spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy, status, error_type, exception, message
+):
+    _, gate = commit_gate_proxy
+    table = f"replacement_layout_error_{int(status)}"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(f"CREATE TABLE {name} USING iceberg AS SELECT 1 AS a")
+    before = _load_table(iceberg_rest_endpoint, table)
+    gate.arm(NAMESPACE, table, update_action="add-spec")
+    gate.apply_commit = False
+    gate.response_fault = status
+    gate.response_payload = {"error": {"code": int(status), "type": error_type, "message": "registration failed"}}
+    gate.release.set()
+    with spark_session_factory(gated_remote) as sessions, pytest.raises(exception, match=message):
+        sessions.create().sql(f"REPLACE TABLE {name} USING iceberg PARTITIONED BY (a) AS SELECT 2 AS a").collect()
+    assert gate.request_count == gate.table_posts == 1
+    assert "add-snapshot" not in [update["action"] for update in gate.request["updates"]]
+    assert _load_table(iceberg_rest_endpoint, table) == before
+
+
+def test_rest_replacement_uses_server_sort_order_in_manifests(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, gated_remote, commit_gate_proxy
+):
+    import requests
+    from pyiceberg.io.pyarrow import PyArrowFileIO
+    from pyiceberg.manifest import read_manifest_list
+
+    _, gate = commit_gate_proxy
+    table = "replacement_concurrent_sort_order"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(f"CREATE TABLE {name} (`#0` INT, b INT) USING iceberg")
+    gate.arm(NAMESPACE, table, snapshot_only=False)
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor() as executor:
+        source = sessions.create().sql("SELECT 2 AS `#0`, 20 AS b")
+        future = executor.submit(
+            lambda: source.write.format("iceberg").mode("overwrite").sortBy("#0").saveAsTable(name)
+        )
+        try:
+            if not gate.arrived.wait(30):
+                if future.done():
+                    future.result()
+                pytest.fail("Replacement did not reach layout registration")
+            competing = {"source-id": 2, "transform": "identity", "direction": "asc", "null-order": "nulls-last"}
+            requests.post(
+                f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table}",
+                json={
+                    "requirements": [],
+                    "updates": [{"action": "add-sort-order", "sort-order": {"order-id": 1, "fields": [competing]}}],
+                },
+                timeout=30,
+            ).raise_for_status()
+        finally:
+            gate.release.set()
+        future.result(timeout=30)
+    metadata = _load_table(iceberg_rest_endpoint, table)["metadata"]
+    orders = {order["order-id"]: order["fields"] for order in metadata["sort-orders"]}
+    assert orders[1] == [competing]
+    assert metadata["default-sort-order-id"] == 2
+    assert orders[2] == [{**competing, "source-id": 1}]
+    io = PyArrowFileIO(
+        {
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        }
+    )
+    manifests = read_manifest_list(io.new_input(_current_snapshot(metadata)["manifest-list"]))
+    assert {entry.data_file.sort_order_id for manifest in manifests for entry in manifest.fetch_manifest_entry(io)} == {
+        2
+    }
+
+
 def test_rest_new_partition_spec_keeps_original_definition_until_snapshot_commit(
     spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy
 ):
@@ -819,3 +900,43 @@ def test_rest_staged_create_infers_variant_format_version(spark, iceberg_rest_en
     spark.sql(f"""CREATE OR REPLACE TABLE {name} USING iceberg AS SELECT parse_json('{{"n":1}}') AS v""").collect()
     assert _load_table(iceberg_rest_endpoint, table)["metadata"]["format-version"] == 3
     assert spark.sql(f"SELECT to_json(v) FROM {name}").collect()[0][0] == '{"n":1}'
+
+
+def test_rest_partitioned_variant_replacement_upgrades_format_at_publication(
+    spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy
+):
+    _, gate = commit_gate_proxy
+    table = "replacement_partitioned_variant_upgrade"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(f"CREATE TABLE {name} USING iceberg TBLPROPERTIES ('format-version'='2') AS SELECT 1 AS old")
+    before = _load_table(iceberg_rest_endpoint, table)["metadata"]
+    gate.arm(NAMESPACE, table, update_action="add-snapshot")
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor() as executor:
+        writer = sessions.create()
+        future = executor.submit(
+            lambda: writer.sql(
+                f"REPLACE TABLE {name} USING iceberg PARTITIONED BY (part) "
+                """AS SELECT parse_json('{"n":1}') AS v, 7 AS part"""
+            ).collect()
+        )
+        try:
+            if not gate.arrived.wait(30):
+                if future.done():
+                    future.result()
+                pytest.fail("Replacement did not reach snapshot publication")
+            staged = _load_table(iceberg_rest_endpoint, table)["metadata"]
+            for key in ["format-version", "current-schema-id", "default-spec-id", "current-snapshot-id"]:
+                assert staged[key] == before[key]
+            assert spark.table(name).collect() == [(1,)]
+            actions = [update["action"] for update in gate.request["updates"]]
+            assert actions.index("upgrade-format-version") < actions.index("add-schema") < actions.index("add-snapshot")
+        finally:
+            gate.release.set()
+        future.result(timeout=30)
+    metadata = _load_table(iceberg_rest_endpoint, table)["metadata"]
+    assert metadata["format-version"] == 3
+    assert _current_snapshot(metadata)["schema-id"] == metadata["current-schema-id"]
+    assert _current_schema_field_names(metadata) == ["v", "part"]
+    spec = next(spec for spec in metadata["partition-specs"] if spec["spec-id"] == metadata["default-spec-id"])
+    assert [field["name"] for field in spec["fields"]] == ["part"]
+    assert spark.sql(f"SELECT to_json(v), part FROM {name} WHERE part = 7").collect() == [('{"n":1}', 7)]

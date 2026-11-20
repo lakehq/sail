@@ -345,30 +345,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn listing_removes_idle_gates_before_snapshot() -> CatalogResult<()> {
-        let (provider, namespace) = fixture(false).await?;
-        let absent = Namespace::try_from(vec!["absent".to_string()])?;
-        // Stay below the cadence so only listing can remove this idle history.
-        for database in [&namespace, &absent] {
-            for i in 0..8 {
-                assert!(
-                    provider
-                        .get_table(database, &format!("missing_{i}"))
-                        .await
-                        .is_err()
-                );
-            }
-        }
-        assert_eq!(provider.table_gates.len(), 16);
-        assert_eq!(provider.namespace_gates.len(), 2);
-        assert!(provider.list_tables(&namespace).await?.is_empty());
-        assert!(provider.table_gates.is_empty());
-        assert_eq!(provider.namespace_gates.len(), 1);
-        assert!(!provider.namespace_gates.contains_key(&absent));
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn gate_cleanup_preserves_holders_waiters_and_unpolled_acquisitions() -> CatalogResult<()>
     {
         use std::future::Future;
@@ -432,16 +408,16 @@ mod tests {
         assert!(rename.as_mut().poll(&mut cx).is_pending()); // holds a, waits for b
         let mut publish_a = Box::pin(a.clone().write_owned());
         assert!(publish_a.as_mut().poll(&mut cx).is_pending()); // queues behind rename
-        let mut listing = Box::pin(MemoryCatalogProvider::ordered_table_access(vec![
+        let mut reverse_rename = Box::pin(MemoryCatalogProvider::ordered_table_access(vec![
             ("b".into(), b.clone()),
             ("a".into(), a.clone()),
             ("a".into(), a.clone()),
         ]));
-        assert!(listing.as_mut().poll(&mut cx).is_pending()); // must wait on a first
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_pending()); // must wait on a first
         drop(held_b);
         let Poll::Ready(rename_guards) = rename.as_mut().poll(&mut cx) else {
             return Err(CatalogError::Internal(
-                "rename blocked by out-of-order listing".into(),
+                "rename blocked by out-of-order reverse rename".into(),
             ));
         };
         drop(rename_guards);
@@ -450,14 +426,13 @@ mod tests {
                 "publication a did not acquire reservation".into(),
             ));
         };
-        let held_b = b
-            .clone()
-            .try_write_owned()
-            .map_err(|_| CatalogError::Internal("listing holds b while waiting for a".into()))?;
+        let held_b = b.clone().try_write_owned().map_err(|_| {
+            CatalogError::Internal("reverse rename holds b while waiting for a".into())
+        })?;
         drop(held_a);
-        assert!(listing.as_mut().poll(&mut cx).is_pending());
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_pending());
         drop(held_b);
-        assert!(listing.as_mut().poll(&mut cx).is_ready());
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_ready());
         Ok(())
     }
 
@@ -716,6 +691,9 @@ mod tests {
                     use std::task::{Context, Waker};
                     let mut cx = Context::from_waker(Waker::noop());
                     assert!(listing.as_mut().poll(&mut cx).is_pending());
+                    // A table acquired after the listing starts also waits at the namespace gate.
+                    let mut late_read = Box::pin(provider.get_table(&namespace, "late"));
+                    assert!(late_read.as_mut().poll(&mut cx).is_pending());
                 }
                 provider.cleanup_idle_gates();
                 assert!(provider.table_gate(&namespace, "t").try_read().is_err());
@@ -730,12 +708,15 @@ mod tests {
                         CatalogError::InvalidArgument(format!("publication task failed: {error}"))
                     })??;
                 }
-                // This read waits for detached finalization, rather than polling or sleeping.
+                let tables = listing.await?;
+                assert_eq!(tables.len(), 3);
+                let listed = tables.into_iter().find(|status| status.name == "t");
+                let expected = status_value(expected);
+                assert_eq!(listed.map(status_value).as_ref(), Some(&expected));
                 assert_eq!(
                     status_value(provider.get_table(&namespace, "t").await?),
-                    status_value(expected)
+                    expected
                 );
-                assert_eq!(listing.await?.len(), 3);
             }
             Ok::<(), CatalogError>(())
         })

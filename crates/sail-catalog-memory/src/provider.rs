@@ -649,15 +649,8 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let _namespace = self.namespace_gate(database).read_owned().await;
-        self.cleanup_idle_gates();
-        let gates = self
-            .table_gates
-            .iter()
-            .filter(|entry| &entry.key().0 == database)
-            .map(|entry| (entry.key().1.clone(), entry.value().clone()))
-            .collect::<Vec<_>>();
-        let _access = Self::ordered_table_access(gates).await;
+        // Publications hold shared namespace access until they install their catalog status.
+        let _namespace = self.namespace_gate(database).write_owned().await;
         match self.databases.get(database) {
             Some(db) => {
                 for table in &db.uncertain_tables {
