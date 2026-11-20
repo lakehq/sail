@@ -28,7 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "deleteTable",
                 "tableExists",
                 "reportMetrics",
-                "getStagingTableCredentials",
                 "renameTable",
                 "getTemporaryPathCredentials",
             ]
@@ -36,9 +35,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(str::to_owned)
             .collect(),
             excluded_schemas: [
+                "DeltaCredentialsResponse",
                 "DeltaDataType",
                 "DeltaLoadTableResponse",
                 "DeltaStagingTableResponse",
+                "DeltaStorageCredential",
                 "DeltaStructType",
             ]
             .into_iter()

@@ -1770,7 +1770,7 @@ mod catalog_managed_tests {
     }
 
     async fn read_unity_managed_table_in_store(
-        store: Arc<InMemory>,
+        store: Arc<dyn ObjectStore>,
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
     ) -> (usize, datafusion_common::Result<i64>) {
@@ -1782,7 +1782,7 @@ mod catalog_managed_tests {
     /// Returns the number of the commit requests and of the discovery requests to the catalog
     /// with the version of the table that is read.
     async fn read_unity_managed_table_with_requests(
-        store: Arc<InMemory>,
+        store: Arc<dyn ObjectStore>,
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
     ) -> (usize, usize, datafusion_common::Result<i64>) {
@@ -1809,7 +1809,7 @@ mod catalog_managed_tests {
         let table_url = Url::parse("memory:///items/").unwrap();
         session
             .runtime_env()
-            .register_object_store(&table_url, store as Arc<dyn ObjectStore>);
+            .register_object_store(&table_url, store);
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("unity".into()),
             vec!["unity".into(), "default".into(), "items".into()],
@@ -1917,6 +1917,81 @@ mod catalog_managed_tests {
             read_unity_managed_table_with_requests(store, true, Some(ratified(0, &[]))).await;
         assert_eq!(result.unwrap(), 0);
         assert_eq!((commit_requests, discover_requests), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_is_read_with_vended_storage_credentials() {
+        use datafusion::execution::object_store::{
+            DefaultObjectStoreRegistry, ObjectStoreRegistry,
+        };
+        use sail_common_datafusion::catalog::{StorageCredential, TableStorageCredentials};
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        // The table only exists in the store that is used with the vended credentials.
+        let vended = Arc::new(InMemory::new());
+        let commit = format!(
+            concat!(
+                "{{\"protocol\":{protocol}}}\n",
+                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
+                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
+                "\\\"fields\\\":[]}}\",\"partitionColumns\":[],",
+                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"}},",
+                "\"createdTime\":0}}}}\n"
+            ),
+            protocol = CATALOG_MANAGED_PROTOCOL
+        );
+        vended
+            .put(
+                &Path::from("items/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await
+            .unwrap();
+        vended
+            .put(
+                &Path::from(format!("items/_delta_log/{}", staged_commit(1, "a"))),
+                EMPTY_COMMIT.to_string().into(),
+            )
+            .await
+            .unwrap();
+        let ambient: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let (_, result) = read_unity_managed_table_in_store(
+            ambient.clone(),
+            true,
+            Some(ratified(1, &[(1, "a")])),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let registry = DefaultObjectStoreRegistry::new();
+        let location = Url::parse("memory:///items/").unwrap();
+        registry.register_store(&location, ambient);
+        let factory: VendedStoreFactory = {
+            let vended = vended.clone();
+            Arc::new(move |_| Ok(vended.clone() as Arc<dyn ObjectStore>))
+        };
+        VendedObjectStores::with_factory(factory)
+            .install(
+                &registry,
+                &location,
+                "unity:unity.default.items",
+                TableStorageCredentials {
+                    credential: StorageCredential::GcsOauth {
+                        token: "token".to_string(),
+                    },
+                    expires_at_ms: None,
+                },
+                Arc::new(|_| Box::pin(async { Err("not expected".to_string()) })),
+            )
+            .unwrap();
+        let (commit_requests, result) = read_unity_managed_table_in_store(
+            registry.get_store(&location).unwrap(),
+            true,
+            Some(ratified(1, &[(1, "a")])),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 1);
+        assert_eq!(commit_requests, 1);
     }
 
     #[tokio::test]

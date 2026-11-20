@@ -3,14 +3,15 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::{TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
     BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
     LakehouseResolvedTable, LakehouseScanPlanningRequest, LakehouseScanPlanningResponse,
-    ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
+    ResolveLakehouseTableRequest, TableAccessSession, TableStorageCredentialsRequest,
+    resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -197,6 +198,17 @@ impl CatalogManager {
     ) -> CatalogResult<TableAccessSession> {
         let (provider, database, name) = self.resolve_object(table)?;
         provider.begin_table_access(&database, &name, request).await
+    }
+
+    pub async fn get_table_storage_credentials<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .get_table_storage_credentials(&database, &name, request)
+            .await
     }
 
     pub async fn plan_lakehouse_scan<T: AsRef<str>>(

@@ -25,6 +25,7 @@ use crate::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
     DropViewOptions,
 };
+use crate::storage_credentials::install_table_storage_credentials;
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 fn clone_result_schema() -> CatalogResult<SchemaRef> {
@@ -1075,6 +1076,8 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     else {
         return Ok(Some((options, create_plan)));
     };
+    // The storage metadata is written with the credentials that the catalog issues.
+    install_table_storage_credentials(ctx, table, &create_plan.table).await?;
 
     // The catalog may plan the storage metadata at a location it allocated and with
     // properties it requires.

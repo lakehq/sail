@@ -20,7 +20,8 @@ use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
-    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, resolve_bucket_region,
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider,
+    resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
 use tokio::sync::OnceCell;
@@ -105,13 +106,24 @@ impl CredentialProvider for S3CredentialProvider {
 }
 
 pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+    get_s3_object_store_with_credentials(url, None).await
+}
+
+/// Creates the S3 object store that uses the given credentials if any,
+/// or the credentials of the environment otherwise.
+pub(crate) async fn get_s3_object_store_with_credentials(
+    url: &Url,
+    credentials: Option<AwsCredentialProvider>,
+) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
 
-    if let Some(provider) = config.credentials_provider() {
+    if let Some(credentials) = credentials {
+        builder = builder.with_credentials(credentials);
+    } else if let Some(provider) = config.credentials_provider() {
         let cache = config
             .identity_cache()
             .unwrap_or_else(|| IdentityCache::lazy().build());

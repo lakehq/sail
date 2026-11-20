@@ -10,7 +10,8 @@ use sail_catalog::lakehouse::{
     DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
     LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
-    LakehouseResolvedTable, ResolveLakehouseTableRequest, resolve_lakehouse_table_status,
+    LakehouseResolvedTable, ResolveLakehouseTableRequest, TableStorageCredentialsRequest,
+    resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -24,8 +25,8 @@ use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, DatabaseStatus, LakehouseOperation, TableColumnStatus, TableKind, TableStatus,
-    identity_partition_fields,
+    CommitAuthority, DatabaseStatus, LakehouseOperation, StorageAccess, StorageCredential,
+    TableColumnStatus, TableKind, TableStatus, TableStorageCredentials, identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
@@ -59,6 +60,9 @@ pub struct UnityCatalogProvider {
     http_client: reqwest::Client,
     /// The negotiated Delta commit API for each catalog.
     delta_commit_apis: Mutex<HashMap<String, DeltaCommitApi>>,
+    /// The IDs of the staging tables that are not registered as tables yet,
+    /// by the storage location of the staging table.
+    staging_table_ids: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +80,14 @@ impl UnityCatalogProvider {
             options,
             http_client,
             delta_commit_apis: Mutex::new(HashMap::new()),
+            staging_table_ids: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn staging_table_id_cache(&self) -> CatalogResult<MutexGuard<'_, HashMap<String, String>>> {
+        self.staging_table_ids
+            .lock()
+            .map_err(|e| CatalogError::Internal(format!("Unity Catalog staging table IDs: {e}")))
     }
 
     async fn get_client(&self) -> CatalogResult<ApiClient> {
@@ -304,6 +315,10 @@ impl UnityCatalogProvider {
                 }
             }
         }
+        self.staging_table_id_cache()?.insert(
+            storage_location_key(&location).to_string(),
+            table_id.clone(),
+        );
         properties.push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id));
         let required_protocol = required_protocol.map_or_else(
             || serde_json::json!({ "minReaderVersion": 1, "minWriterVersion": 2 }),
@@ -335,6 +350,7 @@ impl UnityCatalogProvider {
                 "Unity Catalog managed table is missing a planned staging location".to_string(),
             )
         })?;
+        let staging_location = storage_location_key(&location).to_string();
         let request = delta_create_table_request(table, location, comment, create_commit)?;
         let table_id = request.properties.get(DELTA_UNITY_TABLE_ID_KEY).cloned();
         let client = self
@@ -345,10 +361,14 @@ impl UnityCatalogProvider {
             .create_table(catalog_name.clone(), schema_name.clone(), request)
             .await
         {
-            Ok(_) => return self.get_table(database, table).await,
+            Ok(_) => {
+                self.staging_table_id_cache()?.remove(&staging_location);
+                return self.get_table(database, table).await;
+            }
             // The table is created if the status code indicates success,
             // even if the response body cannot be deserialized.
             Err(e) if e.status().is_some_and(|status| status.is_success()) => {
+                self.staging_table_id_cache()?.remove(&staging_location);
                 return self.get_table(database, table).await;
             }
             Err(e) => e,
@@ -368,6 +388,7 @@ impl UnityCatalogProvider {
                 .table_uuid
                 .eq_ignore_ascii_case(table_id)
         {
+            self.staging_table_id_cache()?.remove(&staging_location);
             return self.get_table(database, table).await;
         }
         match status {
@@ -1203,6 +1224,85 @@ impl CatalogProvider for UnityCatalogProvider {
             request.operation,
             &self.lakehouse_capabilities(),
         ))
+    }
+
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let client = self
+            .get_delta_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        if self.get_delta_commit_api(&client, &catalog_name).await? != DeltaCommitApi::V1 {
+            return Ok(None);
+        }
+        let staging_table_id = self
+            .staging_table_id_cache()?
+            .get(storage_location_key(&request.location))
+            .cloned();
+        // The response body and the error are not reported in full, since a response
+        // that is not understood can contain credentials.
+        let (status, message) = if let Some(table_id) = staging_table_id {
+            match client.get_staging_table_credentials(table_id).await {
+                Ok(response) => {
+                    return Ok(select_storage_credentials(
+                        response.inner,
+                        &request.location,
+                    ));
+                }
+                Err(e) => (e.status(), delta_error_message(&e)),
+            }
+        } else {
+            let operation = match request.access {
+                StorageAccess::Read => delta_gen::DeltaCredentialOperation::Read,
+                StorageAccess::ReadWrite => delta_gen::DeltaCredentialOperation::ReadWrite,
+            };
+            match client
+                .get_table_credentials(
+                    catalog_name.clone(),
+                    schema_name.clone(),
+                    table.to_string(),
+                    operation,
+                )
+                .await
+            {
+                Ok(response) => {
+                    return Ok(select_storage_credentials(
+                        response.inner,
+                        &request.location,
+                    ));
+                }
+                Err(e) => (e.status(), delta_error_message(&e)),
+            }
+        };
+        let name = quote_names_if_needed(&[&catalog_name, &schema_name, table]);
+        let message = message.map(|x| format!(": {x}")).unwrap_or_default();
+        match status {
+            // The server does not issue credentials for the table,
+            // e.g. when the table is not managed by the catalog.
+            Some(
+                reqwest::StatusCode::BAD_REQUEST
+                | reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::NOT_IMPLEMENTED,
+            ) => Ok(None),
+            Some(reqwest::StatusCode::UNAUTHORIZED) => Err(CatalogError::Unauthorized(format!(
+                "Unity Catalog storage credentials for table {name} unauthorized{message}"
+            ))),
+            Some(reqwest::StatusCode::FORBIDDEN) => Err(CatalogError::Forbidden(format!(
+                "Unity Catalog storage credentials for table {name} forbidden{message}"
+            ))),
+            Some(status) => Err(CatalogError::External(format!(
+                "Failed to get storage credentials for table {name} from Unity Catalog: \
+                 HTTP {status}{message}"
+            ))),
+            None => Err(CatalogError::External(format!(
+                "Failed to get storage credentials for table {name} from Unity Catalog"
+            ))),
+        }
     }
 
     fn create_table_metadata_requirement(
@@ -2164,6 +2264,70 @@ fn delta_field_metadata_to_wire(metadata: &mut serde_json::Value) {
 /// Whether the error of creating an object says that the object exists.
 /// Some servers report it as a bad request with an error code for the kind of object,
 /// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
+/// Returns the storage location in the form used to compare locations.
+fn storage_location_key(location: &str) -> &str {
+    location.trim_end_matches('/')
+}
+
+/// Selects the credential with the longest prefix that covers the storage location.
+/// Returns nothing if no credential that the client can use covers the location.
+fn select_storage_credentials(
+    response: delta_gen::DeltaCredentialsResponse,
+    location: &str,
+) -> Option<TableStorageCredentials> {
+    let location = storage_location_key(location);
+    response
+        .storage_credentials
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let prefix = storage_location_key(item.prefix.as_deref()?);
+            let rest = location.strip_prefix(prefix)?;
+            if !(rest.is_empty() || rest.starts_with('/')) {
+                return None;
+            }
+            let length = prefix.len();
+            let mut config = item.config?;
+            let mut take = |key: &str| config.remove(key).flatten().filter(|x| !x.is_empty());
+            let credential = if let Some(access_key_id) = take("s3.access-key-id")
+                && let Some(secret_access_key) = take("s3.secret-access-key")
+            {
+                StorageCredential::S3 {
+                    access_key_id,
+                    secret_access_key,
+                    session_token: take("s3.session-token"),
+                }
+            } else if let Some(token) = take("azure.sas-token") {
+                StorageCredential::AzureSas { token }
+            } else {
+                StorageCredential::GcsOauth {
+                    token: take("gcs.oauth-token")?,
+                }
+            };
+            Some((
+                length,
+                TableStorageCredentials {
+                    credential,
+                    expires_at_ms: item.expiration_time_ms,
+                },
+            ))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, credentials)| credentials)
+}
+
+/// Returns the error message that the server reports in a Delta REST API error response.
+fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
+    let body = match error {
+        delta_gen::ApiError::Response(response) => response.body.as_str(),
+        delta_gen::ApiError::Unknown(response) => response.body.as_str(),
+        _ => return None,
+    };
+    let body: serde_json::Value = serde_json::from_str(body).ok()?;
+    let message = body.get("error")?.get("message")?.as_str()?;
+    Some(message.to_string())
+}
+
 fn is_already_exists_error<E>(error: &r#gen::ApiError<E>, error_code: &str) -> bool {
     let body = match error {
         r#gen::ApiError::Response(response) => response.body.as_str(),
@@ -5629,5 +5793,352 @@ mod tests {
                 None => assert_eq!(field["type"]["type"], "struct", "status {status}"),
             }
         }
+    }
+
+    const DELTA_CREDENTIALS_PATH: &str =
+        "/delta/v1/catalogs/main/schemas/default/tables/events/credentials";
+
+    fn storage_credentials_request(access: StorageAccess) -> TableStorageCredentialsRequest {
+        TableStorageCredentialsRequest {
+            location: format!("{DELTA_TABLE_URI}/"),
+            access,
+        }
+    }
+
+    async fn mount_table_credentials(
+        server: &MockServer,
+        operation: &str,
+        response: ResponseTemplate,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(DELTA_CREDENTIALS_PATH))
+            .and(query_param("operation", operation))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    async fn table_storage_credentials(
+        operation: &str,
+        access: StorageAccess,
+        response: ResponseTemplate,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_table_credentials(&server, operation, response).await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        provider
+            .get_table_storage_credentials(&database, "events", storage_credentials_request(access))
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_use_longest_matching_prefix() {
+        let response = serde_json::json!({
+            "storage-credentials": [
+                {
+                    "prefix": "s3://bucket",
+                    "operation": "READ",
+                    "expiration-time-ms": 1,
+                    "config": {"s3.access-key-id": "bucket-key", "s3.secret-access-key": "x"}
+                },
+                {
+                    "prefix": format!("{DELTA_TABLE_URI}/"),
+                    "operation": "READ",
+                    "expiration-time-ms": 1_800_000_000_000_i64,
+                    "config": {
+                        "s3.access-key-id": "table-key",
+                        "s3.secret-access-key": "table-secret",
+                        "s3.session-token": "table-token",
+                        "azure.sas-token": null,
+                        "gcs.oauth-token": null
+                    }
+                },
+                {
+                    // The prefix is not a parent directory of the table location.
+                    "prefix": "s3://bucket/tables/8a1b",
+                    "operation": "READ",
+                    "expiration-time-ms": 2,
+                    "config": {"s3.access-key-id": "other-key", "s3.secret-access-key": "x"}
+                },
+                {
+                    "prefix": format!("{DELTA_TABLE_URI}/_delta_log"),
+                    "operation": "READ",
+                    "expiration-time-ms": 3,
+                    "config": {"s3.access-key-id": "log-key", "s3.secret-access-key": "x"}
+                }
+            ]
+        });
+        let credentials = table_storage_credentials(
+            "READ",
+            StorageAccess::Read,
+            ResponseTemplate::new(200).set_body_json(response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            credentials,
+            TableStorageCredentials {
+                credential: StorageCredential::S3 {
+                    access_key_id: "table-key".to_string(),
+                    secret_access_key: "table-secret".to_string(),
+                    session_token: Some("table-token".to_string()),
+                },
+                expires_at_ms: Some(1_800_000_000_000),
+            }
+        );
+        let debug = format!("{credentials:?}");
+        assert!(!debug.contains("table-"), "{debug}");
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_for_each_storage_and_access() {
+        for (config, expected) in [
+            (
+                serde_json::json!({"s3.access-key-id": "key", "s3.secret-access-key": "secret"}),
+                StorageCredential::S3 {
+                    access_key_id: "key".to_string(),
+                    secret_access_key: "secret".to_string(),
+                    session_token: None,
+                },
+            ),
+            (
+                serde_json::json!({"azure.sas-token": "sv=1&sig=abc"}),
+                StorageCredential::AzureSas {
+                    token: "sv=1&sig=abc".to_string(),
+                },
+            ),
+            (
+                serde_json::json!({"gcs.oauth-token": "token"}),
+                StorageCredential::GcsOauth {
+                    token: "token".to_string(),
+                },
+            ),
+        ] {
+            let response = serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ_WRITE",
+                    "config": config
+                }]
+            });
+            let credentials = table_storage_credentials(
+                "READ_WRITE",
+                StorageAccess::ReadWrite,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(credentials.credential, expected);
+            assert_eq!(credentials.expires_at_ms, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_not_issued() {
+        // The server issues no credential that the client can use for the location.
+        for response in [
+            serde_json::json!({"storage-credentials": []}),
+            serde_json::json!({}),
+            serde_json::json!({"storage-credentials": [{
+                "prefix": DELTA_TABLE_URI, "operation": "READ", "config": {}
+            }]}),
+            serde_json::json!({"storage-credentials": [{
+                "prefix": DELTA_TABLE_URI, "operation": "READ",
+                "config": {"s3.access-key-id": "key", "s3.secret-access-key": null}
+            }]}),
+            serde_json::json!({"storage-credentials": [{
+                "prefix": "s3://bucket/other", "operation": "READ",
+                "config": {"gcs.oauth-token": "token"}
+            }]}),
+        ] {
+            let credentials = table_storage_credentials(
+                "READ",
+                StorageAccess::Read,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await
+            .unwrap();
+            assert_eq!(credentials, None);
+        }
+        // The server does not issue credentials for the table.
+        for status in [400, 404, 501] {
+            let error = serde_json::json!({
+                "error": {"message": "not managed", "type": "BadRequestException", "code": status}
+            });
+            let credentials = table_storage_credentials(
+                "READ",
+                StorageAccess::Read,
+                ResponseTemplate::new(status).set_body_json(error),
+            )
+            .await
+            .unwrap();
+            assert_eq!(credentials, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_errors() {
+        let error = |status: u16| {
+            ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                "error": {"message": "no EXTERNAL USE SCHEMA", "type": "X", "code": status}
+            }))
+        };
+        let result =
+            table_storage_credentials("READ_WRITE", StorageAccess::ReadWrite, error(403)).await;
+        assert!(
+            matches!(&result, Err(CatalogError::Forbidden(message))
+                if message.contains("main.default.events")
+                    && message.contains("no EXTERNAL USE SCHEMA")),
+            "{result:?}"
+        );
+        let result = table_storage_credentials("READ", StorageAccess::Read, error(401)).await;
+        assert!(
+            matches!(result, Err(CatalogError::Unauthorized(_))),
+            "{result:?}"
+        );
+        let result = table_storage_credentials("READ", StorageAccess::Read, error(500)).await;
+        assert!(
+            matches!(result, Err(CatalogError::External(_))),
+            "{result:?}"
+        );
+
+        // A response that is not understood is not reported, since it can contain credentials.
+        let response = serde_json::json!({
+            "storage-credentials": [{
+                "prefix": DELTA_TABLE_URI,
+                "operation": "READ",
+                "expiration-time-ms": "soon",
+                "config": {"s3.access-key-id": "leaked-key", "s3.secret-access-key": 5}
+            }]
+        });
+        let result = table_storage_credentials(
+            "READ",
+            StorageAccess::Read,
+            ResponseTemplate::new(200).set_body_json(response),
+        )
+        .await;
+        // A successful status with an invalid body is not a refusal of the server.
+        let message = format!("{result:?}");
+        assert!(result.is_err(), "{message}");
+        assert!(
+            !message.contains("leaked-key") && !message.contains("soon"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_are_not_requested_from_legacy_servers() {
+        let server = MockServer::start().await;
+        mount_delta_config(&server, ResponseTemplate::new(404)).await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let credentials = provider
+            .get_table_storage_credentials(
+                &database,
+                "events",
+                storage_credentials_request(StorageAccess::Read),
+            )
+            .await
+            .unwrap();
+        assert_eq!(credentials, None);
+        let targets = received_targets(&server).await;
+        assert!(
+            !targets.iter().any(|target| target.contains("credentials")),
+            "{targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_staging_table_storage_credentials() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_delta_staging_table(&server, delta_staging_table_json()).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            // The table ID is percent-encoded in the request path.
+            .and(path_regex("^/delta/v1/staging-tables/[^/]+/credentials$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ_WRITE",
+                    "expiration-time-ms": 5,
+                    "config": {"gcs.oauth-token": "staging-token"}
+                }]
+            })))
+            .mount(&server)
+            .await;
+        mount_table_credentials(
+            &server,
+            "READ",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ",
+                    "expiration-time-ms": 6,
+                    "config": {"gcs.oauth-token": "table-token"}
+                }]
+            })),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(DELTA_TABLES_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    None,
+                    Some(0),
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let token = async |provider: &UnityCatalogProvider| {
+            let credentials = provider
+                .get_table_storage_credentials(
+                    &database,
+                    "events",
+                    storage_credentials_request(StorageAccess::Read),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            match credentials.credential {
+                StorageCredential::GcsOauth { token } => token,
+                other => format!("{other:?}"),
+            }
+        };
+
+        // The table credentials are used before the table is staged.
+        assert_eq!(token(&provider).await, "table-token");
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(managed_delta_create_options(vec![], false)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+        // The staging table credentials are used until the table is created.
+        assert_eq!(token(&provider).await, "staging-token");
+        let staging_target = format!("GET /delta/v1/staging-tables/{DELTA_TABLE_ID}/credentials");
+        assert!(received_targets(&server).await.contains(&staging_target));
+        provider
+            .create_staged_delta_table(
+                &database,
+                "events",
+                plan.table.status.location.clone(),
+                None,
+                &delta_create_commit(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(token(&provider).await, "table-token");
     }
 }

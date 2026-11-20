@@ -137,6 +137,34 @@ pub mod delta_gen {
         pub latest_table_version: Option<i64>,
     }
 
+    // The storage credentials are defined manually so that servers that issue no
+    // credentials for a location are accepted, and so that the secret values are not
+    // shown when the response is formatted.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaCredentialsResponse {
+        #[serde(rename = "storage-credentials", default)]
+        pub storage_credentials: Option<Vec<DeltaStorageCredential>>,
+    }
+
+    #[derive(Clone, serde::Deserialize)]
+    pub struct DeltaStorageCredential {
+        #[serde(default)]
+        pub prefix: Option<String>,
+        #[serde(default)]
+        pub config: Option<std::collections::HashMap<String, Option<String>>>,
+        #[serde(rename = "expiration-time-ms", default)]
+        pub expiration_time_ms: Option<i64>,
+    }
+
+    impl std::fmt::Debug for DeltaStorageCredential {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DeltaStorageCredential")
+                .field("prefix", &self.prefix)
+                .field("expiration_time_ms", &self.expiration_time_ms)
+                .finish_non_exhaustive()
+        }
+    }
+
     #[derive(Clone, Debug, serde::Deserialize)]
     pub struct DeltaLoadTableMetadata {
         #[serde(rename = "table-uuid")]

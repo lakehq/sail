@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
@@ -18,7 +18,8 @@ use crate::lakehouse::{
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
     LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
     LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
-    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
+    TableStorageCredentialsRequest, plan_lakehouse_create_from_requirement,
+    resolve_lakehouse_table_status,
 };
 
 /// Storage publication performed only after the catalog has reserved and prevalidated the
@@ -164,6 +165,19 @@ pub trait CatalogProvider: Send + Sync {
         Err(CatalogError::UnsupportedCapability(
             "table access sessions".to_string(),
         ))
+    }
+
+    /// Gets the temporary storage credentials that the catalog issues for the table.
+    /// Returns nothing if the catalog does not issue storage credentials for the table,
+    /// in which case the storage is accessed with the credentials of the environment.
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let _ = (database, table, request);
+        Ok(None)
     }
 
     async fn plan_lakehouse_scan(

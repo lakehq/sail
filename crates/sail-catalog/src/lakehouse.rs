@@ -7,7 +7,7 @@ use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,
     LakehouseAuthority, LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
     LakehouseRuntimeAccess, LakehouseStatusHints, MetadataPointerAuthority, ScanAuthority,
-    TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
+    StorageAccess, TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +109,14 @@ pub struct TableAccessSession {
     pub expires_at_ms: Option<i64>,
     pub credential_scope: Option<String>,
     pub capability_fingerprint: CapabilityFingerprint,
+}
+
+/// A request for the storage credentials that the catalog issues for a table.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TableStorageCredentialsRequest {
+    /// The storage location of the table.
+    pub location: String,
+    pub access: StorageAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

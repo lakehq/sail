@@ -5,6 +5,7 @@ use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::storage_credentials::install_table_storage_credentials;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
 };
@@ -51,6 +52,7 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
+        install_table_storage_credentials(self.ctx, table, &resolved).await?;
         let execution = resolved.execution;
         match manager
             .begin_table_access(
