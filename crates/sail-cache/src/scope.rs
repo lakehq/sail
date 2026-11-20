@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::{HashMap, Result, TableReference};
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::cache::cache_manager::{CachedFileMetadataEntry, FileMetadataCache};
 use datafusion::execution::cache::{Cache, CacheEntryInfo};
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -22,12 +23,19 @@ pub fn object_store_scoped_path(object_store_url: &ObjectStoreUrl, path: &Path) 
         .collect()
 }
 
-/// Returns the table reference that scopes file listing cache entries to one object store.
+/// Returns the table reference that scopes the file listing cache entries of `url` to its
+/// object store.
 ///
 /// DataFusion keys its file listing cache by the table reference of the listing URL and the
 /// listing prefix, so every listing of a prefix must use this reference for the same store.
-pub fn object_store_listing_cache_scope(object_store_url: &ObjectStoreUrl) -> TableReference {
-    TableReference::bare(object_store_url.as_str())
+pub fn listing_cache_scope(url: &ListingTableUrl) -> TableReference {
+    TableReference::bare(url.object_store().as_str())
+}
+
+/// Returns `url` with the table reference that scopes its file listing cache entries to its
+/// object store. DataFusion uses this reference when it lists files for a scan.
+pub fn listing_cache_scoped_url(url: &ListingTableUrl) -> ListingTableUrl {
+    url.clone().with_table_ref(listing_cache_scope(url))
 }
 
 /// Returns a view of the shared file metadata cache whose keys are scoped to one object store.
@@ -169,6 +177,21 @@ mod tests {
             object_store_scoped_path(&bucket_a, &other)
         );
         assert_ne!(object_store_scoped_path(&bucket_a, &path), path);
+        Ok(())
+    }
+
+    #[test]
+    fn listing_cache_scope_matches_scoped_url_and_differs_by_object_store() -> Result<()> {
+        let bucket_a = ListingTableUrl::parse("s3://bucket-a/data/")?;
+        let bucket_b = ListingTableUrl::parse("s3://bucket-b/data/")?;
+        assert_eq!(
+            listing_cache_scoped_url(&bucket_a).get_table_ref(),
+            &Some(listing_cache_scope(&bucket_a))
+        );
+        assert_ne!(
+            listing_cache_scope(&bucket_a),
+            listing_cache_scope(&bucket_b)
+        );
         Ok(())
     }
 

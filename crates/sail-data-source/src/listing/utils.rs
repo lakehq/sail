@@ -18,7 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_cache::scope::object_store_listing_cache_scope;
+use sail_cache::scope::listing_cache_scope;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -269,13 +269,6 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
     Ok(inferred.unwrap_or_default())
 }
 
-/// Returns `url` with the table reference that scopes its file listing cache entries to its
-/// object store. DataFusion uses this reference when it lists files for a scan.
-pub fn listing_cache_scoped_url(url: &ListingTableUrl) -> ListingTableUrl {
-    url.clone()
-        .with_table_ref(object_store_listing_cache_scope(&url.object_store()))
-}
-
 pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
@@ -291,7 +284,7 @@ pub async fn list_all_files<'a>(
             Some(cache) => {
                 // This key must match the one DataFusion uses when listing for a scan.
                 let key = TableScopedPath {
-                    table: Some(object_store_listing_cache_scope(&url.object_store())),
+                    table: Some(listing_cache_scope(url)),
                     path: url.prefix().clone(),
                 };
                 if let Some(res) = cache.get(&key) {
@@ -620,6 +613,7 @@ mod tests {
         use datafusion::prelude::SessionContext;
         use object_store::PutPayload;
         use object_store::memory::InMemory;
+        use sail_cache::scope::listing_cache_scoped_url;
 
         let ctx = SessionContext::new();
         assert!(
