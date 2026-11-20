@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
@@ -611,6 +610,8 @@ pub async fn build_delta_log_datasource_union_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use datafusion::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
     use datafusion::datasource::file_format::FileFormat;
     use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
