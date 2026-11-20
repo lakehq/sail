@@ -3,7 +3,7 @@
 //! Spark writes INT96 values in its legacy hybrid calendar when the footer has
 //! `org.apache.spark.version` and either the version is older than "3.1.0" or the footer also has
 //! `org.apache.spark.legacyINT96` (`DataSourceUtils.getRebaseSpec`). That shifts values before 1900
-//! by up to several hours after 1582 and by days before. Sail does not rebase, so it reads such
+//! by up to about a day after 1582 and by days before. Sail does not rebase, so it reads such
 //! `add.stats_parsed` bounds before 1900-01-02 as null, an unknown bound.
 
 use std::sync::Arc;
