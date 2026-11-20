@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -17,12 +17,11 @@ NAMESPACE = "load_table_requests"
 TABLE_PATH = f"/v1/namespaces/{NAMESPACE}/tables/"
 
 
-@pytest.fixture(scope="module")
-def remote(recording_catalog, seaweedfs_host_endpoint) -> Generator[str, None, None]:
+def _server(recording_catalog, seaweedfs_host_endpoint, options=""):
     endpoint, _ = recording_catalog
-    with spark_connect_server(
+    return spark_connect_server(
         envs={
-            "SAIL_CATALOG__LIST": f'[{{name="sail", type="iceberg-rest", uri="{endpoint}"}}]',
+            "SAIL_CATALOG__LIST": f'[{{name="sail", type="iceberg-rest", uri="{endpoint}"{options}}}]',
             "AWS_ACCESS_KEY_ID": "admin",
             "AWS_SECRET_ACCESS_KEY": "password",
             "AWS_REGION": "us-east-1",
@@ -30,7 +29,12 @@ def remote(recording_catalog, seaweedfs_host_endpoint) -> Generator[str, None, N
             "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
             "AWS_ALLOW_HTTP": "true",
         }
-    ) as server:
+    )
+
+
+@pytest.fixture(scope="module")
+def remote(recording_catalog, seaweedfs_host_endpoint) -> Generator[str, None, None]:
+    with _server(recording_catalog, seaweedfs_host_endpoint) as server:
         yield server.remote
 
 
@@ -55,7 +59,7 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
 
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2]
-        assert _table_loads(records, start) == [("first", "vended-credentials")]
+        assert _table_loads(records, start) == [("first", None)]
 
         start = len(records)
         # Repeated references to a table also load it once.
@@ -69,15 +73,35 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
         )
         assert [row.id for row in rows] == [2]
         assert sorted(_table_loads(records, start)) == [
-            ("first", "vended-credentials"),
-            ("second", "vended-credentials"),
+            ("first", None),
+            ("second", None),
         ]
 
         # Each statement loads the table again and sees its latest version.
         spark.sql(f"INSERT INTO {first} VALUES (3)")
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2, 3]
-        assert _table_loads(records, start) == [("first", "vended-credentials")]
+        assert _table_loads(records, start) == [("first", None)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {first}")
         spark.sql(f"DROP TABLE IF EXISTS {second}")
+
+
+def test_read_sends_configured_access_delegation_once(spark, recording_catalog, seaweedfs_host_endpoint):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.delegated"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1)")
+        options = ', access_delegation="vended-credentials"'
+        with (
+            _server(recording_catalog, seaweedfs_host_endpoint, options) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            start = len(records)
+            assert [row.id for row in sessions.create().table(name).collect()] == [1]
+            assert _table_loads(records, start) == [("delegated", "vended-credentials")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+

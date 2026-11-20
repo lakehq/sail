@@ -46,7 +46,9 @@ pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 pub const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "access-delegation";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
-const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
+// FIXME: Sail does not use vended credentials yet, and the header makes some catalogs (e.g.
+// Polaris without STS) reject table loads; restore `vended-credentials` once supported.
+// const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
 const REST_ACCESS_DELEGATION_NONE: &str = "none";
 const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
 const REST_REMOTE_SIGNING_ENABLED_KEY: &str = "s3.remote-signing-enabled";
@@ -108,7 +110,11 @@ impl CatalogConfig<'_> {
             .get(REST_CATALOG_PROP_ACCESS_DELEGATION)
             .map(|value| value.trim())
         {
-            None => Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            // FIXME: Sail does not use vended credentials yet, and the header makes some
+            // catalogs (e.g. Polaris without STS) reject table loads; restore
+            // `vended-credentials` once supported.
+            // None => Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            None => None,
             Some("") => None,
             Some(value) if value.eq_ignore_ascii_case(REST_ACCESS_DELEGATION_NONE) => None,
             Some(value) => Some(value),
@@ -4304,10 +4310,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path(ctx.path("/namespaces/db1/tables/table1")))
-            .and(header(
-                "X-Iceberg-Access-Delegation",
-                REST_ACCESS_DELEGATION_VENDED_CREDENTIALS,
-            ))
+            .and(|request: &Request| !request.headers.contains_key("X-Iceberg-Access-Delegation"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
                 "metadata": {
@@ -5202,15 +5205,19 @@ mod tests {
 
     #[tokio::test]
     async fn get_lakehouse_table_and_begin_table_access_load_the_table_once() {
-        let ctx = TestContext::new(Some("test")).await;
+        let ctx = TestContext::new_with_properties(
+            Some("test"),
+            HashMap::from([(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                "vended-credentials".to_string(),
+            )]),
+        )
+        .await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         Mock::given(method("GET"))
             .and(path(ctx.path("/namespaces/db1/tables/table1")))
-            .and(header(
-                "X-Iceberg-Access-Delegation",
-                REST_ACCESS_DELEGATION_VENDED_CREDENTIALS,
-            ))
+            .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(create_table_response_with_access_session_hints()),
