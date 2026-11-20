@@ -1074,7 +1074,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             // A server may reject the access delegation header before it looks up the table,
             // so the table is loaded again without the header. A view or a missing table is
             // then reported as not found. For an existing table, the session is left out, so
-            // that the rejection is reported when table access begins.
+            // that table access loads the table again with the header.
             Err(error) if access_delegation.is_some() => {
                 match self.load_table_result(database, table, None).await {
                     Ok(result) => (result, None),
@@ -5296,6 +5296,16 @@ mod tests {
         );
     }
 
+    fn iceberg_error_response(code: u16, error_type: &str) -> ResponseTemplate {
+        ResponseTemplate::new(code).set_body_json(serde_json::json!({
+            "error": {
+                "message": error_type,
+                "type": error_type,
+                "code": code
+            }
+        }))
+    }
+
     /// Creates a catalog with the access delegation header, for a server that rejects the
     /// header with 403 Forbidden and answers a table load without the header with `headerless`.
     async fn rejected_access_delegation_context(
@@ -5313,7 +5323,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(ctx.path("/namespaces/db1/tables/table1")))
             .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
-            .respond_with(ResponseTemplate::new(403))
+            .respond_with(iceberg_error_response(403, "ForbiddenException"))
             .expect(rejected)
             .mount(&ctx.server)
             .await;
@@ -5347,7 +5357,11 @@ mod tests {
 
     #[tokio::test]
     async fn get_lakehouse_table_reports_missing_table_when_access_delegation_is_rejected() {
-        let ctx = rejected_access_delegation_context(1, ResponseTemplate::new(404)).await;
+        let ctx = rejected_access_delegation_context(
+            1,
+            iceberg_error_response(404, "NoSuchTableException"),
+        )
+        .await;
         let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
         assert!(matches!(err, CatalogError::NotFound(_, _)), "{err:?}");
     }
@@ -5384,7 +5398,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_lakehouse_table_reports_rejected_access_delegation_on_other_errors() {
-        let ctx = rejected_access_delegation_context(1, ResponseTemplate::new(500)).await;
+        let ctx =
+            rejected_access_delegation_context(1, iceberg_error_response(500, "ServerError")).await;
         let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
         assert!(
             matches!(&err, CatalogError::External(message) if message.contains("403 Forbidden")),

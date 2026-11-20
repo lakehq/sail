@@ -190,16 +190,39 @@ def test_rejected_access_delegation_is_reported_when_table_access_begins(
             _server(catalog, seaweedfs_host_endpoint, ', access_delegation="vended-credentials"') as server,
             spark_session_factory(server.remote) as sessions,
         ):
+            _, records = catalog
             session = sessions.create()
             # Views and missing tables are resolved as without the header.
+            start = len(records)
             assert [row.id for row in session.sql(f"SELECT * FROM {view}").collect()] == [1]
+            assert _requests(records, start) == [
+                (f"{NAMESPACE}/tables/constant", 403, "vended-credentials"),
+                (f"{NAMESPACE}/tables/constant", 404, None),
+                (f"{NAMESPACE}/views/constant", 200, None),
+            ]
+            start = len(records)
             with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
                 session.table(f"{NAMESPACE}.missing").collect()
+            # The namespace name is also looked up as the base table of a metadata table.
+            assert _requests(records, start) == [
+                (f"{NAMESPACE}/tables/missing", 403, "vended-credentials"),
+                (f"{NAMESPACE}/tables/missing", 404, None),
+                (f"{NAMESPACE}/views/missing", 404, None),
+                (f"default/tables/{NAMESPACE}", 403, "vended-credentials"),
+                (f"default/tables/{NAMESPACE}", 404, None),
+                (f"default/views/{NAMESPACE}", 404, None),
+            ]
             # The rejection is reported when table access begins, after read validation.
             with pytest.raises(Exception, match="expression must be deterministic"):
                 session.sql(f"SELECT * FROM {table} VERSION AS OF rand()").collect()
+            start = len(records)
             with pytest.raises(Exception, match="403 Forbidden"):
                 session.table(table).collect()
+            assert _requests(records, start) == [
+                (f"{NAMESPACE}/tables/rejected", 403, "vended-credentials"),
+                (f"{NAMESPACE}/tables/rejected", 200, None),
+                (f"{NAMESPACE}/tables/rejected", 403, "vended-credentials"),
+            ]
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view}")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
