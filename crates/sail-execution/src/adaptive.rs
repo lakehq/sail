@@ -40,16 +40,16 @@ use crate::job_graph::{ExternalStageInput, HandoffOutput, OutputDistribution};
 use crate::plan::HandoffExec;
 
 pub(crate) struct AdaptiveJoinOptions {
-    /// Build sides below this many bytes are broadcast, as in DataFusion's `JoinSelection`.
+    /// Measured build sides below this many bytes are broadcast.
     pub broadcast_threshold: usize,
     pub target_partitions: usize,
     pub config: Arc<ConfigOptions>,
 }
 
 impl AdaptiveJoinOptions {
-    pub fn new(config: Arc<ConfigOptions>) -> Self {
+    pub fn new(config: Arc<ConfigOptions>, broadcast_threshold: usize) -> Self {
         Self {
-            broadcast_threshold: config.optimizer.hash_join_single_partition_threshold,
+            broadcast_threshold,
             target_partitions: config.execution.target_partitions,
             config,
         }
@@ -1028,9 +1028,8 @@ mod tests {
 
     fn options(broadcast_threshold: usize) -> AdaptiveJoinOptions {
         let mut config = ConfigOptions::default();
-        config.optimizer.hash_join_single_partition_threshold = broadcast_threshold;
         config.execution.target_partitions = PARTITIONS;
-        AdaptiveJoinOptions::new(Arc::new(config))
+        AdaptiveJoinOptions::new(Arc::new(config), broadcast_threshold)
     }
 
     /// Replaces every hand-off with the subtree it replaced.

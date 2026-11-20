@@ -104,6 +104,7 @@ pub struct ClusterJobRunner {
     driver: DriverHandle,
     shuffle_backend: ShuffleBackendKind,
     enable_adaptive_join_selection: bool,
+    adaptive_join_broadcast_threshold: usize,
     /// Identifies the jobs of one query run with adaptive join selection.
     next_group: AtomicU64,
 }
@@ -116,11 +117,13 @@ impl ClusterJobRunner {
     ) -> Self {
         let shuffle_backend = options.shuffle_backend.clone();
         let enable_adaptive_join_selection = options.enable_adaptive_join_selection;
+        let adaptive_join_broadcast_threshold = options.adaptive_join_broadcast_threshold;
         let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
         Self {
             driver,
             shuffle_backend,
             enable_adaptive_join_selection,
+            adaptive_join_broadcast_threshold,
             next_group: AtomicU64::new(0),
         }
     }
@@ -268,7 +271,10 @@ impl JobRunner for ClusterJobRunner {
         if !self.enable_adaptive_join_selection {
             return self.run_job(ctx, plan).await;
         }
-        let options = AdaptiveJoinOptions::new(ctx.copied_config().options().clone());
+        let options = AdaptiveJoinOptions::new(
+            ctx.copied_config().options().clone(),
+            self.adaptive_join_broadcast_threshold,
+        );
         let handoffs = Handoffs::default();
         let group = self.next_group.fetch_add(1, Ordering::Relaxed);
         let runner = ClusterSideRunner {

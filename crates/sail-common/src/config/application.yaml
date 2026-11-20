@@ -313,8 +313,18 @@
     Whether to choose between broadcast and partitioned hash joins from the actual size of
     the build side. When enabled, the build side of each partitioned hash join whose size
     is only estimated runs first as a separate job, and the join is broadcast if the result
-    is below the hash join single partition threshold. Build sides that exceed the threshold
-    are abandoned once the threshold is reached and recomputed in the main job.
+    is below `cluster.adaptive_join_broadcast_threshold`. Build sides that reach the
+    threshold are handed off to the main job instead of being computed again.
+  experimental: true
+
+- key: cluster.adaptive_join_broadcast_threshold
+  type: number
+  default: "10485760"
+  description: |
+    The size in bytes below which a build side measured by adaptive join selection is
+    broadcast. This applies to measured sizes only; joins planned from estimates use
+    DataFusion's hash join single partition threshold. Each worker may hold up to four
+    times this amount per stage for outputs that are handed off to a later job.
   experimental: true
 
 - key: cluster.rpc_retry_strategy.type
