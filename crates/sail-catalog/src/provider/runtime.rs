@@ -9,7 +9,7 @@ use tokio::runtime::Handle;
 use super::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
@@ -109,7 +109,7 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let inner = self.inner.clone();
         let database = database.clone();
