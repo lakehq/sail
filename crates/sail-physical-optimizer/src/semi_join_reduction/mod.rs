@@ -8,10 +8,18 @@
 //! Only direct column lineage and inner/semi equality joins are traversed; grouping
 //! keys are safe because removing entire groups leaves retained aggregates unchanged.
 //!
+//! The keys may come from a filtered scan below inner or semi equality joins, filters,
+//! and grouping keys on their own side of the join: each of those only removes key
+//! tuples, so the scan's keys are a superset of the join input's keys.
+//!
 //! A reduction is only generated below an aggregate or a semi join whose filter side
 //! is more than a scan, which join enumeration never reorders across. Among inner
 //! joins, enumeration can normally place the dimension next to a fact already, and a
 //! copy of its keys would only repeat the probe of the original join.
+//!
+//! Speculative reductions are planned as broadcasts whatever their estimated size,
+//! after join selection, for adaptive execution to keep once the keys are known to be
+//! small, or to remove.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -27,6 +35,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr};
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::execution_plan::reset_plan_states;
@@ -36,6 +45,7 @@ use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
+use sail_common_datafusion::OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX;
 use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
 use sail_physical_plan::shared_cte::{SharedCteRestriction, SharedCteScanExec};
 
@@ -45,9 +55,22 @@ const MAX_REDUCTIONS: usize = 64;
 
 mod benefit;
 
-struct Context<'a> {
-    remaining: usize,
-    options: &'a super::JoinReorderOptions,
+/// Relative costs per row, shared with join reorder.
+#[derive(Debug, Clone)]
+pub struct SemiJoinReductionOptions {
+    pub build_side_weight: f64,
+    pub probe_side_weight: f64,
+    pub output_weight: f64,
+}
+
+impl Default for SemiJoinReductionOptions {
+    fn default() -> Self {
+        Self {
+            build_side_weight: 1.0,
+            probe_side_weight: 0.1,
+            output_weight: 1.0,
+        }
+    }
 }
 
 /// The restrictions of the references of a shared CTE (see [`SharedCteRestriction`]),
@@ -103,20 +126,79 @@ impl ExtensionOptions for SharedCteRestrictions {
     }
 }
 
-pub(super) fn propagate(
-    plan: Arc<dyn ExecutionPlan>,
-    config: &ConfigOptions,
-    options: &super::JoinReorderOptions,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut context = Context {
-        remaining: MAX_REDUCTIONS,
-        options,
-    };
-    let plan = visit(plan, config, &mut context)?;
-    match config.extensions.get::<SharedCteRestrictions>() {
-        Some(restrictions) => restrict(plan, restrictions, config, &mut context),
-        None => Ok(plan),
+#[derive(Debug)]
+pub struct SemiJoinReduction {
+    options: SemiJoinReductionOptions,
+    speculative: bool,
+}
+
+impl SemiJoinReduction {
+    /// Reductions whose keys are estimated to be small enough to broadcast. Runs before
+    /// join enumeration, so that it sees the statistics of the reduced inputs.
+    pub fn new(options: SemiJoinReductionOptions) -> Self {
+        Self {
+            options,
+            speculative: false,
+        }
     }
+
+    /// Broadcast reductions whatever their estimated size, for adaptive execution to
+    /// keep or remove. Runs after join selection, which would otherwise repartition them.
+    pub fn speculative(options: SemiJoinReductionOptions) -> Self {
+        Self {
+            options,
+            speculative: true,
+        }
+    }
+}
+
+impl PhysicalOptimizerRule for SemiJoinReduction {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut context = Context {
+            remaining: MAX_REDUCTIONS,
+            options: &self.options,
+            speculative: self.speculative,
+        };
+        let plan = visit(plan, config, &mut context)?;
+        match config.extensions.get::<SharedCteRestrictions>() {
+            Some(restrictions) if !self.speculative => {
+                restrict(plan, restrictions, config, &mut context)
+            }
+            _ => Ok(plan),
+        }
+    }
+
+    fn name(&self) -> &str {
+        if self.speculative {
+            "SpeculativeSemiJoinReduction"
+        } else {
+            "SemiJoinReduction"
+        }
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+/// Whether `join` is a reduction inserted by [`SemiJoinReduction`].
+pub fn is_reduction(join: &HashJoinExec) -> bool {
+    join.join_type() == &JoinType::RightSemi
+        && join.left().schema().fields().first().is_some_and(|field| {
+            field
+                .name()
+                .starts_with(OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX)
+        })
+}
+
+struct Context<'a> {
+    remaining: usize,
+    options: &'a SemiJoinReductionOptions,
+    speculative: bool,
 }
 
 /// Copies the keys of all the references of a shared CTE into the plan of the CTE, as
@@ -208,6 +290,7 @@ fn union(
             keys,
             rows,
             scan_rows,
+            scan_above_limit: false,
             null_equality: candidate.null_equality,
         };
         return Ok(Some((candidate.columns.clone(), restriction)));
@@ -242,7 +325,8 @@ fn visit(
     if !matches!(
         join.join_type(),
         JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-    ) || context.remaining == 0
+    ) || is_reduction(join)
+        || context.remaining == 0
     {
         return Ok(plan);
     }
@@ -251,24 +335,6 @@ fn visit(
     for source_side in 0..2 {
         // A semi join only requires its output side to have matches in the other
         // side. Filtering the non-output side by its own matches is redundant too.
-        let source = &children[source_side];
-        let Some(scan_rows) = filtered_scan_rows(source, false)? else {
-            continue;
-        };
-        // Each reduction executes the source independently. A small filtered
-        // result bounds the hash table, but does not make a large scan cheap.
-        // TODO: This also caps the dimension itself. TPC-DS `item` exceeds the default
-        //   (131072 rows) from SF100, which disables the `item` reductions of q64 there.
-        let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
-        if scan_rows > max_rows {
-            continue;
-        }
-        let Some(rows) = row_count(source)? else {
-            continue;
-        };
-        if rows > max_rows {
-            continue;
-        }
         let mut source_keys = Vec::new();
         let mut target_keys = Vec::new();
         for (left, right) in join.on() {
@@ -289,23 +355,38 @@ fn visit(
         if source_keys.is_empty() {
             continue;
         }
-        let expr: Vec<_> = source_keys
+        let Some(source) = find_source(&children[source_side], &source_keys)? else {
+            continue;
+        };
+        // Each reduction executes the source independently. A small filtered
+        // result bounds the hash table; the benefit model charges the scan itself.
+        let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
+        let rows = match source.rows {
+            Some(rows) if rows <= max_rows => rows,
+            // Adaptive execution removes a speculative reduction above the broadcast
+            // size, so judge its benefit at the largest size it can keep.
+            _ if context.speculative => max_rows,
+            _ => continue,
+        };
+        let expr: Vec<_> = source
+            .keys
             .iter()
             .enumerate()
             .map(|(i, &index)| ProjectionExpr {
-                expr: column(source, index),
-                alias: format!("__early_join_key_{i}"),
+                expr: column(&source.plan, index),
+                alias: format!("{OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX}{i}"),
             })
             .collect();
         let keys: Arc<dyn ExecutionPlan> =
-            Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
-        if !can_collect(&keys, rows, config)? {
+            Arc::new(ProjectionExec::try_new(expr, Arc::clone(&source.plan))?);
+        if !context.speculative && !can_collect(&keys, rows, config)? {
             continue;
         }
         let restriction = Restriction {
             keys,
             rows,
-            scan_rows,
+            scan_rows: source.scan_rows,
+            scan_above_limit: source.scan_rows > max_rows,
             null_equality: join.null_equality(),
         };
         children[1 - source_side] = push(
@@ -317,6 +398,101 @@ fn visit(
         )?;
     }
     replace_children_if_necessary(plan, children)
+}
+
+/// A filtered scan whose `keys` include every key tuple of the join input it was
+/// found under.
+struct Source {
+    plan: Arc<dyn ExecutionPlan>,
+    keys: Vec<usize>,
+    rows: Option<usize>,
+    scan_rows: usize,
+}
+
+impl Source {
+    fn smaller(self, other: Self) -> Self {
+        let rank = |source: &Self| (source.rows.unwrap_or(usize::MAX), source.scan_rows);
+        if rank(&other) < rank(&self) {
+            other
+        } else {
+            self
+        }
+    }
+}
+
+/// Find the filtered scan with the fewest estimated rows whose `keys` columns hold
+/// every key tuple of `plan`. Limits, filters, grouping, and inner or semi equality
+/// joins only remove tuples, so a scan found below them is a valid source.
+fn find_source(plan: &Arc<dyn ExecutionPlan>, keys: &[usize]) -> Result<Option<Source>> {
+    if let Some(scan_rows) = filtered_scan_rows(plan, false)? {
+        return Ok(Some(Source {
+            plan: Arc::clone(plan),
+            keys: keys.to_vec(),
+            rows: row_count(plan)?,
+            scan_rows,
+        }));
+    }
+    let mapped = if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        let mut mapped = Vec::with_capacity(keys.len());
+        for &i in keys {
+            let Some(expr) = projection.expr().get(i) else {
+                return Ok(None);
+            };
+            let Some(column) = expr.expr.downcast_ref::<Column>() else {
+                return Ok(None);
+            };
+            mapped.push(column.index());
+        }
+        vec![(Arc::clone(projection.input()), mapped)]
+    } else if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+        if volatile(filter.predicate())? {
+            return Ok(None);
+        }
+        let mapped = keys
+            .iter()
+            .map(|&i| filter.projection().as_ref().map_or(i, |p| p[i]))
+            .collect();
+        vec![(Arc::clone(filter.input()), mapped)]
+    } else if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+        // Grouping sets can synthesize NULL keys, which the input does not hold.
+        if aggregate.group_expr().has_grouping_set() {
+            return Ok(None);
+        }
+        let mut mapped = Vec::with_capacity(keys.len());
+        for &i in keys {
+            let Some((expr, _)) = aggregate.group_expr().expr().get(i) else {
+                return Ok(None);
+            };
+            let Some(column) = expr.downcast_ref::<Column>() else {
+                return Ok(None);
+            };
+            mapped.push(column.index());
+        }
+        vec![(Arc::clone(aggregate.input()), mapped)]
+    } else if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+        && matches!(
+            join.join_type(),
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        )
+    {
+        let [left, right] = join_input_keys(join, keys);
+        [(join.left(), left), (join.right(), right)]
+            .into_iter()
+            .filter_map(|(input, keys)| Some((Arc::clone(input), keys?)))
+            .collect()
+    } else {
+        return Ok(None);
+    };
+    let mut best: Option<Source> = None;
+    for (input, keys) in mapped {
+        if let Some(source) = find_source(&input, &keys)? {
+            best = Some(match best {
+                Some(best) => best.smaller(source),
+                None => source,
+            });
+        }
+    }
+    Ok(best)
 }
 
 /// Return the pre-filter row count of a deterministic filtered file scan.
@@ -371,6 +547,10 @@ struct Restriction {
     keys: Arc<dyn ExecutionPlan>,
     rows: usize,
     scan_rows: usize,
+    /// Whether the source scan is above the row threshold of a collected join input, so
+    /// that it must instead be small next to the target. The sources of the keys of a
+    /// shared CTE's references are each within the threshold.
+    scan_above_limit: bool,
     null_equality: NullEquality,
 }
 
@@ -465,6 +645,11 @@ fn push(
             }
         }
     } else if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+        // An existing reduction already restricts its input; reducing it again only
+        // repeats the probe, and its keys must not be reduced in turn.
+        if is_reduction(join) {
+            return Ok(plan);
+        }
         if matches!(
             join.join_type(),
             JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
@@ -501,6 +686,7 @@ fn push(
     } else if plan.is::<DataSourceExec>() {
         return insert(plan, keys, restriction, downstream_work, context);
     } else if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+        && !context.speculative
         && !restriction.keys.exists(reads_scalar_subquery)?
     {
         // The plan of a shared CTE is not in the place of its references, so the keys
@@ -509,7 +695,8 @@ fn push(
         // planner has the keys of all of them copied into the plan of the CTE.
         // The plan of the CTE is not below the operator that provides the result of a
         // scalar subquery of the plan of the references, so keys that depend on such a
-        // result are not recorded.
+        // result are not recorded. Nor are the keys of a speculative reduction, which
+        // adaptive execution may remove once their size is known.
         let columns = keys
             .iter()
             .map(|&i| scan.projection().map_or(i, |projection| projection[i]))
@@ -552,7 +739,7 @@ fn insert(
                 .map(|i| {
                     (
                         column(&restriction.keys, i),
-                        format!("__early_join_key_{i}"),
+                        format!("{OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX}{i}"),
                     )
                 })
                 .collect(),
@@ -570,7 +757,11 @@ fn insert(
         None,
         &JoinType::RightSemi,
         None,
-        PartitionMode::Auto,
+        if context.speculative {
+            PartitionMode::CollectLeft
+        } else {
+            PartitionMode::Auto
+        },
         restriction.null_equality,
         false,
     )?))
@@ -778,12 +969,14 @@ mod tests {
             keys: Arc::clone(&keys),
             rows: 1,
             scan_rows: 1,
+            scan_above_limit: false,
             null_equality: NullEquality::NullEqualsNull,
         };
-        let options = super::super::JoinReorderOptions::default();
+        let options = SemiJoinReductionOptions::default();
         let mut context = Context {
             remaining: MAX_REDUCTIONS,
             options: &options,
+            speculative: false,
         };
         assert!(shared_cte_restrictions([&reference(&scan, 0)?]).is_empty());
         // The keys reach the reference through a projection of its columns, and no join
@@ -918,7 +1111,8 @@ mod tests {
         let restrictions = SharedCteRestrictions::new(references);
         let mut config = ConfigOptions::default();
         config.extensions.insert(restrictions.clone());
-        let plan = propagate(body, &config, &super::super::JoinReorderOptions::default())?;
+        let rule = SemiJoinReduction::new(SemiJoinReductionOptions::default());
+        let plan = rule.optimize(body, &config)?;
         Ok((plan, restrictions.applied()))
     }
 
@@ -1128,6 +1322,197 @@ mod tests {
         let (plan, applied) = restrict_grouped_facts(vec![low()?, high()?], false)?;
         assert!(!applied);
         assert_eq!(count::<HashJoinExec>(&plan)?, 0);
+        Ok(())
+    }
+
+    /// A filtered file scan of `(key, label)` with `rows` rows and keys `1..=keys`.
+    fn scan(rows: usize, keys: i64, filtered: bool) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::common::stats::Precision;
+        use datafusion::common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_expr::expressions::lit;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]));
+        let mut statistics = Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(rows));
+        statistics.column_statistics[0] = ColumnStatistics::new_unknown()
+            .with_null_count(Precision::Exact(0))
+            .with_min_value(Precision::Exact(ScalarValue::Int64(Some(1))))
+            .with_max_value(Precision::Exact(ScalarValue::Int64(Some(keys))));
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(Arc::clone(&schema))),
+        )
+        .with_statistics(statistics)
+        .build();
+        let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        if !filtered {
+            return Ok(scan);
+        }
+        let predicate = Arc::new(BinaryExpr::new(
+            column(&scan, 1),
+            Operator::Eq,
+            lit("selected"),
+        ));
+        Ok(Arc::new(FilterExec::try_new(predicate, scan)?))
+    }
+
+    fn inner_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: (usize, usize),
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            vec![(column(&left, on.0), column(&right, on.1))],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))
+    }
+
+    /// TPC-H Q17: facts joined to a filtered dimension, then to an aggregate of the
+    /// facts grouped by the same key.
+    fn q17(dimension_rows: usize, fact_rows: usize) -> Result<Arc<dyn ExecutionPlan>> {
+        let keys = i64::try_from(dimension_rows)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let selected = inner_join(
+            scan(fact_rows, keys, false)?,
+            scan(dimension_rows, keys, true)?,
+            (0, 0),
+        )?;
+        let facts = scan(fact_rows, keys, false)?;
+        let grouped: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(column(&facts, 0), "key".to_string())]),
+            vec![],
+            vec![],
+            Arc::clone(&facts),
+            facts.schema(),
+        )?);
+        // The dimension key is column 2 of the inner join's output.
+        inner_join(selected, grouped, (2, 0))
+    }
+
+    /// The reductions below the aggregate of `plan`, as `(partition mode, source)`.
+    fn reductions_below_aggregate(plan: &Arc<dyn ExecutionPlan>) -> Vec<PartitionMode> {
+        let mut found = vec![];
+        plan.apply(|node| {
+            if let Some(aggregate) = node.downcast_ref::<AggregateExec>()
+                && let Some(join) = aggregate.input().downcast_ref::<HashJoinExec>()
+                && is_reduction(join)
+            {
+                found.push(*join.partition_mode());
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })
+        .ok();
+        found
+    }
+
+    fn optimize(
+        rule: SemiJoinReduction,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let plan = rule.optimize(plan, &ConfigOptions::default())?;
+        // The original joins and the dimension filter must be retained.
+        let mut joins = 0;
+        plan.apply(|node| {
+            if node
+                .downcast_ref::<HashJoinExec>()
+                .is_some_and(|join| !is_reduction(join))
+            {
+                joins += 1;
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(joins, 2);
+        Ok(plan)
+    }
+
+    #[test]
+    fn keys_reach_an_aggregate_from_a_dimension_below_another_join() -> Result<()> {
+        let plan = optimize(
+            SemiJoinReduction::new(Default::default()),
+            q17(20_000, 600_000)?,
+        )?;
+        assert_eq!(reductions_below_aggregate(&plan), vec![PartitionMode::Auto]);
+        Ok(())
+    }
+
+    #[test]
+    fn large_estimates_need_speculative_reductions() -> Result<()> {
+        let plan = q17(2_000_000, 60_000_000)?;
+        let options = SemiJoinReductionOptions::default();
+        let reduced = optimize(SemiJoinReduction::new(options.clone()), Arc::clone(&plan))?;
+        assert!(reductions_below_aggregate(&reduced).is_empty());
+        let reduced = optimize(SemiJoinReduction::speculative(options), plan)?;
+        assert_eq!(
+            reductions_below_aggregate(&reduced),
+            vec![PartitionMode::CollectLeft]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_source_scan_comparable_to_the_target_is_not_duplicated() -> Result<()> {
+        let plan = q17(2_000_000, 6_000_000)?;
+        let reduced = optimize(SemiJoinReduction::speculative(Default::default()), plan)?;
+        assert!(reductions_below_aggregate(&reduced).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn existing_reductions_are_not_reduced_again() -> Result<()> {
+        let options = SemiJoinReductionOptions::default();
+        let plan = optimize(
+            SemiJoinReduction::new(options.clone()),
+            q17(20_000, 600_000)?,
+        )?;
+        let plan = optimize(SemiJoinReduction::speculative(options), plan)?;
+        assert_eq!(reductions_below_aggregate(&plan), vec![PartitionMode::Auto]);
+        let mut reductions = 0;
+        plan.apply(|node| {
+            if node
+                .downcast_ref::<HashJoinExec>()
+                .is_some_and(is_reduction)
+            {
+                reductions += 1;
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(reductions, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn sources_are_not_found_through_outer_joins() -> Result<()> {
+        let left = scan(600_000, 20_000, false)?;
+        let right = scan(20_000, 20_000, true)?;
+        let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            vec![(column(&left, 0), column(&right, 0))],
+            None,
+            &JoinType::Right,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?);
+        // The right side's keys are all preserved, but the left side's are not a
+        // superset of the output's.
+        assert!(find_source(&join, &[0])?.is_none());
+        assert!(find_source(&join, &[2])?.is_none());
+        let inner = inner_join(left, right, (0, 0))?;
+        assert!(find_source(&inner, &[0])?.is_some_and(|source| source.keys == vec![0]));
         Ok(())
     }
 

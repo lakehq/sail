@@ -113,17 +113,70 @@ impl TaskAssigner {
         Ok(())
     }
 
+    /// Occupied worker slots whose tasks all belong to the given jobs.
+    fn shared_slots(
+        &self,
+        jobs: &IndexSet<JobId>,
+        excluded: &HashSet<(WorkerId, usize)>,
+    ) -> Vec<(WorkerId, usize)> {
+        if jobs.is_empty() {
+            return vec![];
+        }
+        let mut slots = vec![];
+        for (worker_id, worker) in &self.workers {
+            let WorkerResource::Active { task_slots, .. } = worker else {
+                continue;
+            };
+            for (index, slot) in task_slots.iter().enumerate() {
+                if !slot.is_vacant()
+                    && slot.tasks().all(|key| jobs.contains(&key.job_id))
+                    && !excluded.contains(&(*worker_id, index))
+                {
+                    slots.push((*worker_id, index));
+                }
+            }
+        }
+        slots
+    }
+
     pub fn exclude_task(&mut self, key: &TaskKey) {
         self.task_queue.retain(|x| !x.contains(key));
     }
 
+    #[cfg(test)]
     pub fn assign_tasks(&mut self) -> Vec<TaskSetAssignment> {
+        self.assign_tasks_with_related(&|_| IndexSet::new())
+    }
+
+    /// Assigns queued regions. A region first uses slots held only by `related` jobs
+    /// (other jobs of the same query, such as handed-off jobs it reads), as the stages of
+    /// one job share slots.
+    pub fn assign_tasks_with_related(
+        &mut self,
+        related: &dyn Fn(JobId) -> IndexSet<JobId>,
+    ) -> Vec<TaskSetAssignment> {
         let mut assignments = vec![];
         let mut assigner = self.build_worker_task_slot_assigner();
+        let mut lent = HashSet::new();
 
         while let Some(region) = self.task_queue.pop_front() {
+            let jobs = region
+                .tasks
+                .iter()
+                .flat_map(|(_, set)| set.tasks())
+                .next()
+                .map(|key| related(key.job_id))
+                .unwrap_or_default();
+            assigner.shared = self.shared_slots(&jobs, &lent);
             match assigner.try_assign_task_region(region) {
-                Ok(x) => assignments.extend(x),
+                Ok(x) => {
+                    for assignment in &x {
+                        if let TaskAssignment::Worker { worker_id, slot } = assignment.assignment {
+                            lent.insert((worker_id, slot));
+                        }
+                    }
+                    assignments.extend(x)
+                }
                 Err(region) => {
                     // The region cannot be successfully assigned as a whole
                     // due to insufficient worker task slots.
@@ -321,11 +374,16 @@ impl TaskAssignmentGetter for TaskAssigner {
 struct TaskSlotAssigner {
     /// The available task slots on workers.
     slots: Vec<(WorkerId, Vec<usize>)>,
+    /// Occupied slots that the region being assigned may share, used first.
+    shared: Vec<(WorkerId, usize)>,
 }
 
 impl TaskSlotAssigner {
     fn new(slots: Vec<(WorkerId, Vec<usize>)>) -> Self {
-        Self { slots }
+        Self {
+            slots,
+            shared: vec![],
+        }
     }
 
     fn next(&mut self) -> Option<(WorkerId, usize)> {
@@ -352,7 +410,7 @@ impl TaskSlotAssigner {
                     });
                 }
                 TaskPlacement::Worker => {
-                    if let Some((worker_id, slot)) = self.next() {
+                    if let Some((worker_id, slot)) = self.shared.pop().or_else(|| self.next()) {
                         assignments.push(TaskSetAssignment {
                             set: set.clone(),
                             assignment: TaskAssignment::Worker { worker_id, slot },
@@ -374,6 +432,8 @@ impl TaskSlotAssigner {
 mod tests {
     use std::collections::HashSet;
 
+    use indexmap::IndexSet;
+
     use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
     use crate::id::{JobId, TaskKey, WorkerId};
     use crate::job_graph::TaskPlacement;
@@ -389,6 +449,10 @@ mod tests {
     }
 
     fn worker_region(slots: usize) -> TaskRegion {
+        job_region(JobId::from(1), slots)
+    }
+
+    fn job_region(job_id: JobId, slots: usize) -> TaskRegion {
         TaskRegion {
             tasks: (0..slots)
                 .map(|partition| {
@@ -397,7 +461,7 @@ mod tests {
                         TaskSet {
                             entries: vec![TaskSetEntry {
                                 key: TaskKey {
-                                    job_id: JobId::from(1),
+                                    job_id,
                                     stage: 0,
                                     partition,
                                     attempt: 0,
@@ -409,6 +473,26 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn regions_share_the_slots_of_the_jobs_they_read() {
+        // One worker with two slots, both held by job 1.
+        let mut assigner = task_assigner(2, 1);
+        assigner.activate_worker(WorkerId::from(1));
+        assert!(assigner.enqueue_tasks(&worker_region(2)).is_ok());
+        assert_eq!(assigner.assign_tasks().len(), 2);
+        let reader = job_region(JobId::from(2), 2);
+        assert!(assigner.enqueue_tasks(&reader).is_ok());
+        assert!(assigner.assign_tasks().is_empty());
+        let assignments = assigner.assign_tasks_with_related(&|job| {
+            if job == JobId::from(2) {
+                [JobId::from(1)].into_iter().collect()
+            } else {
+                IndexSet::new()
+            }
+        });
+        assert_eq!(assignments.len(), 2);
     }
 
     #[test]

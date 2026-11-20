@@ -185,6 +185,7 @@ impl TaskRunnerActor {
         channels: usize,
         replicas: usize,
         bounded: bool,
+        handoff_budget: Option<usize>,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
@@ -194,11 +195,14 @@ impl TaskRunnerActor {
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(
-            self.extensions
-                .local_streams
-                .create_stream(&key, channels, replicas, bounded, schema),
-        );
+        let _ = result.send(self.extensions.local_streams.create_stream(
+            &key,
+            channels,
+            replicas,
+            bounded,
+            handoff_budget,
+            schema,
+        ));
         ActorAction::Continue
     }
 

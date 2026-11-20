@@ -28,11 +28,15 @@ use crate::input_file_name::{
     RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::{JoinReorderOptions, SharedCteRestrictions};
+pub use crate::join_reorder::JoinReorderOptions;
 use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
+use crate::semi_join_reduction::SemiJoinReduction;
+pub use crate::semi_join_reduction::{
+    SemiJoinReductionOptions, SharedCteRestrictions, is_reduction,
+};
 use crate::window_topn::WindowTopN;
 
 mod barrier;
@@ -48,12 +52,19 @@ mod partition_sensitive;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
+mod semi_join_reduction;
 mod window_topn;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
     pub join_reorder: JoinReorderOptions,
+    /// Copy selective dimension keys below aggregates and semi joins (always on with
+    /// join reorder).
+    pub enable_semi_join_reduction: bool,
+    /// Broadcast semijoin reductions whatever their estimated size. Only for adaptive
+    /// execution, which keeps or removes each one once its keys are known.
+    pub speculative_semi_join_reduction: bool,
 }
 
 pub fn get_physical_optimizers(
@@ -65,11 +76,22 @@ pub fn get_physical_optimizers(
     // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
     // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
+    let reduction = SemiJoinReductionOptions {
+        build_side_weight: options.join_reorder.build_side_weight,
+        probe_side_weight: options.join_reorder.probe_side_weight,
+        output_weight: options.join_reorder.output_weight,
+    };
+    if options.enable_semi_join_reduction || options.enable_join_reorder {
+        rules.push(Arc::new(SemiJoinReduction::new(reduction.clone())));
+    }
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(SelectSemiJoinBuildSide));
+    if options.speculative_semi_join_reduction {
+        rules.push(Arc::new(SemiJoinReduction::speculative(reduction)));
+    }
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));

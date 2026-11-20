@@ -9914,6 +9914,7 @@ mod tests {
             locator: TaskOutputLocator::Pipelined {
                 replicas: 1,
                 bounded: false,
+                handoff_budget: None,
             },
         };
 
@@ -9968,6 +9969,7 @@ mod tests {
             locator: TaskOutputLocator::Pipelined {
                 replicas: 1,
                 bounded: false,
+                handoff_budget: None,
             },
         };
 

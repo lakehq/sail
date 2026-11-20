@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
@@ -19,12 +20,13 @@ use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
-use crate::driver::{DriverMessage, TaskStatus};
+use crate::driver::{DriverMessage, SubmittedJob, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
     JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
     TaskStreamKeySet, WorkerId,
 };
+use crate::job_graph::HandoffOutput;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -214,15 +216,32 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        handoff: Option<HandoffOutput>,
+        group: Option<u64>,
+        result: oneshot::Sender<ExecutionResult<SubmittedJob>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
-        if let Ok((job_id, _)) = &out {
+        let out = self
+            .job_scheduler
+            .accept_job(ctx, plan, context, handoff, group);
+        if let Ok((job_id, _, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
             self.reconcile_worker_demands(ctx);
         }
-        let _ = result.send(out.map(|(_, stream)| stream));
+        let _ = result.send(out.map(|(_, handoff, stream)| SubmittedJob { handoff, stream }));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_release_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+    ) -> ActorAction {
+        for action in self.job_scheduler.release_job(job_id) {
+            self.run_job_action(ctx, action);
+        }
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
         ActorAction::Continue
     }
 
@@ -460,6 +479,7 @@ impl DriverActor {
                 key,
                 schema,
                 retry_cause,
+                handoff,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -508,10 +528,20 @@ impl DriverActor {
                 })
                 .try_flatten();
                 ctx.spawn(async move {
+                    let stream: TaskStreamSource = if handoff {
+                        // A hand-off stream's second replica retains what the first accepts
+                        // until the first is closed, so the first is subscribed now, and
+                        // closed when dropped, rather than left for a reader that may not come.
+                        let mut stream = Box::pin(stream).peekable();
+                        let _ = Pin::new(&mut stream).peek().await;
+                        Box::pin(stream)
+                    } else {
+                        Box::pin(stream)
+                    };
                     handle
                         .send(JobOutputItem::Stream {
                             key,
-                            stream: Box::pin(stream),
+                            stream,
                             retry_cause,
                         })
                         .await;
@@ -612,7 +642,10 @@ impl DriverActor {
     /// Reserve complete regions before resolving any routing. Definitions are scoped to this
     /// scheduling snapshot; batches additionally preserve region and worker boundaries.
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
-        let assignments = self.task_assigner.assign_tasks();
+        let job_scheduler = &self.job_scheduler;
+        let assignments = self
+            .task_assigner
+            .assign_tasks_with_related(&|job_id| job_scheduler.related_jobs(job_id));
         self.task_assigner.track_streams(&assignments);
         let mut batches = indexmap::IndexMap::<_, Vec<TaskKey>>::new();
         for assignment in assignments {
@@ -639,6 +672,9 @@ impl DriverActor {
         }
         let mut definitions = std::collections::HashMap::new();
         for ((job_id, _, stage, worker_id), keys) in batches {
+            for key in &keys {
+                self.job_scheduler.record_task_worker(key, worker_id);
+            }
             let Some(first) = keys.first() else { continue };
             let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
                 let started = Instant::now();

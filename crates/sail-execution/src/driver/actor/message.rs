@@ -20,7 +20,14 @@ use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
+use crate::job_graph::{ExternalStageInput, HandoffOutput};
 use crate::stream::reader::TaskStreamSource;
+
+pub struct SubmittedJob {
+    /// How a later job reads the final stage, for a hand-off job on a backend that supports it.
+    pub handoff: Option<ExternalStageInput>,
+    pub stream: SendableRecordBatchStream,
+}
 
 pub enum DriverMessage {
     Activate {
@@ -60,11 +67,24 @@ pub enum DriverMessage {
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        /// How the final stage is written when it is handed to a later job.
+        handoff: Option<HandoffOutput>,
+        /// Jobs of one query share a group, and the worker slots of its running jobs.
+        group: Option<u64>,
+        result: oneshot::Sender<ExecutionResult<SubmittedJob>>,
     },
     CleanUpJob {
         job_id: JobId,
         outcome: JobOutputOutcome,
+    },
+    /// Keeps a hand-off job running for a later job after its output is dropped.
+    HandOffJob {
+        job_id: JobId,
+        result: oneshot::Sender<bool>,
+    },
+    /// Cleans up a handed-off job.
+    ReleaseJob {
+        job_id: JobId,
     },
     UpdateTask {
         key: TaskKey,
@@ -152,6 +172,8 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverMessage::ExecuteJob { .. } => "ExecuteJob",
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
+            DriverMessage::HandOffJob { .. } => "HandOffJob",
+            DriverMessage::ReleaseJob { .. } => "ReleaseJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
@@ -202,9 +224,13 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ExecuteJob {
                 plan: _,
                 context: _,
+                handoff: _,
+                group: _,
                 result: _,
             } => {}
-            DriverMessage::CleanUpJob { job_id, .. } => {
+            DriverMessage::CleanUpJob { job_id, .. }
+            | DriverMessage::HandOffJob { job_id, .. }
+            | DriverMessage::ReleaseJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::UpdateTask {
