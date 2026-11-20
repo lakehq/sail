@@ -55,6 +55,45 @@ pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// The maximum number of pages read for a list request.
 const MAX_LIST_PAGES: usize = 10_000;
 
+/// The number of times that a Delta table is loaded again after a transient failure, as a
+/// Delta commit is sent again after one.
+const MAX_LOAD_TABLE_RESENDS: u32 = 3;
+
+/// The time before a Delta table is loaded again for the first time. The time doubles for
+/// each of the following requests.
+const LOAD_TABLE_RESEND_BACKOFF: Duration = Duration::from_millis(200);
+
+/// The longest time that a `Retry-After` header of the server makes a request wait.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
+
+/// The time to wait before a request that failed with the error is sent again, or `None`
+/// when the failure is not transient: timeouts, connection failures, server errors other than
+/// 501, and 429, whose `Retry-After` header in seconds is followed.
+fn transient_failure_delay<E>(error: &delta_gen::ApiError<E>, resends: u32) -> Option<Duration> {
+    let (status, headers) = match error {
+        delta_gen::ApiError::Request(error) => {
+            if error.is_timeout() || error.is_connect() {
+                return Some(LOAD_TABLE_RESEND_BACKOFF * (1 << resends));
+            }
+            (error.status()?, None)
+        }
+        delta_gen::ApiError::Response(response) => (response.status, Some(&response.headers)),
+        delta_gen::ApiError::Unknown(response) => (response.status, Some(&response.headers)),
+        delta_gen::ApiError::Sign(_) => return None,
+    };
+    let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || (status.is_server_error() && status != reqwest::StatusCode::NOT_IMPLEMENTED);
+    if !transient {
+        return None;
+    }
+    let retry_after = headers
+        .and_then(|headers| headers.get(reqwest::header::RETRY_AFTER))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds).min(MAX_RETRY_AFTER));
+    Some(retry_after.unwrap_or(LOAD_TABLE_RESEND_BACKOFF * (1 << resends)))
+}
+
 /// The highest version of the Unity Catalog Delta REST API supported by the client.
 const DELTA_API_PROTOCOL_VERSIONS: &str = "1.0";
 
@@ -1788,10 +1827,23 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let (status, error) = match api {
             DeltaCommitApi::V1 => {
-                match delta_client
-                    .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
-                    .await
-                {
+                // Loading the table is idempotent, so a transient failure is retried.
+                let mut resends = 0;
+                let result = loop {
+                    let result = delta_client
+                        .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
+                        .await;
+                    if let Err(error) = &result
+                        && resends < MAX_LOAD_TABLE_RESENDS
+                        && let Some(delay) = transient_failure_delay(error, resends)
+                    {
+                        tokio::time::sleep(delay).await;
+                        resends += 1;
+                        continue;
+                    }
+                    break result;
+                };
+                match result {
                     Ok(response) => {
                         return delta_ratified_commits_from_load_table(
                             response.inner,
@@ -3575,6 +3627,78 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, CatalogError::External(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn test_delta_table_load_retries_transient_failures() {
+        async fn table_requests(server: &MockServer) -> usize {
+            let target = format!("GET {DELTA_TABLE_PATH}");
+            received_targets(server)
+                .await
+                .into_iter()
+                .filter(|t| *t == target)
+                .count()
+        }
+        async fn server_with_failures(failure: ResponseTemplate, failures: u64) -> MockServer {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(failure)
+                .up_to_n_times(failures)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                        DELTA_TABLE_ID,
+                        Some(vec![2, 1]),
+                        Some(2),
+                    )),
+                )
+                .mount(&server)
+                .await;
+            server
+        }
+
+        // Transient failures are retried, and the table is then loaded.
+        for failure in [
+            ResponseTemplate::new(503).set_body_string("unavailable"),
+            ResponseTemplate::new(429).insert_header("Retry-After", "0"),
+        ] {
+            let server = server_with_failures(failure, 2).await;
+            let response = discover_delta_catalog_managed(&server).await.unwrap();
+            assert!(response.catalog_managed);
+            assert_eq!(table_requests(&server).await, 3);
+        }
+
+        // Failures that a retry does not change are not retried.
+        for status in [400, 401, 403, 404] {
+            let server =
+                server_with_failures(ResponseTemplate::new(status).set_body_string("failed"), 1)
+                    .await;
+            let _ = discover_delta_catalog_managed(&server).await;
+            assert_eq!(table_requests(&server).await, 1, "status {status}");
+        }
+
+        // A failure that persists is an error after a bounded number of requests.
+        let server = server_with_failures(
+            ResponseTemplate::new(503).set_body_string("unavailable"),
+            10,
+        )
+        .await;
+        let error = discover_delta_catalog_managed(&server).await.unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::External(message)
+                if message.contains("Failed to get Delta commits") && message.contains("unavailable")),
+            "{error:?}"
+        );
+        assert_eq!(
+            table_requests(&server).await,
+            1 + MAX_LOAD_TABLE_RESENDS as usize
+        );
     }
 
     #[tokio::test]

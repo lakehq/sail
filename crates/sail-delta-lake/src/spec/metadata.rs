@@ -168,6 +168,13 @@ impl Metadata {
         }
     }
 
+    pub fn with_configuration(self, configuration: HashMap<String, String>) -> Metadata {
+        Metadata {
+            configuration,
+            ..self
+        }
+    }
+
     pub fn remove_config_key(self, key: &str) -> Metadata {
         let mut configuration = self.configuration;
         configuration.remove(key);

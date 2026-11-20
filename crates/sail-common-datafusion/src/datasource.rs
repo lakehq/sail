@@ -271,6 +271,10 @@ pub struct SinkInfo {
     /// The schema of the table that a precondition of the write creates, from
     /// `LakeSource::create_table_schema_for_write`. The data is written with it.
     pub create_table_schema: Option<SchemaRef>,
+    /// Whether the write replaces the definition of an existing table together with its
+    /// data, as `REPLACE TABLE ... AS SELECT` and the DataFrameWriterV2 `replace` and
+    /// `createOrReplace` do. An overwrite with `saveAsTable` replaces only the data.
+    pub replace_table_metadata: bool,
 }
 
 impl SinkInfo {

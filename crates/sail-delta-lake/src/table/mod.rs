@@ -16,6 +16,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use log::{debug, warn};
 use object_store::ObjectStore;
+use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::DeltaRatifiedCommitResponse;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
@@ -622,9 +623,14 @@ where
         .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, None)
         .await?;
     if response.requires_published_log {
+        let kind = if response.catalog_managed {
+            "catalog-managed table"
+        } else {
+            "table"
+        };
         return Err(DataFusionError::External(Box::new(
             DeltaTableError::generic(format!(
-                "Delta log not found at `{table_url}` for the catalog-managed table `{}`; \
+                "Delta log not found at `{table_url}` for the {kind} `{}`; \
                  check the table location and the storage credentials",
                 catalog_table.join(".")
             )),
@@ -817,6 +823,32 @@ fn warn_discovery_failure(table_url: &Url, error: &DataFusionError) {
     }
 }
 
+/// The error of a write that is refused because the catalog could not be asked whether the
+/// table is catalog-managed. The message of a catalog error is the message that the client
+/// sees, so the context is added to it, and the error stays a catalog error.
+fn refuse_write_without_catalog(
+    catalog_table: &[String],
+    error: DataFusionError,
+) -> DataFusionError {
+    let message = |error: &dyn fmt::Display| {
+        format!(
+            "cannot determine whether table {} is catalog-managed because the Unity Catalog \
+             request failed: {error}; refusing to write without the catalog",
+            catalog_table.join(".")
+        )
+    };
+    match error {
+        DataFusionError::External(error)
+            if error
+                .downcast_ref::<CatalogError>()
+                .is_some_and(|error| std::error::Error::source(error).is_none()) =>
+        {
+            DataFusionError::External(Box::new(CatalogError::External(message(&error))))
+        }
+        error => DataFusionError::Context(message(&error), Box::new(error)),
+    }
+}
+
 /// Loads what a snapshot of a Unity managed Delta table is loaded with. When the latest version
 /// of the table is requested with a configuration, the latest snapshot of a table that is not
 /// catalog-managed is loaded with that configuration.
@@ -862,7 +894,9 @@ where
                     response.requires_published_log && !response.catalog_managed;
                 response.catalog_managed.then_some(response)
             }
-            Err(error) if intent == SnapshotIntent::Write => return Err(error),
+            Err(error) if intent == SnapshotIntent::Write => {
+                return Err(refuse_write_without_catalog(catalog_table, error));
+            }
             Err(error) => {
                 warn_discovery_failure(table_url, &error);
                 None
@@ -2162,8 +2196,26 @@ mod catalog_managed_tests {
             None,
         )
         .await;
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("503 Service Unavailable"), "{error}");
+        // The client sees the message of the innermost error, so the context is in it.
+        let cause = match result.unwrap_err() {
+            datafusion_common::DataFusionError::External(cause) => {
+                cause.downcast::<CatalogError>().ok().map(|cause| *cause)
+            }
+            _ => None,
+        };
+        assert!(
+            matches!(&cause, Some(CatalogError::External(_))),
+            "{cause:?}"
+        );
+        let message = cause.unwrap().to_string();
+        assert!(
+            message.contains(
+                "cannot determine whether table unity.default.items is catalog-managed \
+                 because the Unity Catalog request failed"
+            ) && message.contains("503 Service Unavailable")
+                && message.contains("refusing to write without the catalog"),
+            "{message}"
+        );
         assert_eq!((commit_requests, discover_requests), (0, 1));
     }
 
@@ -2631,10 +2683,12 @@ mod catalog_managed_tests {
 
     async fn read_unity_managed_table_without_log(
         requires_published_log: bool,
+        catalog_managed: bool,
     ) -> (datafusion_common::Result<i64>, Vec<String>) {
         let store = Arc::new(InMemory::new());
         let ratified = DeltaRatifiedCommitResponse {
             requires_published_log,
+            catalog_managed,
             ..ratified(0, &[])
         };
         let (_, result) =
@@ -2646,18 +2700,23 @@ mod catalog_managed_tests {
 
     #[tokio::test]
     async fn read_of_table_without_log_writes_nothing_when_catalog_publishes_version_0() {
-        let (result, files) = read_unity_managed_table_without_log(true).await;
-        let error = result.unwrap_err().to_string();
-        assert!(
-            error.contains("Delta log not found at `memory:///items/`"),
-            "{error}"
-        );
-        assert_eq!(files, Vec::<String>::new());
+        for (catalog_managed, kind) in [(true, "catalog-managed table"), (false, "table")] {
+            let (result, files) = read_unity_managed_table_without_log(true, catalog_managed).await;
+            let error = result.unwrap_err().to_string();
+            // The table is called catalog-managed only when the catalog says it is.
+            assert!(
+                error.contains(&format!(
+                    "Delta log not found at `memory:///items/` for the {kind} `unity.default.items`"
+                )),
+                "{error}"
+            );
+            assert_eq!(files, Vec::<String>::new());
+        }
     }
 
     #[tokio::test]
     async fn read_of_table_without_log_creates_version_0_for_legacy_catalog() {
-        let (result, files) = read_unity_managed_table_without_log(false).await;
+        let (result, files) = read_unity_managed_table_without_log(false, false).await;
         assert_eq!(result.unwrap(), 0);
         assert!(
             files.contains(&"items/_delta_log/00000000000000000000.json".to_string()),

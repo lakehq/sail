@@ -55,8 +55,11 @@ pub use planner::{
 };
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
+#[cfg(test)]
+pub(crate) use write_context::metadata_only_snapshot;
 pub use write_context::{
-    DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext, prepare_delta_write_context,
+    DeltaCommitContext, DeltaSnapshotContext, DeltaTableReplacement, DeltaWriteContext,
+    prepare_delta_write_context,
 };
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;

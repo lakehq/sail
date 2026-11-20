@@ -134,6 +134,84 @@ impl DeltaWriteContext {
     }
 }
 
+/// The table definition that an overwrite gives an existing table when it replaces the
+/// table, in the commit that overwrites the data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeltaTableReplacement {
+    pub configuration: HashMap<String, String>,
+    pub description: Option<String>,
+}
+
+impl DeltaTableReplacement {
+    /// Replaces the configuration and the description of the metadata that the write
+    /// commits, and upgrades the protocol for the new configuration. The schema and the
+    /// partitioning stay the ones of the write.
+    pub fn apply(&self, context: &mut DeltaWriteContext, snapshot: &DeltaSnapshot) -> Result<()> {
+        let metadata = context
+            .schema_actions
+            .iter()
+            .rev()
+            .find_map(|action| match action {
+                Action::Metadata(metadata) => Some(metadata.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| snapshot.metadata().clone());
+        let mut configuration = self.configuration.clone();
+        // The data is written with the column mapping of the table.
+        for key in [
+            "delta.columnMapping.mode",
+            "delta.columnMapping.maxColumnId",
+        ] {
+            match metadata.configuration().get(key) {
+                Some(value) => configuration.insert(key.to_string(), value.clone()),
+                None => configuration.remove(key),
+            };
+        }
+        let metadata = metadata
+            .with_configuration(configuration)
+            .with_description(self.description.clone());
+        let desired =
+            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired =
+            crate::lake_source::avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+                snapshot.protocol(),
+                &desired,
+                metadata.configuration(),
+            );
+        let protocol = snapshot.protocol().merge_upgrade_requirements(&desired);
+        context.schema_actions = (protocol != *snapshot.protocol())
+            .then_some(Action::Protocol(protocol))
+            .into_iter()
+            .chain([Action::Metadata(metadata)])
+            .collect();
+        Ok(())
+    }
+}
+
+/// A snapshot of a table at version 1 with the protocol and the metadata, for tests.
+#[cfg(test)]
+pub(crate) fn metadata_only_snapshot(
+    protocol: Protocol,
+    metadata: Metadata,
+) -> Result<DeltaSnapshot> {
+    let log_store = crate::table::create_logstore_with_object_store(
+        Arc::new(object_store::memory::InMemory::new()),
+        Url::parse("memory:///t/").map_err(|e| DataFusionError::External(Box::new(e)))?,
+        crate::delta_log::StorageConfig,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    DeltaSnapshotContext {
+        version: 1,
+        protocol,
+        metadata,
+        txns: HashMap::new(),
+        domain_metadata: HashMap::new(),
+        commit_timestamps: BTreeMap::new(),
+    }
+    .to_snapshot(log_store.as_ref(), DeltaSnapshotConfig::default())
+    .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
 /// Schema handling mode for Delta Lake writes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SchemaMode {
@@ -613,7 +691,7 @@ mod tests {
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
-    use crate::spec::{DataType, MetadataValue, StructField};
+    use crate::spec::{DataType, MetadataValue, StructField, TableFeature};
 
     fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> StructField {
         StructField::new(name, data_type, true).with_metadata([
@@ -623,6 +701,61 @@ mod tests {
                 MetadataValue::String(physical_name.to_string()),
             ),
         ])
+    }
+
+    #[test]
+    fn table_replacement_replaces_configuration_and_description() -> Result<()> {
+        let schema = StructType::try_new(vec![StructField::new("id", DataType::LONG, true)])
+            .expect("schema");
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![],
+            0,
+            HashMap::from([
+                ("team".to_string(), "a".to_string()),
+                ("comment".to_string(), "old".to_string()),
+            ]),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let snapshot = metadata_only_snapshot(
+            Protocol::new(3, 7, Some(vec![]), Some(vec![])),
+            metadata.clone(),
+        )?;
+        let mut context = DeltaWriteContext {
+            commit_context: DeltaCommitContext::from_snapshot(&snapshot),
+            final_schema: StructType::try_from(snapshot.schema()).expect("schema"),
+            effective_column_mapping_mode: ColumnMappingMode::None,
+            initial_actions: Vec::new(),
+            schema_actions: Vec::new(),
+            operation: None,
+            logical_kernel_for_mapping: None,
+            physical_partition_columns: Vec::new(),
+        };
+        let configuration = HashMap::from([
+            ("delta.enableRowTracking".to_string(), "true".to_string()),
+            ("owner-team".to_string(), "b".to_string()),
+        ]);
+        DeltaTableReplacement {
+            configuration: configuration.clone(),
+            description: None,
+        }
+        .apply(&mut context, &snapshot)?;
+
+        // The protocol is upgraded for row tracking in the same commit as the metadata.
+        let [
+            Action::Protocol(new_protocol),
+            Action::Metadata(new_metadata),
+        ] = context.schema_actions.as_slice()
+        else {
+            panic!("{:?}", context.schema_actions);
+        };
+        assert!(new_protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(new_protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        assert_eq!(new_metadata.configuration(), &configuration);
+        assert_eq!(new_metadata.description(), None);
+        assert_eq!(new_metadata.id(), metadata.id());
+        assert_eq!(new_metadata.schema_string(), metadata.schema_string());
+        Ok(())
     }
 
     #[test]

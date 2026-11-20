@@ -16,7 +16,8 @@ use super::log_segment::LogSegmentFiles;
 use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
-    DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions, prepare_delta_write_context,
+    DeltaCommitContext, DeltaTableReplacement, DeltaWriteContext, DeltaWriterExecOptions,
+    prepare_delta_write_context,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
@@ -57,6 +58,8 @@ pub struct DeltaPlannerConfig {
     /// The schema of a table that is created before the data is written, with the
     /// column mapping that the data is written with.
     pub create_table_schema: Option<SchemaRef>,
+    /// The table definition that an overwrite gives the existing table that it replaces.
+    pub replacement: Option<DeltaTableReplacement>,
 }
 
 impl DeltaPlannerConfig {
@@ -85,6 +88,7 @@ impl DeltaPlannerConfig {
             table_snapshot: None,
             lakehouse_table: None,
             create_table_schema: None,
+            replacement: None,
         }
     }
 
@@ -121,6 +125,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_create_table_schema(mut self, create_table_schema: Option<SchemaRef>) -> Self {
         self.create_table_schema = create_table_schema;
+        self
+    }
+
+    pub fn with_replacement(mut self, replacement: Option<DeltaTableReplacement>) -> Self {
+        self.replacement = replacement;
         self
     }
 
@@ -275,6 +284,11 @@ impl<'a> PlannerContext<'a> {
         )?;
         context.commit_context.identity_columns_to_track =
             self.config.identity_columns_to_track.clone();
+        if let (Some(replacement), Some(snapshot)) =
+            (self.config.replacement.as_ref(), self.table_snapshot())
+        {
+            replacement.apply(&mut context, snapshot)?;
+        }
         Ok(context)
     }
 

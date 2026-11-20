@@ -251,11 +251,15 @@ pub(super) fn validate_row_tracking(
         }
     }
     // The files of an existing table need row IDs before the table can track rows. A table
-    // that is replaced removes all of its files.
+    // that is replaced, or overwritten as a whole, removes all of its files.
     let replaces_table = matches!(
         operation,
         DeltaOperation::Create {
             mode: SaveMode::Overwrite,
+            ..
+        } | DeltaOperation::Write {
+            mode: SaveMode::Overwrite,
+            predicate: None,
             ..
         }
     );

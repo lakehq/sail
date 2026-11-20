@@ -313,6 +313,7 @@ impl PlanResolver<'_> {
                 .collect(),
             lakehouse_table: None,
             create_table_schema: None,
+            replace_table_metadata: false,
         };
         let mut preconditions = vec![];
         let mut table_replacement = None;
@@ -354,6 +355,9 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                // An overwrite with `saveAsTable` keeps the definition of an existing table.
+                sink_info.replace_table_metadata =
+                    info.is_some() && matches!(mode, WriteMode::Replace { .. });
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {

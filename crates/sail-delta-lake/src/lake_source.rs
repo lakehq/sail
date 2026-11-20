@@ -52,6 +52,7 @@ use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::{StorageConfig, get_actions, in_commit_timestamp_from_actions};
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::options::session_replace_where_constraint_check;
+use crate::physical_plan::DeltaTableReplacement;
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
@@ -145,6 +146,7 @@ impl DataSource for DeltaLakeSource {
             options,
             lakehouse_table,
             create_table_schema,
+            replace_table_metadata,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
@@ -184,6 +186,7 @@ impl DataSource for DeltaLakeSource {
                     options,
                     lakehouse_table,
                     create_table_schema,
+                    replace_table_metadata,
                 },
             )),
         }))
@@ -478,33 +481,12 @@ impl LakeSource for DeltaLakeSource {
         let mut metadata_configuration = delta_create_table_metadata_configuration(properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         validate_delta_retention_properties(config, &metadata_configuration)?;
-        if let (Some(_), Some(snapshot)) = (replace_context, replace_snapshot.as_ref()) {
-            ensure_unity_fixed_properties_kept(
-                snapshot.metadata().configuration(),
-                metadata_configuration
-                    .iter()
-                    .map(|(key, value)| (key.as_str(), Some(value.as_str()))),
-            )?;
-            // A catalog-managed table keeps its identity in the catalog, the catalog
-            // coordination, and the in-commit timestamps that the coordination requires,
-            // as Delta Spark retains them on REPLACE. It also keeps the properties that
-            // Unity Catalog requires for managed tables, which the catalog does not check
-            // again unless the protocol changes. All the other properties are replaced by
-            // the ones of the statement.
-            for (key, value) in snapshot.metadata().configuration() {
-                if is_delta_replace_retained_property(key)
-                    && !metadata_configuration.contains_key(key)
-                {
-                    metadata_configuration.insert(key.clone(), value.clone());
-                }
-            }
-        }
         if let Some(snapshot) = replace_snapshot.as_ref() {
-            crate::transaction::row_tracking::retain_for_replace(
-                snapshot.protocol(),
-                snapshot.metadata().configuration(),
-                &mut metadata_configuration,
-            );
+            metadata_configuration = delta_replace_configuration(
+                snapshot,
+                replace_context.is_some(),
+                metadata_configuration,
+            )?;
         }
         let normalized_schema = normalize_delta_schema(&declared_schema);
         let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
@@ -888,6 +870,7 @@ pub struct DeltaWriteNodeOptions {
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     #[educe(PartialOrd(ignore))]
     pub create_table_schema: Option<SchemaRef>,
+    pub replace_table_metadata: bool,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -961,6 +944,7 @@ pub(crate) async fn plan_delta_write(
         options,
         lakehouse_table,
         create_table_schema,
+        replace_table_metadata,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -1016,6 +1000,7 @@ pub(crate) async fn plan_delta_write(
                     LakehouseOperation::Create | LakehouseOperation::Register
                 )
         });
+    let catalog_managed_write = lakehouse_planning_context.is_some();
     let table = match open_delta_write_planning_table(
         ctx,
         table_url.clone(),
@@ -1155,6 +1140,18 @@ pub(crate) async fn plan_delta_write(
     if matches!(mode, PhysicalSinkMode::OverwritePartitions) && partition_columns.is_empty() {
         mode = PhysicalSinkMode::Overwrite;
     }
+    // The replacement of an existing Unity managed table replaces its properties and its
+    // comment with the ones of the statement, in the commit that overwrites the data.
+    let replacement = match &table_snapshot {
+        Some(snapshot)
+            if replace_table_metadata
+                && catalog_managed_write
+                && matches!(mode, PhysicalSinkMode::Overwrite) =>
+        {
+            Some(delta_write_replacement(ctx, snapshot, &table_properties)?)
+        }
+        _ => None,
+    };
     let logical_schema = logical_input.schema();
     let table_config = DeltaPlannerConfig::new(
         table_url,
@@ -1173,7 +1170,8 @@ pub(crate) async fn plan_delta_write(
     .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(table_snapshot)
     .with_lakehouse_table(lakehouse_table)
-    .with_create_table_schema(create_table_schema);
+    .with_create_table_schema(create_table_schema)
+    .with_replacement(replacement);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
     planner
@@ -2261,6 +2259,40 @@ const UNITY_FIXED_PROPERTIES: [&str; 5] = [
     "delta.checkpoint.writeStatsAsJson",
 ];
 
+/// The configuration that a REPLACE gives an existing table, from the configuration of
+/// the statement.
+fn delta_replace_configuration(
+    snapshot: &crate::table::DeltaSnapshot,
+    catalog_managed: bool,
+    mut configuration: HashMap<String, String>,
+) -> Result<HashMap<String, String>> {
+    if catalog_managed {
+        ensure_unity_fixed_properties_kept(
+            snapshot.metadata().configuration(),
+            configuration
+                .iter()
+                .map(|(key, value)| (key.as_str(), Some(value.as_str()))),
+        )?;
+        // A catalog-managed table keeps its identity in the catalog, the catalog
+        // coordination, and the in-commit timestamps that the coordination requires,
+        // as Delta Spark retains them on REPLACE. It also keeps the properties that
+        // Unity Catalog requires for managed tables, which the catalog does not check
+        // again unless the protocol changes. All the other properties are replaced by
+        // the ones of the statement.
+        for (key, value) in snapshot.metadata().configuration() {
+            if is_delta_replace_retained_property(key) && !configuration.contains_key(key) {
+                configuration.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    crate::transaction::row_tracking::retain_for_replace(
+        snapshot.protocol(),
+        snapshot.metadata().configuration(),
+        &mut configuration,
+    );
+    Ok(configuration)
+}
+
 /// Whether REPLACE keeps a property of a catalog-managed table that the statement
 /// does not set.
 fn is_delta_replace_retained_property(key: &str) -> bool {
@@ -2458,6 +2490,33 @@ fn extract_identity_columns(
         .collect()
 }
 
+/// The table definition that a write gives an existing table that it replaces, from the
+/// properties of the statement, with the property rules of REPLACE.
+fn delta_write_replacement(
+    ctx: &dyn Session,
+    snapshot: &crate::table::DeltaSnapshot,
+    table_properties: &HashMap<String, String>,
+) -> Result<DeltaTableReplacement> {
+    let mut configuration = canonicalize_and_validate_table_properties(table_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    validate_delta_retention_properties(ctx.config(), &configuration)?;
+    let description = configuration.remove("comment");
+    let configuration =
+        delta_catalog_managed_create_table_properties(configuration.into_iter().collect())
+            .into_iter()
+            .collect();
+    let mut configuration = delta_replace_configuration(
+        snapshot,
+        snapshot.protocol().is_catalog_managed(),
+        configuration,
+    )?;
+    crate::transaction::row_tracking::add_materialized_column_names(&mut configuration);
+    Ok(DeltaTableReplacement {
+        configuration,
+        description,
+    })
+}
+
 fn resolve_delta_metadata_configuration(
     table_properties: &HashMap<String, String>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
@@ -2539,6 +2598,77 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use super::*;
+
+    #[test]
+    fn write_replacement_follows_replace_property_rules() -> Result<()> {
+        let schema = StructType::try_new(vec![StructField::new(
+            "id",
+            crate::spec::DataType::LONG,
+            true,
+        )])
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![],
+            0,
+            HashMap::from([
+                (DELTA_UNITY_TABLE_ID_KEY.to_string(), "table-id".to_string()),
+                (
+                    "delta.enableInCommitTimestamps".to_string(),
+                    "true".to_string(),
+                ),
+                ("delta.checkpointPolicy".to_string(), "v2".to_string()),
+                ("team".to_string(), "a".to_string()),
+            ]),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let snapshot = crate::physical_plan::metadata_only_snapshot(
+            protocol_with_catalog_managed(&crate::spec::Protocol::new(
+                3,
+                7,
+                Some(vec![]),
+                Some(vec![]),
+            )),
+            metadata,
+        )?;
+        let state = datafusion::prelude::SessionContext::new().state();
+        let properties = |items: &[(&str, &str)]| {
+            items
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>()
+        };
+
+        let replacement = delta_write_replacement(
+            &state,
+            &snapshot,
+            &properties(&[("comment", "replaced"), ("owner-team", "b")]),
+        )?;
+        assert_eq!(replacement.description.as_deref(), Some("replaced"));
+        assert_eq!(
+            replacement.configuration,
+            properties(&[
+                (DELTA_UNITY_TABLE_ID_KEY, "table-id"),
+                ("delta.enableInCommitTimestamps", "true"),
+                ("delta.checkpointPolicy", "v2"),
+                ("owner-team", "b"),
+            ])
+        );
+
+        let error = delta_write_replacement(
+            &state,
+            &snapshot,
+            &properties(&[("delta.checkpointPolicy", "classic")]),
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+        assert!(
+            error.as_ref().is_err_and(|e| e
+                .contains("requires the table property delta.checkpointPolicy=v2")),
+            "{error:?}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn unity_fixed_properties_are_kept() {

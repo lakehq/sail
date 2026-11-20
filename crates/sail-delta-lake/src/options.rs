@@ -236,6 +236,7 @@ mod tests {
             }],
             lakehouse_table: None,
             create_table_schema: None,
+            replace_table_metadata: false,
         };
         let checked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
         *provider.value.lock().unwrap() = Some("false".to_string());

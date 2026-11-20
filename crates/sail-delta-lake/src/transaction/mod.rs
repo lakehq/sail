@@ -4595,6 +4595,54 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn row_tracking_is_enabled_by_an_overwrite_of_the_whole_table() -> DeltaResult<()> {
+        // An overwrite that replaces the table definition removes every file of the table,
+        // so no file is left without row IDs.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created =
+            create_row_tracking_table(&log_store, &[], vec![row_tracking_add("a", 3)]).await?;
+        let snapshot = created.snapshot.as_ref().unwrap();
+        let metadata = test_metadata(vec![
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-x",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-x",
+            ),
+        ]);
+        let protocol = snapshot
+            .protocol()
+            .merge_upgrade_requirements(&crate::schema::protocol_for_metadata(&metadata)?);
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(metadata),
+                CommitAction::Remove(row_tracking_add("a", 3).into_remove(0)),
+                CommitAction::Add(row_tracking_add("b", 2)),
+            ])
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert_eq!(row_tracking_adds(&actions), vec![("b", Some(0), Some(1))]);
+        assert_eq!(
+            row_tracking_high_water_mark(&actions).as_deref(),
+            Some(r#"{"rowIdHighWaterMark":1}"#)
+        );
+        Ok(())
+    }
+
     /// Commits a REPLACE of the table with the given configuration and added files. The
     /// protocol is merged with the protocol of the replaced table.
     async fn replace_row_tracking_table(

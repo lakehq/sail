@@ -424,3 +424,89 @@ def test_sql_replace_enables_and_keeps_row_tracking(spark: SparkSession) -> None
         assert _rows(spark, table, "id") == [(20,)]
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def test_replace_as_select_replaces_the_properties_in_the_data_commit(
+    spark: SparkSession,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
+    database = _unique_database("unity_replace_as_select_properties")
+    table = f"{database}.t"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING delta COMMENT 'created' TBLPROPERTIES ('team' = 'a')")
+        created = _unity_table_info(unity_rest_url, table)
+        location = _location_to_path(_table_location(spark, table))
+        spark.sql(f"INSERT INTO {table} VALUES (1), (2), (3)")
+        version, _ = _latest_commit(location)
+
+        # An overwrite with saveAsTable keeps the table definition, as the Delta V1 writer does.
+        spark.createDataFrame([(4,)], schema="id BIGINT").write.format("delta").mode("overwrite").saveAsTable(table)
+        overwritten_version, actions = _latest_commit(location)
+        assert overwritten_version == version + 1
+        assert _actions(actions, "metaData") == []
+        assert _rows(spark, table, "id") == [(4,)]
+        # The rows of a table that supports row tracking already have row IDs.
+        commits = _published_commits(location)
+        used = _row_ids([add for actions in commits.values() for add in _actions(actions, "add") if "baseRowId" in add])
+        high_water_mark = max(used, default=-1)
+
+        # The statement replaces the properties and the comment of the table, and enables
+        # row tracking, in the commit that replaces the data, as Delta Spark does.
+        spark.sql(
+            f"REPLACE TABLE {table} USING delta COMMENT 'replaced' "
+            "TBLPROPERTIES ('delta.enableRowTracking' = 'true', 'owner-team' = 'b') "
+            "AS SELECT id FROM range(10, 13)"
+        )
+        assert _rows(spark, table, "id") == [(10,), (11,), (12,)]
+        replaced_version, actions = _latest_commit(location)
+        assert replaced_version == overwritten_version + 1
+        protocols = [p for _, a in sorted(_published_commits(location).items()) for p in _actions(a, "protocol")]
+        assert {"rowTracking", "domainMetadata"} <= set(protocols[-1]["writerFeatures"])
+        (metadata,) = _actions(actions, "metaData")
+        assert metadata["description"] == "replaced"
+        configuration = metadata["configuration"]
+        assert configuration["delta.enableRowTracking"] == "true"
+        assert configuration["delta.rowTracking.materializedRowIdColumnName"].startswith("_row-id-col-")
+        assert configuration["owner-team"] == "b"
+        assert "team" not in configuration
+        # The table keeps its identity in the catalog and its protocol properties.
+        assert configuration["io.unitycatalog.tableId"] == created["table_id"]
+        assert configuration["delta.enableInCommitTimestamps"] == "true"
+        assert _actions(actions, "remove")
+        adds = _actions(actions, "add")
+        assert _row_ids(adds) == [high_water_mark + 1, high_water_mark + 2, high_water_mark + 3]
+        assert all(add["defaultRowCommitVersion"] == replaced_version for add in adds)
+        if unity_uses_delta_api:
+            properties = _delta_api_table_properties(unity_rest_url, table)
+            assert properties["owner-team"] == "b"
+            assert properties["delta.enableRowTracking"] == "true"
+            assert "team" not in properties
+            assert _UNITY_REQUIRED_PROPERTIES.items() <= properties.items()
+            assert _unity_table_info(unity_rest_url, table)["comment"] == "replaced"
+
+        # A replacement without properties keeps row tracking and drops the other properties.
+        spark.createDataFrame([(20,)], schema="id BIGINT").writeTo(table).using("delta").createOrReplace()
+        assert _rows(spark, table, "id") == [(20,)]
+        _, actions = _latest_commit(location)
+        (metadata,) = _actions(actions, "metaData")
+        assert metadata.get("description") is None
+        assert metadata["configuration"]["delta.enableRowTracking"] == "true"
+        assert "owner-team" not in metadata["configuration"]
+        (add,) = _actions(actions, "add")
+        assert add["baseRowId"] == high_water_mark + 4
+
+        if unity_uses_delta_api:
+            with pytest.raises(Exception, match="requires the table property delta.checkpointPolicy=v2"):
+                spark.sql(
+                    f"CREATE OR REPLACE TABLE {table} USING delta "
+                    "TBLPROPERTIES ('delta.checkpointPolicy' = 'classic') AS SELECT CAST(30 AS BIGINT) AS id"
+                )
+            assert _rows(spark, table, "id") == [(20,)]
+
+        replaced = _unity_table_info(unity_rest_url, table)
+        assert replaced["table_id"] == created["table_id"]
+        assert replaced["storage_location"] == created["storage_location"]
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")
