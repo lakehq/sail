@@ -57,10 +57,10 @@ use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
     add_type_widening_metadata, annotate_arrow_schema_for_column_mapping,
     annotate_for_column_mapping, annotate_new_fields_for_column_mapping, collect_type_changes,
-    compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
-    inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
-    protocol_for_metadata,
+    column_mapping_metadata_only, compute_max_column_id, evolve_schema, format_type_change_path,
+    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
+    is_supported_type_change_for_write, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
@@ -514,11 +514,7 @@ impl LakeSource for DeltaLakeSource {
         let mut configuration = metadata_configuration;
         // A table that is created before the data of a write is written has the column
         // mapping that the data is written with.
-        let assigned_column_mapping = if unity_required_protocol.is_some() {
-            delta_create_table_column_mapping(&columns)?
-        } else {
-            None
-        };
+        let assigned_column_mapping = delta_create_table_column_mapping(&columns)?;
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
             let (annotated, max_column_id) = if let Some(snapshot) =
                 replace_snapshot.as_ref().filter(|snapshot| {
@@ -2020,8 +2016,10 @@ fn delta_create_table_column_mapping(
             )
         })
         .collect::<Vec<_>>();
-    let schema = StructType::try_from(normalize_delta_schema(&Arc::new(Schema::new(fields))))
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let schema = column_mapping_metadata_only(
+        &StructType::try_from(normalize_delta_schema(&Arc::new(Schema::new(fields))))
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+    );
     Ok((compute_max_column_id(&schema) > 0).then_some(schema))
 }
 

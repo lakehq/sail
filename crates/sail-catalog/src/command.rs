@@ -390,6 +390,12 @@ impl CatalogCommand {
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 };
+                // The storage metadata of a table that is created for the data of a
+                // write has the columns that the data is written with.
+                let write_columns = options
+                    .is_write_precondition
+                    .then(|| options.columns.clone())
+                    .filter(|columns| !columns.is_empty());
                 let status = manager.create_table(&table, options).await?;
                 if !existed_before {
                     prepare_created_table_storage_metadata(
@@ -398,6 +404,7 @@ impl CatalogCommand {
                         &table,
                         &status,
                         &create_plan,
+                        write_columns.as_deref(),
                     )
                     .await?;
                 }
@@ -1159,6 +1166,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
     table: &[String],
     status: &sail_common_datafusion::catalog::TableStatus,
     create_plan: &LakehouseCreatePlan,
+    write_columns: Option<&[crate::provider::CreateTableColumnOptions]>,
 ) -> CatalogResult<()> {
     let LakehouseCreateMaterialization::AfterCatalogLakeSource { mode, .. } =
         &create_plan.materialization
@@ -1200,19 +1208,38 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         ),
     };
 
-    materialize_lake_source_create_metadata(
-        ctx,
-        format,
-        location.clone(),
-        columns,
-        comment.clone(),
-        partition_by.clone(),
-        properties.clone(),
-        false,
-        lakehouse_table,
-        None,
-    )
-    .await
+    match write_columns {
+        Some(columns) => {
+            materialize_lake_source_create_metadata(
+                ctx,
+                format,
+                location.clone(),
+                columns,
+                comment.clone(),
+                partition_by.clone(),
+                properties.clone(),
+                false,
+                lakehouse_table,
+                None,
+            )
+            .await
+        }
+        None => {
+            materialize_lake_source_create_metadata(
+                ctx,
+                format,
+                location.clone(),
+                columns,
+                comment.clone(),
+                partition_by.clone(),
+                properties.clone(),
+                false,
+                lakehouse_table,
+                None,
+            )
+            .await
+        }
+    }
     .map(|_| ())
 }
 

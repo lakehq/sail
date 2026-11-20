@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::LakehouseCreateRequest;
+use sail_catalog::lakehouse::{LakehouseCreateMaterialization, LakehouseCreateRequest};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
@@ -688,13 +688,16 @@ impl PlanResolver<'_> {
                         create_options.properties = staged.properties.clone();
                     }
                     create_options.staged = create_plan.staged.clone();
-                    // A staged table is created before the data is written, so the table
-                    // and the data files are created with the same schema.
-                    if create_options.staged.is_some()
-                        && let Some(lake_source) = self
-                            .ctx
-                            .extension::<DataSourceRegistry>()?
-                            .get_lake_source_if_supported(&write_format)?
+                    // The storage metadata of the table is created before the data is
+                    // written, so the table and the data files are created with the same
+                    // schema.
+                    if !matches!(
+                        create_plan.materialization,
+                        LakehouseCreateMaterialization::None
+                    ) && let Some(lake_source) = self
+                        .ctx
+                        .extension::<DataSourceRegistry>()?
+                        .get_lake_source_if_supported(&write_format)?
                         && let Some(schema) = lake_source.create_table_schema_for_write(
                             input.schema().inner(),
                             &create_options.properties,

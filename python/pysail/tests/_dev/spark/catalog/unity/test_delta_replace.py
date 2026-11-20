@@ -248,12 +248,14 @@ def test_sql_replace_drops_the_delta_properties_of_the_replaced_table(spark: Spa
             f"CREATE TABLE {table} (id INT) USING delta "
             "TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')"
         )
-        spark.sql(f"INSERT INTO {table} VALUES (1), (2)")
-        with pytest.raises(Exception, match=r"(?i)append"):
-            spark.sql(f"DELETE FROM {table} WHERE id = 1")
         location = _location_to_path(_table_location(spark, table))
+        _, actions = _latest_commit(location)
+        (metadata,) = _actions(actions, "metaData")
+        assert metadata["configuration"]["delta.appendOnly"] == "true"
+        assert metadata["configuration"]["delta.enableChangeDataFeed"] == "true"
 
         # The properties that the statement does not set are not kept, as in Delta Spark.
+        # The table has no data, since an append-only table does not allow the removal.
         spark.sql(f"CREATE OR REPLACE TABLE {table} (id INT) USING delta")
         _, actions = _latest_commit(location)
         (metadata,) = _actions(actions, "metaData")

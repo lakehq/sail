@@ -133,6 +133,47 @@ fn with_nested_column_mapping_of(
     })
 }
 
+/// Returns the schema with only the column mapping metadata (id + physicalName) of the
+/// fields, so that merging it with `annotate_new_fields_for_column_mapping` adds the
+/// column mapping and nothing else.
+pub fn column_mapping_metadata_only(schema: &StructType) -> StructType {
+    fn map_field(field: &StructField) -> StructField {
+        StructField {
+            name: field.name().clone(),
+            data_type: map_type(field.data_type()),
+            nullable: field.is_nullable(),
+            metadata: field
+                .metadata()
+                .iter()
+                .filter(|(key, _)| {
+                    *key == ColumnMetadataKey::ColumnMappingId.as_ref()
+                        || *key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }
+    }
+    fn map_type(data_type: &DataType) -> DataType {
+        match data_type {
+            DataType::Struct(st) => DataType::Struct(Box::new(
+                StructType::try_new(st.fields().map(map_field))
+                    .unwrap_or_else(|_| empty_struct_type()),
+            )),
+            DataType::Array(at) => DataType::Array(Box::new(ArrayType::new(
+                map_type(at.element_type()),
+                at.contains_null(),
+            ))),
+            DataType::Map(mt) => DataType::Map(Box::new(MapType::new(
+                map_type(mt.key_type()),
+                map_type(mt.value_type()),
+                mt.value_contains_null(),
+            ))),
+            other => other.clone(),
+        }
+    }
+    StructType::try_new(schema.fields().map(map_field)).unwrap_or_else(|_| empty_struct_type())
+}
+
 /// Annotate only new fields (compared to `existing`) within `candidate` with
 /// column mapping metadata, starting from `start_id` (inclusive).
 /// Returns the updated schema and the last used id.

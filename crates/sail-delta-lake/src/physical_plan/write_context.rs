@@ -17,9 +17,9 @@ use crate::delta_log::LogStore;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping,
-    annotate_new_fields_for_column_mapping, collect_type_changes, compute_max_column_id,
-    evolve_schema, format_type_change_path, get_physical_schema, inject_default_expressions,
-    inject_generation_expressions, inject_identity_columns,
+    annotate_new_fields_for_column_mapping, collect_type_changes, column_mapping_metadata_only,
+    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
+    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
     schema_contains_type_widening_metadata, strip_column_mapping_metadata,
@@ -227,9 +227,10 @@ pub fn prepare_delta_write_context(
                 // The table is created before the data is written, with the column
                 // mapping of this schema.
                 Some(create_table_schema) => {
-                    let assigned =
-                        StructType::try_from(normalize_delta_schema(create_table_schema))
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let assigned = column_mapping_metadata_only(
+                        &StructType::try_from(normalize_delta_schema(create_table_schema))
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                    );
                     annotate_new_fields_for_column_mapping(
                         &assigned,
                         &kernel_schema,

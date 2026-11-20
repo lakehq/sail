@@ -25,7 +25,8 @@ pub(crate) use manager::{
 pub use mapping::{
     annotate_arrow_schema_for_column_mapping, annotate_new_fields_for_column_mapping,
     annotate_schema_for_column_mapping,
-    annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,
+    annotate_schema_for_column_mapping as annotate_for_column_mapping,
+    column_mapping_metadata_only, compute_max_column_id,
 };
 pub use normalize::{normalize_delta_schema, strip_column_mapping_metadata};
 pub use type_widening::{
