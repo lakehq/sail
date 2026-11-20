@@ -1488,17 +1488,6 @@ impl std::future::IntoFuture for PreparedCommit {
                     }
                 }
                 let version: i64 = latest_version.map(|v| v + 1).unwrap_or(0);
-                // The commits of a table with the catalog-managed protocol are ratified by the
-                // catalog, and only version 0 of such a table is written to the file system.
-                if version > 0
-                    && read_snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| snapshot.protocol().is_catalog_managed())
-                {
-                    return Err(DeltaError::generic(format!(
-                        "version {version} of a catalog-managed Delta table must be committed to the catalog"
-                    )));
-                }
                 let previous_commit_timestamp =
                     previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
                         .await?;
@@ -3776,42 +3765,6 @@ mod tests {
                 .get("delta.inCommitTimestampEnablementTimestamp"),
             Some(&upgrade_timestamp.to_string())
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn catalog_managed_tables_are_not_committed_to_the_file_system() -> DeltaResult<()> {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let log_store = test_log_store(store.clone());
-        let protocol =
-            crate::catalog_managed::protocol_with_catalog_managed(&Protocol::new(1, 2, None, None));
-        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
-        let create = || {
-            CommitBuilder::default()
-                .with_actions(vec![
-                    CommitAction::Protocol(protocol.clone()),
-                    CommitAction::Metadata(metadata.clone()),
-                ])
-                .build(
-                    None,
-                    log_store.clone(),
-                    DeltaOperation::Create {
-                        mode: SaveMode::ErrorIfExists,
-                        location: "memory:///".to_string(),
-                        protocol: Box::new(protocol.clone()),
-                        metadata: Box::new(metadata.clone()),
-                    },
-                )
-        };
-        create().await?;
-        // A concurrent creation of the same table finds version 0, and is not written as
-        // version 1 of the table.
-        let error = create().await.err().unwrap();
-        assert!(
-            error.to_string().contains("committed to the catalog"),
-            "{error}"
-        );
-        assert!(store.head(&commit_path(1)).await.is_err());
         Ok(())
     }
 

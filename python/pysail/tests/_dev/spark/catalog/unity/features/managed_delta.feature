@@ -426,9 +426,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | name |
       | 3  | new  |
       | 4  | new  |
-    # Version 1 is not reported as published, since its published commit is not the ratified
-    # commit, so version 2 is not published either.
-    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_overwrite_corrupt_published_t version 2 references staged Delta commit in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_overwrite_corrupt_published_t version 2 references staged Delta commit in location
 
   Scenario: DELETE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
@@ -455,9 +453,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | name  |
       | 1  | one   |
       | 3  | three |
-    # Version 1 is not reported as published, since its published commit is not the ratified
-    # commit, so version 2 is not published either.
-    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_corrupt_published_t version 2 references staged Delta commit in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_corrupt_published_t version 2 references staged Delta commit in location
 
   Scenario: MERGE on managed Delta table uses Unity ratified commit when published commit is corrupted
     Given statement
@@ -498,9 +494,7 @@ Feature: Unity Catalog managed Delta table operations
       | 1  | one         |
       | 2  | two updated |
       | 3  | three       |
-    # Version 1 is not reported as published, since its published commit is not the ratified
-    # commit, so version 2 is not published either.
-    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_merge_corrupt_published_t version 2 references staged Delta commit in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_merge_corrupt_published_t version 2 references staged Delta commit in location
 
   Scenario: Managed Delta write succeeds when publish backfill fails after Unity ratification
     Given statement

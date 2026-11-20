@@ -20,9 +20,8 @@ use crate::physical_plan::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    CatalogSnapshotSource, DeltaSnapshot, DeltaTable, SnapshotIntent,
-    catalog_managed_commit_context, create_delta_table_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 
 /// Configuration shared by all Delta planners.
@@ -339,29 +338,27 @@ impl<'a> PlannerContext<'a> {
             Ok(table)
         } else {
             let log_store = self.log_store()?;
-            let source = match catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
+            let mut table_config = table_config;
+            let mut replay_hint = None;
+            if let Some(lakehouse_table) =
+                catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
             {
-                Some(lakehouse_table) => {
-                    load_catalog_managed_commits_for_snapshot(
-                        &self.session,
-                        lakehouse_table,
-                        &self.config.table_url,
-                        log_store.clone(),
-                        None,
-                        SnapshotIntent::Write,
-                        Some(&table_config),
-                    )
-                    .await?
-                }
-                None => CatalogSnapshotSource::default(),
-            };
-            let mut table = source.into_table(log_store, table_config);
-            if table.state.is_none() {
-                table
-                    .load()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let source = load_catalog_managed_commits_for_snapshot(
+                    &self.session,
+                    lakehouse_table,
+                    &self.config.table_url,
+                    log_store.clone(),
+                    None,
+                )
+                .await?;
+                table_config.catalog_managed_commits = source.commits;
+                replay_hint = source.replay_hint;
             }
+            let mut table = DeltaTable::new(log_store, table_config).with_replay_hint(replay_hint);
+            table
+                .load()
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok(table)
         }
     }

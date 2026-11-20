@@ -5,16 +5,16 @@
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
-use log::{debug, warn};
+use log::warn;
 use object_store::ObjectStore;
 use sail_catalog::lakehouse::DeltaRatifiedCommitResponse;
 use sail_catalog::manager::CatalogManager;
@@ -276,16 +276,8 @@ pub async fn create_delta_source(
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let read_options = options.clone();
-    let (snapshot, log_store, scan_config) = load_delta_read_state(
-        ctx,
-        table_url,
-        schema,
-        options,
-        false,
-        lakehouse_table,
-        SnapshotIntent::Read,
-    )
-    .await?;
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
 
     if read_options.read_change_feed {
         return Ok(Arc::new(
@@ -326,16 +318,8 @@ pub async fn infer_delta_logical_metadata(
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<LakeSourceMetadata> {
     let read_options = options.clone();
-    let (snapshot, log_store, scan_config) = load_delta_read_state(
-        ctx,
-        table_url,
-        schema,
-        options,
-        true,
-        lakehouse_table,
-        SnapshotIntent::Read,
-    )
-    .await?;
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
 
     let schema = if read_options.read_change_feed {
         use datafusion::logical_expr::TableSource;
@@ -377,16 +361,8 @@ pub(crate) async fn delta_table_properties(
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Vec<(String, String)>> {
-    let (snapshot, _, _) = load_delta_read_state(
-        ctx,
-        table_url,
-        None,
-        options,
-        true,
-        lakehouse_table,
-        SnapshotIntent::Read,
-    )
-    .await?;
+    let (snapshot, _, _) =
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
     let mut properties = snapshot.metadata().configuration().clone();
     properties.remove("path");
     let protocol = snapshot.protocol();
@@ -440,8 +416,7 @@ fn effective_catalog_commit_end_version(
     )
 }
 
-/// Returns the start version of the next page of ratified commits, or `None` when the page
-/// reaches the end version or has no commits.
+#[cfg(test)]
 fn next_catalog_commit_start_version(
     current_start_version: i64,
     effective_end_version: i64,
@@ -615,19 +590,12 @@ where
     }
     let (actions, operation) = catalog_managed_bootstrap_actions(info, table_url)?;
     let commit_properties = CommitProperties::from_session_config(&ctx.session_config())?;
-    match CommitBuilder::from(commit_properties)
+    CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .build(None, log_store.clone(), operation)
+        .build(None, log_store, operation)
         .await
-    {
-        Ok(_) => Ok(true),
-        // Another reader or the creator of the table may write version 0 first, and the
-        // table is read from that version then.
-        Err(error) => match log_store.get_latest_version(-1).await {
-            Ok(_) => Ok(true),
-            Err(_) => Err(DataFusionError::External(Box::new(error))),
-        },
-    }
+        .map(|_| true)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 async fn load_catalog_managed_commits<C>(
@@ -677,37 +645,11 @@ where
         });
     };
 
-    // The catalog returns the ratified commits after the latest version that is published and
-    // reported, up to the latest version of the table. A response whose commits end before the
-    // latest version is a page, such as a page of the legacy API, and the rest of the commits
-    // are requested.
-    let mut commits = response.commits;
-    let mut next_start_version = next_catalog_commit_start_version(
-        1,
-        effective_end_version,
-        commits.iter().map(|commit| commit.version),
-    )?;
-    while let Some(start_version) = next_start_version {
-        let page = DeltaCatalogCommitCoordinator::new(ctx, lakehouse_table.catalog_table())
-            .get_ratified_commits(
-                lakehouse_table,
-                table_url.to_string(),
-                start_version,
-                Some(effective_end_version),
-            )
-            .await?;
-        next_start_version = next_catalog_commit_start_version(
-            start_version,
-            effective_end_version,
-            page.commits.iter().map(|commit| commit.version),
-        )?;
-        commits.extend(page.commits);
-    }
-
     // The catalog returns the ratified commits that are not published yet, and the log replay
     // reads every other version from the published log. The snapshot falls back to the staged
     // commit of a version only when the replay of the published log fails.
-    let by_version = commits
+    let by_version = response
+        .commits
         .into_iter()
         .filter(|commit| commit.version >= 1 && commit.version <= effective_end_version)
         .map(|commit| {
@@ -727,17 +669,6 @@ where
     })
 }
 
-/// What a snapshot of a Unity managed Delta table is loaded for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SnapshotIntent {
-    /// A read uses the published Delta protocol when the catalog cannot be asked whether the
-    /// table is catalog-managed.
-    Read,
-    /// A write, a DDL statement, or a commit fails then, since the table may be catalog-managed,
-    /// and a catalog-managed table is not committed to the file system.
-    Write,
-}
-
 /// What a snapshot of a Unity managed Delta table is loaded with.
 #[derive(Debug, Default)]
 pub(crate) struct CatalogSnapshotSource {
@@ -746,71 +677,23 @@ pub(crate) struct CatalogSnapshotSource {
     /// The header of the latest published version of a table that is not catalog-managed,
     /// which was loaded to read its protocol.
     pub replay_hint: Option<ReplayedTableHeader>,
-    /// The latest snapshot of a table that is not catalog-managed, which was loaded with the
-    /// configuration of the caller to read its protocol.
-    pub snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
 impl CatalogSnapshotSource {
     fn catalog_managed(commits: CatalogManagedCommitSet) -> Self {
         Self {
             commits: Some(commits),
-            ..Default::default()
+            replay_hint: None,
         }
     }
-
-    /// Creates the table that a snapshot is loaded from, with the latest snapshot of the
-    /// table when it is loaded already.
-    pub(crate) fn into_table(
-        self,
-        log_store: LogStoreRef,
-        config: DeltaSnapshotConfig,
-    ) -> DeltaTable {
-        let mut table = DeltaTable::new(
-            log_store,
-            DeltaSnapshotConfig {
-                catalog_managed_commits: self.commits,
-                ..config
-            },
-        )
-        .with_replay_hint(self.replay_hint);
-        table.state = self.snapshot;
-        table
-    }
 }
 
-/// Warns once for each table that the catalog cannot be asked whether the table is
-/// catalog-managed, since a snapshot of the table is loaded for every query of the table.
-fn warn_discovery_failure(table_url: &Url, error: &DataFusionError) {
-    static REPORTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
-    let first = REPORTED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(table_url.to_string());
-    if first {
-        warn!(
-            "Failed to ask the catalog whether {table_url} is a catalog-managed Delta table, \
-             using the published Delta protocol: {error}"
-        );
-    } else {
-        debug!(
-            "Failed to ask the catalog whether {table_url} is a catalog-managed Delta table, \
-             using the published Delta protocol: {error}"
-        );
-    }
-}
-
-/// Loads what a snapshot of a Unity managed Delta table is loaded with. When the latest version
-/// of the table is requested with a configuration, the latest snapshot of a table that is not
-/// catalog-managed is loaded with that configuration.
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
     ctx: &C,
     lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     log_store: LogStoreRef,
     version_as_of: Option<i64>,
-    intent: SnapshotIntent,
-    config: Option<&DeltaSnapshotConfig>,
 ) -> Result<CatalogSnapshotSource>
 where
     C: SessionExtensionAccessor + ?Sized,
@@ -828,19 +711,20 @@ where
     // The commit that enables the feature on an existing table may not be published yet, and
     // the table properties may not have the catalog property. So the catalog is asked about
     // a Unity managed table, and its answer has the ratified commits of the table as well.
-    // When the catalog cannot be asked, the published Delta protocol decides for a read, so
-    // that a table that is not catalog-managed can be read without the catalog commits. A
-    // catalog-managed table still needs them, and the failure to load them is the error then.
-    // A write fails, since the table may be catalog-managed.
+    // When the catalog cannot be asked, the published Delta protocol decides, so that a table
+    // that is not catalog-managed can be read without the catalog commits. A catalog-managed
+    // table still needs them, and the failure to load them is the error then.
     let discovered = if bootstrap_info.is_some() && !catalog_managed_property {
         match DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
             .discover_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
             .await
         {
             Ok(response) => response.catalog_managed.then_some(response),
-            Err(error) if intent == SnapshotIntent::Write => return Err(error),
             Err(error) => {
-                warn_discovery_failure(table_url, &error);
+                warn!(
+                    "Failed to ask the catalog whether {table_url} is a catalog-managed Delta table, \
+                     using the published Delta protocol: {error}"
+                );
                 None
             }
         }
@@ -866,20 +750,11 @@ where
         ));
     }
 
-    // The latest snapshot that the caller asks for is loaded at once, and is used when the
-    // table is not catalog-managed.
-    let latest_config = config.filter(|_| version_as_of.is_none());
     let mut detector = DeltaTable::new(
         log_store.clone(),
-        match latest_config {
-            Some(config) => DeltaSnapshotConfig {
-                catalog_managed_commits: None,
-                ..config.clone()
-            },
-            None => DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
         },
     );
     match detector.load().await {
@@ -889,15 +764,10 @@ where
                 Ok(CatalogSnapshotSource::catalog_managed(
                     load_commits(None).await?,
                 ))
-            } else if latest_config.is_some() {
-                Ok(CatalogSnapshotSource {
-                    snapshot: Some(snapshot.clone()),
-                    ..Default::default()
-                })
             } else {
                 Ok(CatalogSnapshotSource {
+                    commits: None,
                     replay_hint: Some(snapshot.replay_hint()),
-                    ..Default::default()
                 })
             }
         }
@@ -951,7 +821,6 @@ pub(crate) async fn load_delta_read_state(
     options: DeltaReadOptions,
     metadata_only: bool,
     lakehouse_table: Option<LakehouseExecutionContext>,
-    intent: SnapshotIntent,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
@@ -960,10 +829,6 @@ pub(crate) async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let table_config = delta_read_snapshot_config(metadata_only, &options);
-    // The latest snapshot of the table is loaded with the catalog commits when the read has
-    // no time travel options.
-    let reads_latest_version = options.version_as_of.is_none() && options.timestamp_as_of.is_none();
     let source = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
         Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
@@ -972,21 +837,19 @@ pub(crate) async fn load_delta_read_state(
                 &table_url,
                 log_store.clone(),
                 options.version_as_of,
-                intent,
-                reads_latest_version.then_some(&table_config),
             )
             .await?
         }
         None => CatalogSnapshotSource::default(),
     };
 
-    let mut deltalake_table = source.into_table(log_store.clone(), table_config);
+    let mut table_config = delta_read_snapshot_config(metadata_only, &options);
+    table_config.catalog_managed_commits = source.commits;
+    let mut deltalake_table =
+        DeltaTable::new(log_store.clone(), table_config).with_replay_hint(source.replay_hint);
 
-    // Load the table state according to the provided time travel options, unless the latest
-    // snapshot is loaded already.
-    if deltalake_table.state.is_none() {
-        load_table_by_options(&mut deltalake_table, &options).await?;
-    }
+    // Load the table state according to the provided time travel options.
+    load_table_by_options(&mut deltalake_table, &options).await?;
 
     let snapshot = deltalake_table.snapshot()?.clone();
 
@@ -1540,7 +1403,7 @@ mod catalog_managed_tests {
     use sail_common_datafusion::datasource::OptionLayer;
     use url::Url;
 
-    use super::{SnapshotIntent, load_delta_read_state};
+    use super::load_delta_read_state;
     use crate::options::ResolveOptions;
     use crate::options::r#gen::DeltaReadOptions;
 
@@ -1554,9 +1417,6 @@ mod catalog_managed_tests {
         discover_error: Option<fn() -> CatalogError>,
         commit_error: Option<fn() -> CatalogError>,
         script: Option<CommitScript>,
-        /// The number of ratified commits in a response, from the start version of the
-        /// request, as in a page of the legacy API. All of them when it is not set.
-        page_size: Option<usize>,
     }
 
     /// What the catalog does with a commit request. The catalog ratifies the commit request
@@ -1738,18 +1598,9 @@ mod catalog_managed_tests {
                 });
                 return Ok(ratified);
             }
-            let mut ratified = self
-                .ratified
+            self.ratified
                 .clone()
-                .ok_or_else(|| CatalogError::External("401 Unauthorized".into()))?;
-            if let Some(page_size) = self.page_size {
-                ratified.commits.retain(|commit| {
-                    commit.version >= request.start_version
-                        && request.end_version.is_none_or(|end| commit.version <= end)
-                });
-                ratified.commits.truncate(page_size);
-            }
-            Ok(ratified)
+                .ok_or_else(|| CatalogError::External("401 Unauthorized".into()))
         }
         async fn alter_table(
             &self,
@@ -1913,29 +1764,6 @@ mod catalog_managed_tests {
         discover_error: Option<fn() -> CatalogError>,
         options: Vec<(&str, &str)>,
     ) -> (usize, usize, datafusion_common::Result<i64>) {
-        load_unity_managed_table(
-            store,
-            catalog_managed_property,
-            ratified,
-            discover_error,
-            options,
-            SnapshotIntent::Read,
-            None,
-        )
-        .await
-    }
-
-    /// Loads the table like `read_unity_managed_table_with_options` for the intent, from a
-    /// catalog that returns the ratified commits in pages of the size.
-    async fn load_unity_managed_table(
-        store: Arc<dyn ObjectStore>,
-        catalog_managed_property: bool,
-        ratified: Option<DeltaRatifiedCommitResponse>,
-        discover_error: Option<fn() -> CatalogError>,
-        options: Vec<(&str, &str)>,
-        intent: SnapshotIntent,
-        page_size: Option<usize>,
-    ) -> (usize, usize, datafusion_common::Result<i64>) {
         let catalog = Arc::new(UnityManagedCatalog {
             catalog_managed_property,
             ratified,
@@ -1944,7 +1772,6 @@ mod catalog_managed_tests {
             discover_error,
             commit_error: None,
             script: None,
-            page_size,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
             catalogs: HashMap::from([(
@@ -1992,7 +1819,6 @@ mod catalog_managed_tests {
             .unwrap(),
             false,
             Some(context),
-            intent,
         )
         .await
         .map(|(snapshot, _, _)| snapshot.version());
@@ -2107,82 +1933,6 @@ mod catalog_managed_tests {
             assert_eq!(result.unwrap(), 0);
             assert_eq!((commit_requests, discover_requests), (0, 1));
         }
-    }
-
-    #[tokio::test]
-    async fn unity_managed_table_is_not_written_when_discovery_fails() {
-        // The table may be catalog-managed with the commit that enables the feature not
-        // published yet, so a write does not use the published protocol.
-        let store = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
-        let (commit_requests, discover_requests, result) = load_unity_managed_table(
-            store,
-            false,
-            Some(ratified(0, &[])),
-            Some(|| CatalogError::External("503 Service Unavailable".into())),
-            vec![],
-            SnapshotIntent::Write,
-            None,
-        )
-        .await;
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("503 Service Unavailable"), "{error}");
-        assert_eq!((commit_requests, discover_requests), (0, 1));
-    }
-
-    #[tokio::test]
-    async fn ratified_commits_are_read_in_pages() {
-        // The versions 1 to 3 are ratified and not published. Version 3 has two staged
-        // commits, so only the catalog tells which one is ratified.
-        let store = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
-        for file in [
-            staged_commit(1, "a"),
-            staged_commit(2, "b"),
-            staged_commit(3, "c"),
-            staged_commit(3, "d"),
-        ] {
-            store
-                .put(
-                    &Path::from(format!("items/_delta_log/{file}")),
-                    EMPTY_COMMIT.to_string().into(),
-                )
-                .await
-                .unwrap();
-        }
-        let (commit_requests, _, result) = load_unity_managed_table(
-            store,
-            true,
-            Some(ratified(3, &[(1, "a"), (2, "b"), (3, "c")])),
-            None,
-            vec![],
-            SnapshotIntent::Read,
-            Some(2),
-        )
-        .await;
-        assert_eq!(result.unwrap(), 3);
-        assert_eq!(commit_requests, 2);
-    }
-
-    #[tokio::test]
-    async fn table_that_is_not_catalog_managed_is_loaded_once() {
-        let source = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
-        let store = Arc::new(crate::test_store::ObservedStore::default());
-        let version_0 = Path::from("items/_delta_log/00000000000000000000.json");
-        let bytes = source.get(&version_0).await.unwrap().bytes().await.unwrap();
-        store.put(&version_0, bytes.into()).await.unwrap();
-        let (_, _, result) = read_unity_managed_table_with_requests(
-            store.clone(),
-            false,
-            Some(ratified(0, &[])),
-            None,
-        )
-        .await;
-        assert_eq!(result.unwrap(), 0);
-        let reads = store
-            .gets()
-            .into_iter()
-            .filter(|path| *path == version_0)
-            .count();
-        assert_eq!(reads, 1);
     }
 
     #[tokio::test]
@@ -2497,7 +2247,6 @@ mod catalog_managed_tests {
             discover_error: None,
             commit_error: Some(error),
             script: None,
-            page_size: None,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
             catalogs: HashMap::from([("unity".into(), catalog as Arc<dyn CatalogProvider>)]),
@@ -2770,7 +2519,6 @@ mod catalog_managed_tests {
                 }),
                 requests: Mutex::new(vec![]),
             }),
-            page_size: None,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
             catalogs: HashMap::from([(

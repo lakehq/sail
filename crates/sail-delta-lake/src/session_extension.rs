@@ -11,8 +11,8 @@ use url::Url;
 use crate::delta_log::{LogStoreRef, ReplayedTableHeader, StorageConfig};
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    DeltaSnapshot, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
-    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
+    load_catalog_managed_commits_for_snapshot,
 };
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
@@ -111,8 +111,6 @@ pub(crate) async fn load_table_uncached(
             table_url,
             log_store.clone(),
             Some(version),
-            SnapshotIntent::Read,
-            None,
         )
         .await?;
         table_config.catalog_managed_commits = source.commits;
