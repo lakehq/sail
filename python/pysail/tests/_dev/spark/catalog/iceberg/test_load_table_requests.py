@@ -87,6 +87,14 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
         spark.sql(f"DROP TABLE IF EXISTS {second}")
 
 
+def _requests(records, start):
+    return [
+        (record.path.removeprefix("/v1/namespaces/"), record.status, record.access_delegation)
+        for record in records[start:]
+        if record.method == "GET" and ("/tables/" in record.path or "/views/" in record.path)
+    ]
+
+
 def test_read_sends_configured_access_delegation_once(spark, recording_catalog, seaweedfs_host_endpoint):
     _, records = recording_catalog
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
@@ -105,3 +113,43 @@ def test_read_sends_configured_access_delegation_once(spark, recording_catalog, 
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
+
+def test_metadata_table_read_loads_the_table_once(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.metadata"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1)")
+        start = len(records)
+        rows = spark.sql(f"SELECT operation FROM {name}.snapshots").collect()
+        assert [row.operation for row in rows] == ["append"]
+        # The metadata table name is not a table or a view, so the base table is loaded.
+        assert _requests(records, start) == [
+            (f"{NAMESPACE}\x1fmetadata/tables/snapshots", 404, None),
+            (f"{NAMESPACE}\x1fmetadata/views/snapshots", 404, None),
+            (f"{NAMESPACE}/tables/metadata", 200, None),
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    table = f"{NAMESPACE}.base"
+    view = f"{NAMESPACE}.filtered"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {table} VALUES (1), (2)")
+        spark.sql(f"CREATE VIEW {view} AS SELECT id FROM {table} WHERE id > 1")
+        start = len(records)
+        assert [row.id for row in spark.table(view).collect()] == [2]
+        assert _requests(records, start) == [
+            (f"{NAMESPACE}/tables/filtered", 404, None),
+            (f"{NAMESPACE}/views/filtered", 200, None),
+            (f"{NAMESPACE}/tables/base", 200, None),
+        ]
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {view}")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
