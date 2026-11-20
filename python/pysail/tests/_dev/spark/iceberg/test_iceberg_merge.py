@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 
 import pyarrow as pa
@@ -153,7 +155,6 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert current_snapshot["summary"]["total-records"] == "5"
 
         manifests = _current_manifest_list(metadata)["manifests"]
-        expected_deleted_row_count = 2
         data_manifests = [manifest for manifest in manifests if manifest.get("content") == "data"]
         delete_manifests = [manifest for manifest in manifests if manifest.get("content") == "deletes"]
         assert any(manifest["sequence-number"] < current_snapshot["sequence-number"] for manifest in data_manifests)
@@ -164,7 +165,7 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         )
         assert all(manifest["sequence-number"] == current_snapshot["sequence-number"] for manifest in delete_manifests)
         assert _manifest_count(manifests, content="deletes", key="added-files-count") >= 1
-        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= expected_deleted_row_count
+        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= 2
         assert _manifest_count(manifests, content="data", key="deleted-files-count") == 0
         assert _manifest_count(manifests, content="data", key="deleted-rows-count") == 0
 
@@ -192,7 +193,7 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert all(not entry.data_file.equality_ids for entry in delete_entries)
         assert all(getattr(entry.data_file, "content_offset", None) is None for entry in delete_entries)
         assert all(getattr(entry.data_file, "content_size_in_bytes", None) is None for entry in delete_entries)
-        assert sum(entry.data_file.record_count for entry in delete_entries) >= expected_deleted_row_count
+        assert sum(entry.data_file.record_count for entry in delete_entries) >= 2
     finally:
         _drop_table(spark, table_name)
 
@@ -842,7 +843,7 @@ def test_iceberg_merge_partition_delete_granularity_groups_data_files(
 
         before_data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
         before_data_paths = {entry.data_file.file_path for entry in before_data_entries}
-        assert len(before_data_paths) == 2  # noqa: PLR2004
+        assert len(before_data_paths) == 2
 
         spark.sql(
             """

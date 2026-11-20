@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, NullArray, NullBufferBuilder, StructArray};
@@ -10,8 +12,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_functions::utils::make_scalar_function;
-use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
-use datafusion_spark::function::map::map_from_entries::MapFromEntries;
+use datafusion_spark::function::map::map_from_arrays::MapFromArrays as DataFusionMapFromArrays;
+use datafusion_spark::function::map::map_from_entries::MapFromEntries as DataFusionMapFromEntries;
 
 use crate::scalar::map::utils::{
     get_element_field, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
@@ -19,15 +21,15 @@ use crate::scalar::map::utils::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkMapFromArrays {
-    delegate: MapFromArrays,
+pub struct MapFromArrays {
+    delegate: DataFusionMapFromArrays,
     last_value_wins: bool,
 }
 
-impl SparkMapFromArrays {
+impl MapFromArrays {
     pub fn new(last_value_wins: bool) -> Self {
         Self {
-            delegate: MapFromArrays::new(),
+            delegate: DataFusionMapFromArrays::new(),
             last_value_wins,
         }
     }
@@ -37,7 +39,7 @@ impl SparkMapFromArrays {
     }
 }
 
-impl ScalarUDFImpl for SparkMapFromArrays {
+impl ScalarUDFImpl for MapFromArrays {
     fn name(&self) -> &str {
         self.delegate.name()
     }
@@ -99,15 +101,15 @@ fn map_from_arrays_inner(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkMapFromEntries {
-    delegate: MapFromEntries,
+pub struct MapFromEntries {
+    delegate: DataFusionMapFromEntries,
     last_value_wins: bool,
 }
 
-impl SparkMapFromEntries {
+impl MapFromEntries {
     pub fn new(last_value_wins: bool) -> Self {
         Self {
-            delegate: MapFromEntries::new(),
+            delegate: DataFusionMapFromEntries::new(),
             last_value_wins,
         }
     }
@@ -117,7 +119,7 @@ impl SparkMapFromEntries {
     }
 }
 
-impl ScalarUDFImpl for SparkMapFromEntries {
+impl ScalarUDFImpl for MapFromEntries {
     fn name(&self) -> &str {
         self.delegate.name()
     }
@@ -219,7 +221,7 @@ mod tests {
 
     #[test]
     fn typed_arrays_keep_key_and_value_identity_at_runtime() -> Result<()> {
-        let function = SparkMapFromArrays::new(false);
+        let function = MapFromArrays::new(false);
         let types = ["17", "29"].map(|id| {
             DataType::List(Arc::new(
                 Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(

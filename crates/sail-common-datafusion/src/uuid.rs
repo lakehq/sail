@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! UUID identity and validated write conversion. UUIDs are not arbitrary fixed[16] fields.
 use std::sync::Arc;
 

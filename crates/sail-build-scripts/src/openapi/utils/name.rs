@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 
 use proc_macro2::{Ident, TokenStream};

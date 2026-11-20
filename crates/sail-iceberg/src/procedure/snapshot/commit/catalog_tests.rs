@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Exercise the procedure's pointer-publication boundary through CatalogManager.
 #![expect(clippy::expect_used)]
 

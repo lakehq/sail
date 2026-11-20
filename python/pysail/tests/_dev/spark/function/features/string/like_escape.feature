@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: LIKE and ILIKE with ESCAPE clause
 
   Rule: Custom ESCAPE character

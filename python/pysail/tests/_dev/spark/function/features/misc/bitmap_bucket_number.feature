@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: bitmap_bucket_number output schema
 
   @function(nullability)

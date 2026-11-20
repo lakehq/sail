@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 
 use crate::spec::transform::Transform;

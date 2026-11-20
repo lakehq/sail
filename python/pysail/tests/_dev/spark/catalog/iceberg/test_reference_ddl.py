@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608, F811
 """Snapshot reference DDL publishes through the catalog and retries conflicts."""
 
@@ -32,7 +34,7 @@ def test_reference_lifecycle(spark, reference_catalog, version):
         spark.sql(f"ALTER TABLE {table} REPLACE BRANCH empty_branch AS OF VERSION {first}")
         reference = reference_catalog.load_table(table)
         assert reference.refs()["empty_branch"].snapshot_id == first
-        assert reference.refs()["release"].max_ref_age_ms == 172800000  # noqa: PLR2004
+        assert reference.refs()["release"].max_ref_age_ms == 172800000
         before = reference.metadata_location
         with pytest.raises(Exception, match="different type"):
             spark.sql(f"ALTER TABLE {table} REPLACE TAG empty_branch")
@@ -40,7 +42,7 @@ def test_reference_lifecycle(spark, reference_catalog, version):
         with reference.manage_snapshots() as update:
             update.create_branch(first, "external")
         spark.sql(f"ALTER TABLE {table} REPLACE BRANCH external WITH SNAPSHOT RETENTION 3 SNAPSHOTS")
-        assert reference_catalog.load_table(table).refs()["external"].min_snapshots_to_keep == 3  # noqa: PLR2004
+        assert reference_catalog.load_table(table).refs()["external"].min_snapshots_to_keep == 3
         spark.sql(f"CALL system.set_current_snapshot(table => '{table}', ref => 'release')").collect()
         spark.sql(f"ALTER TABLE {table} DROP TAG release")
         spark.sql(f"ALTER TABLE {table} DROP BRANCH empty_branch")

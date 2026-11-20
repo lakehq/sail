@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
@@ -7,9 +9,10 @@ use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use xee_xpath::{Documents, Item, Queries, Query};
+use datafusion_functions::utils::make_scalar_function;
+use xee_xpath::{Documents, Item, Query};
 
-use crate::functions_utils::make_scalar_function;
+use super::{reader, xpath_query};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Xpath {
@@ -120,21 +123,24 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
     }
 
     let mut documents = Documents::new();
-    let document = documents
-        .add_string_without_uri(xml)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathNodes)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}")))?;
-    let query = Queries::default()
-        .sequence(path)
-        .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;
-    let value = query.execute(&mut documents, document).map_err(|error| {
-        DataFusionError::Execution(format!("Error loading expression '{path}': {error}"))
-    })?;
+    let query = xpath_query::compile(path)?;
+    let value = query
+        .execute(&mut documents, document.node)
+        .map_err(|error| {
+            DataFusionError::Execution(format!("Error loading expression '{path}': {error}"))
+        })?;
 
     Ok(Some(
         value
             .iter()
             .map(|item| match item {
-                Item::Node(node) => Ok(node_value(documents.xot(), node)),
+                Item::Node(node) => Ok(document
+                    .text_values
+                    .get(&node)
+                    .cloned()
+                    .or_else(|| node_value(documents.xot(), node))),
                 Item::Atomic(_) | Item::Function(_) => Err(DataFusionError::Execution(format!(
                     "Error loading expression '{path}': Cannot convert XPath result to a NodeList"
                 ))),

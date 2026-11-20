@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use async_stream;
 use datafusion::prelude::SessionContext;
 use log::debug;

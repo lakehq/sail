@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/upper.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/upper.rs
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
@@ -8,7 +9,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 
-use crate::scalar::string::common::to_upper;
+use crate::scalar::string::utils::kernels::to_upper;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpperFunc {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -23,7 +25,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 
@@ -115,7 +117,7 @@ pub fn align_row_level_value(
         .iter()
         .map(|field| field.name().clone())
         .collect();
-    let rebuilt = ScalarUDF::from(StructFunction::new(field_names)).call(child_values);
+    let rebuilt = ScalarUDF::from(StructFromFields::new(field_names)).call(child_values);
     let rebuilt = cast(rebuilt, target_type.clone());
     when(
         value.is_null(),

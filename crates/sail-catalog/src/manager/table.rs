@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -13,7 +15,7 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -75,11 +77,11 @@ impl CatalogManager {
     pub async fn stage_table_replacement<T: AsRef<str>>(
         &self,
         table: &[T],
-        options: CreateTableOptions,
+        options: impl Into<StageTableOptions>,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider
-            .stage_table_replacement(&database, &table, options)
+            .stage_table_replacement(&database, &table, options.into())
             .await
     }
 
@@ -101,6 +103,17 @@ impl CatalogManager {
     ) -> CatalogResult<CreateTableMetadataRequirement> {
         let (provider, _, _) = self.resolve_object(table)?;
         provider.create_table_metadata_requirement(options)
+    }
+
+    pub async fn list_file_partitions<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<crate::provider::CatalogFilePartition>>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .list_file_partitions(&database, &table, partition_values)
+            .await
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {

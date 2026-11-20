@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Tests for Python DataSource integration.
 
@@ -62,7 +64,7 @@ def test_python_range_datasource_api():
 
     reader = ds.reader(schema)
     partitions = reader.partitions()
-    assert len(partitions) == 2  # noqa: PLR2004
+    assert len(partitions) == 2
 
     # Read from first partition
     rows = list(reader.read(partitions[0]))
@@ -116,14 +118,14 @@ def test_python_arrow_datasource(spark):
     df = spark.read.format("arrow_range_test").load()
 
     rows = df.collect()
-    assert len(rows) == 100  # noqa: PLR2004
+    assert len(rows) == 100
     assert rows[0].id == 0
     assert rows[0].value == 0.0
 
     # Test filter query (filter is applied post-read by DataFusion in MVP)
     filtered = df.filter("value > 50.0").collect()
     # ids 34+ have value > 50 (34 * 1.5 = 51)
-    assert len(filtered) == 66  # noqa: PLR2004 - ids 34-99 have value > 50
+    assert len(filtered) == 66  # ids 34-99 have value > 50
 
 
 def test_python_tuple_datasource(spark):
@@ -164,13 +166,13 @@ def test_python_tuple_datasource(spark):
     df = spark.read.format("tuple_range_test").load()
 
     rows = df.collect()
-    assert len(rows) == 1000  # noqa: PLR2004
+    assert len(rows) == 1000
 
     # Verify data integrity: check that squares are correct
     # Find row with id=100, should have square=10000
     sample = df.filter("id = 100").collect()
     assert len(sample) == 1
-    assert sample[0].square == 10000  # noqa: PLR2004 - 100² = 10000
+    assert sample[0].square == 10000  # 100² = 10000
 
 
 def test_python_multi_partition(spark):
@@ -216,7 +218,7 @@ def test_python_multi_partition(spark):
 
     rows = df.collect()
     # 4 partitions * 25 rows each = 100 total
-    assert len(rows) == 100  # noqa: PLR2004
+    assert len(rows) == 100
 
 
 def test_python_partition_failure(spark):
@@ -243,8 +245,7 @@ def test_python_partition_failure(spark):
 
         def read(self, partition):
             pid = partition.value
-            failure_partition = 2
-            if pid == failure_partition:
+            if pid == 2:
                 msg = f"Deliberate failure in partition {pid}!"
                 raise ValueError(msg)
 
@@ -387,8 +388,7 @@ def test_python_schema_mismatch(spark):
     try:
         rows = df.collect()
         # If it succeeds, verify data is present
-        expected_rows = 3
-        assert len(rows) == expected_rows
+        assert len(rows) == 3
     except Exception as e:  # noqa: BLE001
         # If it fails, error should mention schema/type issue
         error_msg = str(e).lower()
@@ -477,7 +477,7 @@ def test_python_session_isolation(remote: str):
         # Verify Session A can read from it
         df_a = spark_a.read.format("session_isolation_test").load()
         rows_a = df_a.collect()
-        assert len(rows_a) == 3  # noqa: PLR2004
+        assert len(rows_a) == 3
 
         # Session B: Create a completely independent session
         spark_b = sessions.create()
@@ -619,15 +619,14 @@ def test_python_filter_pushdown_equality(spark):
 
     # Query without filter should return all 5 rows
     all_rows = df.collect()
-    expected_all_rows = 5
-    assert len(all_rows) == expected_all_rows, f"Expected 5 rows, got {len(all_rows)}"
+    assert len(all_rows) == 5, f"Expected 5 rows, got {len(all_rows)}"
 
     # Query WITH filter - if pushFilters works, Python reader applies it
     filtered_rows = df.filter("id = 3").collect()
 
     # Should get exactly 1 row
     assert len(filtered_rows) == 1, f"Expected 1 row, got {len(filtered_rows)}"
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_filter_pushdown_reader_without_push_filters(spark):
@@ -674,12 +673,11 @@ def test_python_filter_pushdown_reader_without_push_filters(spark):
     spark.dataSource.register(NoPushFiltersDataSource)
     df = spark.read.format("no_push_filters_test").load()
 
-    expected_all_rows = 5
-    assert len(df.collect()) == expected_all_rows
+    assert len(df.collect()) == 5
 
     filtered_rows = df.filter("id = 3").collect()
     assert len(filtered_rows) == 1
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
@@ -723,12 +721,11 @@ def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
     spark.dataSource.register(NonCallablePushFiltersDataSource)
     df = spark.read.format("non_callable_push_filters_test").load()
 
-    expected_all_rows = 5
-    assert len(df.collect()) == expected_all_rows
+    assert len(df.collect()) == 5
 
     filtered_rows = df.filter("id = 3").collect()
     assert len(filtered_rows) == 1
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_ddl_schema_fallback(spark):
@@ -749,7 +746,7 @@ def test_python_ddl_schema_fallback(spark):
 
     # Verify data read works
     rows = df.collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     # Sort by ID to ensure deterministic check
     rows.sort(key=lambda r: r.id)
     assert rows[0].id == 0
@@ -935,10 +932,8 @@ def test_python_filter_pushdown_comparison(spark):
 
     # Test greater than
     rows = df.filter("id > 5").collect()
-    expected_rows = 4
-    assert len(rows) == expected_rows, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
-    min_id = 5
-    assert all(r.id > min_id for r in rows)
+    assert len(rows) == 4, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
+    assert all(r.id > 5 for r in rows)
 
 
 def test_python_filter_pushdown_rejection(spark):
@@ -976,7 +971,7 @@ def test_python_filter_pushdown_rejection(spark):
     # DataFusion will post-filter the results
     rows = df.filter("id = 3").collect()
     assert len(rows) == 1
-    assert rows[0].id == 3  # noqa: PLR2004
+    assert rows[0].id == 3
 
 
 def test_python_filter_pushdown_complex_and(spark):
@@ -1683,7 +1678,7 @@ def test_python_sql_create_table_and_select(spark):
 
     try:
         rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
-        assert len(rows) == 2  # noqa: PLR2004
+        assert len(rows) == 2
         names = sorted(row.name for row in rows)
         ages = sorted(row.age for row in rows)
         assert names == ["Alice", "Bob"]
@@ -1770,7 +1765,7 @@ def test_python_sql_create_table_arrow_datasource(spark):
 
     try:
         rows = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()  # noqa: S608
-        assert len(rows) == 3  # noqa: PLR2004
+        assert len(rows) == 3
         assert [(r.id, r.value) for r in rows] == [(1, "a"), (2, "b"), (3, "c")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")

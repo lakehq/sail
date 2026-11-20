@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: soundex() returns the Soundex code of a string
 
   Rule: Basic usage

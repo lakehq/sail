@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/array_agg.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/array_agg.rs
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
@@ -40,7 +41,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
 use itertools::{Either, Itertools};
 
-use crate::functions_utils::offset_span;
+use crate::utils::nested::offset_span;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression

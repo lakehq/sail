@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: width_bucket output schema
 
   @function(nullability)

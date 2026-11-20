@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from pyspark.sql import Row
 
@@ -27,6 +29,7 @@ def remote():
 # The limit only guards against a hang. The test takes a few seconds on an idle machine,
 # and many times as long on a busy one, where the client reads the rows slowly.
 @pytest.mark.timeout(300)
+@pytest.mark.suite(name="slow")
 def test_tasks_do_not_keep_their_slots_while_the_client_reads_the_result(spark):
     # The result is much larger than what is buffered on its way to the client, and the
     # client has only read a small part of it when it runs another query. The tasks of
@@ -40,7 +43,7 @@ def test_tasks_do_not_keep_their_slots_while_the_client_reads_the_result(spark):
         rows = 0
         for _ in result:
             rows += 1
-            if rows == 2000:  # noqa: PLR2004
+            if rows == 2000:
                 break
 
         other = spark.sql("""

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -89,7 +91,9 @@ impl Display for ShufflePartitioning {
     }
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L940-L1010
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L940-L1010
 /// Computes `value % divisor` without division in the hot loop when `divisor`
 /// is fixed for many values.
 ///
@@ -161,6 +165,7 @@ impl StrengthReducedU64 {
         ((high_product >> 64) + carry) as u64
     }
 }
+// SPDX-SnippetEnd
 
 /// Assigns the rows of the input to output channels, in the same way as DataFusion's
 /// `BatchPartitioner` and as `RowRoundRobinPartitioner`, without moving any row.
@@ -216,12 +221,15 @@ impl Router {
                 // Self::Range(RangeExpr::try_new_with_schema(keys, range, schema)?)
                 Self::Range(RangeExpr::try_new(keys, range)?)
             }
-            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1056-L1069
+            // SPDX-SnippetBegin
+            // SPDX-License-Identifier: Apache-2.0
+            // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1056-L1069
             ShufflePartitioning::RoundRobinBatch(channels) => Self::Batch {
                 channels: *channels,
                 next: (partition * channels) / num_input_partitions,
                 expressions: vec![],
             },
+            // SPDX-SnippetEnd
             ShufflePartitioning::RoundRobinRow(channels) => {
                 if *channels == 0 {
                     return internal_err!(
@@ -267,7 +275,9 @@ impl Router {
         flush: bool,
     ) -> Result<Vec<Round>> {
         match self {
-            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1241-L1248
+            // SPDX-SnippetBegin
+            // SPDX-License-Identifier: Apache-2.0
+            // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1241-L1248
             Self::Batch {
                 channels,
                 next,
@@ -278,7 +288,11 @@ impl Router {
                 *next = (*next + 1) % *channels;
                 return buffer.push_batch(channel, batch, flush);
             }
-            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1249-L1274
+            // SPDX-SnippetEnd
+
+            // SPDX-SnippetBegin
+            // SPDX-License-Identifier: Apache-2.0
+            // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1249-L1274
             Self::Hash {
                 exprs,
                 channels,
@@ -300,6 +314,7 @@ impl Router {
 
                 partition_reducer.partition_indices(hash_buffer, indices);
             }
+            // SPDX-SnippetEnd
             Self::Range(expression) => {
                 let channels = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
                 let channels = channels.as_primitive::<UInt64Type>();
@@ -2173,7 +2188,9 @@ mod tests {
         Ok(())
     }
 
-    // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L2745-L2819
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L2745-L2819
     #[test]
     fn strength_reduced_u64_remainder_matches_modulo() {
         let divisors = [
@@ -2249,6 +2266,7 @@ mod tests {
             }
         }
     }
+    // SPDX-SnippetEnd
 
     mod memory;
     mod probe;

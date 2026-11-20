@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 import pytest
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType

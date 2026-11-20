@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Spark semantics of `collect_list`/`collect_set`/`listagg` windows and of nested `min`/`max`."""
 
 import math

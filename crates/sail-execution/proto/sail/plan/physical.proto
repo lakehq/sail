@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package sail.plan;
@@ -82,6 +84,8 @@ message ExtendedPhysicalPlanNode {
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
     TailExecNode tail = 69;
+    IcebergImportedExecNode iceberg_imported = 70;
+    bytes unsupported_iceberg_row_scan_schema = 71;
   }
 }
 
@@ -460,6 +464,7 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+  optional string timezone = 2;
 }
 
 message SparkCeilUdf {
@@ -1428,4 +1433,9 @@ message DeltaOptimizeGroupAssignment {
 message SparkSchemaOfXmlUdf {
   bool case_sensitive = 1;
   bool timestamp_ntz = 2;
+}
+
+message IcebergImportedExecNode {
+  bytes base_config = 1;
+  string format = 2;
 }

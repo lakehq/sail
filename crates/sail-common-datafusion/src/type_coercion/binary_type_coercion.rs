@@ -1,4 +1,6 @@
-//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
+
 //!
 //! # Intentional divergences from Spark
 //!

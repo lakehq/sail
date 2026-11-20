@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """DataFrame-API tests for ``pyspark.sql.functions.product``.
 
 This is the DataFrame-API equivalent of ``features/product.feature``. Spark SQL

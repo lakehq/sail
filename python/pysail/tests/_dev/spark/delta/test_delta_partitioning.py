@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 
 import pandas as pd
@@ -48,17 +50,16 @@ def test_delta_partitioning_by_single_column(spark, tmp_path):
     assert_frame_equal(result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False)
 
     filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2025").sort("id")
-    expected = 2025
-    expected_filtered = expected_data[expected_data["year"] == expected].sort_values("id").reset_index(drop=True)
+    expected_filtered = expected_data[expected_data["year"] == 2025].sort_values("id").reset_index(drop=True)
 
     assert_frame_equal(filtered_df.toPandas(), expected_filtered, check_dtype=False)
-    assert filtered_df.count() == 2, "Partition pruning should return exactly 2 records for year=2025"  # noqa: PLR2004
+    assert filtered_df.count() == 2, "Partition pruning should return exactly 2 records for year=2025"
 
     filtered_df_ne = spark.read.format("delta").load(delta_table_path).filter("year != 2025")
-    assert filtered_df_ne.count() == 2, "NOT EQUAL filter should return 2 records for year!=2025"  # noqa: PLR2004
+    assert filtered_df_ne.count() == 2, "NOT EQUAL filter should return 2 records for year!=2025"
 
     filtered_df_gt = spark.read.format("delta").load(delta_table_path).filter("year > 2025")
-    assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"  # noqa: PLR2004
+    assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"
 
 
 def test_delta_constant_partition_uses_multiple_writers(spark, tmp_path):
@@ -165,13 +166,13 @@ def test_delta_partitioning_by_multiple_columns(spark, tmp_path):
     assert_frame_equal(result_pandas, expected_data, check_dtype=False)
 
     df_region1 = spark.read.format("delta").load(f"{delta_path}").filter("region = 1")
-    assert df_region1.count() == 2, "Region 1 should have 2 records"  # noqa: PLR2004
+    assert df_region1.count() == 2, "Region 1 should have 2 records"
 
     df_region2_cat2 = spark.read.format("delta").load(f"{delta_path}").filter("region = 2 AND category = 2")
     assert df_region2_cat2.count() == 1, "Region 2, Category 2 should have 1 record"
 
     df_region_ge2 = spark.read.format("delta").load(f"{delta_path}").filter("region >= 2")
-    assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004
+    assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"
 
 
 def test_delta_append_uses_existing_partition_metadata(spark, tmp_path):

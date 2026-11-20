@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Wire/transport utility tests. All peers use Apache's codecs rather than Sail's generator.
 #![expect(clippy::unwrap_used)]
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the DataFrame ``inputFiles`` snapshot of constituent files."""
 
 import pytest

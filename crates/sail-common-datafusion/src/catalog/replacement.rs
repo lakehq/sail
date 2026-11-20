@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 
 use datafusion::arrow::datatypes::DataType;
@@ -15,6 +17,7 @@ pub struct TableReplacement {
     pub existing: bool,
     pub columns: Vec<(String, DataType, bool, BTreeMap<String, String>)>,
     pub location: String,
+    pub format: String,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<CatalogTableSort>,
     /// Original catalog bookkeeping at staging; replaced with authoritative effective

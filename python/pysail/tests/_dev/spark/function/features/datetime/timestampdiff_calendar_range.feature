@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMPDIFF counts calendar units for timestamps in any year
 
   Scenario: TIMESTAMPDIFF counts calendar units for TIMESTAMP_NTZ values far from the present

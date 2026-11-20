@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod st_asbinary;
 pub mod st_geogfromwkb;
 pub mod st_geomfromwkb;

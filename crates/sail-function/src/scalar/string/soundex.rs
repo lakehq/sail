@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
@@ -5,8 +7,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-
-use crate::functions_utils::make_scalar_function;
+use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Soundex {

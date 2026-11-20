@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 use std::sync::Arc;
 
@@ -6,7 +8,7 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use crate::resolver::PlanResolver;
@@ -43,7 +45,7 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if !inner.is::<SparkMonotonicallyIncreasingId>() {
+        if !inner.is::<MonotonicallyIncreasingId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: try_avg
 
   Rule: Result values (migrated from test_try_avg.txt doctests)

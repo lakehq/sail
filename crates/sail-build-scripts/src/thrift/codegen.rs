@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Rust syntax generation. IDL names and literals become tokens, never Rust source fragments.
 
 use std::collections::{BTreeMap, BTreeSet};

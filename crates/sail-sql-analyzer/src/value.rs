@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_sql_parser::ast::expression::BooleanLiteral;
 use sail_sql_parser::ast::literal::{NumberLiteral, NumberSuffix, StringLiteral};

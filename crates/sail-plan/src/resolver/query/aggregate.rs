@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, sum};
@@ -16,9 +18,9 @@ use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::explode::Explode;
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
+use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
-use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_logical_optimizer::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
@@ -38,6 +40,7 @@ use crate::resolver::tree::seeded_random::{
     SeededRandomRewriter, SeededRandomScope, seeded_random_calls,
 };
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+use crate::shared_cte::inline_deterministic_reference;
 
 /// Projections resolved by index, with typed columns for lateral dependencies.
 /// A `None` marks a projection deferred until grouping is materialized.
@@ -433,8 +436,8 @@ impl PlanResolver<'_> {
         for group in &grouping {
             group.expr.apply(|expr| {
                 if let Expr::ScalarFunction(function) = expr
-                    && (function.func.inner().is::<SparkMonotonicallyIncreasingId>()
-                        || function.func.inner().is::<SparkPartitionId>())
+                    && (function.func.inner().is::<MonotonicallyIncreasingId>()
+                        || function.func.inner().is::<PartitionId>())
                     && !partition_expressions.contains(expr)
                 {
                     partition_expressions.push(expr.clone());
@@ -907,6 +910,16 @@ impl PlanResolver<'_> {
     pub(crate) fn require_input_sort_inner(
         plan: LogicalPlan,
     ) -> PlanResult<(LogicalPlan, bool, bool)> {
+        // A consumer that depends on the order of the rows of a sorted CTE definition
+        // evaluates the definition itself, as if the CTE was not shareable.
+        if let Some(definition) = inline_deterministic_reference(&plan)? {
+            let (definition, found, global) = Self::require_input_sort_inner(definition)?;
+            return Ok(if found {
+                (definition, true, global)
+            } else {
+                (plan, false, false)
+            });
+        }
         match plan {
             LogicalPlan::Sort(sort) => Ok((
                 LogicalPlan::Extension(Extension {

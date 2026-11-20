@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Chumsky grammar for the client generator's supported Thrift IDL subset.
 
 use std::collections::{BTreeMap, BTreeSet};

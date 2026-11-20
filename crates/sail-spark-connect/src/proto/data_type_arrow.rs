@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes as adt;
 use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
 use sail_common::spec;

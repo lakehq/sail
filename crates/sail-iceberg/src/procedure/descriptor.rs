@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureField,
     LakeProcedureParameter, LakeProcedureTarget,
@@ -115,6 +117,23 @@ impl IcebergProcedureType {
         let timestamp = LakeProcedureDataType::TimestampMicros;
         let string_map = LakeProcedureDataType::StringMap;
         let (parameters, output, access) = match self {
+            Self::AddFiles => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::required("source_table", string),
+                    LakeProcedureParameter::optional("partition_filter", string_map),
+                    LakeProcedureParameter::optional(
+                        "check_duplicate_files",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                    LakeProcedureParameter::optional("parallelism", LakeProcedureDataType::Int32),
+                ],
+                vec![
+                    LakeProcedureField::new("added_files_count", long, false),
+                    LakeProcedureField::new("changed_partition_count", long, true),
+                ],
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::AncestorsOf => (
                 vec![
                     LakeProcedureParameter::required("table", string),

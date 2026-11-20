@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @function(lambda)
 Feature: map_zip_with higher-order function
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Storage for Sail system tables.
 //!
 //! The system store is an in-process implementation detail. Persistent backends are intended to

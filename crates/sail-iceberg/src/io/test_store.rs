@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Object-store observations and fault injection for manifest/commit invariants.
 
 use std::collections::{HashMap, HashSet};
@@ -60,6 +62,8 @@ pub(crate) enum PutFault {
 pub(crate) struct TestStore {
     pub inner: Arc<dyn ObjectStore>,
     pub gets: Mutex<HashMap<String, usize>>,
+    pub bytes_read: AtomicUsize,
+    pub largest_read: AtomicUsize,
     pub puts: AtomicUsize,
     pub deletes: Arc<Mutex<Vec<Path>>>,
     pub fault: Option<(String, PutFault)>,
@@ -81,6 +85,8 @@ impl TestStore {
         Self {
             inner,
             gets: Mutex::new(HashMap::new()),
+            bytes_read: AtomicUsize::new(0),
+            largest_read: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
             deletes: Arc::new(Mutex::new(vec![])),
             fault: None,
@@ -179,7 +185,11 @@ impl ObjectStore for TestStore {
         }) {
             return Err(injected_error("injected readback failure"));
         }
-        self.inner.get_opts(location, options).await
+        let result = self.inner.get_opts(location, options).await?;
+        let len = (result.range.end - result.range.start) as usize;
+        self.bytes_read.fetch_add(len, Ordering::Relaxed);
+        self.largest_read.fetch_max(len, Ordering::Relaxed);
+        Ok(result)
     }
 
     fn delete_stream(

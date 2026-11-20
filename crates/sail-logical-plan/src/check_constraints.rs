@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::Result;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, lit, when};
 pub use sail_common_datafusion::datasource::{DeltaCheckConstraintExpr, DeltaConstraintViolation};

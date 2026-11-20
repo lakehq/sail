@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake partition column name resolution
 
   Rule: Partition columns use Spark-compatible case-insensitive resolution

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Reference DDL roundtrips through HMS and the JVM Iceberg client."""
 
@@ -23,8 +25,8 @@ def test_reference_ddl_roundtrip(spark, jvm_spark, hms_s3_database, hms_s3_env, 
     jvm_spark.sql(f"ALTER TABLE {reference} CREATE TAG release RETAIN 1 DAYS")
     spark.sql(f"ALTER TABLE {name} REPLACE TAG release RETAIN 2 HOURS")
     _, stored = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
-    assert stored["refs"]["release"]["max-ref-age-ms"] == 7200000  # noqa: PLR2004
-    assert stored["refs"]["audit"]["min-snapshots-to-keep"] == 2  # noqa: PLR2004
+    assert stored["refs"]["release"]["max-ref-age-ms"] == 7200000
+    assert stored["refs"]["audit"]["min-snapshots-to-keep"] == 2
     spark.sql(f"ALTER TABLE {name} DROP BRANCH audit")
     spark.sql(f"ALTER TABLE {name} DROP TAG release")
     _, stored = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)

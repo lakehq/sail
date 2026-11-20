@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -753,6 +755,7 @@ mod tests {
                 Default::default(),
             )],
             location: "memory:///table".into(),
+            format: "iceberg".into(),
             partition_by: vec![],
             sort_by: vec![],
             properties: vec![("owner".into(), "old".into())],

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: EM102, FLY002, S105, S103, TRY003, TRY300
 """Pytest fixtures for HMS catalog interop tests."""
 
@@ -280,6 +282,7 @@ def hms_s3_container(
     container.with_env(
         "SERVICE_OPTS",
         f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()} "
+        "-Dmetastore.limit.partition.request=100 "
         "-Dhive.metastore.disallow.incompatible.col.type.changes=false",
     )
     container.with_network(hms_s3_network)
@@ -510,11 +513,11 @@ def _assert_schema_matrix_rows(rows) -> None:
     """Assert row values for the known schema_matrix INSERT."""
     from decimal import Decimal
 
-    assert len(rows) == 2  # noqa: PLR2004
+    assert len(rows) == 2
     assert rows[0].id == 1
     assert rows[0].amount == Decimal("12.34")
     assert rows[0].payload.flag is True
-    assert rows[0].payload.score == 7  # noqa: PLR2004
+    assert rows[0].payload.score == 7
     assert rows[0].tags == ["red", "blue"]
     assert [(e.kind, e.score) for e in rows[0].events] == [("click", 3), ("view", 5)]
     assert [(i.label, i.weight) for i in rows[0].nested_combo.items] == [
@@ -524,7 +527,7 @@ def _assert_schema_matrix_rows(rows) -> None:
     assert rows[0].nested_combo.attrs == {"empty": [], "nums": [1, 2]}
     assert rows[0].attrs == {"x": 1, "y": 2}
     assert rows[0].nullable_note is None
-    assert rows[1].id == 2  # noqa: PLR2004
+    assert rows[1].id == 2
     assert rows[1].amount == Decimal("0.10")
     assert rows[1].payload.flag is False
     assert rows[1].tags == []

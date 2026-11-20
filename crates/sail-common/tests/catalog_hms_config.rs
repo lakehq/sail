@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use sail_common::config::CatalogType;

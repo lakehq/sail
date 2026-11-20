@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Copies and compacts arrays so that queued shuffle output holds little more than its rows.
 
 use std::collections::HashSet;

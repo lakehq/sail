@@ -1,7 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +17,9 @@ import pytest
 from pyspark.sql import Row
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
+from pysail.testing._dev.spark.utils.jvm import classic_spark_mode
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests._dev.spark.delta.utils import _active_files, _commits
 
 
 def _read_first_commit_metadata(table_path: Path) -> dict:
@@ -300,13 +307,14 @@ def _write_checkpoint_with_compacted_tail(
     return latest
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaLogMinorCompactionSuite.scala
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize(
     "tail",
     ["compaction-then-commit", "commit-then-compaction", "checkpoint-only", "commit-only", "compaction-only"],
 )
 def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, tail: str, metadata_as_data: str):
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaLogMinorCompactionSuite.scala>
     # Compacted deltas at either end after a checkpoint.
     latest = _write_checkpoint_with_compacted_tail(tmp_path, tail)
     names = ["old", "first", "middle", "new"]
@@ -321,6 +329,12 @@ def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, t
         ], f"tail={tail}, version={version}, metadataAsDataRead={metadata_as_data}"
 
 
+# SPDX-SnippetEnd
+
+
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("tail", ["compaction-then-commit", "commit-then-compaction"])
 @pytest.mark.parametrize(
@@ -330,8 +344,6 @@ def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, t
 def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
     spark, tmp_path: Path, tail: str, metadata_as_data: str, ict_enablement_version: int | None
 ):
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala>
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala>
     # Exact and between-commit timestamps use ICT rather than mtime, including the enablement boundary.
     _write_checkpoint_with_compacted_tail(tmp_path, tail, ict_enablement_version=ict_enablement_version)
     names = ["old", "first", "middle", "new"]
@@ -347,6 +359,9 @@ def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
             assert reader.option("timestampAsOf", timestamp).load(str(tmp_path)).collect() == [
                 Row(id=expected_version, value=names[expected_version])
             ], f"tail={tail}, timestamp={timestamp}, after_latest={after_latest}"
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
@@ -858,3 +873,138 @@ def test_deletion_vector_transition_after_checkpoint_preserves_json_field(
         assert metadata_ids == [1, 3, 4]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+
+def _write_commit(path, version, actions):
+    (path / "_delta_log" / f"{version:020d}.json").write_text(
+        "".join(json.dumps(action) + "\n" for action in actions), encoding="utf-8"
+    )
+
+
+def _reopen_both(spark, delta_jvm_spark, path, destination, expected):
+    # A new path prevents either engine from serving an already cached pre-cleanup snapshot.
+    shutil.copytree(path, destination)
+    for session in [spark, delta_jvm_spark]:
+        with classic_spark_mode() if session is delta_jvm_spark else nullcontext():
+            assert session.read.format("delta").load(str(destination)).orderBy("id").collect() == expected
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DeltaRetentionSuite.scala#L305-L408
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("action_kind", "property_name"),
+    [("remove", "deletedFileRetentionDuration"), ("txn", "setTransactionRetentionDuration"), ("txn", None)],
+)
+def test_checkpoint_retention_filters_expired_actions(spark, delta_jvm_spark, tmp_path, action_kind, property_name):
+    path = tmp_path / "retention"
+    writer = spark.range(1).coalesce(1).write.format("delta").option("delta.checkpointInterval", "4")
+    if property_name:
+        writer = writer.option(f"delta.{property_name}", "interval 1 day")
+    writer.save(str(path))
+    spark.range(1, 2).coalesce(1).write.format("delta").mode("append").save(str(path))
+    files = _active_files(path)
+    expected_file_count = 2
+    assert len(files) == expected_file_count
+    now = int(time.time() * 1000)
+    if action_kind == "remove":
+        actions = [
+            {"remove": {"path": file.path, "deletionTimestamp": timestamp, "dataChange": True}}
+            for file, timestamp in zip(files, [0, now], strict=True)
+        ]
+        expected_actions = [{"path": files[1].path, "deletionTimestamp": now}]
+        expected_rows = [Row(id=2), Row(id=3)]
+    else:
+        actions = [
+            {"txn": {"appId": app, "version": 1, "lastUpdated": timestamp}}
+            for app, timestamp in [("ancient", 0), ("two-days-old", now - 2 * 86_400_000), ("live", now)]
+        ]
+        actions.append({"txn": {"appId": "undated", "version": 1}})
+        expected_actions = [
+            action["txn"] for action in actions if not property_name or action["txn"]["appId"] == "live"
+        ]
+        expected_rows = [Row(id=i) for i in range(4)]
+    _write_commit(path, 2, actions)
+    for value in [2, 3]:
+        spark.range(value, value + 1).coalesce(1).write.format("delta").mode("append").save(str(path))
+    checkpoint = pq.read_table(_checkpoint_file(path, 4))
+    actual = [row for row in checkpoint.column(action_kind).to_pylist() if row is not None]
+    if action_kind == "txn":
+        actual.sort(key=lambda txn: txn["appId"])
+        expected_actions.sort(key=lambda txn: txn["appId"])
+    # Checkpoint replay may normalize dataChange; retention depends on identity and time.
+    assert [
+        {key: value for key, value in row.items() if value is not None and key != "dataChange"} for row in actual
+    ] == expected_actions
+    # Force reopen through checkpoint, not the original action JSON.
+    for version in range(4):
+        for suffix in ["json", "crc"]:
+            (path / "_delta_log" / f"{version:020d}.{suffix}").unlink(missing_ok=True)
+    _reopen_both(spark, delta_jvm_spark, path, tmp_path / "reopened", expected_rows)
+
+
+def _age_logs(path, through):
+    for file in (path / "_delta_log").iterdir():
+        if file.name[:20].isdigit() and int(file.name[:20]) <= through:
+            os.utime(file, (1_600_000_000, 1_600_000_000))
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DeltaRetentionSuite.scala#L606-L826
+@pytest.mark.integration
+@pytest.mark.parametrize("incomplete", [False, True], ids=["live-version-base", "incomplete-base"])
+def test_cleanup_preserves_history_needed_by_live_versions(spark, delta_jvm_spark, tmp_path, incomplete):
+    path = tmp_path / "cleanup"
+    spark.range(0).write.format("delta").option("delta.checkpointInterval", "2").option(
+        "delta.logRetentionDuration", "interval 1 day"
+    ).option("delta.deletedFileRetentionDuration", "interval 1 day").save(str(path))
+    for value in range(1, 4):
+        spark.range(value, value + 1).write.format("delta").mode("append").save(str(path))
+    checkpoint = _checkpoint_file(path, 2)
+    if incomplete:
+        # One of two declared parts is absent; the surviving part is not a usable checkpoint.
+        checkpoint.rename(checkpoint.with_name("00000000000000000002.checkpoint.0000000001.0000000002.parquet"))
+        (path / "_delta_log" / "_last_checkpoint").write_text(json.dumps({"version": 2, "size": 4, "parts": 2}))
+    _age_logs(path, 2)
+    spark.range(4, 5).write.format("delta").mode("append").save(str(path))
+    assert set(_commits(path)) == (set(range(5)) if incomplete else {2, 3, 4})
+    if not incomplete:
+        assert checkpoint.is_file()
+    _checkpoint_file(path, 4)
+    _reopen_both(spark, delta_jvm_spark, path, tmp_path / "reopened", [Row(id=i) for i in range(1, 5)])
+    for version in range(0 if incomplete else 2, 5):
+        for session in [spark, delta_jvm_spark]:
+            with classic_spark_mode() if session is delta_jvm_spark else nullcontext():
+                assert session.read.format("delta").option("versionAsOf", version).load(
+                    str(tmp_path / "reopened")
+                ).orderBy("id").collect() == [Row(id=i) for i in range(1, version + 1)]
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DeltaRetentionSuite.scala#L421-L537
+@pytest.mark.integration
+def test_v2_cleanup_retains_live_sidecars_and_removes_expired_orphans(spark, delta_jvm_spark, tmp_path):
+    path = tmp_path / "sidecars"
+    spark.range(0).write.format("delta").option("delta.checkpointInterval", "1").option(
+        "delta.checkpointPolicy", "v2"
+    ).option("delta.logRetentionDuration", "interval 1 day").option(
+        "delta.deletedFileRetentionDuration", "interval 1 day"
+    ).save(str(path))
+    for value in range(1, 4):
+        spark.range(value, value + 1).write.format("delta").mode("append").save(str(path))
+    sidecars = {version: _v2_checkpoint_sidecar(path, version) for version in range(1, 4)}
+    sidecar_dir = path / "_delta_log" / "_sidecars"
+    expired = sidecar_dir / "expired-orphan.parquet"
+    recent = sidecar_dir / "recent-orphan.parquet"
+    shutil.copyfile(sidecars[1], expired)
+    shutil.copyfile(sidecars[1], recent)
+    _age_logs(path, 2)
+    for file in [sidecars[1], sidecars[2], expired]:
+        os.utime(file, (1_600_000_000, 1_600_000_000))
+    live_bytes = sidecars[2].read_bytes()
+    spark.range(4, 5).write.format("delta").mode("append").save(str(path))
+    assert set(_commits(path)) == {2, 3, 4}
+    assert not sidecars[1].exists()
+    assert not expired.exists()
+    assert recent.is_file()
+    assert sidecars[2].read_bytes() == live_bytes
+    sidecars[4] = _v2_checkpoint_sidecar(path, 4)
+    assert set(sidecar_dir.glob("*.parquet")) == {sidecars[2], sidecars[3], sidecars[4], recent}
+    _reopen_both(spark, delta_jvm_spark, path, tmp_path / "reopened", [Row(id=i) for i in range(1, 5)])

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_catalog::provider::TablePublication;
 
 use super::*;
@@ -7,22 +9,9 @@ impl MemoryCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: impl Into<StageTableOptions>,
     ) -> CatalogResult<TableReplacement> {
         let _access = self.table_access(database, table).await;
-        validate_create_table_options(&options.format, &options.partition_by)?;
-        if !options.format.eq_ignore_ascii_case("iceberg")
-            || !matches!(
-                options.mode,
-                CreateTableMode::Replace | CreateTableMode::CreateOrReplace
-            )
-            || options.bucket_by.is_some()
-            || !options.constraints.is_empty()
-        {
-            return Err(CatalogError::NotSupported(
-                "staged Iceberg table replacement options".into(),
-            ));
-        }
         let db = self.databases.get(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
@@ -34,6 +23,28 @@ impl MemoryCatalogProvider {
             ));
         }
         let existing = db.tables.get(table);
+        let options = options.into().resolve(existing)?;
+        validate_create_table_options(&options.format, &options.partition_by)?;
+        let is_delta = options.format.eq_ignore_ascii_case("delta");
+        if !(is_delta || options.format.eq_ignore_ascii_case("iceberg"))
+            || (!is_delta
+                && !matches!(
+                    options.mode,
+                    CreateTableMode::Replace | CreateTableMode::CreateOrReplace
+                ))
+            || options.bucket_by.is_some()
+            || !options.constraints.is_empty()
+        {
+            return Err(CatalogError::NotSupported(
+                "staged lakehouse table publication options".into(),
+            ));
+        }
+        if existing.is_some() && !options.mode.is_replace() {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.into(),
+            ));
+        }
         if options.mode.replace_requires_existing() && existing.is_none() {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
@@ -48,32 +59,31 @@ impl MemoryCatalogProvider {
                     location: old_location,
                     properties: old_properties,
                     ..
-                } if format.eq_ignore_ascii_case("iceberg") => {
+                } if format.eq_ignore_ascii_case(&options.format) => {
                     if old_location.as_deref() != Some(location.as_str()) {
                         return Err(CatalogError::NotSupported(
-                            "relocating an Iceberg table during replacement".into(),
+                            "relocating a lakehouse table during replacement".into(),
                         ));
                     }
                     properties = old_properties.clone();
                 }
                 _ => {
                     return Err(CatalogError::NotSupported(
-                        "replacing a non-Iceberg table with Iceberg".into(),
+                        "replacement requires the same lakehouse table format".into(),
                     ));
                 }
             }
         }
         // Validate the original bookkeeping too: a request must not hide a managed marker.
-        if properties
-            .iter()
-            .chain(options.properties.iter())
-            .any(|(key, value)| {
-                sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
-                    key.trim(),
-                    value.trim(),
-                ) || key.trim().starts_with("metadata.")
-            })
-        {
+        let mut markers = properties.iter().chain(&options.properties);
+        if is_delta {
+            validate_delta_replacement_properties(markers)?;
+        } else if markers.any(|(key, value)| {
+            sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
+                key.trim(),
+                value.trim(),
+            ) || key.trim().starts_with("metadata.")
+        }) {
             return Err(CatalogError::UnsupportedCapability(
                 "replacement requires path-managed Iceberg publication authority".into(),
             ));
@@ -103,10 +113,15 @@ impl MemoryCatalogProvider {
                 })
                 .collect(),
             location,
+            format: options.format,
             partition_by: options.partition_by,
             sort_by: options.sort_by,
             properties,
-            property_updates: options.properties,
+            property_updates: options
+                .properties
+                .into_iter()
+                .chain(options.comment.map(|value| ("comment".to_string(), value)))
+                .collect(),
             is_external: options.is_external,
         })
     }
@@ -116,6 +131,11 @@ impl MemoryCatalogProvider {
         replacement: TableReplacement,
         publication: TablePublication,
     ) -> CatalogResult<()> {
+        // Clone preparation fills in authoritative metadata after staging the target identity.
+        validate_create_table_options(&replacement.format, &replacement.partition_by)?;
+        if replacement.format.eq_ignore_ascii_case("delta") {
+            validate_delta_replacement_properties(&replacement.properties)?;
+        }
         let sail_common_datafusion::catalog::ReplacementAuthority::Path {
             catalog_generation,
             database_generation,
@@ -183,6 +203,20 @@ impl MemoryCatalogProvider {
     }
 }
 
+fn validate_delta_replacement_properties<'a>(
+    properties: impl IntoIterator<Item = &'a (String, String)>,
+) -> CatalogResult<()> {
+    if properties
+        .into_iter()
+        .any(|(key, _)| sail_common_datafusion::catalog::delta::is_delta_coordinated_property(key))
+    {
+        return Err(CatalogError::UnsupportedCapability(
+            "replacement of a catalog-coordinated Delta table".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn prepared_status(
     replacement: &TableReplacement,
     database: &Namespace,
@@ -213,10 +247,14 @@ fn prepared_status(
                     is_cluster: false,
                 })
                 .collect(),
-            comment: None,
+            comment: replacement
+                .properties
+                .iter()
+                .find(|(key, _)| key == "comment")
+                .map(|(_, value)| value.clone()),
             constraints: vec![],
             location: Some(replacement.location.clone()),
-            format: "iceberg".into(),
+            format: replacement.format.clone(),
             partition_by: replacement.partition_by.clone(),
             sort_by: replacement.sort_by.clone(),
             bucket_by: None,

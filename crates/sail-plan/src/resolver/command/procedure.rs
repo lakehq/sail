@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -129,6 +131,15 @@ impl PlanResolver<'_> {
         let catalog = if is_path {
             manager.resolve_catalog_reference(None)?.to_string()
         } else {
+            // Resolve views before the procedure's table-only lookup, including
+            // temporary views shadowing catalog tables.
+            let status = manager.get_table_or_view(&parts).await?;
+            if !matches!(status.kind, TableKind::Table { .. }) {
+                return Err(PlanError::invalid(format!(
+                    "Lakehouse procedure '{procedure_name}' requires a table, but '{}' is a view",
+                    parts.join(".")
+                )));
+            }
             manager
                 .resolve_table_reference_with_default_catalog(
                     &manager.resolve_catalog_reference(None)?,
@@ -480,7 +491,7 @@ impl PlanResolver<'_> {
                 spec::Expr::Cast {
                     expr: Box::new(argument),
                     cast_to_type: target,
-                    rename: false,
+                    naming: spec::CastNaming::Cast,
                     is_try: false,
                 },
                 &schema,

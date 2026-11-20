@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`DataFrame.tail`, which returns the last rows of one evaluation of the input
 (Spark's `CollectTailExec`)."""
 
@@ -272,6 +274,6 @@ def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
     for _ in range(5):
         for candidate in [df, df.select("rn", "total")]:
             rows = candidate.tail(3)
-            assert len(rows) == 3, rows  # noqa: PLR2004
+            assert len(rows) == 3, rows
             total = rows[0].total
             assert [r.rn for r in rows] == [total - 2, total - 1, total], rows

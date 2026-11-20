@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
@@ -8,7 +10,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use super::decimal_format::{format_with_parsed_pattern, insert_grouping, parse_pattern};
+use super::utils::decimal_format::{format_with_parsed_pattern, insert_grouping, parse_pattern};
 
 /// Formats a number to a string with comma grouping or a DecimalFormat pattern.
 #[derive(Debug, PartialEq, Eq, Hash)]

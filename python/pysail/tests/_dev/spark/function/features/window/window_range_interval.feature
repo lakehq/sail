@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Window RANGE frame with interval boundaries
 
   Rule: RANGE frame with INTERVAL PRECEDING on timestamp ORDER BY

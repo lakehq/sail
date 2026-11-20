@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Approximate percentiles select observations within the requested rank error
   Both aliases select observed values and preserve native numeric observations.
   A single partition with 100000 rows crosses the 50000-value buffering boundary;

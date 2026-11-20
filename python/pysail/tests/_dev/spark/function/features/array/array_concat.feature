@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @sail-only
 Feature: array_concat() concatenates arrays (Sail extension)
 

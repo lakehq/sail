@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// PythonExecutor trait for abstracting Python execution.
 ///
 /// This trait enables easy swapping between:

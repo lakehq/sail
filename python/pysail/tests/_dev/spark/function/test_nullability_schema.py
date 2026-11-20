@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Output-schema nullability via the DataFrame API.
 
 Complements the SQL `@function(nullability)` feature suite with the DataFrame path: build a

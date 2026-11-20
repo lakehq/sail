@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 pytestmark = pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
@@ -87,7 +90,7 @@ def test_python_data_source_table_is_read_for_each_reference(spark, counting_tab
         df = spark.sql(query.format(t=table_name, v=view_name))
         assert scalar_subquery_slots(df) == [2]
         assert [tuple(row) for row in df.collect()] == [(7, 7)]
-        assert reads(counter) == 2  # noqa: PLR2004
+        assert reads(counter) == 2
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view_name}")
 
@@ -103,7 +106,7 @@ def test_python_data_source_dataframe_view_is_read_for_each_reference(spark, cou
         df = spark.sql(f"SELECT (SELECT x FROM {view_name}) AS a, (SELECT x FROM {view_name}) AS b")  # noqa: S608
         assert scalar_subquery_slots(df) == [2]
         assert [tuple(row) for row in df.collect()] == [(7, 7)]
-        assert reads(counter) == 2  # noqa: PLR2004
+        assert reads(counter) == 2
     finally:
         spark.catalog.dropTempView(view_name)
 
@@ -142,3 +145,15 @@ def test_python_data_source_is_checked_in_every_scan(spark, counting_table, tmp_
         assert reads(counter) == expected_reads
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {parquet_name}")
+
+
+def test_volatile_cte_over_python_data_source_is_evaluated_once(spark, counting_table):
+    """Spark reads the source for each reference, where exchange reuse gives them the same rows."""
+    table, counter = counting_table
+    query = (
+        f"WITH c AS (SELECT x, rand() AS r FROM {table}) "  # noqa: S608
+        "SELECT count(*) FROM c a JOIN c b ON a.x = b.x AND a.r = b.r"
+    )
+    assert spark.sql(query).collect() == [(1,)]
+    if not is_jvm_spark():
+        assert reads(counter) == 1

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -8,7 +10,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::scalar::math::xorshift::SparkXorShiftRandom;
+use crate::scalar::math::utils::xorshift::XorShiftRandom;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Randstr {
@@ -90,7 +92,7 @@ impl ScalarUDFImpl for Randstr {
             None
         };
 
-        let mut rng = SparkXorShiftRandom::new(seed.unwrap_or_else(rand::random::<i64>));
+        let mut rng = XorShiftRandom::new(seed.unwrap_or_else(rand::random::<i64>));
         let array = random_strings(&mut rng, length, number_rows)?;
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
@@ -146,7 +148,7 @@ const RANDOM_STRING_CHARACTERS: &[u8; 62] =
 /// Generates `num_rows` random alphanumeric strings (0-9, a-z, A-Z) of the specified length,
 /// drawing the characters of the rows in order.
 pub(crate) fn random_strings(
-    rng: &mut SparkXorShiftRandom,
+    rng: &mut XorShiftRandom,
     length: usize,
     num_rows: usize,
 ) -> Result<StringArray> {
@@ -177,11 +179,11 @@ mod tests {
     #[test]
     fn test_random_strings_match_spark() -> Result<()> {
         // `SELECT randstr(3, 0)` in Spark.
-        let array = random_strings(&mut SparkXorShiftRandom::new(0), 3, 1)?;
+        let array = random_strings(&mut XorShiftRandom::new(0), 3, 1)?;
         assert_eq!(array, StringArray::from(vec!["ceV"]));
         // `SELECT randstr(4, 5) FROM range(0, 9, 1, 3)` in Spark: partition 0, whose rows
         // continue the same generator.
-        let mut rng = SparkXorShiftRandom::new(5);
+        let mut rng = XorShiftRandom::new(5);
         let first = random_strings(&mut rng, 4, 2)?;
         let second = random_strings(&mut rng, 4, 1)?;
         assert_eq!(first, StringArray::from(vec!["R0Tm", "gfhb"]));
@@ -191,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_random_strings_empty() -> Result<()> {
-        let mut rng = SparkXorShiftRandom::new(0);
+        let mut rng = XorShiftRandom::new(0);
         assert_eq!(
             random_strings(&mut rng, 0, 2)?,
             StringArray::from(vec!["", ""])
@@ -202,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_random_strings_too_large() {
-        let mut rng = SparkXorShiftRandom::new(0);
+        let mut rng = XorShiftRandom::new(0);
         assert!(random_strings(&mut rng, i32::MAX as usize, 2).is_err());
         assert!(random_strings(&mut rng, usize::MAX, 2).is_err());
     }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion_common::Result;

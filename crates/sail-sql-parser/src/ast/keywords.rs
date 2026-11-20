@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
@@ -75,7 +77,7 @@ macro_rules! keyword_types {
                 fn parser(
                     _args: (),
                     _options: &'a ParserOptions
-                ) -> impl Parser<'a, I, Self, E> + Clone {
+                ) -> impl Parser<'a, I, Self, E> + std::clone::Clone {
                     custom(move |input| parse_keyword(input, Self::keyword()).map(Self::new))
                 }
             }

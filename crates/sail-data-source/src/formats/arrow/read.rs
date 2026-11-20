@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -25,6 +27,9 @@ pub struct ArrowReadFormat;
 const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-arrow/src/file_format.rs
 async fn is_object_in_arrow_ipc_file_format(
     store: Arc<dyn ObjectStore>,
     object_location: &Path,
@@ -40,6 +45,7 @@ async fn is_object_in_arrow_ipc_file_format(
         .await?;
     Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
+// SPDX-SnippetEnd
 
 #[async_trait::async_trait]
 impl ReadFormat for ArrowReadFormat {
@@ -51,6 +57,9 @@ impl ReadFormat for ArrowReadFormat {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-arrow/src/file_format.rs
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
@@ -92,7 +101,11 @@ impl ReadFormat for ArrowReadFormat {
             NanosecondTimestamps::Report,
         )?))
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-arrow/src/file_format.rs
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let object_store = ctx.runtime_env().object_store(&input.object_store_url)?;
         let object_location = &input
@@ -127,8 +140,12 @@ impl ReadFormat for ArrowReadFormat {
 
         Ok(config)
     }
+    // SPDX-SnippetEnd
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-arrow/src/file_format.rs
 // Custom implementation of inferring schema from Arrow IPC stream payload.
 // Adapted from DataFusion's Arrow data source implementation.
 async fn infer_stream_schema(
@@ -189,7 +206,11 @@ async fn infer_stream_schema(
         .ok_or_else(|| ArrowError::IpcError("Unable to read IPC message schema".to_string()))?;
     Ok(Arc::new(fb_to_schema(fb_schema)))
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-arrow/src/file_format.rs
 async fn extend_bytes_to_n_length_from_stream(
     bytes: Vec<u8>,
     n: usize,
@@ -216,3 +237,4 @@ async fn extend_bytes_to_n_length_from_stream(
 
     Ok(buf)
 }
+// SPDX-SnippetEnd

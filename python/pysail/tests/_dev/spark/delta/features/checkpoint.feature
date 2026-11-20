@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Checkpoint
 
   Rule: Checkpoint parquet and _last_checkpoint files are created at the configured interval
@@ -299,6 +301,7 @@ Feature: Delta Lake Checkpoint
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true'
         )
         """
@@ -374,6 +377,7 @@ Feature: Delta Lake Checkpoint
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true',
           'delta.enableInCommitTimestamps' = 'true'
         )

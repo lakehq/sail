@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -14,7 +16,7 @@ use sail_data_source::reuse::is_reusable_source;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
-use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::math::uniform::Uniform;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -488,6 +490,20 @@ impl NameNormalizer {
     }
 }
 
+/// Returns whether the expression is a call of a volatile function.
+pub(crate) fn is_volatile_call(expr: &Expr) -> bool {
+    let volatility = match expr {
+        Expr::ScalarFunction(function) => function.func.signature().volatility,
+        Expr::AggregateFunction(function) => function.func.signature().volatility,
+        Expr::WindowFunction(function) => match &function.fun {
+            WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature().volatility,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature().volatility,
+        },
+        _ => return false,
+    };
+    volatility == Volatility::Volatile
+}
+
 /// Returns whether the extension node holds no source or state, and its equality compares
 /// everything that determines its output. Such nodes are shared even when their output is
 /// nondeterministic (e.g. monotonically increasing IDs or Python UDFs), as Spark reuses
@@ -520,7 +536,7 @@ fn is_reusable_volatile_scalar(function: &ScalarUDF, args: &[Expr]) -> bool {
         || func.is::<PySparkCoGroupMapUDF>()
         || ((func.is::<Random>() || func.is::<Randn>()) && seeded(0))
         || ((func.is::<Randstr>() || func.is::<RandPoisson>()) && seeded(1))
-        || (func.is::<SparkUniform>() && seeded(2))
+        || (func.is::<Uniform>() && seeded(2))
 }
 
 /// Returns whether calls to the volatile aggregate function may be reused, which holds for

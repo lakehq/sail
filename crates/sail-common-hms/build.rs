@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     sail_build_scripts::thrift::generate_client(
@@ -16,6 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "get_table",
             "get_table_objects_by_name",
             "get_table_req",
+            "get_partition_names",
+            "get_partition_names_ps",
+            "get_partitions_by_names",
             "alter_table",
             "lock",
             "check_lock",

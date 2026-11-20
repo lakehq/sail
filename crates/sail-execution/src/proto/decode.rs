@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, FieldRef, Schema};
@@ -16,21 +18,21 @@ use datafusion_proto::protobuf::{
     Partitioning as ProtoPartitioning, PhysicalExprNode, PhysicalPlanNode,
 };
 use prost::Message;
-use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
-use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
-use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::array::array_aggregate::ArrayAggregate;
+use sail_function::scalar::array::array_exists::ArrayExists;
+use sail_function::scalar::array::array_filter::ArrayFilter;
+use sail_function::scalar::array::array_forall::ArrayForall;
+use sail_function::scalar::array::array_sort::ArraySort;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::array::array_zip_with::ArrayZipWith;
+use sail_function::scalar::array::sequence::{Sequence, SequenceLazy};
 use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
-use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
-use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
-use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
-use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
-use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
+use sail_function::scalar::map::map_filter::MapFilter;
+use sail_function::scalar::map::map_zip_with::MapZipWith;
+use sail_function::scalar::map::transform_keys::TransformKeys;
+use sail_function::scalar::map::transform_values::TransformValues;
+use sail_function::scalar::string::regexp_instr::RegexpInstr;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -187,10 +189,10 @@ pub(super) fn try_decode_higher_order_udf(
         .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
     Ok(match udf_kind {
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))
+            Arc::new(HigherOrderUDF::new_from_impl(MapFilter::new()))
         }
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
+            Arc::new(HigherOrderUDF::new_from_impl(TransformValues::new()))
         }
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins,
@@ -203,59 +205,57 @@ pub(super) fn try_decode_higher_order_udf(
                             .to_owned(),
                     ));
                 }
-                (false, true) => SparkTransformKeys::new_preserving_duplicates(),
-                (last_value_wins, false) => SparkTransformKeys::new(last_value_wins),
+                (false, true) => TransformKeys::new_preserving_duplicates(),
+                (last_value_wins, false) => TransformKeys::new(last_value_wins),
             };
             Arc::new(HigherOrderUDF::new_from_impl(transform_keys))
         }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
-                Arc::new(HigherOrderUDF::new_from_impl(
-                    SparkArrayFilter::new_index_first(),
-                ))
+                Arc::new(HigherOrderUDF::new_from_impl(ArrayFilter::new_index_first()))
             } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArrayFilter::new()))
             }
         }
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf { index_first }) => {
             if index_first {
                 Arc::new(HigherOrderUDF::new_from_impl(
-                    SparkArrayTransform::new_index_first(),
+                    ArrayTransform::new_index_first(),
                 ))
             } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new()))
             }
         }
         HigherOrderUdfKind::Aggregate(r#gen::SparkArrayAggregateUdf { element_first }) => {
             if element_first {
                 Arc::new(HigherOrderUDF::new_from_impl(
-                    SparkArrayAggregate::new_element_first(),
+                    ArrayAggregate::new_element_first(),
                 ))
             } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArrayAggregate::new()))
             }
         }
         HigherOrderUdfKind::Exists(r#gen::SparkArrayExistsUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()))
+            Arc::new(HigherOrderUDF::new_from_impl(ArrayExists::new()))
         }
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
+            Arc::new(HigherOrderUDF::new_from_impl(ArrayForall::new()))
         }
-        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf { ansi_mode }) => Arc::new(
-            HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(ansi_mode)),
-        ),
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf { ansi_mode }) => {
+            Arc::new(HigherOrderUDF::new_from_impl(RegexpInstr::new(ansi_mode)))
+        }
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf { swapped }) => {
             if swapped {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArraySort::new_swapped()))
             } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArraySort::new()))
             }
         }
         HigherOrderUdfKind::SparkSequenceLazy(r#gen::SparkSequenceUdf {
             session_timezone,
             ansi_mode,
-        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(
-            SparkSequence::new(Arc::from(session_timezone), ansi_mode),
+        }) => Arc::new(HigherOrderUDF::new_from_impl(SequenceLazy::new(
+            Sequence::new(Arc::from(session_timezone), ansi_mode),
         ))),
         HigherOrderUdfKind::CoalesceLazy(r#gen::CoalesceLazyUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(CoalesceLazy::new()))
@@ -276,12 +276,12 @@ pub(super) fn try_decode_higher_order_udf(
             )))
         }
         HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
+            Arc::new(HigherOrderUDF::new_from_impl(ArrayZipWith::new()))
         }
         HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
             ansi_mode,
             session_timezone,
-        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+        }) => Arc::new(HigherOrderUDF::new_from_impl(MapZipWith::new(
             ansi_mode,
             Arc::from(session_timezone),
         ))),

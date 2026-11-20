@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -6,10 +8,12 @@ from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse
 
 import pytest
+from pyspark.sql import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests._dev.spark.delta.utils import _active_files, _commits, _tree
 
 
 @pytest.fixture
@@ -83,7 +87,7 @@ def test_native_detail_and_history(spark, inspection_table):
     spark.sql(f"INSERT OVERWRITE {name} VALUES (3, 'new')")  # noqa: S608
     current = [action["add"] for action in _actions(path, 2) if "add" in action]
     assert spark.sql(f"DESCRIBE DETAIL {name}").first().numFiles == len(current)
-    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2  # noqa: PLR2004
+    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2
 
 
 @pytest.mark.parametrize(
@@ -183,7 +187,7 @@ def test_history_optional_fields(spark, tmp_path):
         assert history[1].operationMetrics == {"numOutputRows": "1"}
         assert history[1].userMetadata == "audit"
         limited = spark.sql("DESCRIBE HISTORY raw_inspection LIMIT 1").first()
-        assert limited.version == 2  # noqa: PLR2004
+        assert limited.version == 2
         assert limited.timestamp == history[-1].timestamp
         assert spark.sql("DESCRIBE DETAIL raw_inspection").first().tableFeatures == ["domainMetadata"]
     finally:
@@ -282,10 +286,10 @@ def test_native_delta_commands_resolve_delta_namespace_table(spark, tmp_path):
         spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
         detail = spark.sql(f"DESCRIBE DETAIL {target}").first()
         assert detail.name == "sail.delta.relative-table"
-        assert detail.numFiles == 2  # noqa: PLR2004
+        assert detail.numFiles == 2
         assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {target}").collect()] == [2, 1, 0]
         metrics = spark.sql(f"OPTIMIZE {target}").first().metrics
-        assert metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.numFilesRemoved == 2
         assert metrics.numFilesAdded == 1
         assert spark.sql(f"VACUUM {target} DRY RUN").collect() == []
         assert [row.id for row in spark.table(f"sail.{target}").orderBy("id").collect()] == [0, 1, 2, 3]
@@ -304,7 +308,10 @@ def test_native_target_resolution(spark, inspection_table):
     name, _ = inspection_table
     spark.sql("CREATE TEMPORARY VIEW inspection_view AS SELECT 1 AS id")
     try:
-        with pytest.raises(Exception, match=r"(not a table|not found|does not exist)"):
+        with pytest.raises(
+            Exception,
+            match=r"Lakehouse procedure 'describe_detail' requires a table, but 'inspection_view' is a view",
+        ):
             spark.sql("DESCRIBE DETAIL inspection_view").collect()
     finally:
         spark.sql("DROP VIEW inspection_view")
@@ -319,7 +326,7 @@ def test_native_target_resolution(spark, inspection_table):
     try:
         spark.sql(f"CREATE TABLE {name}.history (marker INT) USING parquet")
         spark.sql(f"INSERT INTO {name}.history VALUES (42)")  # noqa: S608
-        assert spark.table(f"{name}.history").first().marker == 42  # noqa: PLR2004
+        assert spark.table(f"{name}.history").first().marker == 42
     finally:
         spark.sql(f"DROP DATABASE {name} CASCADE")
 
@@ -403,7 +410,7 @@ def test_inspection_matches_delta_spark(spark, delta_jvm_spark, tmp_path, ict):
             spark.sql("DESCRIBE HISTORY inspection_interop").collect()
             == jvm.sql(f"DESCRIBE HISTORY delta.`{path}`").collect()
         )
-        assert jvm.read.format("delta").load(str(path)).count() == 7  # noqa: PLR2004
+        assert jvm.read.format("delta").load(str(path)).count() == 7
     finally:
         spark.sql("DROP TABLE inspection_interop")
 
@@ -429,7 +436,7 @@ def test_detail_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, t
         assert actual.sizeInBytes == expected.sizeInBytes == sum(add["size"] for add in current)
         assert actual.partitionColumns == expected.partitionColumns == ["part"]
         assert actual.tableFeatures == expected.tableFeatures
-        assert spark.table("inspection_mapped").count() == 2  # noqa: PLR2004
+        assert spark.table("inspection_mapped").count() == 2
     finally:
         spark.sql("DROP TABLE inspection_mapped")
 
@@ -450,3 +457,82 @@ def test_detail_resolves_logical_clustering_columns(spark, delta_jvm_spark, tmp_
         assert actual.tableFeatures == expected.tableFeatures
     finally:
         spark.sql("DROP TABLE inspection_clustered")
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DescribeDeltaDetailSuite.scala#L163-L241
+@pytest.mark.integration
+def test_inspection_refreshes_external_snapshot(spark, delta_jvm_spark, semantic_table):
+    name, path = semantic_table
+    initial = spark.sql(f"DESCRIBE DETAIL {name}").first()
+    initial_history = spark.sql(f"DESCRIBE HISTORY {name}").collect()
+    delta_jvm_spark.sql(f"INSERT INTO delta.`{path}` VALUES (7, 'external')").collect()  # noqa: S608
+    delta_jvm_spark.sql(f"ALTER TABLE delta.`{path}` SET TBLPROPERTIES ('comment' = 'external update')").collect()
+    detail = spark.sql(f"DESCRIBE DETAIL {name}").first()
+    reference = delta_jvm_spark.sql(f"DESCRIBE DETAIL delta.`{path}`").first()
+    assert detail.id == initial.id == reference.id
+    assert detail.numFiles == reference.numFiles == len(_active_files(path))
+    assert detail.sizeInBytes == reference.sizeInBytes == sum(f.size for f in _active_files(path))
+    assert detail.description == reference.description == "external update"
+    assert detail.properties == reference.properties
+    history = spark.sql(f"DESCRIBE HISTORY {name}").collect()
+    assert len(history) == len(initial_history) + 2
+    assert history[:2] == delta_jvm_spark.sql(f"DESCRIBE HISTORY delta.`{path}` LIMIT 2").collect()
+    assert spark.table(name).collect() == [Row(id=7, part="external")]
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DescribeDeltaDetailSuite.scala#L142-L192
+@pytest.mark.parametrize("populated", [False, True], ids=["empty", "populated"])
+def test_detail_alias_metadata(spark, semantic_table, populated):
+    name, path = semantic_table
+    alias = "maintenance_alias"
+    spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('comment' = 'table description')").collect()
+    if populated:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 'a'), (2, NULL)").collect()  # noqa: S608
+    spark.sql(f"CREATE TABLE {alias} USING delta LOCATION '{escape_sql_string_literal(str(path))}'").collect()
+    try:
+        before = _tree(path)
+        details = [spark.sql(f"DESCRIBE DETAIL {target}").first() for target in [name, alias, f"delta.`{path}`"]]
+        assert details[0].name.endswith(f".{name}")
+        assert details[1].name.endswith(f".{alias}")
+        assert details[2].name is None
+        for detail in details:
+            assert detail.id == details[0].id
+            assert detail.format == "delta"
+            assert detail.description == "table description"
+            assert detail.partitionColumns == ["part"]
+            assert detail.numFiles == len(_active_files(path))
+            assert detail.sizeInBytes == sum(f.size for f in _active_files(path))
+            assert detail.properties == details[0].properties
+            assert detail.minReaderVersion == details[0].minReaderVersion
+            assert detail.minWriterVersion == details[0].minWriterVersion
+            assert detail.tableFeatures == details[0].tableFeatures
+        assert _tree(path) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {alias}").collect()
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DescribeDeltaHistorySuite.scala#L252-L290
+@pytest.mark.parametrize("limit", [0, 1, 2, 3, 10])
+def test_history_limit_and_operation_boundaries(spark, semantic_table, limit):
+    name, path = semantic_table
+    spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
+    spark.sql(f"INSERT OVERWRITE {name} VALUES (2, 'b')").collect()  # noqa: S608
+    before = _tree(path)
+    for target in [name, f"delta.`{path}`", f"'{escape_sql_string_literal(str(path))}'"]:
+        result = spark.sql(f"DESCRIBE HISTORY {target} LIMIT {limit}").collect()
+        assert [row.version for row in result] == [2, 1, 0][:limit]
+        for row in result:
+            commit = next(a["commitInfo"] for a in _commits(path)[row.version] if "commitInfo" in a)
+            assert row.operation == commit["operation"]
+            metrics = commit.get("operationMetrics")
+            expected_metrics = (
+                None
+                if metrics is None
+                else {key: None if value is None else str(value) for key, value in metrics.items()}
+            )
+            assert row.operationMetrics == expected_metrics
+        if result:
+            assert result[0].operation == "WRITE"
+            assert result[0].operationParameters["mode"] == "Overwrite"
+    assert _tree(path) == before
+    assert spark.table(name).collect() == [Row(id=2, part="b")]

@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -26,6 +16,7 @@ use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
     CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    StageTableOptions,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
@@ -1540,10 +1531,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         use sail_common_datafusion::catalog::{
             LakehouseOperation, ReplacementAuthority, TableReplacement,
+        };
+        let StageTableOptions::Definition(options) = options else {
+            return Err(CatalogError::UnsupportedCapability(
+                "shallow clone in the Iceberg REST catalog".into(),
+            ));
         };
         if !options.format.eq_ignore_ascii_case("iceberg")
             || !options.mode.is_replace()
@@ -1554,6 +1550,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 "Iceberg REST replacement options".into(),
             ));
         }
+        let mut property_updates = options.properties;
+        if let Some(comment) = options.comment {
+            property_updates.push(("comment".to_string(), comment));
+        }
         let config = self.resolved_catalog_config().await?;
         let loaded = self
             .load_table_result(database, table, config.access_delegation())
@@ -1563,7 +1563,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             Err(CatalogError::NotFound(CatalogObject::Table, _))
                 if !options.mode.replace_requires_existing() =>
             {
-                let version = requested_iceberg_format_version(&options.properties)?;
+                let version = requested_iceberg_format_version(&property_updates)?;
                 let fields = columns_to_nested_fields(&options.columns, version)?;
                 let (names, _) = sail_iceberg::spec::SchemaBuilder::build_name_indexes(
                     &StructType::new(fields.clone()),
@@ -1580,8 +1580,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     write_order: build_sort_order(&options.sort_by, &names)?,
                     stage_create: Some(true),
                     properties: Some(
-                        options
-                            .properties
+                        property_updates
                             .iter()
                             .filter(|(key, _)| !key.starts_with("option."))
                             .cloned()
@@ -1680,10 +1679,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 })
                 .collect(),
             location: metadata.location,
+            format: options.format,
             partition_by: options.partition_by,
             sort_by: options.sort_by,
             properties: metadata.properties.into_iter().collect(),
-            property_updates: options.properties,
+            property_updates,
             is_external: options.is_external,
         })
     }
@@ -3118,7 +3118,7 @@ mod tests {
                     .stage_table_replacement(
                         &Namespace::try_from(vec!["db1"]).unwrap(),
                         "table1",
-                        options,
+                        options.into(),
                     )
                     .await;
                 if stages && !replace_only {

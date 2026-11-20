@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use chrono::NaiveDate;
@@ -13,21 +15,21 @@ use datafusion_functions::utils::make_scalar_function;
 use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
 use crate::utils::schema_inference::{type_coercion, validation};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkSchemaOfCsv {
+pub struct SchemaOfCsv {
     signature: Signature,
 }
 
-impl Default for SparkSchemaOfCsv {
+impl Default for SchemaOfCsv {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkSchemaOfCsv {
+impl SchemaOfCsv {
     pub const SCHEMA_OF_CSV_NAME: &'static str = "schema_of_csv";
 
     pub fn new() -> Self {
@@ -37,7 +39,7 @@ impl SparkSchemaOfCsv {
     }
 }
 
-impl ScalarUDFImpl for SparkSchemaOfCsv {
+impl ScalarUDFImpl for SchemaOfCsv {
     fn name(&self) -> &str {
         Self::SCHEMA_OF_CSV_NAME
     }
@@ -62,14 +64,14 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
 }
 
 #[derive(Debug)]
-struct SparkSchemaOfCsvOptions {
+struct SchemaOfCsvOptions {
     sep: String,
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
     timezone: Option<String>,
 }
 
-impl Default for SparkSchemaOfCsvOptions {
+impl Default for SchemaOfCsvOptions {
     #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
@@ -83,7 +85,7 @@ impl Default for SparkSchemaOfCsvOptions {
     }
 }
 
-impl SparkSchemaOfCsvOptions {
+impl SchemaOfCsvOptions {
     fn from_map(map_array: &MapArray) -> Result<Self> {
         let mut options = Self::default();
         // `schema_of_csv` takes only literal arguments, so it is always evaluated eagerly: both the
@@ -110,12 +112,12 @@ impl SparkSchemaOfCsvOptions {
 }
 
 fn schema_of_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    validation::validate_args_len(SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME, args)?;
+    validation::validate_args_len(SchemaOfCsv::SCHEMA_OF_CSV_NAME, args)?;
     let rows = downcast_arg!(&args[0], StringArray);
     let options = if let Some(arg) = args.get(1) {
-        SparkSchemaOfCsvOptions::from_map(downcast_arg!(arg, MapArray))?
+        SchemaOfCsvOptions::from_map(downcast_arg!(arg, MapArray))?
     } else {
-        SparkSchemaOfCsvOptions::default()
+        SchemaOfCsvOptions::default()
     };
     if rows.is_empty() {
         return Err(DataFusionError::Execution(
@@ -129,7 +131,7 @@ fn schema_of_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![ddl])))
 }
 
-fn infer_csv_schema(csv_row: &str, options: &SparkSchemaOfCsvOptions) -> String {
+fn infer_csv_schema(csv_row: &str, options: &SchemaOfCsvOptions) -> String {
     let fields = csv_row
         .split(&options.sep)
         .map(str::trim)
@@ -140,7 +142,7 @@ fn infer_csv_schema(csv_row: &str, options: &SparkSchemaOfCsvOptions) -> String 
     format!("STRUCT<{fields}>")
 }
 
-fn infer_csv_field_type(value: &str, options: &SparkSchemaOfCsvOptions) -> &'static str {
+fn infer_csv_field_type(value: &str, options: &SchemaOfCsvOptions) -> &'static str {
     if value.is_empty() {
         return "STRING";
     }

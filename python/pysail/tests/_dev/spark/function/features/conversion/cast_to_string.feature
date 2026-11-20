@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CAST(x AS STRING) renders each type the way Spark does
   # Spark routes both `CAST(x AS STRING)` and `show()` through one trait, ToStringBase
   # (sql/catalyst/.../expressions/ToStringBase.scala), but the two implementors override

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Snapshot retention and physical reachability cleanup. No candidate is a staged artifact.
 
 use std::collections::{HashMap, HashSet};
@@ -109,7 +111,9 @@ impl ExpireSnapshots {
         })
     }
 
-    // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/main/java/org/apache/iceberg/RemoveSnapshots.java#L213-L365
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/core/src/main/java/org/apache/iceberg/RemoveSnapshots.java#L213-L365
     fn select(&self, metadata: &TableMetadata) -> Result<(HashSet<i64>, Vec<String>)> {
         if !gc_enabled(metadata) {
             return plan_err!(
@@ -223,6 +227,7 @@ impl ExpireSnapshots {
             .collect();
         Ok((expired, removed_refs))
     }
+    // SPDX-SnippetEnd
 
     pub(crate) async fn prepare(
         &self,
@@ -252,7 +257,9 @@ impl ExpireSnapshots {
         // REST cannot assert the absence of unseen refs or unchanged retention properties.
         // A concurrently added tag can therefore disappear with its expired snapshot, and
         // retention-only changes need not conflict. These guards are not a metadata CAS.
-        // [CREDIT]: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/core/src/main/java/org/apache/iceberg/TableMetadata.java#L1429-L1469
+        // SPDX-SnippetBegin
+        // SPDX-License-Identifier: Apache-2.0
+        // SPDX-SnippetComment: Credit: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/core/src/main/java/org/apache/iceberg/TableMetadata.java#L1429-L1469
         let mut updates: Vec<_> = removed_refs
             .into_iter()
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
@@ -280,6 +287,8 @@ impl ExpireSnapshots {
                     snapshot_id: file.snapshot_id,
                 }),
         );
+        // SPDX-SnippetEnd
+
         if self.clean_metadata {
             requirements.push(TableRequirement::CurrentSchemaIdMatch {
                 current_schema_id: metadata.current_schema_id,
@@ -358,7 +367,7 @@ pub(crate) fn checked_path(store: &StoreContext, table: &Url, raw: &str) -> Resu
                 "expire_snapshots cannot access a path outside the table's object store: {raw}"
             );
         }
-        return crate::utils::url_to_object_path(&url);
+        return store.resolve_to_absolute_path(raw);
     } else if raw.contains("://") || raw.starts_with("//") {
         return plan_err!("Invalid Iceberg expiration path: {raw}");
     }

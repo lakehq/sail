@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;

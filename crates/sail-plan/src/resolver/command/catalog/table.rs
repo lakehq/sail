@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, CloneTarget};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
@@ -58,6 +60,47 @@ impl PlanResolver<'_> {
             }
             change => change.try_map_type(|ty| self.resolve_data_type(&ty, state)),
         }
+    }
+
+    pub(in super::super) async fn resolve_catalog_clone_table(
+        &self,
+        table: spec::ObjectName,
+        source: spec::ObjectName,
+        definition: spec::TableDefinition,
+    ) -> PlanResult<LogicalPlan> {
+        if !definition.columns.is_empty()
+            || definition.comment.is_some()
+            || !definition.constraints.is_empty()
+            || definition.file_format.is_some()
+            || definition.row_format.is_some()
+            || !definition.partition_by.is_empty()
+            || !definition.sort_by.is_empty()
+            || definition.bucket_by.is_some()
+            || !definition.cluster_by.is_empty()
+            || !definition.options.is_empty()
+            || !definition.properties.is_empty()
+        {
+            return Err(PlanError::unsupported(
+                "SHALLOW CLONE supports only LOCATION; schema, properties and layout are inherited from the source",
+            ));
+        }
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let target = if let Some(path) = manager.clone_path(table.parts()).await? {
+            CloneTarget::Path(path.into())
+        } else {
+            let default_location = self.resolve_default_table_location(&table).await?;
+            CloneTarget::Table {
+                name: table.into(),
+                default_location,
+            }
+        };
+        self.resolve_catalog_command(CatalogCommand::CloneTable {
+            target,
+            source: source.into(),
+            location: definition.location,
+            mode: definition.mode,
+            is_external: definition.external,
+        })
     }
 
     pub(in super::super) async fn resolve_catalog_create_table(
@@ -183,12 +226,6 @@ impl PlanResolver<'_> {
                 "BUCKET_BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if comment.is_some() {
-            return Err(PlanError::todo(
-                "COMMENT in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !constraints.is_empty() {
             return Err(PlanError::todo(
                 "CONSTRAINTS in CREATE TABLE AS SELECT statement",
@@ -245,6 +282,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_partition_by(partition_by)
             .with_table_properties(properties)
+            .with_table_comment(comment)
             .with_table_is_external(is_external)
             .with_options(write_options);
 

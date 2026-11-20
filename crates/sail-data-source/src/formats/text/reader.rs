@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{self, Debug};
 use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
@@ -118,7 +120,9 @@ pub struct Decoder {
     record_decoder: RecordDecoder,
 }
 
-// [Credit]: https://github.com/apache/arrow-rs/blob/ebb6ede98b2b4d96a1a4f501a28ab42a3b937f73/arrow-csv/src/reader/mod.rs#L581-L634
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/ebb6ede98b2b4d96a1a4f501a28ab42a3b937f73/arrow-csv/src/reader/mod.rs#L581-L634
 impl Decoder {
     /// Decode records from `buf` returning the number of bytes read
     ///
@@ -166,6 +170,7 @@ impl Decoder {
         self.batch_size - self.record_decoder.len()
     }
 }
+// SPDX-SnippetEnd
 
 fn parse(
     rows: &StringRecords<'_>,

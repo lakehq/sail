@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Sail publication-race tests with deterministic storage barriers.
 //! Cover immutable metadata versions, stale-base rejection, cancellation, and codec lag.
 use std::collections::HashMap;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::spec::PrimitiveLiteral;

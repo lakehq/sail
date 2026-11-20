@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use serde::{Deserialize, Deserializer};
 
 /// The raw test data written by Spark test suites.

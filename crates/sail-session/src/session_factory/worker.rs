@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::Result;
@@ -87,6 +89,9 @@ mod tests {
         config.parquet.binary_as_string = true;
         config.parquet.compression = "gzip(3)".to_string();
         config.parquet.max_row_group_size = 2048;
+        config.parquet.force_filter_selections = true;
+        config.parquet.max_in_list_size = 50;
+        config.parquet.max_row_group_bytes = Some(8192);
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
@@ -101,10 +106,14 @@ mod tests {
         assert!(parquet.binary_as_string);
         assert_eq!(parquet.compression.as_deref(), Some("gzip(3)"));
         assert_eq!(parquet.max_row_group_size, 2048);
+        assert!(parquet.force_filter_selections);
+        assert_eq!(parquet.max_in_list_size, 50);
+        assert_eq!(parquet.max_row_group_bytes.map(|v| v.get()), Some(8192));
         assert_eq!(parquet.coerce_int96.as_deref(), Some("us"));
+        assert_eq!(parquet.bloom_filter_ndv, None);
         assert_eq!(
             parquet.created_by,
-            concat!("sail version ", env!("CARGO_PKG_VERSION"))
+            sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY
         );
         Ok(())
     }

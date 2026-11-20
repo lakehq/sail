@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
@@ -13,21 +15,21 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
-use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
-use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
-use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
+use sail_function::scalar::array::array_aggregate::ArrayAggregate;
+use sail_function::scalar::array::array_exists::ArrayExists;
+use sail_function::scalar::array::array_filter::ArrayFilter;
+use sail_function::scalar::array::array_forall::ArrayForall;
+use sail_function::scalar::array::array_sort::ArraySort;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::array::array_zip_with::ArrayZipWith;
+use sail_function::scalar::array::sequence::SequenceLazy;
 use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
-use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
-use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
-use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
-use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
-use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
+use sail_function::scalar::map::map_filter::MapFilter;
+use sail_function::scalar::map::map_zip_with::MapZipWith;
+use sail_function::scalar::map::transform_keys::TransformKeys;
+use sail_function::scalar::map::transform_values::TransformValues;
+use sail_function::scalar::string::regexp_instr::RegexpInstr;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -162,36 +164,36 @@ pub(super) fn try_encode_higher_order_udf(
     hof: &HigherOrderFunctionExpr,
 ) -> Result<r#gen::HigherOrderUdf> {
     let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
-    let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
+    let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<ArrayFilter>() {
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
         })
-    } else if udf_inner.is::<SparkMapFilter>() {
+    } else if udf_inner.is::<MapFilter>() {
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})
-    } else if udf_inner.is::<SparkTransformValues>() {
+    } else if udf_inner.is::<TransformValues>() {
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {})
-    } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
+    } else if let Some(transform_keys) = udf_inner.downcast_ref::<TransformKeys>() {
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins: transform_keys.is_last_value_wins(),
             preserve_duplicates: transform_keys.preserves_duplicates(),
         })
-    } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
+    } else if let Some(transform) = udf_inner.downcast_ref::<ArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
             index_first: transform.is_index_first(),
         })
-    } else if let Some(aggregate) = udf_inner.downcast_ref::<SparkArrayAggregate>() {
+    } else if let Some(aggregate) = udf_inner.downcast_ref::<ArrayAggregate>() {
         HigherOrderUdfKind::Aggregate(r#gen::SparkArrayAggregateUdf {
             element_first: aggregate.is_element_first(),
         })
-    } else if udf_inner.is::<SparkArrayExists>() {
+    } else if udf_inner.is::<ArrayExists>() {
         HigherOrderUdfKind::Exists(r#gen::SparkArrayExistsUdf {})
-    } else if udf_inner.is::<SparkArrayForall>() {
+    } else if udf_inner.is::<ArrayForall>() {
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {})
-    } else if let Some(sort) = udf_inner.downcast_ref::<SparkArraySort>() {
+    } else if let Some(sort) = udf_inner.downcast_ref::<ArraySort>() {
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
             swapped: sort.is_swapped(),
         })
-    } else if let Some(sequence) = udf_inner.downcast_ref::<SparkSequenceLazy>() {
+    } else if let Some(sequence) = udf_inner.downcast_ref::<SequenceLazy>() {
         HigherOrderUdfKind::SparkSequenceLazy(r#gen::SparkSequenceUdf {
             session_timezone: sequence.session_timezone().to_owned(),
             ansi_mode: sequence.ansi_mode(),
@@ -204,13 +206,13 @@ pub(super) fn try_encode_higher_order_udf(
             null_short_circuit: convert_tz.null_short_circuit(),
             ..Default::default()
         })
-    } else if let Some(regexp_instr) = udf_inner.downcast_ref::<SparkRegexpInstr>() {
+    } else if let Some(regexp_instr) = udf_inner.downcast_ref::<RegexpInstr>() {
         HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {
             ansi_mode: regexp_instr.ansi_mode(),
         })
-    } else if udf_inner.is::<SparkArrayZipWith>() {
+    } else if udf_inner.is::<ArrayZipWith>() {
         HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
-    } else if let Some(map_zip_with) = udf_inner.downcast_ref::<SparkMapZipWith>() {
+    } else if let Some(map_zip_with) = udf_inner.downcast_ref::<MapZipWith>() {
         HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
             ansi_mode: map_zip_with.ansi_mode(),
             session_timezone: map_zip_with.session_timezone().to_owned(),

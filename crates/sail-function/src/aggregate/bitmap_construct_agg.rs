@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
@@ -25,25 +27,25 @@ const BITMAP_NUM_BITS: i64 = (8 * BITMAP_NUM_BYTES) as i64;
 /// bit positions (typically from `bitmap_bit_position()`). Positions are
 /// wrapped into the range `0..BITMAP_NUM_BITS` using modulo arithmetic.
 #[derive(PartialEq, Eq, Hash)]
-pub struct BitmapConstructAggFunction {
+pub struct BitmapConstructAgg {
     signature: Signature,
 }
 
-impl Debug for BitmapConstructAggFunction {
+impl Debug for BitmapConstructAgg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BitmapConstructAggFunction")
+        f.debug_struct("BitmapConstructAgg")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for BitmapConstructAggFunction {
+impl Default for BitmapConstructAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BitmapConstructAggFunction {
+impl BitmapConstructAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
@@ -67,7 +69,7 @@ impl BitmapConstructAggFunction {
     }
 }
 
-impl AggregateUDFImpl for BitmapConstructAggFunction {
+impl AggregateUDFImpl for BitmapConstructAgg {
     fn name(&self) -> &str {
         "bitmap_construct_agg"
     }

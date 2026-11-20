@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -917,35 +919,20 @@ impl<'a> PlanReconstructor<'a> {
             }
         };
 
-        // Build compact column index list in first-appearance order
+        // Assign compact column indices in the order columns appear in the filter.
         let mut compact_indices: Vec<ColumnIndex> = Vec::new();
-        let mut seen: Vec<(JoinSide, usize)> = Vec::new();
-        let cols_in_expr = collect_columns(&combined_filter);
-        for c in &cols_in_expr {
-            let (side, idx) = find_side_and_index(c)?;
-            if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
-                seen.push((side, idx));
-                compact_indices.push(ColumnIndex { side, index: idx });
-            }
-        }
-
-        let index_of = |side: JoinSide, base_idx: usize| -> Result<usize> {
-            compact_indices
-                .iter()
-                .position(|ci| ci.side == side && ci.index == base_idx)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "JoinReorder: compact index lookup failed for side={:?} base_idx={} during join-filter rewriting",
-                        side, base_idx
-                    ))
-                })
-        };
-
-        let retargeted = combined_filter.transform(|expr| {
+        let retargeted = combined_filter.transform_down(|expr| {
             if let Some(col) = expr.downcast_ref::<Column>() {
-                let (side, base_idx) = find_side_and_index(col)?;
-                let new_pos = index_of(side, base_idx)?;
-                let new_col = Column::new(col.name(), new_pos);
+                let (side, index) = find_side_and_index(col)?;
+                let position = compact_indices
+                    .iter()
+                    .position(|column| column.side == side && column.index == index)
+                    .unwrap_or_else(|| {
+                        let position = compact_indices.len();
+                        compact_indices.push(ColumnIndex { side, index });
+                        position
+                    });
+                let new_col = Column::new(col.name(), position);
                 return Ok(Transformed::yes(Arc::new(new_col)));
             }
             Ok(Transformed::no(expr))

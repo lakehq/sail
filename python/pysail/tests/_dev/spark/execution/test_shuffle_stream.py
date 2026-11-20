@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import time
 
@@ -68,26 +70,29 @@ def _task_stop_times(spark):
     ).collect()
     assert len(session) == 1
     args = {"id": session[0].session_id}
-    stages = (
-        spark.sql("SELECT job_id, stage, inputs FROM system.execution.stages WHERE session_id = :id", args=args)
-        .toArrow()
-        .to_pylist()
-    )
-    tasks = (
-        spark.sql(
-            "SELECT job_id, stage, status, created_at, stopped_at FROM system.execution.tasks WHERE session_id = :id",
-            args=args,
-        )
-        .toArrow()
-        .to_pylist()
-    )
-    job = max(stage["job_id"] for stage in stages if len(stage["inputs"]) >= 2)  # noqa: PLR2004
-    stages = {stage["stage"]: stage for stage in stages if stage["job_id"] == job}
-    tasks = [task for task in tasks if task["job_id"] == job]
-    assert all(task["status"] == "SUCCEEDED" for task in tasks)
-    started = min(task["created_at"] for task in tasks)
+    # PySpark collect requires signed integer types for the job and stage IDs.
+    stages = spark.sql(
+        """
+        SELECT CAST(job_id AS BIGINT) AS job_id, CAST(stage AS BIGINT) AS stage,
+               transform(inputs, input -> CAST(input.stage AS BIGINT)) AS input_stages
+        FROM system.execution.stages WHERE session_id = :id
+        """,
+        args=args,
+    ).collect()
+    tasks = spark.sql(
+        """
+        SELECT CAST(job_id AS BIGINT) AS job_id, CAST(stage AS BIGINT) AS stage, status, created_at, stopped_at
+        FROM system.execution.tasks WHERE session_id = :id
+        """,
+        args=args,
+    ).collect()
+    job = max(stage.job_id for stage in stages if len(stage.input_stages) >= 2)
+    stages = {stage.stage: stage for stage in stages if stage.job_id == job}
+    tasks = [task for task in tasks if task.job_id == job]
+    assert all(task.status == "SUCCEEDED" for task in tasks)
+    started = min(task.created_at for task in tasks)
     stopped = {
-        stage: max((task["stopped_at"] - started).total_seconds() for task in tasks if task["stage"] == stage)
+        stage: max((task.stopped_at - started).total_seconds() for task in tasks if task.stage == stage)
         for stage in stages
     }
     return stages, stopped
@@ -113,12 +118,13 @@ def test_shuffle_producers_finish_without_waiting_for_unread_channels(spark):
 
     assert rows == [Row(id=0)]
     stages, stopped = _task_stop_times(spark)
-    (join,) = [stage for stage in stages.values() if len(stage["inputs"]) == 2]  # noqa: PLR2004
-    assert stopped[join["stage"]] >= delay
-    for producer in join["inputs"]:
-        assert stopped[producer["stage"]] < stopped[join["stage"]] - delay / 2
+    (join,) = [stage for stage in stages.values() if len(stage.input_stages) == 2]
+    assert stopped[join.stage] >= delay
+    for producer_stage in join.input_stages:
+        assert stopped[producer_stage] < stopped[join.stage] - delay / 2
 
 
+@pytest.mark.suite(name="slow")
 @pytest.mark.timeout(30)
 def test_shuffle_producer_stops_after_all_readers_leave_without_opening(spark, tmp_path):
     # Every join partition has an empty build side and finishes without opening its
@@ -202,6 +208,7 @@ def test_shuffle_finishes_when_region_is_retried_after_stage_cleanup(spark, tmp_
     assert marker.exists()
 
 
+@pytest.mark.suite(name="slow")
 @pytest.mark.timeout(60)
 def test_ordered_merge_finishes_when_partitions_are_read_one_after_another(spark):
     # Each partition holds a contiguous range of the sort key, so the final merge reads
@@ -238,7 +245,7 @@ def test_hash_join_preserves_global_build_limit(spark):
     build = spark.range(16, numPartitions=4).limit(3)
     probe = spark.range(16, numPartitions=4)
 
-    assert len(build.join(probe, "id", "left").collect()) == 3  # noqa: PLR2004
+    assert len(build.join(probe, "id", "left").collect()) == 3
 
 
 @pytest.mark.timeout(30)

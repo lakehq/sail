@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Replacement boundary contracts verified with Spark 4.1.3 / Iceberg 1.11.0."""
 
 # ruff: noqa: S608
@@ -67,7 +69,7 @@ def test_replacement_drops_v1_partition_source(spark, target, version, api):
     spark.sql(f"INSERT INTO {name} VALUES (30)")
     assert sorted(spark.table(name).collect()) == [(20,), (30,)]
     entries = _current_manifest_entries(path, ManifestContent.DATA)
-    assert sum(entry.data_file.record_count for entry in entries) == 2  # noqa: PLR2004
+    assert sum(entry.data_file.record_count for entry in entries) == 2
     assert all(tuple(entry.data_file.partition) == (None,) for entry in entries)
     assert all(p.read_bytes() == contents for p, contents in old_files.items())
 

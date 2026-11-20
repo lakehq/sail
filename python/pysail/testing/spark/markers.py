@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Spark support metadata and collection-time skips for Python and BDD tests.
 
 Use ``@pytest.mark.spark(version=">=4.1,<4.2", cross_version=True)`` for a UDF

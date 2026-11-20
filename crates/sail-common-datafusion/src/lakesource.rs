@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,6 +25,26 @@ pub struct LakeSourceMetadata {
     pub properties: Vec<(String, String)>,
     /// Authoritative partitioning when available, including `Some(vec![])` for unpartitioned tables.
     pub partition_by: Option<Vec<CatalogPartitionField>>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CloneMetrics {
+    pub source_table_size: i64,
+    pub source_num_of_files: i64,
+    pub num_removed_files: i64,
+    pub num_copied_files: i64,
+    pub removed_files_size: i64,
+    pub copied_files_size: i64,
+}
+
+/// A validated zero-copy snapshot and its deferred storage publication.
+/// Preparation must not mutate storage. Publication must never delete shared data.
+pub struct LakeSourceClone {
+    pub metrics: Option<CloneMetrics>,
+    pub metadata: LakeSourceMetadata,
+    pub publish: futures::future::BoxFuture<'static, Result<()>>,
+    /// Best-effort storage maintenance to run after successful publication.
+    pub post_commit: futures::future::BoxFuture<'static, ()>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create
@@ -205,6 +227,19 @@ pub trait LakeSource: DataSource {
     ) -> Result<LakeSourceCreateTableResult> {
         let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
+    }
+
+    /// Prepares an independent log referencing the source snapshot's existing files.
+    /// Resolve the source only when the destination requires a clone.
+    async fn prepare_shallow_clone(
+        &self,
+        ctx: &TaskContext,
+        source: futures::future::BoxFuture<'_, Result<String>>,
+        destination: &str,
+        mode: sail_common::spec::CreateTableMode,
+    ) -> Result<LakeSourceClone> {
+        let _ = (ctx, source, destination, mode);
+        not_impl_err!("SHALLOW CLONE is not supported for '{}'", self.name())
     }
 
     /// Creates a logical plan for a row-level operation.

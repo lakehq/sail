@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Check shared pytest configuration outside the project configuration file."""
 
 import pytest

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Delta Spark inspection and maintenance command schemas.
 //!
 //! TODO: Consider Sail-only `SELECT ... FROM <table>.detail` / `.history` relations.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 # Semantic cases: Apache Iceberg 1.12 TestRemoveSnapshots and TestExpireSnapshotsProcedure.
 # NULL IDs and missing-file counts confirmed with Spark 4.1.4 + Iceberg 1.12.0.
@@ -58,7 +60,7 @@ def _install_escaped_data_aliases(metadata_location, file_io, spelling):
     """Give two snapshots one reader-visible file, using URI and non-URI spellings."""
     table = StaticTable.from_metadata(metadata_location, properties=file_io.properties)
     snapshots = table.metadata.snapshots
-    assert len(snapshots) == 2  # noqa: PLR2004
+    assert len(snapshots) == 2
     current = table.current_snapshot()
     entries = [entry for manifest in current.manifests(file_io) for entry in manifest.fetch_manifest_entry(file_io)]
     assert len(entries) == 1

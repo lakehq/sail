@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};

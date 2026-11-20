@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: sequence() over DATE returns expected arrays
 
     Scenario Outline: sequence over DATE: <case>

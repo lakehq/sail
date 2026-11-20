@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -12,7 +14,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use ordered_float::OrderedFloat;
 
-use crate::aggregate::vector::normalize;
+use crate::aggregate::utils::vector::normalize;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VectorSum {

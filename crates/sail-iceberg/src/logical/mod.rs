@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) mod delete;
 pub mod merge;
 pub(crate) mod row_level;

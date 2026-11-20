@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 
@@ -38,20 +41,25 @@ use sail_common_datafusion::schema_evolution::{
 };
 use url::Url;
 
+use crate::datasource::imported_source::IcebergImportedFileSource;
 use crate::datasource::partition_defaults::{
     IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
 };
 use crate::io::StoreContext;
+use crate::physical_plan::action_schema::parse_data_file_format;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::file_tasks_exec::{
     COL_IDENTITY_PARTITION_DEFAULTS, COL_REWRITE_SCAN_CONTEXT, RewriteScanContext,
 };
 use crate::physical_plan::manifest_scan_exec::{
-    COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_PARTITION_SPEC_ID, COL_RECORD_COUNT,
+    COL_FILE_FORMAT, COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_PARTITION_SPEC_ID,
+    COL_RECORD_COUNT,
 };
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::spec::DataFileFormat;
 
 struct ScanFile {
+    format: DataFileFormat,
     path: String,
     size: u64,
     records: u64,
@@ -77,8 +85,8 @@ struct ScanByDataFilesState {
     limit: Option<usize>,
     input_file_projection: Option<ProjectionExprs>,
     /// Pending file entries accumulated from the metadata stream.
-    pending_files: Vec<ScanFile>,
-    /// Currently active scan stream (draining Parquet data).
+    pending_files: VecDeque<ScanFile>,
+    /// Currently active data file scan.
     current_scan: Option<SendableRecordBatchStream>,
     /// Whether we've emitted at least one (possibly empty) batch.
     emitted_batch: bool,
@@ -101,7 +109,7 @@ impl ScanByDataFilesState {
             predicate: plan.predicate.clone(),
             limit: plan.limit,
             input_file_projection: plan.input_file_projection.clone(),
-            pending_files: Vec::new(),
+            pending_files: VecDeque::new(),
             current_scan: None,
             emitted_batch: false,
         }
@@ -118,6 +126,11 @@ impl ScanByDataFilesState {
                     COL_FILE_PATH
                 ))
             })?;
+
+        let formats = batch
+            .column_by_name(COL_FILE_FORMAT)
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| DataFusionError::Internal("Missing Iceberg file format".into()))?;
 
         let size_col = batch
             .column_by_name(COL_FILE_SIZE_IN_BYTES)
@@ -169,6 +182,7 @@ impl ScanByDataFilesState {
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
                 files.push(ScanFile {
+                    format: parse_data_file_format(formats.value(i))?,
                     path: path_col.value(i).to_string(),
                     size: size_col.value(i),
                     records: rows.value(i),
@@ -320,13 +334,17 @@ impl ScanByDataFilesState {
         Ok(Arc::new(ProjectionExec::try_new(expressions, scan)?))
     }
 
-    /// Build and start a Parquet scan for the accumulated file entries.
+    /// Scan consecutive entries of the same format using the matching reader.
     async fn build_next_scan(&mut self) -> Result<()> {
-        if self.pending_files.is_empty() {
+        let Some(format) = self.pending_files.front().map(|file| file.format) else {
             return Ok(());
-        }
-
-        let files = std::mem::take(&mut self.pending_files);
+        };
+        let count = self
+            .pending_files
+            .iter()
+            .take_while(|file| file.format == format)
+            .count();
+        let files: Vec<_> = self.pending_files.drain(..count).collect();
         if files.iter().any(|file| file.rewrite.is_some()) {
             let scans = files
                 .into_iter()
@@ -423,48 +441,30 @@ impl ScanByDataFilesState {
         let object_store_url = ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        // Use session Parquet options for parity with the driver-based scan path.
-        let parquet_options = crate::datasource::parquet::parquet_options(
-            &self.file_schema,
-            files.iter().all(|file| file.nan_free),
-            self.context
-                .session_config()
-                .options()
-                .execution
-                .parquet
-                .clone(),
-        );
-        let metadata_cache = self
-            .context
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
-        let file_groups = load_parquet_scan_metadata(
-            file_groups,
-            &object_store,
-            &metadata_cache,
-            parquet_options.global.metadata_size_hint,
-            self.context
-                .session_config()
-                .options()
-                .execution
-                .meta_fetch_concurrency
-                .into(),
-        )
-        .await?;
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
-            object_store,
-            metadata_cache,
-        ));
-        let mut parquet_source = ParquetSource::new(Arc::clone(&self.file_schema))
-            .with_table_parquet_options(parquet_options)
-            .with_parquet_file_reader_factory(reader_factory);
-        if let Some(predicate) = &self.predicate {
-            parquet_source = parquet_source.with_predicate(predicate.clone());
-        }
-        let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-            Arc::new(parquet_source);
-        let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+        let (file_groups, source): (_, Arc<dyn FileSource>) = match format {
+            DataFileFormat::Parquet => {
+                Self::parquet_scan_source(
+                    &self.context,
+                    &self.file_schema,
+                    self.predicate.as_ref(),
+                    file_groups,
+                    object_store,
+                    files.iter().all(|file| file.nan_free),
+                )
+                .await?
+            }
+            DataFileFormat::Avro | DataFileFormat::Orc => (
+                file_groups,
+                Arc::new(IcebergImportedFileSource::new(
+                    TableSchema::from(self.file_schema.clone()),
+                    format,
+                )),
+            ),
+            DataFileFormat::Puffin => {
+                return datafusion_common::exec_err!("Cannot read Puffin as an Iceberg data file");
+            }
+        };
+        let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
             .with_projection_indices(self.projection.clone())?
             .with_limit(self.limit)
@@ -509,6 +509,50 @@ impl ScanByDataFilesState {
             combined,
         )));
         Ok(())
+    }
+
+    async fn parquet_scan_source(
+        context: &TaskContext,
+        file_schema: &SchemaRef,
+        predicate: Option<&Arc<dyn PhysicalExpr>>,
+        file_groups: Vec<FileGroup>,
+        object_store: Arc<dyn object_store::ObjectStore>,
+        nan_free: bool,
+    ) -> Result<(Vec<FileGroup>, Arc<dyn FileSource>)> {
+        // Use session Parquet options for parity with the driver-based scan path.
+        let parquet_options = crate::datasource::parquet::parquet_options(
+            file_schema,
+            nan_free,
+            context.session_config().options().execution.parquet.clone(),
+        );
+        let metadata_cache = context
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        let file_groups = load_parquet_scan_metadata(
+            file_groups,
+            &object_store,
+            &metadata_cache,
+            parquet_options.global.metadata_size_hint,
+            context
+                .session_config()
+                .options()
+                .execution
+                .meta_fetch_concurrency
+                .into(),
+        )
+        .await?;
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            object_store,
+            metadata_cache,
+        ));
+        let mut parquet_source = ParquetSource::new(Arc::clone(file_schema))
+            .with_table_parquet_options(parquet_options)
+            .with_parquet_file_reader_factory(reader_factory);
+        if let Some(predicate) = predicate {
+            parquet_source = parquet_source.with_predicate(predicate.clone());
+        }
+        Ok((file_groups, Arc::new(parquet_source)))
     }
 }
 

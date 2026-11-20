@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Lakehouse DDL with Glue schema and metadata-pointer verification."""
 
@@ -22,7 +24,7 @@ def test_glue_identifier_fields(spark, tmp_path, moto_endpoint):
         stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
         reference = StaticTable.from_metadata(stored["Parameters"]["metadata_location"])
         assert reference.schema().identifier_field_ids == [reference.schema().find_field("renamed").field_id]
-        assert reference.scan().to_arrow().num_rows == 2  # noqa: PLR2004
+        assert reference.scan().to_arrow().num_rows == 2
         spark.sql(f"ALTER TABLE {name} DROP IDENTIFIER FIELDS renamed")
         stored = _glue_client(moto_endpoint).get_table(DatabaseName="test_db", Name=table)["Table"]
         assert not StaticTable.from_metadata(stored["Parameters"]["metadata_location"]).schema().identifier_field_ids
@@ -56,12 +58,12 @@ def test_glue_lakehouse_ddl(spark, tmp_path, moto_endpoint, fmt):
             ]
         spark.sql(f"DROP TABLE {name}")
         spark.sql(f"CREATE TABLE {name} USING {fmt} LOCATION '{location}'")
-        assert spark.table(name).count() == 3  # noqa: PLR2004
+        assert spark.table(name).count() == 3
         assert [r.col_name for r in spark.sql(f"DESCRIBE TABLE {name}").collect()][:3] == ["id", "value", "part"]
         spark.sql(f"DROP TABLE {name}")
         ctas_location = (tmp_path / f"ctas_{fmt}").as_uri()
         spark.sql(f"CREATE TABLE {name} USING {fmt} LOCATION '{ctas_location}' AS SELECT 4 AS id")
-        assert spark.table(name).first().id == 4  # noqa: PLR2004
+        assert spark.table(name).first().id == 4
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 

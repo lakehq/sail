@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Python wrappers for catalog status types.
 
 use pyo3::prelude::*;

@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_function::scalar::table_input::TableInput;
 
 use crate::resolver::PlanResolver;
@@ -49,7 +51,7 @@ impl TreeNodeRewriter for TableInputRewriter<'_> {
             .collect();
         // The table input is replaced with a struct expression in the projection of
         // the cross join plan.
-        let expr = ScalarUDF::from(StructFunction::new(field_names)).call(columns);
+        let expr = ScalarUDF::from(StructFromFields::new(field_names)).call(columns);
         self.plan = LogicalPlanBuilder::new(plan)
             .cross_join(table.plan().as_ref().clone())?
             .build()?;

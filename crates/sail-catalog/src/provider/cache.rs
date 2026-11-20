@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -18,7 +20,7 @@ use crate::lakehouse::{
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 
 #[derive(Clone)]
@@ -287,7 +289,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         self.inner
             .stage_table_replacement(database, table, options)
@@ -402,6 +404,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         self.inner
             .get_delta_ratified_commits(database, table, request)
+            .await
+    }
+
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<super::CatalogFilePartition>>> {
+        self.inner
+            .list_file_partitions(database, table, partition_values)
             .await
     }
 

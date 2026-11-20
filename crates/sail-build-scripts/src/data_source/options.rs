@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::path::PathBuf;
 
 use lazy_static::lazy_static;

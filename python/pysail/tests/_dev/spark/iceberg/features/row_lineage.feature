@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg v3 row lineage
 
   Scenario Outline: MERGE after positional skips preserves inherited and stored lineage

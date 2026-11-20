@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -10,23 +12,23 @@ use datafusion::logical_expr::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
-use crate::hll_sketch::{
+use crate::utils::hll_sketch::{
     DEFAULT_LG_CONFIG_K, empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes,
     union_hll_sketches, update_hll_sketch_from_array, validate_lg_config_k,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllSketchAggFunction {
+pub struct HllSketchAgg {
     signature: Signature,
 }
 
-impl Default for HllSketchAggFunction {
+impl Default for HllSketchAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllSketchAggFunction {
+impl HllSketchAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -37,7 +39,7 @@ impl HllSketchAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllSketchAggFunction {
+impl AggregateUDFImpl for HllSketchAgg {
     fn name(&self) -> &str {
         "hll_sketch_agg"
     }
@@ -69,17 +71,17 @@ impl AggregateUDFImpl for HllSketchAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllUnionAggFunction {
+pub struct HllUnionAgg {
     signature: Signature,
 }
 
-impl Default for HllUnionAggFunction {
+impl Default for HllUnionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllUnionAggFunction {
+impl HllUnionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -90,7 +92,7 @@ impl HllUnionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllUnionAggFunction {
+impl AggregateUDFImpl for HllUnionAgg {
     fn name(&self) -> &str {
         "hll_union_agg"
     }

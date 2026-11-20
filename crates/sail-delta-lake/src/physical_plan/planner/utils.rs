@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -43,7 +33,7 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
+    DeltaPathKey, DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
@@ -109,6 +99,12 @@ fn action_replay_key_expr(
     let path = Expr::Cast(Cast::new(
         Box::new(struct_field_expr(action_expr.clone(), FIELD_NAME_PATH)),
         DataType::Utf8,
+    ));
+    // Normalize the comparison key before partitioning, sorting, or hashing.
+    // The Add payload below continues to carry its original URI spelling.
+    let path = Expr::ScalarFunction(ScalarFunction::new_udf(
+        Arc::new(ScalarUDF::from(DeltaPathKey::default())),
+        vec![path],
     ));
     let path_bytes = Expr::ScalarFunction(ScalarFunction::new_udf(
         datafusion::functions::string::octet_length(),

@@ -1,4 +1,5 @@
-// [CREDIT]: https://raw.githubusercontent.com/apache/datafusion-comet/c41e4645a92dc3121d62004515f3fb03f1348631/native/spark-expr/src/array_funcs/array_position.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion-comet/blob/c41e4645a92dc3121d62004515f3fb03f1348631/native/spark-expr/src/array_funcs/array_position.rs
 
 use std::sync::Arc;
 
@@ -18,17 +19,17 @@ use num::Float;
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
-pub struct SparkArrayPosition {
+pub struct ArrayPosition {
     signature: Signature,
 }
 
-impl Default for SparkArrayPosition {
+impl Default for ArrayPosition {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkArrayPosition {
+impl ArrayPosition {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -36,7 +37,7 @@ impl SparkArrayPosition {
     }
 }
 
-impl ScalarUDFImpl for SparkArrayPosition {
+impl ScalarUDFImpl for ArrayPosition {
     fn name(&self) -> &str {
         "spark_array_position"
     }

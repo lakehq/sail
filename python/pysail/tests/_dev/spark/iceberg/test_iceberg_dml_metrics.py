@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Iceberg action summaries count affected rows separately from storage records."""
 
@@ -107,7 +109,7 @@ def _check(spark, table, path, sql, rows, metrics, *, changed=True, operation=No
     current = _current_snapshot(after)
     parent = _current_snapshot(before)["snapshot-id"] if before.get("snapshots") else None
     assert current.get("parent-snapshot-id") == parent
-    if after["format-version"] >= 2:  # noqa: PLR2004
+    if after["format-version"] >= 2:
         assert after["last-sequence-number"] == before["last-sequence-number"] + 1
     summary = current["summary"]
     assert {k: v for k, v in summary.items() if k.startswith(PREFIXES)} == metrics
@@ -115,7 +117,7 @@ def _check(spark, table, path, sql, rows, metrics, *, changed=True, operation=No
         assert summary["operation"] == operation
     if files is not None:
         assert _files_by_path(spark, table) == files
-        if after["format-version"] == 3:  # noqa: PLR2004
+        if after["format-version"] == 3:
             assert after["next-row-id"] == before["next-row-id"]
             assert current["added-rows"] == 0
     return summary
