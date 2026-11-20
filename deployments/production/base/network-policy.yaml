@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sail-ingress
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/part-of: sail-production
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sail
+  policyTypes:
+    - Ingress
+  ingress:
+    # Sail uses dynamic ports for internal driver-worker RPC and for the
+    # configured Flight shuffle. This rule trusts any same-namespace pod
+    # carrying Sail's application label.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sail
+    # A client in the same namespace must opt in with this label.
+    - from:
+        - podSelector:
+            matchLabels:
+              sail.lakesail.com/spark-connect-client: "true"
+      ports:
+        - port: 50051
+          protocol: TCP
+    # A client in another namespace needs both an approved namespace and the
+    # client pod label. The cluster operator controls the namespace label.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              sail.lakesail.com/spark-connect-access: "true"
+          podSelector:
+            matchLabels:
+              sail.lakesail.com/spark-connect-client: "true"
+      ports:
+        - port: 50051
+          protocol: TCP

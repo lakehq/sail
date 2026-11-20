@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sail-spark-server
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sail
+      app.kubernetes.io/component: spark-server

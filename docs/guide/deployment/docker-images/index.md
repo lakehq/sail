@@ -1,6 +1,6 @@
 ---
 title: Building Docker Images
-rank: 1
+rank: 2
 ---
 
 # Building Docker Images
