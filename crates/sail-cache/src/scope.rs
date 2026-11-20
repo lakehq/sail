@@ -37,6 +37,8 @@ fn cache_scope<'a>(object_store_url: &'a ObjectStoreUrl, session_id: &str) -> Co
 
 /// Returns a cache key for `path` in the object store at `object_store_url` in the session with
 /// `session_id`.
+///
+/// This scopes the file statistics cache (DataFusion's `FileStatisticsCache`) keys.
 pub fn scoped_path(object_store_url: &ObjectStoreUrl, session_id: &str, path: &Path) -> Path {
     prefixed(
         PathPart::from(cache_scope(object_store_url, session_id).as_ref()),
@@ -54,6 +56,7 @@ fn prefixed(scope: PathPart<'_>, path: &Path) -> Path {
 ///
 /// DataFusion keys its file listing cache by the table reference of the listing URL and the
 /// listing prefix, so every listing of a prefix must use this reference for the same store.
+/// This scopes the list files cache (DataFusion's `ListFilesCache`) keys.
 pub fn listing_table_ref(url: &ListingTableUrl, session_id: &str) -> TableReference {
     TableReference::bare(cache_scope(&url.object_store(), session_id).as_ref())
 }
@@ -61,6 +64,7 @@ pub fn listing_table_ref(url: &ListingTableUrl, session_id: &str) -> TableRefere
 /// Returns `url` with the table reference that scopes its file listing cache entries to its
 /// object store in the session with `session_id`. DataFusion uses this reference when it lists
 /// files for a scan.
+/// This scopes the list files cache (DataFusion's `ListFilesCache`) keys.
 pub fn scoped_listing_url(url: &ListingTableUrl, session_id: &str) -> ListingTableUrl {
     url.clone()
         .with_table_ref(listing_table_ref(url, session_id))
@@ -68,6 +72,7 @@ pub fn scoped_listing_url(url: &ListingTableUrl, session_id: &str) -> ListingTab
 
 /// Returns a view of the shared file metadata cache whose keys are scoped to one object store
 /// in the session with `session_id`.
+/// This scopes the Parquet footer cache (DataFusion's `FileMetadataCache`).
 ///
 /// Lookups, insertions, removals, and `list_entries` are scoped to the object store. The size,
 /// capacity, and TTL methods, `clear`, and `drop_table_entries` act on the shared cache.
