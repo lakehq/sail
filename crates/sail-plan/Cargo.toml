@@ -60,6 +60,7 @@ parquet-variant-compute = { workspace = true }
 
 [dev-dependencies]
 sail-catalog-memory = { path = "../sail-catalog-memory" }
+sail-object-store = { path = "../sail-object-store" }
 
 [build-dependencies]
 serde = { workspace = true }
