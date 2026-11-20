@@ -1060,10 +1060,30 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, sail_catalog::lakehouse::LakehouseResolvedTable)> {
         let config = self.resolved_catalog_config().await?;
-        let result = self
-            .load_table_result(database, table, config.access_delegation())
-            .await?;
-        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result);
+        let access_delegation = config.access_delegation();
+        let (result, session) = match self
+            .load_table_result(database, table, access_delegation)
+            .await
+        {
+            Ok(result) => {
+                let session =
+                    Self::rest_table_session_ref(&self.name, database, table, config, &result);
+                (result, Some(session))
+            }
+            Err(error @ CatalogError::NotFound(_, _)) => return Err(error),
+            // A server may reject the access delegation header before it looks up the table,
+            // so the table is loaded again without the header. A view or a missing table is
+            // then reported as not found. For an existing table, the session is left out, so
+            // that the rejection is reported when table access begins.
+            Err(error) if access_delegation.is_some() => {
+                match self.load_table_result(database, table, None).await {
+                    Ok(result) => (result, None),
+                    Err(not_found @ CatalogError::NotFound(_, _)) => return Err(not_found),
+                    Err(_) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
         let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
             &self.name,
@@ -1072,7 +1092,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             request.operation,
             &self.lakehouse_capabilities(),
         );
-        resolved.execution.rest_session = Some(session);
+        resolved.execution.rest_session = session;
         Ok((status, resolved))
     }
 
@@ -1829,7 +1849,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             mut context,
             purpose: _,
         } = request;
-        // A context from `get_lakehouse_table` already has the session from that table load.
+        // A context from `get_lakehouse_table` usually has the session from that table load.
         let rest_session = match context.rest_session.take() {
             Some(rest_session) => rest_session,
             None => {
@@ -5273,6 +5293,102 @@ mod tests {
         assert_eq!(
             session.credential_scope.as_deref(),
             Some("iceberg-rest:db1.table1")
+        );
+    }
+
+    /// Creates a catalog with the access delegation header, for a server that rejects the
+    /// header with 403 Forbidden and answers a table load without the header with `headerless`.
+    async fn rejected_access_delegation_context(
+        rejected: u64,
+        headerless: ResponseTemplate,
+    ) -> TestContext {
+        let ctx = TestContext::new_with_properties(
+            Some("test"),
+            HashMap::from([(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                "vended-credentials".to_string(),
+            )]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(rejected)
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(|request: &Request| !request.headers.contains_key("X-Iceberg-Access-Delegation"))
+            .respond_with(headerless)
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+        ctx
+    }
+
+    async fn get_read_lakehouse_table(
+        ctx: &TestContext,
+    ) -> CatalogResult<(TableStatus, sail_catalog::lakehouse::LakehouseResolvedTable)> {
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        ctx.catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn get_lakehouse_table_reports_missing_table_when_access_delegation_is_rejected() {
+        let ctx = rejected_access_delegation_context(1, ResponseTemplate::new(404)).await;
+        let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
+        assert!(matches!(err, CatalogError::NotFound(_, _)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_reports_rejected_access_delegation() {
+        let ctx = rejected_access_delegation_context(
+            2,
+            ResponseTemplate::new(200)
+                .set_body_json(create_table_response_with_access_session_hints()),
+        )
+        .await;
+        let (status, resolved) = get_read_lakehouse_table(&ctx).await.unwrap();
+        assert_eq!(status.name, "table1");
+        assert_eq!(resolved.execution.rest_session, None);
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let err = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::External(message) if message.contains("403 Forbidden")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_lakehouse_table_reports_rejected_access_delegation_on_other_errors() {
+        let ctx = rejected_access_delegation_context(1, ResponseTemplate::new(500)).await;
+        let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::External(message) if message.contains("403 Forbidden")),
+            "{err:?}"
         );
     }
 

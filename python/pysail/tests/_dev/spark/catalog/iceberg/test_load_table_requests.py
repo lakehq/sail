@@ -173,3 +173,33 @@ def test_invalid_scan_planning_mode_is_reported_after_read_validation(
                 session.sql(f"SELECT * FROM {name} VERSION AS OF rand()").collect()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_rejected_access_delegation_is_reported_when_table_access_begins(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
+):
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    view = f"{NAMESPACE}.constant"
+    table = f"{NAMESPACE}.rejected"
+    try:
+        spark.sql(f"CREATE VIEW {view} AS SELECT 1 AS id")
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        with (
+            recording_proxy(iceberg_rest_endpoint, reject_access_delegation=True) as catalog,
+            _server(catalog, seaweedfs_host_endpoint, ', access_delegation="vended-credentials"') as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            # Views and missing tables are resolved as without the header.
+            assert [row.id for row in session.sql(f"SELECT * FROM {view}").collect()] == [1]
+            with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+                session.table(f"{NAMESPACE}.missing").collect()
+            # The rejection is reported when table access begins, after read validation.
+            with pytest.raises(Exception, match="expression must be deterministic"):
+                session.sql(f"SELECT * FROM {table} VERSION AS OF rand()").collect()
+            with pytest.raises(Exception, match="403 Forbidden"):
+                session.table(table).collect()
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {view}")
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

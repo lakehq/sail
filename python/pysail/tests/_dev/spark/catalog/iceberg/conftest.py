@@ -293,18 +293,29 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
 
 @contextmanager
 def recording_proxy(
-    target: str, config_overrides: dict[str, str] | None = None
+    target: str, config_overrides: dict[str, str] | None = None, *, reject_access_delegation: bool = False
 ) -> Iterator[tuple[str, list[tuple[str, str, Any, int, str | None]]]]:
     """Forward requests to a REST catalog and record each of them.
 
     Each record is the method, the path, the JSON body, the response status, and the
     access delegation header. `config_overrides` are added to the catalog config overrides.
+    If `reject_access_delegation` is set, requests with the access delegation header get
+    403 Forbidden instead of being forwarded.
     """
     records = []
 
     class Proxy(BaseHTTPRequestHandler):
         def forward(self):
             body = self.rfile.read(int(self.headers.get("content-length", "0")))
+            if reject_access_delegation and ACCESS_DELEGATION in self.headers:
+                records.append((self.command, self.path, None, 403, self.headers[ACCESS_DELEGATION]))
+                content = json.dumps({"error": {"message": "Forbidden", "type": "ForbiddenException", "code": 403}})
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content.encode())
+                return
             headers = {"Content-Type": "application/json"}
             if ACCESS_DELEGATION in self.headers:
                 headers[ACCESS_DELEGATION] = self.headers[ACCESS_DELEGATION]
