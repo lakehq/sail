@@ -173,3 +173,19 @@ def test_spark_sql_merge_dataframe_source_is_unity_managed(
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
+
+
+def test_idempotent_append_to_managed_delta_table(spark: SparkSession, unity_rest_url: str) -> None:
+    database = "unity_idempotent_append"
+    table = f"{database}.events"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING delta")
+        for value, version in enumerate([1, 1, 0, 2]):
+            spark.range(value, value + 1).write.format("delta").mode("append").options(
+                txnAppId="job", txnVersion=version
+            ).saveAsTable(table)
+        assert sorted(row.id for row in spark.table(table).collect()) == [0, 3]
+        assert _unity_delta_commit_info(unity_rest_url, table, 2)
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")

@@ -200,3 +200,83 @@ def test_delta_write_preserves_input_sort(spark, tmp_path, global_sort, partitio
         count += len(values)
     assert count == size
     assert spark.read.format("delta").load(str(path)).count() == size
+
+
+def _write_transaction(session, path, app, version, value, mode="append"):
+    data = session.createDataFrame([(value,)], "id LONG").repartition(2)
+    data.write.format("delta").mode(mode).options(txnAppId=app, txnVersion=version).save(str(path))
+
+
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+def test_idempotent_write(spark, tmp_path, mode):
+    path = tmp_path / "transactions"
+    # Use different values on retries so a duplicate overwrite is also observable.
+    for value, (app, version) in enumerate([("a", 1), ("a", 1), ("a", 0), ("b", 0), ("a", 2)]):
+        _write_transaction(spark, path, app, version, value, mode)
+    expected = [0, 3, 4] if mode == "append" else [4]
+    assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == expected
+    commits = sorted((path / "_delta_log").glob("*.json"))
+    assert len(commits) == 3
+    for commit, (app, version) in zip(commits, [("a", 1), ("b", 0), ("a", 2)], strict=True):
+        actions = [json.loads(line) for line in commit.read_text().splitlines()]
+        assert any("add" in action for action in actions)
+        (txn,) = [action["txn"] for action in actions if "txn" in action]
+        assert (txn["appId"], txn["version"]) == (app, version)
+        assert txn["lastUpdated"] > 0
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"txnAppId": "a"}, "txnVersion"),
+        ({"txnVersion": "0"}, "txnAppId"),
+        *[({"txnAppId": "a", "txnVersion": v}, "non-negative integer") for v in ["", "-1", "1.5", str(2**63)]],
+    ],
+)
+def test_invalid_transaction_options(spark, tmp_path, options, error):
+    path = tmp_path / "invalid"
+    with pytest.raises(Exception, match=error):
+        spark.range(1).write.format("delta").mode("append").options(**options).save(str(path))
+    assert not path.exists()
+
+
+@pytest.mark.integration
+def test_idempotent_write_delta_spark_interop(delta_jvm_spark, spark, tmp_path):
+    path = tmp_path / "shared"
+    delta_jvm_spark = delta_jvm_spark.newSession()
+    delta_jvm_spark.conf.set("spark.databricks.delta.snapshotPartitions", "1")
+    _write_transaction(delta_jvm_spark, path, "app", 0, 10)
+    _write_transaction(spark, path, "app", 0, 11)
+    _write_transaction(spark, path, "app", 1, 12)
+    _write_transaction(delta_jvm_spark, path, "app", 1, 13)
+    for session in [spark, delta_jvm_spark]:
+        assert sorted(row.id for row in session.read.format("delta").load(str(path)).collect()) == [10, 12]
+    assert len(list((path / "_delta_log").glob("*.json"))) == 2
+
+
+def test_empty_idempotent_write_advances_version(spark, tmp_path):
+    path = str(tmp_path / "empty")
+    for size in [0, 3]:
+        spark.range(size).write.format("delta").mode("append").options(txnAppId="app", txnVersion=1).save(path)
+    assert spark.read.format("delta").load(path).count() == 0
+
+
+def test_expired_transaction_can_be_reused(spark, tmp_path):
+    path = tmp_path / "expired"
+    spark.range(1).write.format("delta").options(
+        **{"delta.setTransactionRetentionDuration": "interval 0 seconds", "txnAppId": "app", "txnVersion": "1"}
+    ).save(str(path))
+    _write_transaction(spark, path, "app", 1, 1)
+    assert spark.read.format("delta").load(str(path)).count() == 2
+
+
+def test_idempotent_write_after_checkpoint(spark, tmp_path):
+    path = tmp_path / "checkpoint"
+    spark.range(1).write.format("delta").options(
+        **{"delta.checkpointInterval": "1", "txnAppId": "first", "txnVersion": "7"}
+    ).save(str(path))
+    _write_transaction(spark, path, "second", 0, 1)
+    assert list((path / "_delta_log").glob("*.checkpoint.parquet"))
+    _write_transaction(spark, path, "first", 6, 2)
+    assert spark.read.format("delta").load(str(path)).count() == 2
+    assert len(list((path / "_delta_log").glob("*.json"))) == 2
