@@ -4,13 +4,17 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, transform_binary_to_string, transform_schema_to_view,
+};
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::table_schema::TableSchema;
+use datafusion::execution::cache::cache_manager::FileMetadataCache;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::union::UnionExec;
@@ -18,6 +22,7 @@ use datafusion_common::extensions::Extensions;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::cache_scope::object_store_scoped_file_metadata_cache;
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
@@ -140,6 +145,66 @@ async fn head_many(
         .buffer_unordered(concurrency)
         .try_collect::<Vec<_>>()
         .await
+}
+
+/// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
+/// file metadata cache.
+///
+/// This is the same as `ParquetFormat::default().infer_schema()`, which always uses the runtime's
+/// unscoped file metadata cache. The default format has no INT96 coercion and no decryption.
+async fn infer_parquet_checkpoint_schema(
+    session: &dyn datafusion::catalog::Session,
+    store: &Arc<dyn ObjectStore>,
+    metadata_cache: &Arc<FileMetadataCache>,
+    objects: &[ObjectMeta],
+) -> Result<SchemaRef> {
+    let format = ParquetFormat::default();
+    let mut schemas: Vec<(Path, Schema)> = stream::iter(objects)
+        .map(|object| async {
+            let schema = DFParquetMetadata::new(store.as_ref(), object)
+                .with_metadata_size_hint(format.metadata_size_hint())
+                .with_file_metadata_cache(Some(Arc::clone(metadata_cache)))
+                .fetch_schema()
+                .await?;
+            Ok::<_, DataFusionError>((object.location.clone(), schema))
+        })
+        .boxed()
+        .buffer_unordered(
+            session
+                .config_options()
+                .execution
+                .meta_fetch_concurrency
+                .get(),
+        )
+        .try_collect()
+        .await?;
+    // Sort by location so that the merged field order is deterministic.
+    schemas.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    let schemas = schemas.into_iter().map(|(_, schema)| {
+        if format.skip_metadata() {
+            Schema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.as_ref().clone().with_metadata(Default::default()))
+                    .collect::<Fields>(),
+            )
+        } else {
+            schema
+        }
+    });
+    let schema = Schema::try_merge(schemas)?;
+    let schema = if format.binary_as_string() {
+        transform_binary_to_string(&schema)
+    } else {
+        schema
+    };
+    let schema = if format.force_view_types() {
+        transform_schema_to_view(&schema)
+    } else {
+        schema
+    };
+    Ok(Arc::new(schema))
 }
 
 fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> {
@@ -275,6 +340,16 @@ pub async fn build_delta_log_datasource_scans_with_options(
 
     // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
     // This builder only materializes datasource scans from those resolved filenames.
+    // The checkpoint footers are cached under keys scoped to the object store, both for schema
+    // inference and for the scan, so that the two share cache entries. Workers rebuild the scan
+    // with the same scoped cache.
+    let metadata_cache = object_store_scoped_file_metadata_cache(
+        ctx.session()
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache(),
+        &object_store_url,
+    );
     let table_root = Path::from_url_path(log_store.config().location.path())?;
     let table_root_path = &table_root;
     let (checkpoint_metas, commit_metas, sidecar_metas) = tokio::try_join!(
@@ -310,9 +385,13 @@ pub async fn build_delta_log_datasource_scans_with_options(
         None
     } else {
         Some(
-            ParquetFormat::default()
-                .infer_schema(ctx.session(), &store, &all_parquet_metas)
-                .await?,
+            infer_parquet_checkpoint_schema(
+                ctx.session(),
+                &store,
+                &metadata_cache,
+                &all_parquet_metas,
+            )
+            .await?,
         )
     };
     let has_json_files = !json_checkpoint_metas.is_empty() || !commit_metas.is_empty();
@@ -371,7 +450,11 @@ pub async fn build_delta_log_datasource_scans_with_options(
 
     let parquet_checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = {
         let mut source =
-            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone());
+            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone())
+                .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    metadata_cache,
+                )));
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }
@@ -450,7 +533,93 @@ pub async fn build_delta_log_datasource_union_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
+    use datafusion::datasource::file_format::FileFormat;
+    use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
+    use datafusion::prelude::SessionContext;
+    use object_store::PutPayload;
+    use object_store::memory::InMemory;
+    use parquet::arrow::ArrowWriter;
+
     use super::*;
+
+    async fn put_parquet(
+        store: &Arc<dyn ObjectStore>,
+        path: &str,
+        columns: Vec<(Field, ArrayRef)>,
+    ) -> Result<ObjectMeta> {
+        let (fields, arrays): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            HashMap::from([("k".to_string(), "v".to_string())]),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)?;
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let path = Path::from(path);
+        store
+            .put(&path, PutPayload::from(buf))
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        store
+            .head(&path)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    #[tokio::test]
+    async fn checkpoint_schema_inference_matches_parquet_format_with_scoped_cache() -> Result<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let field_metadata = HashMap::from([("f".to_string(), "m".to_string())]);
+        let b = put_parquet(
+            &store,
+            "table/_delta_log/b.parquet",
+            vec![
+                (
+                    Field::new("x", DataType::Int64, true).with_metadata(field_metadata.clone()),
+                    Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                ),
+                (
+                    Field::new("bin", DataType::Binary, true),
+                    Arc::new(BinaryArray::from(vec![b"a".as_ref()])) as ArrayRef,
+                ),
+            ],
+        )
+        .await?;
+        let a = put_parquet(
+            &store,
+            "table/_delta_log/a.parquet",
+            vec![(
+                Field::new("y", DataType::Int64, true).with_metadata(field_metadata),
+                Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+            )],
+        )
+        .await?;
+        let objects = vec![b, a];
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let expected = ParquetFormat::default()
+            .infer_schema(&state, &store, &objects)
+            .await?;
+
+        let shared =
+            CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
+        let url = ObjectStoreUrl::parse("memory://")?;
+        let scoped = object_store_scoped_file_metadata_cache(Arc::clone(&shared), &url);
+        let actual = infer_parquet_checkpoint_schema(&state, &store, &scoped, &objects).await?;
+
+        assert_eq!(actual, expected);
+        for object in &objects {
+            assert!(scoped.contains_key(&object.location));
+            assert!(!shared.contains_key(&object.location));
+        }
+        Ok(())
+    }
 
     #[test]
     #[expect(clippy::expect_used)]
