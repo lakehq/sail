@@ -560,7 +560,7 @@ def test_rewrite_procedure_does_not_publish_action_metrics(spark, tmp_path, metr
 def test_sql_action_counts(metrics_table, spark, tmp_path):
     table, _ = metrics_table
     _seed(spark, table, tmp_path)
-    key = "sail.spark.dml_result_counts"
+    key = "sail.execution.return_write_metrics"
     spark.conf.set(key, "true")
     try:
         merge = spark.sql(f"""

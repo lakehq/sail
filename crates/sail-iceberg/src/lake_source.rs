@@ -134,7 +134,7 @@ impl DataSource for IcebergLakeSource {
                 Arc::new(input),
                 IcebergWriteNodeOptions {
                     output: if sql_insert
-                        && !sail_common_datafusion::command::dml_counts_enabled(ctx.config())?
+                        && !sail_common_datafusion::command::return_write_metrics(ctx.config())?
                     {
                         CommandOutput::Empty
                     } else {
@@ -320,15 +320,15 @@ impl LakeSource for IcebergLakeSource {
             }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(
                 *info,
-                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+                sail_common_datafusion::command::return_write_metrics(ctx.config())?,
             ),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(
                 *info,
-                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+                sail_common_datafusion::command::return_write_metrics(ctx.config())?,
             ),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(
                 *info,
-                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+                sail_common_datafusion::command::return_write_metrics(ctx.config())?,
             ),
         }
     }

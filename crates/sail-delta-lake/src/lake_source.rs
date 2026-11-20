@@ -168,7 +168,7 @@ impl DataSource for DeltaLakeSource {
                 DeltaWriteNodeOptions {
                     identity_columns_to_track,
                     output: if sql_insert
-                        && !sail_common_datafusion::command::dml_counts_enabled(ctx.config())?
+                        && !sail_common_datafusion::command::return_write_metrics(ctx.config())?
                     {
                         CommandOutput::Empty
                     } else {

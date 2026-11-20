@@ -10,19 +10,19 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 
 use crate::session::config::SessionConfigService;
 
-pub const DML_RESULT_COUNTS_KEY: &str = "sail.spark.dml_result_counts";
+pub const RETURN_WRITE_METRICS_KEY: &str = "sail.execution.return_write_metrics";
 
 /// Expose write counts to SQL clients that request them while preserving Spark defaults.
-pub fn dml_counts_enabled(config: &SessionConfig) -> Result<bool> {
+pub fn return_write_metrics(config: &SessionConfig) -> Result<bool> {
     let Some(service) = config.get_extension::<SessionConfigService>() else {
         return Ok(false);
     };
-    match service.get_option(DML_RESULT_COUNTS_KEY)?.as_deref() {
+    match service.get_option(RETURN_WRITE_METRICS_KEY)?.as_deref() {
         None => Ok(false),
         Some(v) if v.trim().eq_ignore_ascii_case("true") => Ok(true),
         Some(v) if v.trim().eq_ignore_ascii_case("false") => Ok(false),
         Some(v) => {
-            datafusion_common::plan_err!("{DML_RESULT_COUNTS_KEY} must be a boolean, got {v}")
+            datafusion_common::plan_err!("{RETURN_WRITE_METRICS_KEY} must be a boolean, got {v}")
         }
     }
 }

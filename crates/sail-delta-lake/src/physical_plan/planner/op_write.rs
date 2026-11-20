@@ -198,7 +198,7 @@ async fn build_overwrite_if_plan(
             tag_row_operation(aligned_old, RowLevelOperationType::Copy)?,
             tag_row_operation(deleted, RowLevelOperationType::MatchedDelete)?,
         ])?
-    } else if sail_common_datafusion::command::dml_counts_enabled(ctx.session().config())? {
+    } else if sail_common_datafusion::command::return_write_metrics(ctx.session().config())? {
         UnionExec::try_new(vec![
             tag_row_operation(aligned_new, RowLevelOperationType::Insert)?,
             tag_row_operation(aligned_old, RowLevelOperationType::Copy)?,

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_common_datafusion::command::DML_RESULT_COUNTS_KEY;
+use sail_common_datafusion::command::RETURN_WRITE_METRICS_KEY;
 use sail_plan::config::{
     DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
 };
@@ -41,14 +41,14 @@ impl From<ConfigKeyValue> for connect::KeyValue {
 }
 
 pub(crate) struct SparkRuntimeConfig {
-    default_dml_result_counts: bool,
+    default_return_write_metrics: bool,
     entries:
         &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,
     config: HashMap<String, String>,
 }
 
 impl SparkRuntimeConfig {
-    pub(crate) fn try_new(default_dml_result_counts: bool) -> SparkResult<Self> {
+    pub(crate) fn try_new(default_return_write_metrics: bool) -> SparkResult<Self> {
         let entries = match get_pyspark_version() {
             Ok(version) => {
                 let mut parts = version.split('.');
@@ -74,7 +74,7 @@ impl SparkRuntimeConfig {
             }
         };
         Ok(Self {
-            default_dml_result_counts,
+            default_return_write_metrics,
             entries,
             config: HashMap::new(),
         })
@@ -109,7 +109,7 @@ impl SparkRuntimeConfig {
 
     fn get_with_server_default(&self, key: &str) -> Option<&str> {
         self.get_by_key(key).or_else(|| {
-            (key == DML_RESULT_COUNTS_KEY).then_some(if self.default_dml_result_counts {
+            (key == RETURN_WRITE_METRICS_KEY).then_some(if self.default_return_write_metrics {
                 "true"
             } else {
                 "false"
@@ -182,7 +182,7 @@ impl SparkRuntimeConfig {
         // configuration and the mirrored DataFusion Parquet option as they were.
         if matches!(
             key.as_str(),
-            SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING | DML_RESULT_COUNTS_KEY
+            SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING | RETURN_WRITE_METRICS_KEY
         ) && value.trim().to_lowercase().parse::<bool>().is_err()
         {
             return Err(SparkError::invalid(format!(
@@ -217,7 +217,7 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn is_modifiable(&self, key: &str) -> bool {
-        key == DML_RESULT_COUNTS_KEY
+        key == RETURN_WRITE_METRICS_KEY
             || self
                 .entries
                 .get(key)

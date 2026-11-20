@@ -253,7 +253,7 @@ def test_delta_delete_missing_metadata_counts(spark, tmp_path, known_stats, pred
 
 
 def test_replace_where_result_counts_input_rows(spark, tmp_path):
-    key = "sail.spark.dml_result_counts"
+    key = "sail.execution.return_write_metrics"
     with _table(spark, tmp_path) as table:
         _seed(spark, tmp_path)
         spark.conf.set(key, "true")

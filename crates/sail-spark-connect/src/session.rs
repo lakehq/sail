@@ -24,7 +24,7 @@ use crate::streaming::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
-    pub dml_result_counts: bool,
+    pub return_write_metrics: bool,
     pub execution_heartbeat_interval: Duration,
     /// The Sail `parquet.binary_as_string` option, which applies while
     /// `spark.sql.parquet.binaryAsString` is not set in the session.
@@ -97,7 +97,7 @@ impl SparkSession {
             server_session_id,
             session_id,
             user_id,
-            state: Mutex::new(SparkSessionState::try_new(options.dml_result_counts)?),
+            state: Mutex::new(SparkSessionState::try_new(options.return_write_metrics)?),
             options,
         };
         extension.set_config(vec![ConfigKeyValue {
@@ -385,9 +385,9 @@ struct SparkSessionState {
 }
 
 impl SparkSessionState {
-    fn try_new(dml_result_counts: bool) -> SparkResult<Self> {
+    fn try_new(return_write_metrics: bool) -> SparkResult<Self> {
         Ok(Self {
-            config: SparkRuntimeConfig::try_new(dml_result_counts)?,
+            config: SparkRuntimeConfig::try_new(return_write_metrics)?,
             native_config_keys: BTreeSet::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
