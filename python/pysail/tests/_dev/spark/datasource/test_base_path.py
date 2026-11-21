@@ -615,6 +615,16 @@ def test_base_path_local_glob_percent_escape(spark, tmp_path):
     assert df.collect() == [Row(id=1, p=1)]
 
 
+@pytest.mark.parametrize("uri", [True, False])
+@pytest.mark.parametrize("leaf", ["p=1/row.json", "p=*//row.json"])
+def test_base_path_repeated_separators(spark, tmp_path, uri, leaf):
+    write_json_partition(tmp_path / "table", "p=1")
+    root = tmp_path.as_uri() if uri else str(tmp_path)
+    base = f"{root}//table"
+    df = spark.read.option("basePath", base).json(f"{base}///{leaf}")
+    assert df.collect() == [Row(id=1, p=1)]
+
+
 def test_base_path_literal_directory(spark, tmp_path):
     root = tmp_path / "bracket[old]"
     write_json_partition(root, "p=1")

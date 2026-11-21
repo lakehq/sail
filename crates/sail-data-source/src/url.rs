@@ -426,6 +426,19 @@ impl GlobUrl {
                 // HTTP URLs continue to use URL escapes, queries, and fragments.
                 let uri_escapes =
                     syntax == ReadPathSyntax::UrlGlob || matches!(url.scheme(), "http" | "https");
+                // Hadoop Path collapses consecutive separators in the path component.
+                let mut collapsed;
+                let path = if syntax != ReadPathSyntax::UrlGlob && path.contains("//") {
+                    collapsed = String::with_capacity(path.len());
+                    for c in path.chars() {
+                        if c != '/' || !collapsed.ends_with('/') {
+                            collapsed.push(c);
+                        }
+                    }
+                    collapsed.as_str()
+                } else {
+                    path
+                };
                 let normalized;
                 let path = if syntax == ReadPathSyntax::HadoopGlob {
                     normalized = Self::normalize_hadoop_glob_path(path);
