@@ -24,7 +24,9 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
-use crate::parquet_schema::validate_parquet_field;
+use crate::parquet_schema::{
+    cast_parquet_integer, parquet_integer_cast_wraps, validate_parquet_field,
+};
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 pub const FIELD_DEFAULT_METADATA_KEY: &str = "sail.schema_evolution.default";
@@ -1241,6 +1243,12 @@ fn cast_array_with_schema_evolution_inner(
 
     if source.data_type() == target_field.data_type() {
         return Ok(Arc::clone(source));
+    }
+
+    if cast_mode == SchemaEvolutionCastMode::Parquet
+        && parquet_integer_cast_wraps(source.data_type(), target_field.data_type())
+    {
+        return cast_parquet_integer(source.as_ref(), target_field.data_type());
     }
 
     if cast_mode == SchemaEvolutionCastMode::RelaxedTimezone

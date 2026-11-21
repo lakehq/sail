@@ -2,8 +2,13 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, Field, TimeUnit};
-use datafusion_common::{Result, plan_err};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, downcast_integer_array};
+use datafusion::arrow::compute::take;
+use datafusion::arrow::datatypes::{
+    DECIMAL128_MAX_PRECISION, DataType, Field, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimeUnit,
+};
+use datafusion_common::{Result, internal_err, plan_err};
 
 use crate::schema_evolution::{StructFieldMatching, find_matching_struct_field};
 use crate::variant::is_variant_storage_field;
@@ -42,6 +47,10 @@ pub fn normalize_parquet_field(
             DataType::Decimal128(*precision, *scale)
         }
         DataType::Date64 => DataType::Date32,
+        DataType::UInt8 => DataType::Int16,
+        DataType::UInt16 => DataType::Int32,
+        DataType::UInt32 => DataType::Int64,
+        DataType::UInt64 => DataType::Decimal128(20, 0),
         DataType::Timestamp(
             TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Microsecond,
             tz,
@@ -81,6 +90,15 @@ pub fn validate_parquet_field(
     matching: StructFieldMatching,
 ) -> Result<()> {
     match (physical.data_type(), requested.data_type()) {
+        (DataType::Dictionary(_, values), _) => {
+            let plain = Arc::new(
+                physical
+                    .as_ref()
+                    .clone()
+                    .with_data_type(values.as_ref().clone()),
+            );
+            validate_parquet_field(path, requested, &plain, matching)?;
+        }
         (DataType::Struct(actual), DataType::Struct(fields)) => {
             for field in fields {
                 if let Some((_, source)) = find_matching_struct_field(actual, field, matching)? {
@@ -111,7 +129,13 @@ pub fn validate_parquet_field(
         // FIXED_LEN_BYTE_ARRAY only supplies binary data. Check this before normalization.
         (actual, expected) if is_parquet_byte_array(actual) && is_parquet_byte_array(expected) => {}
         (_, expected) => {
-            let actual = normalize_parquet_field(physical, None, false);
+            // Unsigned annotations determine which physical readers Spark can use.
+            // Keep them for validation even though inference exposes wider signed types.
+            let actual = if physical.data_type().is_unsigned_integer() {
+                Arc::clone(physical)
+            } else {
+                normalize_parquet_field(physical, None, false)
+            };
             if !parquet_primitive_type_compatible(actual.data_type(), expected) {
                 return plan_err!(
                     "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
@@ -124,8 +148,50 @@ pub fn validate_parquet_field(
     Ok(())
 }
 
+/// Spark retains the low bits when reading a byte or short. Reading UINT32 or
+/// UINT64 as its signed storage type likewise reinterprets the sign bit.
+pub fn parquet_integer_cast_wraps(physical: &DataType, requested: &DataType) -> bool {
+    match (physical, requested) {
+        (DataType::Dictionary(_, values), _) => parquet_integer_cast_wraps(values, requested),
+        (DataType::Int16 | DataType::UInt8, DataType::Int8)
+        | (
+            DataType::Int32 | DataType::UInt16 | DataType::UInt32,
+            DataType::Int8 | DataType::Int16,
+        )
+        | (DataType::UInt32, DataType::Int32 | DataType::Float64)
+        | (DataType::UInt64, DataType::Int64) => true,
+        _ => false,
+    }
+}
+
+#[expect(
+    clippy::unnecessary_cast,
+    reason = "the integer dispatch macro also expands identity casts"
+)]
+pub(crate) fn cast_parquet_integer(array: &dyn Array, requested: &DataType) -> Result<ArrayRef> {
+    downcast_integer_array!(
+        array => {
+            match requested {
+                DataType::Int8 => Ok(Arc::new(array.unary::<_, Int8Type>(|v| v as i8))),
+                DataType::Int16 => Ok(Arc::new(array.unary::<_, Int16Type>(|v| v as i16))),
+                DataType::Int32 => Ok(Arc::new(array.unary::<_, Int32Type>(|v| v as i32))),
+                DataType::Int64 => Ok(Arc::new(array.unary::<_, Int64Type>(|v| v as i64))),
+                // The INT32-to-double reader widens the signed physical value.
+                DataType::Float64 => Ok(Arc::new(array.unary::<_, Float64Type>(|v| f64::from(v as i32)))),
+                _ => internal_err!("Unexpected target for wrapping Parquet integer cast: {requested}"),
+            }
+        }
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let values = cast_parquet_integer(dictionary.values().as_ref(), requested)?;
+            Ok(take(values.as_ref(), dictionary.keys(), None)?)
+        }
+        other => internal_err!("Expected an integer Parquet array, got {other}"),
+    )
+}
+
 fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) -> bool {
-    if physical == requested {
+    if physical == requested || parquet_integer_cast_wraps(physical, requested) {
         return true;
     }
 
@@ -138,10 +204,13 @@ fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) 
             DataType::Int64 | DataType::Float64,
         )
         | (DataType::Float32, DataType::Float64)
-        | (DataType::UInt8, DataType::Int16)
-        | (DataType::UInt16, DataType::Int32)
-        | (DataType::UInt32, DataType::Int64) => true,
-        (DataType::UInt64, DataType::Decimal128(20, 0)) => true,
+        | (
+            DataType::UInt8,
+            DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::Float64,
+        )
+        | (DataType::UInt16, DataType::Int32 | DataType::Int64 | DataType::Float64)
+        | (DataType::UInt32, DataType::Int64)
+        | (DataType::UInt64, DataType::Decimal128(20, 0)) => true,
         (
             DataType::Int8 | DataType::Int16 | DataType::Int32,
             DataType::Decimal128(precision, scale),

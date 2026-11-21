@@ -19,13 +19,15 @@ use datafusion::parquet::schema::types::SchemaDescriptor;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
-use sail_common_datafusion::parquet_schema::{normalize_parquet_field, validate_parquet_field};
+use sail_common_datafusion::parquet_schema::{
+    normalize_parquet_field, parquet_integer_cast_wraps, validate_parquet_field,
+};
 use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
 use sail_common_datafusion::schema::nullable_query_field;
 use sail_common_datafusion::schema_evolution::{
@@ -345,43 +347,69 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
-        // StatisticsConverter resolves fields by their physical spelling. Keep the logical
-        // types and order so per-file statistics can be combined across schemas.
-        let stats_schema = if self.matching == StructFieldMatching::CaseInsensitiveName {
-            let file_metadata = metadata.file_metadata();
-            let physical = parquet_to_arrow_schema(
-                file_metadata.schema_descr(),
-                file_metadata.key_value_metadata(),
-            )?;
-            let fields = file_schema
-                .fields()
-                .iter()
-                .map(|field| {
-                    Ok(
-                        match find_matching_struct_field(physical.fields(), field, self.matching)? {
-                            Some((_, source)) if source.name() != field.name() => {
-                                Arc::new(field.as_ref().clone().with_name(source.name()))
-                            }
-                            _ => Arc::clone(field),
-                        },
-                    )
-                })
-                .collect::<Result<Fields>>()?;
-            Arc::new(Schema::new(fields))
-        } else {
-            Arc::clone(&file_schema)
-        };
+        // Read integer statistics with their physical signedness before converting
+        // bounds to the scan type. UINT32 and UINT64 can exceed the signed range.
+        let file_metadata = metadata.file_metadata();
+        let physical = parquet_to_arrow_schema(
+            file_metadata.schema_descr(),
+            file_metadata.key_value_metadata(),
+        )?;
+        let fields = file_schema
+            .fields()
+            .iter()
+            .map(|field| {
+                Ok(
+                    match find_matching_struct_field(physical.fields(), field, self.matching)? {
+                        Some((_, source))
+                            if source.data_type().is_unsigned_integer()
+                                || parquet_integer_cast_wraps(
+                                    source.data_type(),
+                                    field.data_type(),
+                                ) =>
+                        {
+                            Arc::clone(source)
+                        }
+                        Some((_, source)) if source.name() != field.name() => {
+                            Arc::new(field.as_ref().clone().with_name(source.name()))
+                        }
+                        _ => Arc::clone(field),
+                    },
+                )
+            })
+            .collect::<Result<Fields>>()?;
+        let stats_schema = Arc::new(Schema::new(fields));
         let mut statistics =
             DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &stats_schema)?;
         let num_rows = match statistics.num_rows {
             Precision::Exact(num_rows) => Some(num_rows),
             _ => None,
         };
-        for (field, column) in file_schema
+        for ((field, source), column) in file_schema
             .fields()
             .iter()
+            .zip(stats_schema.fields())
             .zip(statistics.column_statistics.iter_mut())
         {
+            if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
+                // Wrapping can reorder values and map different source values to the same integer.
+                *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+            } else if source.data_type().is_unsigned_integer()
+                && source.data_type() != field.data_type()
+            {
+                let mut converted =
+                    ColumnStatistics::new_unknown().with_null_count(column.null_count);
+                if field.data_type().is_numeric() {
+                    converted.min_value = column
+                        .min_value
+                        .cast_to(field.data_type())
+                        .unwrap_or(Precision::Absent);
+                    converted.max_value = column
+                        .max_value
+                        .cast_to(field.data_type())
+                        .unwrap_or(Precision::Absent);
+                }
+                *column = converted;
+            }
             // TODO: Row-group and page pruning still use the float maximum, which leaves out NaN.
             if field.data_type().is_floating() {
                 let non_null_count = match (num_rows, &column.null_count) {
