@@ -45,7 +45,7 @@ use sail_common_datafusion::schema_evolution::{
 use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::SchemaSampling;
+use crate::listing::utils::{SchemaSampling, parquet_path_sort_key};
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -331,22 +331,20 @@ impl ReadFormat for ParquetReadFormat {
             group
                 .objects
                 .iter()
-                .map(move |object| (&group.store, Arc::clone(&metadata_cache), object))
+                .map(move |object| (group.url, &group.store, Arc::clone(&metadata_cache), object))
         });
 
-        let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
-            .map(|(store, metadata_cache, object)| async {
+        let int96_type = int96_type.as_ref();
+        let mut schemas: Vec<_> = futures::stream::iter(objects)
+            .map(|(url, store, metadata_cache, object)| async move {
                 let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(metadata_cache))
                     .with_coerce_int96(coerce_int96);
                 let metadata = reader.fetch_metadata().await?;
-                let schema = parquet_file_schema(
-                    metadata.file_metadata(),
-                    int96_type.as_ref(),
-                    self.duration_hints,
-                )?;
-                Ok::<_, DataFusionError>((object.location.clone(), schema))
+                let schema =
+                    parquet_file_schema(metadata.file_metadata(), int96_type, self.duration_hints)?;
+                Ok::<_, DataFusionError>(((url, &object.location), schema))
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently
@@ -361,7 +359,11 @@ impl ReadFormat for ParquetReadFormat {
             Some("_metadata") => 1,
             _ => 0,
         };
-        schemas.sort_unstable_by(|(a, _), (b, _)| (order(a), a).cmp(&(order(b), b)));
+        schemas.sort_unstable_by(|((left_url, a), _), ((right_url, b), _)| {
+            order(a).cmp(&order(b)).then_with(|| {
+                parquet_path_sort_key(left_url, a).cmp(parquet_path_sort_key(right_url, b))
+            })
+        });
 
         let session_timezone = ctx
             .config_options()
@@ -789,10 +791,7 @@ fn merge_parquet_field(
 /// (`TIMESTAMP_NTZ`) is preserved untouched so it stays distinct from the aware type. Only fields
 /// that appear as timezone-aware milliseconds in at least one file are retagged; a
 /// microsecond-only field keeps its producer label in legacy sampling mode.
-fn normalize_widened_timestamp_timezones(
-    schemas: &mut [(object_store::path::Path, Schema)],
-    session_timezone: &str,
-) {
+fn normalize_widened_timestamp_timezones<K>(schemas: &mut [(K, Schema)], session_timezone: &str) {
     let widened_timestamp_fields = schemas
         .iter()
         .flat_map(|(_, schema)| schema.fields().iter())

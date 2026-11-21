@@ -1044,6 +1044,14 @@ def test_parquet_merge_disabled_selects_one_footer(spark, tmp_path, base_path, w
     assert df.columns == ["c" if with_summary else "a", "p"]
 
 
+@pytest.mark.parametrize("merge_schema", [False, True])
+def test_parquet_footer_unicode_path_order(spark, tmp_path, merge_schema):
+    for name, column in [("\ue000", "bmp"), ("😀", "supplementary")]:
+        pq.write_table(pa.table({column: [1]}), tmp_path / f"{name}.parquet")
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.columns == (["supplementary", "bmp"] if merge_schema else ["supplementary"])
+
+
 @pytest.mark.parametrize("pattern", ["row{,2}.json", "row{2,}.json", "row{}.json"])
 @pytest.mark.parametrize("filename_filter", [True, False])
 def test_base_path_empty_brace_alternative(spark, tmp_path, pattern, filename_filter):

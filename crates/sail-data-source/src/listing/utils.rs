@@ -357,6 +357,17 @@ fn order_csv_directory_files(files: &mut Vec<ObjectMeta>, start: usize, root: &P
     files.extend(entries.into_iter().map(|(_, file)| file));
 }
 
+/// Spark orders Parquet schemas by Hadoop Path.toString, a qualified, decoded UTF-16 string.
+pub(crate) fn parquet_path_sort_key<'a>(
+    url: &'a ListingTableUrl,
+    path: &'a Path,
+) -> impl Iterator<Item = u16> + 'a {
+    url.get_url()[..url::Position::BeforePath]
+        .encode_utf16()
+        .chain([u16::from(b'/')])
+        .chain(path.as_ref().encode_utf16())
+}
+
 // Spark prefers _common_metadata over _metadata, then the lexicographically first path.
 fn keep_parquet_footer<'a>(
     current: &mut Option<(&'a ListingTableUrl, Arc<dyn ObjectStore>, ObjectMeta)>,
@@ -369,8 +380,14 @@ fn keep_parquet_footer<'a>(
         Some("_metadata") => 1,
         _ => 2,
     };
-    if current.as_ref().is_none_or(|(_, _, previous)| {
-        (key(file), &file.location) < (key(previous), &previous.location)
+    if current.as_ref().is_none_or(|(previous_url, _, previous)| {
+        key(file)
+            .cmp(&key(previous))
+            .then_with(|| {
+                parquet_path_sort_key(url, &file.location)
+                    .cmp(parquet_path_sort_key(previous_url, &previous.location))
+            })
+            .is_lt()
     }) {
         *current = Some((url, Arc::clone(store), file.clone()));
     }
