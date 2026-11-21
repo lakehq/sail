@@ -14,7 +14,6 @@ use datafusion_common::{Result, internal_err, plan_err};
 
 use crate::schema_evolution::{StructFieldMatching, find_matching_struct_field};
 use crate::uuid::is_uuid_field;
-use crate::variant::is_variant_storage_field;
 
 /// Planning records the physical integer type or fixed decimal byte width on the per-file
 /// scan schema. Workers use this internal hint to validate and cast values. Query results
@@ -23,13 +22,7 @@ pub const SAIL_PARQUET_STORAGE_METADATA_KEY: &str = "SAIL::parquet::storage";
 
 /// Canonical Arrow representations for Spark SQL values. Parquet stores lists and
 /// byte arrays independently of the offset widths in the embedded Arrow schema.
-pub fn normalize_parquet_field(
-    field: &Arc<Field>,
-    merge_timezone: Option<&str>,
-    binary_as_string: bool,
-) -> Arc<Field> {
-    // VARIANT uses unannotated binary leaves for its own storage.
-    let binary_as_string = binary_as_string && !is_variant_storage_field(field);
+pub fn normalize_parquet_field(field: &Arc<Field>, merge_timezone: Option<&str>) -> Arc<Field> {
     let ty = match field.data_type() {
         DataType::Dictionary(_, values) => {
             let plain = Arc::new(
@@ -38,12 +31,9 @@ pub fn normalize_parquet_field(
                     .clone()
                     .with_data_type(values.as_ref().clone()),
             );
-            return normalize_parquet_field(&plain, merge_timezone, binary_as_string);
+            return normalize_parquet_field(&plain, merge_timezone);
         }
         DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView if binary_as_string => {
-            DataType::Utf8
-        }
         DataType::FixedSizeBinary(_) if is_uuid_field(field) => return Arc::clone(field),
         DataType::LargeBinary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
             DataType::Binary
@@ -71,16 +61,12 @@ pub fn normalize_parquet_field(
             DataType::Timestamp(TimeUnit::Microsecond, tz)
         }
         DataType::List(child) | DataType::LargeList(child) | DataType::FixedSizeList(child, _) => {
-            DataType::List(normalize_parquet_field(
-                child,
-                merge_timezone,
-                binary_as_string,
-            ))
+            DataType::List(normalize_parquet_field(child, merge_timezone))
         }
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|f| normalize_parquet_field(f, merge_timezone, binary_as_string))
+                .map(|f| normalize_parquet_field(f, merge_timezone))
                 .collect(),
         ),
         DataType::Map(entries, sorted) => {
@@ -89,7 +75,7 @@ pub fn normalize_parquet_field(
             };
             // Legacy Parquet maps use arbitrary names for the two positional children.
             let children = [(key, "key"), (value, "value")].map(|(child, name)| {
-                let child = normalize_parquet_field(child, merge_timezone, binary_as_string);
+                let child = normalize_parquet_field(child, merge_timezone);
                 Arc::new(child.as_ref().clone().with_name(name))
             });
             let entries = entries
@@ -183,7 +169,7 @@ pub fn validate_parquet_field(
             let actual = if physical.data_type().is_unsigned_integer() {
                 Arc::clone(physical)
             } else {
-                normalize_parquet_field(physical, None, false)
+                normalize_parquet_field(physical, None)
             };
             if !parquet_primitive_type_compatible(&actual, expected) {
                 return plan_err!(

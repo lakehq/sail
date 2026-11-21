@@ -684,6 +684,22 @@ def test_parquet_int96_with_arrow_schema_hint_before_1677(spark, tmp_path):
     ]
 
 
+def test_parquet_int96_in_legacy_list(spark, tmp_path):
+    path = tmp_path / "legacy_list.parquet"
+    values = [datetime(year, 6, 15, tzinfo=UTC) for year in [1600, 2500]]
+    array = pa.array([values], type=pa.list_(pa.timestamp("us", tz="UTC")))
+    pq.write_table(pa.table({"ts": array}), path, use_deprecated_int96_timestamps=True, store_schema=False)
+
+    # Rename the repeated LIST wrapper in the footer, preserving its byte length and all page offsets.
+    data = path.read_bytes()
+    footer_start = len(data) - 8 - int.from_bytes(data[-8:-4], "little")
+    path.write_bytes(data[:footer_start] + data[footer_start:].replace(b"\x04list", b"\x04bags"))
+    assert pq.ParquetFile(path).schema.column(0).path == "ts.bags.element"
+
+    rows = spark.read.parquet(str(path)).selectExpr("year(ts[0])", "year(ts[1])").collect()
+    assert rows == [(1600, 2500)]
+
+
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")
