@@ -110,6 +110,10 @@ impl ReadFormat for CsvReadFormat {
                         )
                     })?;
 
+                // Blank or comment-only files do not supply the first multiline CSV header.
+                if self.options.multi_line && schema.fields.is_empty() {
+                    continue;
+                }
                 records_to_read = records_to_read.saturating_sub(records_read);
                 schemas.push(schema);
                 if records_to_read == 0 {
@@ -121,7 +125,7 @@ impl ReadFormat for CsvReadFormat {
         // Spark takes multiline CSV field names from the first header and combines
         // the types inferred from each file by position.
         if self.options.multi_line && schemas.len() > 1 {
-            let mut files = schemas.into_iter().filter(|s| !s.fields.is_empty());
+            let mut files = schemas.into_iter();
             let mut first = files.next().unwrap_or_else(Schema::empty);
             let mut fields = first.fields.to_vec();
             for file in files {

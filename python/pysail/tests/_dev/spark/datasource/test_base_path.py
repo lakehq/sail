@@ -289,6 +289,29 @@ def test_base_path_multiline_csv_header_order(spark, tmp_path, inputs, header):
     assert sorted(r[0] for r in df.collect()) == ["1", "2"]
 
 
+@pytest.mark.parametrize("first_file", ["\n\n", "# comment\n"])
+def test_base_path_multiline_csv_first_nonempty_header(spark, tmp_path, first_file):
+    first = tmp_path / "a.csv"
+    second = tmp_path / "b.csv"
+    first.write_text(first_file)
+    second.write_text("id\n1\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True, comment="#").csv(
+        [str(first), str(second)]
+    )
+    assert df.columns == ["id"]
+    assert df.collect() == [Row(id="1")]
+
+
+def test_base_path_multiline_csv_loose_header(spark, tmp_path):
+    (tmp_path / "z.csv").write_text("root\n2\n")
+    nested = tmp_path / "p=1"
+    nested.mkdir()
+    (nested / "part.csv").write_text("nested\n1\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True).csv(str(tmp_path))
+    assert df.collect() == [Row(root="1", p=1)]
+    assert df.columns == ["root", "p"]
+
+
 @pytest.mark.parametrize(("first", "second"), [("!", " "), ("😀", "\ue000")])
 def test_base_path_glob_uri_order(spark, tmp_path, first, second):
     for name, header in [(first, "first"), (second, "second")]:

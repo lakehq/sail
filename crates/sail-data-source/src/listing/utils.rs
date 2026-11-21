@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -18,6 +19,7 @@ use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::listing_table_ref;
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::partition::{BasePathOptions, PartitionDiscovery};
 use crate::listing::source::ListingFileSample;
@@ -182,6 +184,8 @@ pub(super) async fn sample_listing_files<'a>(
     const SAMPLE_SIZE: usize = 10;
     let merge = matches!(sampling, SchemaSampling::MergeParquet { .. });
     let all_files = merge || sampling == SchemaSampling::MultilineCsv;
+    let directory_order =
+        sampling == SchemaSampling::MultilineCsv && uses_directory_listing(ctx, inputs)?;
     let mut discovery = PartitionDiscovery::default();
     let mut samples = Vec::new();
     let mut direct_samples = Vec::new();
@@ -197,6 +201,7 @@ pub(super) async fn sample_listing_files<'a>(
         let mut has_listed_file = false;
         let mut has_direct_file = false;
         'roots: for url in roots {
+            let start = objects.len();
             let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
@@ -260,6 +265,9 @@ pub(super) async fn sample_listing_files<'a>(
                     break 'roots;
                 }
             }
+            if directory_order && url.is_collection() {
+                order_csv_directory_files(&mut objects, start, url.prefix());
+            }
         }
         samples.push(ListingFileSample {
             url: first,
@@ -285,6 +293,68 @@ pub(super) async fn sample_listing_files<'a>(
         }];
     }
     Ok((samples, discovery))
+}
+
+/// Spark can use a flat recursive listing for a single root on configured filesystems.
+fn uses_directory_listing(ctx: &dyn Session, inputs: &[Vec<ListingTableUrl>]) -> Result<bool> {
+    let [roots] = inputs else { return Ok(true) };
+    let [url] = roots.as_slice() else {
+        return Ok(true);
+    };
+    let schemes = ctx
+        .config()
+        .get_extension::<SessionConfigService>()
+        .map(|service| service.get_option("spark.sql.sources.useListFilesFileSystemList"))
+        .transpose()?
+        .flatten();
+    Ok(!schemes
+        .as_deref()
+        .unwrap_or("s3a")
+        .split(',')
+        .any(|scheme| scheme.trim().eq_ignore_ascii_case(url.scheme())))
+}
+
+/// Hadoop emits the immediate files in each directory before walking its child directories.
+/// Preserve the listing order of sibling directories and of files in the same directory.
+fn order_csv_directory_files(files: &mut Vec<ObjectMeta>, start: usize, root: &Path) {
+    if files.len() - start < 2 {
+        return;
+    }
+    fn relative<'a>(file: &'a ObjectMeta, root: &Path) -> &'a str {
+        file.location
+            .as_ref()
+            .strip_prefix(root.as_ref())
+            .unwrap_or(file.location.as_ref())
+            .trim_start_matches('/')
+    }
+    if files[start..]
+        .iter()
+        .all(|file| !relative(file, root).contains('/'))
+    {
+        return;
+    }
+    let mut directories = HashMap::<String, usize>::new();
+    let mut entries = Vec::new();
+    for file in files.drain(start..) {
+        let path = relative(&file, root);
+        let mut order = Vec::new();
+        for (end, _) in path.match_indices('/') {
+            let directory = &path[..end];
+            let id = match directories.get(directory) {
+                Some(&id) => id,
+                None => {
+                    let id = directories.len();
+                    directories.insert(directory.to_owned(), id);
+                    id
+                }
+            };
+            order.push(id);
+        }
+        entries.push((order, file));
+    }
+    // Ancestor keys are strict prefixes of their descendants.
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    files.extend(entries.into_iter().map(|(_, file)| file));
 }
 
 // Spark prefers _common_metadata over _metadata, then the lexicographically first path.
