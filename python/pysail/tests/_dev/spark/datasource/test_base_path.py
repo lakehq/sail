@@ -195,6 +195,23 @@ def test_base_path_invalid_partition_cast(spark, tmp_path, validate):
         spark.conf.set(key, previous)
 
 
+@pytest.mark.parametrize("validate", [False, True])
+def test_base_path_complex_partition_type(spark, tmp_path, validate):
+    write_json_partition(tmp_path, "p=foo")
+    key = "spark.sql.sources.validatePartitionColumns"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(validate).lower())
+        df = spark.read.schema("id INT, p ARRAY<STRING>").option("basePath", str(tmp_path)).json(str(tmp_path))
+        if validate:
+            with pytest.raises(Exception, match=r"(?i)partition.*(type|column)|cast.*partition"):
+                df.collect()
+        else:
+            assert df.collect() == [Row(id=1, p=None)]
+    finally:
+        spark.conf.set(key, previous)
+
+
 def test_base_path_empty_partition_value(spark, tmp_path):
     write_json_partition(tmp_path, "p=")
     with pytest.raises(Exception, match=r"(?i)empty.*partition column"):

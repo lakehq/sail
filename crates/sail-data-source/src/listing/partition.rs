@@ -604,7 +604,7 @@ fn parse_partition_value(
                 .ok_or_else(|| plan_datafusion_err!("invalid time partition value: {value}"))?;
             ScalarValue::Time64Nanosecond(Some(nanos)).cast_to(ty)
         }
-        DataType::Utf8 => Ok(ScalarValue::Utf8(Some(decoded(value).into_owned()))),
+        ty if ty.is_string() => ScalarValue::Utf8(Some(decoded(value).into_owned())).cast_to(ty),
         DataType::Int8 | DataType::Int16 | DataType::Int32 => {
             // Released Spark versions parse an Int and narrow it for byte and short partitions.
             let integer = normalize_decimal_digits(value)
@@ -653,7 +653,13 @@ fn parse_partition_value(
                 _ => plan_err!("unexpected interval partition value: {value}"),
             }
         }
-        _ => ScalarValue::try_from_string(value.to_owned(), ty),
+        DataType::Binary | DataType::BinaryView | DataType::LargeBinary => {
+            ScalarValue::Binary(Some(value.as_bytes().to_vec())).cast_to(ty)
+        }
+        _ => plan_err!(
+            "Unsupported partition type {ty} for {}: {value}",
+            field.name()
+        ),
     }
 }
 
