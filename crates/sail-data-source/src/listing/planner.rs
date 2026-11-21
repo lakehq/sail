@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::datasource::listing::helpers::{filter_partitioned_file, pruned_partition_list};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
@@ -24,7 +24,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{DFSchema, Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
@@ -39,6 +39,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::partition_values;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -373,10 +374,32 @@ async fn list_files_for_scan<'a>(
         .iter()
         .map(|url| scoped_listing_url(url, ctx.session_id()))
         .collect::<Vec<_>>();
+    let partition_fields = source.config().schema.table_partition_cols();
+    let base_path = source
+        .config()
+        .base_path
+        .as_ref()
+        .filter(|_| !partition_fields.is_empty());
+    let partition_schema = base_path
+        .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
+        .transpose()?;
+    let base_partitions = base_path.zip(partition_schema.as_ref());
+    let (listing_filters, listing_cols) = if base_partitions.is_some() {
+        // List only the selected input paths. Their partition values are relative to basePath.
+        (&[][..], &[][..])
+    } else {
+        (filters, partition_cols_ref)
+    };
     let file_list = future::try_join_all(table_paths.iter().map(|table_path| async move {
-        let files =
-            pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                .await?;
+        let files = pruned_partition_list(
+            ctx,
+            store_ref,
+            table_path,
+            listing_filters,
+            "",
+            listing_cols,
+        )
+        .await?;
         // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
         let files = files.try_filter(move |file| {
             let location = &file.object_meta.location;
@@ -385,7 +408,18 @@ async fn list_files_for_scan<'a>(
                     && matches_path_glob_filter(path_glob_filter, location),
             )
         });
-        Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+        let files = if let Some((base, schema)) = base_partitions {
+            files
+                .try_filter_map(move |mut file| async move {
+                    file.partition_values =
+                        partition_values(base, &file.object_meta.location, partition_fields)?;
+                    filter_partitioned_file(file, filters, schema)
+                })
+                .boxed()
+        } else {
+            files.boxed()
+        };
+        Ok::<_, datafusion_common::DataFusionError>(files)
     }))
     .await?;
 

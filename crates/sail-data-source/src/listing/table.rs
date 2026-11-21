@@ -18,6 +18,7 @@ use crate::url::PathGlobFilter;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
+    pub base_path: Option<ListingTableUrl>,
     pub table_paths: Vec<ListingTableUrl>,
     pub schema: TableSchema,
     pub constraints: Constraints,

@@ -209,6 +209,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: vec![],
+            base_path: None,
             schema: TableSchema::from(schema),
             constraints: Constraints::default(),
             file_sort_order: vec![],

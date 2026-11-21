@@ -9,7 +9,7 @@ use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::{Expr, Volatility};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
+use datafusion_common::{DataFusionError, GetExt, Result, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_session::Session;
@@ -20,6 +20,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::listing_table_ref;
 
+use crate::listing::partition::{PartitionDiscovery, partition_type_inference_enabled};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -160,113 +161,42 @@ pub fn infer_listing_compression(
 ///
 /// File extensions are intentionally ignored since `ListingTableUrl` carries the filtering glob
 /// already, and Spark reads every non-hidden file regardless of extension.
-pub async fn sample_listing_files<'a>(
+pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
-    path_glob_filter: Option<&'a PathGlobFilter>,
-) -> Result<Vec<ListingFileSample<'a>>> {
+    path_glob_filter: Option<&PathGlobFilter>,
+    base_path: Option<&ListingTableUrl>,
+) -> Result<(Vec<ListingFileSample<'a>>, Vec<FieldRef>)> {
+    const SAMPLE_SIZE: usize = 10;
+    let infer_types = base_path.is_some() && partition_type_inference_enabled(ctx)?;
+    let mut discovery = PartitionDiscovery::default();
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
-            .await?
-            // Empty files can't contribute to schema / partition inference and may error when read.
-            .try_filter(|meta| futures::future::ready(meta.size > 0))
-            .take(10)
-            .try_collect()
-            .await?;
+        let mut objects = vec![];
+        let mut files = list_all_files(url, ctx, store.as_ref(), path_glob_filter).await?;
+        while let Some(file) = files.try_next().await? {
+            if file.size == 0 {
+                continue;
+            }
+            discovery.observe(base_path.unwrap_or(url), &file.location, infer_types)?;
+            if objects.len() < SAMPLE_SIZE {
+                objects.push(file);
+            }
+            // Type inference needs every selected partition value, even after the
+            // sample for physical file schema inference is full.
+            if base_path.is_none() && objects.len() == SAMPLE_SIZE {
+                break;
+            }
+        }
+        drop(files);
         samples.push(ListingFileSample {
             url,
             store,
             objects,
         });
     }
-    Ok(samples)
-}
-
-pub fn validate_partitions(
-    files: &[ListingFileSample<'_>],
-    table_partition_fields: &[FieldRef],
-) -> Result<()> {
-    if table_partition_fields.is_empty() {
-        return Ok(());
-    }
-    let inferred = infer_partitions(files)?;
-    if inferred.is_empty() {
-        return Ok(());
-    }
-
-    for group in files {
-        if !group.url.is_collection() {
-            return plan_err!(
-                "Can't create a partitioned table backed by a single file, \
-            perhaps the URL is missing a trailing slash?"
-            );
-        }
-
-        let table_partition_names = table_partition_fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-
-        if inferred.len() < table_partition_names.len() {
-            return plan_err!(
-                "Inferred partitions to be {:?}, but got {:?}",
-                inferred,
-                table_partition_names
-            );
-        }
-
-        // Match prefix to allow creating tables with partial partitions.
-        for (idx, col) in table_partition_names.iter().enumerate() {
-            if inferred.get(idx) != Some(col) {
-                return plan_err!(
-                    "Inferred partitions to be {:?}, but got {:?}",
-                    inferred,
-                    table_partition_names
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
-    let mut inferred: Option<Vec<String>> = None;
-    for group in files {
-        for file in &group.objects {
-            let path_parts = group
-                .url
-                .strip_prefix(&file.location)
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "failed to strip listing prefix from object location: {}",
-                        file.location
-                    )
-                })?
-                .collect::<Vec<_>>();
-
-            let keys = path_parts
-                .into_iter()
-                .rev()
-                .skip(1) // get parents only and skip the file itself
-                .rev()
-                .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>();
-
-            match &mut inferred {
-                None => inferred = Some(keys),
-                Some(x) if x == &keys => {}
-                Some(x) => {
-                    return plan_err!("found mixed partition values {x:?} and {keys:?}");
-                }
-            }
-        }
-    }
-
-    Ok(inferred.unwrap_or_default())
+    Ok((samples, discovery.into_fields(base_path.is_some())))
 }
 
 pub async fn list_all_files<'a>(
@@ -390,6 +320,7 @@ mod tests {
 
     use datafusion::datasource::listing::helpers::pruned_partition_list;
     use datafusion::prelude::SessionContext;
+    use datafusion_common::internal_datafusion_err;
     use object_store::PutPayload;
     use object_store::memory::InMemory;
     use sail_cache::scope::scoped_listing_url;
