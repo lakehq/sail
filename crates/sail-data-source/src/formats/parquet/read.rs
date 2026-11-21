@@ -150,9 +150,11 @@ fn parquet_file_schema(
         ),
         None => schema,
     };
-    if !schema.flattened_fields().iter().any(|field| {
-        matches!(field.data_type(), DataType::Timestamp(TimeUnit::Second, _))
-    }) {
+    if !schema
+        .flattened_fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Timestamp(TimeUnit::Second, _)))
+    {
         return Ok(schema);
     }
     // Only seconds timestamps need a comparison with the schema without Arrow hints.
@@ -448,7 +450,10 @@ impl ReadFormat for ParquetReadFormat {
             |metadata| {
                 // Physical projection pushdown selects struct leaves after this pass.
                 // The expression adapter validates them once it has the final projection.
-                let mut fields = projected.iter().filter(|field| !matches!(field.data_type(), DataType::Struct(_))).peekable();
+                let mut fields = projected
+                    .iter()
+                    .filter(|field| !matches!(field.data_type(), DataType::Struct(_)))
+                    .peekable();
                 if fields.peek().is_none() {
                     return Ok(());
                 }
@@ -458,13 +463,7 @@ impl ReadFormat for ParquetReadFormat {
                     if let Some((_, actual)) =
                         find_matching_struct_field(physical.fields(), field, self.matching)?
                     {
-                        validate_parquet_field(
-                            field.name(),
-                            field,
-                            actual,
-                            self.matching,
-                            options.global.binary_as_string,
-                        )?;
+                        validate_parquet_field(field.name(), field, actual, self.matching)?;
                     }
                 }
                 Ok(())
@@ -486,9 +485,7 @@ impl ReadFormat for ParquetReadFormat {
             .with_expr_adapter(Some(Arc::new(
                 SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::with_cast_mode(
                     self.matching,
-                    SchemaEvolutionCastMode::Parquet {
-                        binary_as_string: options.global.binary_as_string,
-                    },
+                    SchemaEvolutionCastMode::Parquet,
                 ),
             )))
             .with_projection_indices(input.projection)?

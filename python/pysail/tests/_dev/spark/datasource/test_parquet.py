@@ -286,6 +286,14 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     assert rows == [Row(id=1, missing=None)]
 
 
+def test_parquet_single_footer_widens_small_integers(spark, tmp_path):
+    for name, ty in [("a", pa.int64()), ("b", pa.int8()), ("c", pa.int16())]:
+        pq.write_table(pa.table({"value": pa.array([42], type=ty)}), tmp_path / f"{name}.parquet")
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<value:bigint>"
+    assert df.collect() == [Row(value=42)] * 3
+
+
 def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
     # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
     # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
@@ -1276,7 +1284,9 @@ def test_parquet_explicit_schema_skips_unrequested_merge_conflicts(spark, tmp_pa
 def test_parquet_validates_case_insensitive_nested_field(spark, tmp_path):
     pq.write_table(pa.table({"item": [{"x": 42, "value": 7}]}), tmp_path / "data.parquet")
 
-    df = spark.read.option("basePath", str(tmp_path)).schema("item STRUCT<x:BIGINT,VALUE:STRING>").parquet(str(tmp_path))
+    df = (
+        spark.read.option("basePath", str(tmp_path)).schema("item STRUCT<x:BIGINT,VALUE:STRING>").parquet(str(tmp_path))
+    )
     assert df.select("item.x").collect() == [Row(x=42)]
     with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
         df.select("item.VALUE").collect()
@@ -1291,6 +1301,19 @@ def test_parquet_merge_dictionary_with_plain_string(spark, tmp_path):
     df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
     assert df.schema.simpleString() == "struct<color:string>"
     assert df.orderBy("color").collect() == [Row(color="blue"), Row(color="red")]
+
+
+def test_parquet_disjoint_struct_children(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1], "item": [{"x": 4}]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2, 3], "item": [{"y": 5}, None]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+        assert [r.item for r in df.orderBy("id").collect()] == [Row(x=4), Row(x=None), None]
+    finally:
+        spark.conf.set(key, previous)
 
 
 def test_parquet_reads_nested_unannotated_int64_with_seconds_hint(spark, tmp_path):
@@ -1343,3 +1366,26 @@ def test_parquet_merge_schema_binary_as_string(spark, tmp_path):
         ]
     finally:
         spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize("binary_as_string", [False, True])
+def test_parquet_requested_byte_array_type(spark, tmp_path, binary_as_string):
+    pq.write_table(pa.table({"value": ["café"]}), tmp_path / "a.parquet", store_schema=False)
+    pq.write_table(pa.table({"value": [b"row"]}), tmp_path / "b.parquet", store_schema=False)
+    key = "spark.sql.parquet.binaryAsString"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(binary_as_string).lower())
+        reader = spark.read.option("mergeSchema", False)
+        assert sorted(row.value for row in reader.parquet(str(tmp_path)).collect()) == ["café", "row"]
+        binary_rows = reader.schema("value BINARY").parquet(str(tmp_path)).collect()
+        assert sorted(bytes(row.value) for row in binary_rows) == ["café".encode(), b"row"]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_fixed_binary_rejects_string_schema(spark, tmp_path):
+    path = tmp_path / "fixed.parquet"
+    pq.write_table(pa.table({"value": pa.array([b"abc"], type=pa.binary(3))}), path)
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema("value STRING").parquet(str(path)).collect()

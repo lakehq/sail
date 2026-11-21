@@ -79,9 +79,7 @@ pub fn validate_parquet_field(
     requested: &Field,
     physical: &Arc<Field>,
     matching: StructFieldMatching,
-    binary_as_string: bool,
 ) -> Result<()> {
-    let binary_as_string = binary_as_string && !is_variant_storage_field(physical);
     match (physical.data_type(), requested.data_type()) {
         (DataType::Struct(actual), DataType::Struct(fields)) => {
             for field in fields {
@@ -91,7 +89,6 @@ pub fn validate_parquet_field(
                         field,
                         source,
                         matching,
-                        binary_as_string,
                     )?;
                 }
             }
@@ -102,22 +99,19 @@ pub fn validate_parquet_field(
             | DataType::FixedSizeList(actual, _),
             DataType::List(field) | DataType::LargeList(field),
         ) => {
-            validate_parquet_field(
-                &format!("{path}[]"),
-                field,
-                actual,
-                matching,
-                binary_as_string,
-            )?;
+            validate_parquet_field(&format!("{path}[]"), field, actual, matching)?;
         }
         (DataType::Map(actual, _), DataType::Map(field, _)) => {
-            validate_parquet_field(path, field, actual, matching, binary_as_string)?;
+            validate_parquet_field(path, field, actual, matching)?;
         }
         // An unannotated INT64 can carry an embedded Arrow seconds timestamp hint.
         // The decoder presents the hinted type while schema inference uses the physical long.
         (DataType::Timestamp(TimeUnit::Second, _), DataType::Int64) => {}
+        // BYTE_ARRAY supplies either the raw bytes or their UTF-8 interpretation.
+        // FIXED_LEN_BYTE_ARRAY only supplies binary data. Check this before normalization.
+        (actual, expected) if is_parquet_byte_array(actual) && is_parquet_byte_array(expected) => {}
         (_, expected) => {
-            let actual = normalize_parquet_field(physical, None, binary_as_string);
+            let actual = normalize_parquet_field(physical, None, false);
             if !parquet_primitive_type_compatible(actual.data_type(), expected) {
                 return plan_err!(
                     "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
@@ -137,7 +131,12 @@ fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) 
 
     match (physical, requested) {
         // Spark's Parquet readers support these lossless numeric widenings.
-        (DataType::Int32, DataType::Int64 | DataType::Float64)
+        (DataType::Int8, DataType::Int16 | DataType::Int32)
+        | (DataType::Int16, DataType::Int32)
+        | (
+            DataType::Int8 | DataType::Int16 | DataType::Int32,
+            DataType::Int64 | DataType::Float64,
+        )
         | (DataType::Float32, DataType::Float64)
         | (DataType::UInt8, DataType::Int16)
         | (DataType::UInt16, DataType::Int32)
@@ -195,6 +194,14 @@ fn decimal_type_compatible(
     let scale_increase = i16::from(requested_scale) - i16::from(physical_scale);
     let precision_increase = i16::from(requested_precision) - i16::from(physical_precision);
     scale_increase >= 0 && precision_increase >= scale_increase
+}
+
+fn is_parquet_byte_array(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(_, values) => is_parquet_byte_array(values),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => true,
+        _ => is_string_type(data_type),
+    }
 }
 
 fn is_string_type(data_type: &DataType) -> bool {

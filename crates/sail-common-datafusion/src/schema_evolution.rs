@@ -203,9 +203,7 @@ pub enum SchemaEvolutionCastMode {
     #[default]
     Strict,
     RelaxedTimezone,
-    Parquet {
-        binary_as_string: bool,
-    },
+    Parquet,
 }
 
 #[derive(Debug)]
@@ -367,12 +365,10 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             matching: self.matching,
             cast_mode: self.cast_mode,
         };
-        if let SchemaEvolutionCastMode::Parquet { binary_as_string } = self.cast_mode {
+        if self.cast_mode == SchemaEvolutionCastMode::Parquet {
             return expr
                 .transform_down(|expr| {
-                    if let Some(rewritten) =
-                        rewriter.rewrite_parquet_struct_access(&expr, binary_as_string)?
-                    {
+                    if let Some(rewritten) = rewriter.rewrite_parquet_struct_access(&expr)? {
                         return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
                     }
                     if let Some(column) = expr.downcast_ref::<Column>() {
@@ -404,7 +400,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
     fn rewrite_parquet_struct_access(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
-        binary_as_string: bool,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let Some(function) = ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
         else {
@@ -448,13 +443,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             logical = field;
             physical = source;
         }
-        validate_parquet_field(
-            logical.name(),
-            logical,
-            physical,
-            self.matching,
-            binary_as_string,
-        )?;
+        validate_parquet_field(logical.name(), logical, physical, self.matching)?;
         let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
             Arc::new(function.fun().clone()),
             arguments,
@@ -659,7 +648,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if let SchemaEvolutionCastMode::Parquet { binary_as_string } = self.cast_mode
+        if self.cast_mode == SchemaEvolutionCastMode::Parquet
             && matches!(logical_field.data_type(), DataType::Struct(_))
         {
             validate_parquet_field(
@@ -667,10 +656,14 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 logical_field,
                 &Arc::new(physical_field.clone()),
                 self.matching,
-                binary_as_string,
             )?;
         }
-        if !can_cast_field_with_schema_evolution(physical_field, logical_field, self.matching)? {
+        if !can_cast_field_with_schema_evolution(
+            physical_field,
+            logical_field,
+            self.matching,
+            self.cast_mode,
+        )? {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
                 logical_field.name(),
@@ -768,6 +761,7 @@ fn can_cast_field_with_schema_evolution(
     source: &Field,
     target: &Field,
     matching: StructFieldMatching,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<bool> {
     if source.data_type() == &DataType::Null {
         return Ok(target.is_nullable());
@@ -787,7 +781,12 @@ fn can_cast_field_with_schema_evolution(
 
     match (source.data_type(), target.data_type()) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-            validate_struct_compatibility_with_variant(from_fields, to_fields, matching)?;
+            validate_struct_compatibility_with_variant(
+                from_fields,
+                to_fields,
+                matching,
+                cast_mode,
+            )?;
             Ok(true)
         }
         (
@@ -795,7 +794,7 @@ fn can_cast_field_with_schema_evolution(
             | DataType::LargeList(from_elem)
             | DataType::FixedSizeList(from_elem, _),
             DataType::List(to_elem) | DataType::LargeList(to_elem),
-        ) => can_cast_field_with_schema_evolution(from_elem, to_elem, matching),
+        ) => can_cast_field_with_schema_evolution(from_elem, to_elem, matching, cast_mode),
         (
             DataType::FixedSizeList(from_elem, from_len),
             DataType::FixedSizeList(to_elem, to_len),
@@ -803,10 +802,10 @@ fn can_cast_field_with_schema_evolution(
             if from_len != to_len {
                 return Ok(false);
             }
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
+            can_cast_field_with_schema_evolution(from_elem, to_elem, matching, cast_mode)
         }
         (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => {
-            validate_map_entries_compatibility(from_entries, to_entries, matching)?;
+            validate_map_entries_compatibility(from_entries, to_entries, matching, cast_mode)?;
             Ok(true)
         }
         _ => Ok(can_cast_types(source.data_type(), target.data_type())),
@@ -906,8 +905,10 @@ fn validate_struct_compatibility_with_variant(
     source_fields: &[Arc<Field>],
     target_fields: &[Arc<Field>],
     matching: StructFieldMatching,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<()> {
-    if matching == StructFieldMatching::Name
+    if cast_mode != SchemaEvolutionCastMode::Parquet
+        && matching == StructFieldMatching::Name
         && !target_fields.iter().any(|target| {
             find_matching_struct_field(source_fields, target, matching)
                 .is_ok_and(|field| field.is_some())
@@ -923,7 +924,12 @@ fn validate_struct_compatibility_with_variant(
     for target_field in target_fields {
         match find_matching_struct_field(source_fields, target_field, matching)? {
             Some((_, source_field)) => {
-                if !can_cast_field_with_schema_evolution(source_field, target_field, matching)? {
+                if !can_cast_field_with_schema_evolution(
+                    source_field,
+                    target_field,
+                    matching,
+                    cast_mode,
+                )? {
                     return exec_err!(
                         "Cannot cast struct field '{}' from type {} to type {}",
                         target_field.name(),
@@ -951,6 +957,7 @@ fn validate_map_entries_compatibility(
     source_entries: &Field,
     target_entries: &Field,
     matching: StructFieldMatching,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<()> {
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_entries.data_type(), target_entries.data_type())
@@ -965,7 +972,12 @@ fn validate_map_entries_compatibility(
             .find(|source| source.name() == target_field.name())
         {
             Some(source_field)
-                if can_cast_field_with_schema_evolution(source_field, target_field, matching)? => {}
+                if can_cast_field_with_schema_evolution(
+                    source_field,
+                    target_field,
+                    matching,
+                    cast_mode,
+                )? => {}
             Some(source_field) => {
                 return exec_err!(
                     "Cannot cast map entry '{}' from type {} to type {}",
@@ -1116,24 +1128,13 @@ impl SchemaEvolutionCastColumnExpr {
     }
 
     fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
-        match self.cast_mode {
-            SchemaEvolutionCastMode::Strict | SchemaEvolutionCastMode::Parquet { .. } => {
-                cast_array_with_schema_evolution(
-                    array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                    self.matching,
-                )
-            }
-            SchemaEvolutionCastMode::RelaxedTimezone => {
-                cast_array_with_schema_evolution_relaxed_tz(
-                    array,
-                    self.target_field.as_ref(),
-                    &self.cast_options,
-                    self.matching,
-                )
-            }
-        }
+        cast_array_with_schema_evolution_inner(
+            array,
+            self.target_field.as_ref(),
+            &self.cast_options,
+            self.matching,
+            self.cast_mode,
+        )
     }
 }
 
@@ -1203,7 +1204,13 @@ pub fn cast_array_with_schema_evolution(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, false)
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        SchemaEvolutionCastMode::Strict,
+    )
 }
 
 pub fn cast_array_with_schema_evolution_relaxed_tz(
@@ -1212,7 +1219,13 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, true)
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        SchemaEvolutionCastMode::RelaxedTimezone,
+    )
 }
 
 fn cast_array_with_schema_evolution_inner(
@@ -1220,7 +1233,7 @@ fn cast_array_with_schema_evolution_inner(
     target_field: &Field,
     cast_options: &CastOptions,
     matching: StructFieldMatching,
-    relaxed_timezone: bool,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<ArrayRef> {
     if is_variant_arrow_field(target_field) && is_variant_storage_type(source.data_type()) {
         return cast_variant_array_with_schema_evolution(source, target_field, cast_options);
@@ -1230,7 +1243,7 @@ fn cast_array_with_schema_evolution_inner(
         return Ok(Arc::clone(source));
     }
 
-    if relaxed_timezone
+    if cast_mode == SchemaEvolutionCastMode::RelaxedTimezone
         && let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
             (source.data_type(), target_field.data_type())
     {
@@ -1267,7 +1280,7 @@ fn cast_array_with_schema_evolution_inner(
             target_fields,
             cast_options,
             matching,
-            relaxed_timezone,
+            cast_mode,
         ),
         DataType::List(target_elem) => {
             let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
@@ -1281,7 +1294,7 @@ fn cast_array_with_schema_evolution_inner(
                 target_elem.as_ref(),
                 cast_options,
                 matching,
-                relaxed_timezone,
+                cast_mode,
             )?;
             Ok(Arc::new(ListArray::new(
                 Arc::clone(target_elem),
@@ -1302,7 +1315,7 @@ fn cast_array_with_schema_evolution_inner(
                 target_elem.as_ref(),
                 cast_options,
                 matching,
-                relaxed_timezone,
+                cast_mode,
             )?;
             Ok(Arc::new(LargeListArray::new(
                 Arc::clone(target_elem),
@@ -1331,7 +1344,7 @@ fn cast_array_with_schema_evolution_inner(
                 target_elem.as_ref(),
                 cast_options,
                 matching,
-                relaxed_timezone,
+                cast_mode,
             )?;
             Ok(Arc::new(FixedSizeListArray::new(
                 Arc::clone(target_elem),
@@ -1368,7 +1381,7 @@ fn cast_array_with_schema_evolution_inner(
                         target_child.as_ref(),
                         cast_options,
                         matching,
-                        relaxed_timezone,
+                        cast_mode,
                     )?),
                     None => kv_arrays.push(new_null_array(target_child.data_type(), num_entries)),
                 }
@@ -1410,7 +1423,7 @@ fn cast_variant_array_with_schema_evolution(
         target_fields,
         cast_options,
         StructFieldMatching::Name,
-        false,
+        SchemaEvolutionCastMode::Strict,
     )
 }
 
@@ -1419,7 +1432,7 @@ fn cast_struct_array_with_schema_evolution(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
     matching: StructFieldMatching,
-    relaxed_timezone: bool,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<ArrayRef> {
     if source.data_type() == &DataType::Null
         || (!source.is_empty() && source.null_count() == source.len())
@@ -1436,14 +1449,13 @@ fn cast_struct_array_with_schema_evolution(
             source.data_type()
         );
     };
-    validate_struct_compatibility_with_variant(source_struct.fields(), target_fields, matching)?;
-    cast_struct_array_to_fields(
-        source,
+    validate_struct_compatibility_with_variant(
+        source_struct.fields(),
         target_fields,
-        cast_options,
         matching,
-        relaxed_timezone,
-    )
+        cast_mode,
+    )?;
+    cast_struct_array_to_fields(source, target_fields, cast_options, matching, cast_mode)
 }
 
 fn cast_struct_array_to_fields(
@@ -1451,7 +1463,7 @@ fn cast_struct_array_to_fields(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
     matching: StructFieldMatching,
-    relaxed_timezone: bool,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<ArrayRef> {
     let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
         return exec_err!(
@@ -1472,7 +1484,7 @@ fn cast_struct_array_to_fields(
                     target_child.as_ref(),
                     cast_options,
                     matching,
-                    relaxed_timezone,
+                    cast_mode,
                 )?);
             }
             None => arrays.push(match field_default_array(target_child, num_rows)? {
@@ -1802,6 +1814,7 @@ mod tests {
             &Field::new("root", source.data_type().clone(), true),
             &target_field,
             StructFieldMatching::FieldId,
+            SchemaEvolutionCastMode::Strict,
         )?);
         let casted = cast_array_with_schema_evolution(
             &source,
@@ -1912,6 +1925,7 @@ mod tests {
                 &Field::new("items", source.data_type().clone(), true),
                 &target,
                 StructFieldMatching::FieldId,
+                SchemaEvolutionCastMode::Strict,
             )?);
             let actual = cast_array_with_schema_evolution(
                 &source,
@@ -1939,6 +1953,7 @@ mod tests {
                 &Field::new("items", source, true),
                 &Field::new("items", target, true),
                 StructFieldMatching::FieldId,
+                SchemaEvolutionCastMode::Strict,
             )?);
         }
         Ok(())
@@ -2241,6 +2256,7 @@ mod tests {
             &source,
             &target,
             StructFieldMatching::PhysicalName,
+            SchemaEvolutionCastMode::Strict,
         )?);
         Ok(())
     }
@@ -2311,6 +2327,7 @@ mod tests {
             &source_field,
             &target_field,
             StructFieldMatching::PhysicalName,
+            SchemaEvolutionCastMode::Strict,
         )?);
         let casted = cast_array_with_schema_evolution(
             &source,

@@ -5280,14 +5280,7 @@ impl RemoteExecutionCodec {
         match r#gen::SchemaEvolutionCastMode::try_from(mode)
             .map_err(|_| plan_datafusion_err!("invalid schema evolution cast mode"))?
         {
-            r#gen::SchemaEvolutionCastMode::Parquet => Ok(SchemaEvolutionCastMode::Parquet {
-                binary_as_string: false,
-            }),
-            r#gen::SchemaEvolutionCastMode::ParquetBinaryAsString => {
-                Ok(SchemaEvolutionCastMode::Parquet {
-                    binary_as_string: true,
-                })
-            }
+            r#gen::SchemaEvolutionCastMode::Parquet => Ok(SchemaEvolutionCastMode::Parquet),
             r#gen::SchemaEvolutionCastMode::Strict => Ok(SchemaEvolutionCastMode::Strict),
             r#gen::SchemaEvolutionCastMode::RelaxedTimezone => {
                 Ok(SchemaEvolutionCastMode::RelaxedTimezone)
@@ -5297,12 +5290,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_schema_evolution_cast_mode(mode: SchemaEvolutionCastMode) -> i32 {
         (match mode {
-            SchemaEvolutionCastMode::Parquet {
-                binary_as_string: false,
-            } => r#gen::SchemaEvolutionCastMode::Parquet,
-            SchemaEvolutionCastMode::Parquet {
-                binary_as_string: true,
-            } => r#gen::SchemaEvolutionCastMode::ParquetBinaryAsString,
+            SchemaEvolutionCastMode::Parquet => r#gen::SchemaEvolutionCastMode::Parquet,
             SchemaEvolutionCastMode::Strict => r#gen::SchemaEvolutionCastMode::Strict,
             SchemaEvolutionCastMode::RelaxedTimezone => {
                 r#gen::SchemaEvolutionCastMode::RelaxedTimezone
@@ -8088,12 +8076,7 @@ mod tests {
         for mode in [
             SchemaEvolutionCastMode::Strict,
             SchemaEvolutionCastMode::RelaxedTimezone,
-            SchemaEvolutionCastMode::Parquet {
-                binary_as_string: false,
-            },
-            SchemaEvolutionCastMode::Parquet {
-                binary_as_string: true,
-            },
+            SchemaEvolutionCastMode::Parquet,
         ] {
             let encoded = RemoteExecutionCodec::try_encode_schema_evolution_cast_mode(mode);
             assert_eq!(
@@ -8122,12 +8105,7 @@ mod tests {
             for cast_mode in [
                 SchemaEvolutionCastMode::Strict,
                 SchemaEvolutionCastMode::RelaxedTimezone,
-                SchemaEvolutionCastMode::Parquet {
-                    binary_as_string: false,
-                },
-                SchemaEvolutionCastMode::Parquet {
-                    binary_as_string: true,
-                },
+                SchemaEvolutionCastMode::Parquet,
             ] {
                 let adapter_factory =
                     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::with_cast_mode(
