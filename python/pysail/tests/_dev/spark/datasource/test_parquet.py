@@ -1401,6 +1401,45 @@ def test_parquet_merge_schema_decimal_precision(spark, tmp_path):
     assert df.orderBy("price").collect() == [(Decimal("11.11"),), (Decimal("12345678.90"),)]
 
 
+def test_parquet_merge_schema_interval_qualifiers(spark, tmp_path):
+    paths = []
+    for i, (day_time, year_month) in enumerate([("HOUR", "MONTH"), ("MINUTE", "YEAR")]):
+        path = str(tmp_path / str(i))
+        spark.sql(f"SELECT INTERVAL '2' {day_time} AS dt, INTERVAL '1' {year_month} AS ym").write.parquet(path)
+        paths.append(path)
+
+    df = spark.read.option("mergeSchema", True).parquet(*paths)
+    assert df.schema.simpleString() == "struct<dt:interval hour to minute,ym:interval year to month>"
+    assert df.selectExpr("dt", "EXTRACT(YEAR FROM ym) AS yr", "EXTRACT(MONTH FROM ym) AS mon").orderBy(
+        "yr"
+    ).collect() == [
+        (timedelta(hours=2), 0, 1),
+        (timedelta(minutes=2), 1, 0),
+    ]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Reads Spark interval qualifiers embedded in Arrow field metadata")
+def test_parquet_merge_schema_nested_interval_qualifiers(spark, tmp_path):
+    for i, qualifier in enumerate(["hour", "minute"]):
+        metadata = {
+            "SAIL::spark::interval": f'{{"unit":"dayTime","startField":"{qualifier}","endField":"{qualifier}"}}'
+        }
+        leaf = pa.field("value", pa.duration("us"), metadata=metadata)
+        schema = pa.schema([("s", pa.struct([leaf])), ("a", pa.list_(leaf)), ("m", pa.map_(pa.string(), leaf))])
+        value = timedelta(hours=1) if i == 0 else timedelta(minutes=2)
+        table = pa.Table.from_pylist([{"s": {"value": value}, "a": [value], "m": {"k": value}}], schema=schema)
+        pq.write_table(table, tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == (
+        "struct<s:struct<value:interval hour to minute>,a:array<interval hour to minute>,"
+        "m:map<string,interval hour to minute>>"
+    )
+    assert df.selectExpr("s.value", "a[0]", "m['k']").orderBy("value").collect() == [
+        (value, value, value) for value in [timedelta(minutes=2), timedelta(hours=1)]
+    ]
+
+
 def test_parquet_merge_schema_statistics_cache_field_case(spark, tmp_path):
     pq.write_table(pa.table({"id": [1]}), tmp_path / "a.parquet")
     pq.write_table(pa.table({"ID": [2]}), tmp_path / "b.parquet")

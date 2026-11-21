@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::parquet::metadata::{
@@ -30,7 +32,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
-use sail_common_datafusion::metadata::type_metadata;
+use sail_common_datafusion::metadata::{type_metadata, widest_interval_metadata};
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
     FIXED_BYTE_WIDTH_META_KEY, INTEGER_STORAGE_META_KEY, is_parquet_integer_target,
@@ -877,11 +879,29 @@ fn merge_parquet_field(
             );
         }
     };
-    Ok(Arc::new(
-        left.clone()
-            .with_data_type(ty)
-            .with_nullable(left.is_nullable() || right.is_nullable()),
-    ))
+    let mut field = left
+        .clone()
+        .with_data_type(ty)
+        .with_nullable(left.is_nullable() || right.is_nullable());
+    if matches!(
+        field.data_type(),
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        // Arrow stores Spark interval bounds in field metadata.
+        match widest_interval_metadata([(left, None), (right, None)])? {
+            Some(qualifier) => {
+                field
+                    .metadata_mut()
+                    .insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_owned(), qualifier);
+            }
+            None => {
+                field
+                    .metadata_mut()
+                    .remove(SAIL_SPARK_INTERVAL_METADATA_KEY);
+            }
+        }
+    }
+    Ok(Arc::new(field))
 }
 
 /// Retags producer-specific Arrow timezone labels to the Spark session timezone on timestamp
