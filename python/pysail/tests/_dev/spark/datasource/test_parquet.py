@@ -1342,6 +1342,31 @@ def test_parquet_merge_schema_nested_timestamp_timezones(spark, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_parquet_single_footer_ambiguous_field_projection(spark, tmp_path, case_sensitive):
+    pq.write_table(pa.table({"id": [1], "q": [10]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2], "q": [20], "Q": [30]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+        assert df.columns == ["id", "q"]
+        assert df.select("id").orderBy("id").collect() == [(1,), (2,)]
+        assert df.count() == 2
+        if case_sensitive:
+            assert df.select("q").orderBy("q").collect() == [(10,), (20,)]
+        else:
+            for projection in ["q", "count(q)"]:
+                with pytest.raises(
+                    Exception,
+                    match=r"Multiple physical fields match 'q'|FAILED_READ_FILE\.NO_HINT|Found duplicate field",
+                ):
+                    df.selectExpr(projection).collect()
+    finally:
+        spark.conf.set(key, previous)
+
+
 def test_parquet_single_footer_missing_required_fields(spark, tmp_path):
     required = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("q", pa.int64(), nullable=False)])
     pq.write_table(pa.table({"id": [1], "q": [42]}, schema=required), tmp_path / "a.parquet")

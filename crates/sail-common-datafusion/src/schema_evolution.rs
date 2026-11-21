@@ -280,28 +280,36 @@ fn create_schema_evolution_adapter(
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-    let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema, matching)?;
+    let column_mapping = create_column_mapping(
+        &logical_file_schema,
+        &physical_file_schema,
+        matching,
+        cast_mode,
+    )?;
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
         physical_file_schema,
         column_mapping,
-        default_values,
         matching,
         cast_mode,
     }))
 }
 
-type ColumnMapping = (Vec<Option<usize>>, Vec<Option<ScalarValue>>);
+#[derive(Debug, Clone)]
+enum ColumnMapping {
+    Physical(usize),
+    Missing(Option<ScalarValue>),
+    Ambiguous(Arc<DataFusionError>),
+}
 
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
     matching: StructFieldMatching,
-) -> Result<ColumnMapping> {
+    cast_mode: SchemaEvolutionCastMode,
+) -> Result<Vec<ColumnMapping>> {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
-    let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
         // Reader-generated positions have no Delta physical name or field ID.
@@ -316,15 +324,24 @@ fn create_column_mapping(
                         && field.try_extension_type::<RowNumber>().is_ok()
                 })
         } else {
-            find_matching_struct_field(physical_schema.fields(), logical_field, matching)?
+            match find_matching_struct_field(physical_schema.fields(), logical_field, matching) {
+                Ok(field) => field,
+                Err(error)
+                    if cast_mode == SchemaEvolutionCastMode::Parquet
+                        && matching == StructFieldMatching::CaseInsensitiveName =>
+                {
+                    // Spark resolves case-insensitive Parquet names only for requested fields.
+                    column_mapping.push(ColumnMapping::Ambiguous(Arc::new(error)));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
         };
         match physical_field {
             Some((physical_index, _)) => {
-                column_mapping.push(Some(physical_index));
-                default_values.push(None);
+                column_mapping.push(ColumnMapping::Physical(physical_index))
             }
             None => {
-                column_mapping.push(None);
                 let default_value = if let Some(value) = field_default(logical_field)? {
                     Some(value)
                 } else if logical_field.is_nullable() {
@@ -340,20 +357,19 @@ fn create_column_mapping(
                             .unwrap_or(ScalarValue::Null),
                     )
                 };
-                default_values.push(default_value);
+                column_mapping.push(ColumnMapping::Missing(default_value));
             }
         }
     }
 
-    Ok((column_mapping, default_values))
+    Ok(column_mapping)
 }
 
 #[derive(Debug, Clone)]
 struct SchemaEvolutionPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
-    column_mapping: Vec<Option<usize>>,
-    default_values: Vec<Option<ScalarValue>>,
+    column_mapping: Vec<ColumnMapping>,
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
 }
@@ -364,7 +380,6 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
             column_mapping: &self.column_mapping,
-            default_values: &self.default_values,
             matching: self.matching,
             cast_mode: self.cast_mode,
         };
@@ -391,8 +406,7 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
 struct SchemaEvolutionPhysicalExprRewriter<'a> {
     logical_file_schema: &'a Schema,
     physical_file_schema: &'a Schema,
-    column_mapping: &'a [Option<usize>],
-    default_values: &'a [Option<ScalarValue>],
+    column_mapping: &'a [ColumnMapping],
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
 }
@@ -415,7 +429,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         let Ok(index) = self.logical_file_schema.index_of(column.name()) else {
             return Ok(None);
         };
-        let Some(Some(physical_index)) = self.column_mapping.get(index) else {
+        let Some(ColumnMapping::Physical(physical_index)) = self.column_mapping.get(index) else {
             return Ok(None);
         };
         let mut logical = &self.logical_file_schema.fields()[index];
@@ -510,7 +524,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             Err(_) => return Ok(None),
         };
         let physical_field_index = match self.column_mapping.get(logical_field_index) {
-            Some(Some(index)) => *index,
+            Some(ColumnMapping::Physical(index)) => *index,
             _ => return Ok(None),
         };
         let physical_field = self.physical_file_schema.field(physical_field_index);
@@ -575,8 +589,8 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
 
         let logical_field = self.logical_file_schema.field(logical_field_index);
 
-        match self.column_mapping.get(logical_field_index) {
-            Some(Some(physical_index)) => {
+        match &self.column_mapping[logical_field_index] {
+            ColumnMapping::Physical(physical_index) => {
                 let physical_field = self.physical_file_schema.field(*physical_index);
                 self.handle_existing_column(
                     expr,
@@ -586,8 +600,8 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                     *physical_index,
                 )
             }
-            Some(None) => {
-                if let Some(Some(default_value)) = self.default_values.get(logical_field_index) {
+            ColumnMapping::Missing(default_value) => {
+                if let Some(default_value) = default_value {
                     if logical_field.data_type().is_nested()
                         && logical_field
                             .metadata()
@@ -610,10 +624,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                     )
                 }
             }
-            None => exec_err!(
-                "Column mapping not found for logical field index {}",
-                logical_field_index
-            ),
+            ColumnMapping::Ambiguous(error) => Err(DataFusionError::Shared(Arc::clone(error))),
         }
     }
 

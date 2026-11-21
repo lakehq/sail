@@ -481,13 +481,15 @@ impl ReadFormat for ParquetReadFormat {
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )?;
+        let mut ambiguous_indices = Vec::new();
         let fields = file_schema
             .fields()
             .iter()
-            .map(|field| {
+            .enumerate()
+            .map(|(index, field)| {
                 Ok(
-                    match find_matching_struct_field(physical.fields(), field, self.matching)? {
-                        Some((_, source))
+                    match find_matching_struct_field(physical.fields(), field, self.matching) {
+                        Ok(Some((_, source)))
                             if source.data_type().is_unsigned_integer()
                                 || (dictionary_value_type(source.data_type()).is_decimal()
                                     && is_parquet_integer_target(field.data_type()))
@@ -504,10 +506,15 @@ impl ReadFormat for ParquetReadFormat {
                         {
                             Arc::clone(source)
                         }
-                        Some((_, source)) if source.name() != field.name() => {
+                        Ok(Some((_, source))) if source.name() != field.name() => {
                             Arc::new(field.as_ref().clone().with_name(source.name()))
                         }
-                        _ => Arc::clone(field),
+                        Ok(_) => Arc::clone(field),
+                        Err(_) if self.matching == StructFieldMatching::CaseInsensitiveName => {
+                            ambiguous_indices.push(index);
+                            Arc::clone(field)
+                        }
+                        Err(error) => return Err(error),
                     },
                 )
             })
@@ -582,11 +589,16 @@ impl ReadFormat for ParquetReadFormat {
                 );
             }
         }
-        let ordering = if file_schema.fields() == stats_schema.fields() {
-            ordering_from_parquet_metadata(&metadata, &file_schema)?
-        } else {
-            None
-        };
+        // Exact-name footer statistics cannot describe an ambiguous case-insensitive match.
+        let ordering =
+            if ambiguous_indices.is_empty() && file_schema.fields() == stats_schema.fields() {
+                ordering_from_parquet_metadata(&metadata, &file_schema)?
+            } else {
+                None
+            };
+        for index in ambiguous_indices {
+            statistics.column_statistics[index] = ColumnStatistics::new_unknown();
+        }
         Ok(ListingFileMeta {
             statistics,
             ordering,
