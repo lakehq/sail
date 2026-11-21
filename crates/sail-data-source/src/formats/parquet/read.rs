@@ -13,7 +13,9 @@ use datafusion::datasource::physical_plan::parquet::{
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
-use datafusion::parquet::basic::{ConvertedType, Type as PhysicalType};
+use datafusion::parquet::basic::{
+    ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
+};
 use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, SchemaDescriptor};
 use datafusion_common::config::TableParquetOptions;
@@ -89,6 +91,10 @@ fn unannotated_integer(column: &ColumnDescriptor) -> Option<DataType> {
     }
 }
 
+fn is_nanos_timestamp(column: &ColumnDescriptor) -> bool {
+    matches!(column.logical_type_ref(), Some(LogicalType::Timestamp(ts)) if ts.unit == ParquetTimeUnit::NANOS)
+}
+
 /// Arrow lists and maps may rename or elide Parquet group wrappers. Both schemas
 /// retain the same depth-first leaf order, so each leaf consumes one descriptor.
 fn reconcile_parquet_field<'a>(
@@ -125,6 +131,20 @@ fn reconcile_parquet_field<'a>(
                     field.name()
                 )
             })?;
+            if is_nanos_timestamp(column)
+                && let DataType::Timestamp(_, zone) = data_type
+            {
+                // Arrow can apply a microsecond INT96 hint to an INT64 NANOS timestamp.
+                // Keep its actual unit and storage for raw BIGINT reads and timestamp validation.
+                let mut field = field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()));
+                field
+                    .metadata_mut()
+                    .insert(INTEGER_STORAGE_META_KEY.to_owned(), "INT64".to_owned());
+                return Ok(Arc::new(field));
+            }
             if hinted_integer_type(data_type)
                 && let Some(storage) = unannotated_integer(column)
             {
@@ -282,7 +302,10 @@ fn reconciled_read_schema(
             }
         }
     }
-    if !has_hints && !integer_roots.contains(&true) {
+    if !has_hints
+        && !integer_roots.contains(&true)
+        && !descriptor.columns().iter().any(|c| is_nanos_timestamp(c))
+    {
         return Ok(None);
     }
 

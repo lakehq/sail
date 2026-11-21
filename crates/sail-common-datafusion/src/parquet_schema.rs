@@ -6,7 +6,7 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, downcast_integer_array}
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DataType, Field, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimeUnit,
+    Int64Type, IntervalUnit, TimeUnit,
 };
 use datafusion_common::{Result, internal_err, plan_err};
 
@@ -179,7 +179,7 @@ pub fn validate_parquet_field(
             } else {
                 normalize_parquet_field(physical, None, false)
             };
-            if !parquet_primitive_type_compatible(actual.data_type(), expected) {
+            if !parquet_primitive_type_compatible(&actual, expected) {
                 return plan_err!(
                     "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
                      Parquet column `{path}`. Expected {expected}, actual Parquet type {}.",
@@ -237,6 +237,7 @@ pub fn parquet_temporal_storage_cast(source: &DataType, requested: &DataType) ->
     match (source, requested) {
         (Dictionary(_, values), _) => parquet_temporal_storage_cast(values, requested),
         (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32 | Time32(_), Date32)
+        | (Int32, Interval(IntervalUnit::YearMonth))
         | (Date32 | Time32(_), Int8 | Int16 | Int32 | Int64 | Float64) => Some(Int32),
         (Timestamp(_, _) | Time64(_), Int64) | (Int64, Duration(TimeUnit::Microsecond)) => {
             Some(Int64)
@@ -287,7 +288,8 @@ pub(crate) fn cast_parquet_integer(array: &dyn Array, requested: &DataType) -> R
     )
 }
 
-fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) -> bool {
+fn parquet_primitive_type_compatible(field: &Field, requested: &DataType) -> bool {
+    let physical = field.data_type();
     if physical == requested || parquet_integer_cast_wraps(physical, requested) {
         return true;
     }
@@ -337,8 +339,14 @@ fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) 
             *requested_precision,
             *requested_scale,
         ),
-        // INT96 carries no timezone marker, so the explicit schema determines the
-        // timestamp family. Spark permits the same reinterpretation for Parquet.
+        // Spark reads INT96 into a microsecond timestamp but rejects INT64 TIMESTAMP(NANOS).
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, _),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => field
+            .metadata()
+            .get(INTEGER_STORAGE_META_KEY)
+            .is_none_or(|ty| ty != "INT64"),
         (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => true,
         (DataType::Date32, DataType::Timestamp(_, None)) => true,
         (physical, requested) if is_string_type(physical) && is_string_type(requested) => true,

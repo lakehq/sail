@@ -67,6 +67,23 @@ def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path)
         _ = spark.read.parquet(path).schema
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_parquet_rejects_nanos_for_microsecond_timestamp(spark, tmp_path, explicit):
+    for i, unit in enumerate(["us", "ns"]):
+        value = pa.array([123456789], pa.timestamp(unit))
+        nested = pa.StructArray.from_arrays([value, pa.array([i])], names=["ts", "id"])
+        pq.write_table(pa.table({"ts": value, "nested": nested}), tmp_path / f"{i}.parquet", version="2.6")
+
+    reader = spark.read.option("mergeSchema", False)
+    if explicit:
+        reader = reader.schema("ts TIMESTAMP, nested STRUCT<ts:TIMESTAMP_NTZ,id:BIGINT>")
+    df = reader.parquet(str(tmp_path))
+    assert df.select("nested.id").orderBy("id").collect() == [(0,), (1,)]
+    for column in ["ts", "nested.ts"]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.select(column).collect()
+
+
 def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
     # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
     # column read as BinaryView must still reach the client as Spark binary.
@@ -403,6 +420,16 @@ def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_
     assert df.orderBy("ts").collect() == [
         Row(ts=-1),
         Row(ts=1704164645),
+    ]
+
+
+def test_parquet_explicit_year_month_interval_reads_int32_months(spark, tmp_path):
+    pq.write_table(pa.table({"v": pa.array([-13, None, 14], pa.int32())}), tmp_path / "months.parquet")
+    df = spark.read.schema("v INTERVAL YEAR TO MONTH").parquet(str(tmp_path))
+    assert df.selectExpr("CAST(v AS STRING) AS v").orderBy("v").collect() == [
+        (None,),
+        ("INTERVAL '-1-1' YEAR TO MONTH",),
+        ("INTERVAL '1-2' YEAR TO MONTH",),
     ]
 
 
