@@ -350,7 +350,7 @@ def test_sql_replace_keeps_the_unity_required_properties(
             )
         with pytest.raises(Exception, match=required):
             spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.checkpointPolicy' = 'classic')")
-        with pytest.raises(Exception, match="requires the table property delta.enableDeletionVectors=true"):
+        with pytest.raises(Exception, match=r"requires the table property delta\.enableDeletionVectors=true"):
             spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('delta.enableDeletionVectors')")
         spark.sql(
             f"CREATE OR REPLACE TABLE {table} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"
@@ -499,7 +499,7 @@ def test_replace_as_select_replaces_the_properties_in_the_data_commit(
         assert add["baseRowId"] == high_water_mark + 4
 
         if unity_uses_delta_api:
-            with pytest.raises(Exception, match="requires the table property delta.checkpointPolicy=v2"):
+            with pytest.raises(Exception, match=r"requires the table property delta\.checkpointPolicy=v2"):
                 spark.sql(
                     f"CREATE OR REPLACE TABLE {table} USING delta "
                     "TBLPROPERTIES ('delta.checkpointPolicy' = 'classic') AS SELECT CAST(30 AS BIGINT) AS id"
@@ -559,7 +559,7 @@ def test_replace_as_select_applies_the_column_mapping_mode(spark: SparkSession) 
             (metadata,) = _actions(actions, "metaData")
             mapping = _column_mapping(json.loads(metadata["schemaString"])["fields"])
             adds = _actions(actions, "add")
-            assert len(adds) == 2  # noqa: PLR2004
+            assert len(adds) == 2
             if mode is None:
                 assert not any(key.startswith("delta.columnMapping.") for key in metadata["configuration"])
                 assert all(physical is None for physical, _, _ in mapping.values())

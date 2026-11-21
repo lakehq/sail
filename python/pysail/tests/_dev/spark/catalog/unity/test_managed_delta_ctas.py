@@ -96,7 +96,7 @@ def _assert_not_registered(spark: SparkSession, unity_rest_url: str, table: str)
     assert not spark.catalog.tableExists(table)
     full_name = _qualified_table_name(table)
     response = requests.get(f"{unity_rest_url}/tables/{quote(full_name, safe='')}", timeout=10)
-    assert response.status_code == 404, response.text  # noqa: PLR2004
+    assert response.status_code == 404, response.text
 
 
 def test_ctas_creates_managed_table_with_data_in_version_zero(
@@ -118,7 +118,7 @@ def test_ctas_creates_managed_table_with_data_in_version_zero(
     # The table takes commits through the catalog after it is created.
     spark.sql(f"INSERT INTO {table} VALUES (3, 'three')")
     assert _delta_api_table(unity_rest_url, table)["latest-table-version"] == 1
-    assert spark.sql(f"SELECT count(*) FROM {table}").collect()[0][0] == 3  # noqa: PLR2004
+    assert spark.sql(f"SELECT count(*) FROM {table}").collect()[0][0] == 3
 
 
 def test_ctas_with_row_tracking_registers_the_row_id_high_water_mark(
@@ -132,7 +132,7 @@ def test_ctas_with_row_tracking_registers_the_row_id_high_water_mark(
     actions = _assert_created_with_data(spark, unity_rest_url, table, 3)
     domains = {domain["domain"]: domain for domain in _actions(actions, "domainMetadata")}
     high_water_mark = json.loads(domains["delta.rowTracking"]["configuration"])["rowIdHighWaterMark"]
-    assert high_water_mark == 2  # noqa: PLR2004
+    assert high_water_mark == 2
     assert sorted(add["baseRowId"] for add in _actions(actions, "add"))[0] == 0
     properties = _unity_table_info(unity_rest_url, table)["properties"]
     assert properties["delta.rowTracking.rowIdHighWaterMark"] == str(high_water_mark)
@@ -189,7 +189,7 @@ def _register_create_table_during_query(spark: SparkSession, unity_rest_url: str
 
     def create_table(value: int) -> int:
         response = requests.get(f"{unity_rest_url}/tables/{full_name}", timeout=10)
-        if response.status_code == 404:  # noqa: PLR2004
+        if response.status_code == 404:
             _create_unity_managed_delta_table_with_delta_api(table, unity_rest_url, [_unity_column("id", "LONG", 0)])
         return value
 
@@ -220,7 +220,7 @@ def test_ctas_fails_when_the_table_is_created_during_the_write(
     table = f"{database}.t"
     function = _register_create_table_during_query(spark, unity_rest_url, table)
     # The data is written before the catalog refuses to register the table.
-    with pytest.raises(Exception, match="(?i)already exists"):
+    with pytest.raises(Exception, match=r"(?i)already exists"):
         spark.sql(f"CREATE TABLE {table} USING delta AS SELECT {function}(id) AS id FROM range(3)")
     _assert_concurrently_created(spark, unity_rest_url, table)
 
