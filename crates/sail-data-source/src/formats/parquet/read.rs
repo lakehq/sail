@@ -33,8 +33,9 @@ use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::metadata::type_metadata;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
-    INTEGER_STORAGE_META_KEY, is_parquet_integer_target, normalize_parquet_field,
-    parquet_integer_cast_wraps, parquet_temporal_storage_cast, validate_parquet_field,
+    FIXED_BYTE_WIDTH_META_KEY, INTEGER_STORAGE_META_KEY, is_parquet_integer_target,
+    normalize_parquet_field, parquet_integer_cast_wraps, parquet_temporal_storage_cast,
+    validate_parquet_field,
 };
 use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
 use sail_common_datafusion::schema::nullable_query_field;
@@ -124,7 +125,7 @@ fn is_nanos_timestamp(column: &ColumnDescriptor) -> bool {
 fn reconcile_parquet_field<'a>(
     field: &Arc<Field>,
     columns: &mut impl Iterator<Item = &'a ColumnDescPtr>,
-    for_integer_read: bool,
+    for_storage_read: bool,
     durations: DurationHints,
 ) -> Result<Arc<Field>> {
     let data_type = dictionary_value_type(field.data_type());
@@ -132,27 +133,27 @@ fn reconcile_parquet_field<'a>(
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|f| reconcile_parquet_field(f, columns, for_integer_read, durations))
+                .map(|f| reconcile_parquet_field(f, columns, for_storage_read, durations))
                 .collect::<Result<Fields>>()?,
         ),
         DataType::List(child) => DataType::List(reconcile_parquet_field(
             child,
             columns,
-            for_integer_read,
+            for_storage_read,
             durations,
         )?),
         DataType::LargeList(child) => DataType::LargeList(reconcile_parquet_field(
             child,
             columns,
-            for_integer_read,
+            for_storage_read,
             durations,
         )?),
         DataType::FixedSizeList(child, size) => DataType::FixedSizeList(
-            reconcile_parquet_field(child, columns, for_integer_read, durations)?,
+            reconcile_parquet_field(child, columns, for_storage_read, durations)?,
             *size,
         ),
         DataType::Map(entries, sorted) => DataType::Map(
-            reconcile_parquet_field(entries, columns, for_integer_read, durations)?,
+            reconcile_parquet_field(entries, columns, for_storage_read, durations)?,
             *sorted,
         ),
         _ => {
@@ -183,15 +184,25 @@ fn reconcile_parquet_field<'a>(
             }
             match data_type {
                 DataType::Date64
-                    if for_integer_read && column.physical_type() == PhysicalType::INT32 =>
+                    if for_storage_read && column.physical_type() == PhysicalType::INT32 =>
                 {
                     DataType::Date32
                 }
-                ty if for_integer_read
-                    && (matches!(ty, DataType::Timestamp(_, _)) || ty.is_decimal()) =>
+                ty if for_storage_read
+                    && (matches!(ty, DataType::Timestamp(_, _) | DataType::Null)
+                        || ty.is_decimal()) =>
                 {
                     // The same Arrow type can originate from different Parquet physical types.
                     let mut field = field.as_ref().clone().with_data_type(data_type.clone());
+                    field.metadata_mut().remove(FIXED_BYTE_WIDTH_META_KEY);
+                    if ty.is_decimal()
+                        && column.physical_type() == PhysicalType::FIXED_LEN_BYTE_ARRAY
+                    {
+                        field.metadata_mut().insert(
+                            FIXED_BYTE_WIDTH_META_KEY.to_owned(),
+                            column.type_length().to_string(),
+                        );
+                    }
                     match column.physical_type() {
                         ty @ (PhysicalType::INT32 | PhysicalType::INT64) => {
                             field
@@ -310,11 +321,11 @@ fn temporal_statistics_types(
 }
 
 /// Use the descriptor for unannotated integer leaves, independent of projection.
-/// Projected integer readers also need the backing type of annotated timestamps and decimals.
+/// Projected storage reads also need the backing type of annotated timestamps, decimals and nulls.
 fn reconciled_read_schema(
     metadata: &FileMetaData,
     schema: &Schema,
-    integer_fields: &[Arc<Field>],
+    storage_fields: &[Arc<Field>],
     matching: StructFieldMatching,
     durations: DurationHints,
 ) -> Result<Option<Schema>> {
@@ -325,22 +336,26 @@ fn reconciled_read_schema(
             .columns()
             .iter()
             .any(|column| unannotated_integer(column).is_some());
-    let mut integer_roots = vec![false; schema.fields().len()];
-    if !integer_fields.is_empty()
+    let mut storage_roots = vec![false; schema.fields().len()];
+    if !storage_fields.is_empty()
         && leaves.iter().any(|f| {
             let ty = dictionary_value_type(f.data_type());
-            ty.is_decimal() || matches!(ty, DataType::Timestamp(_, _) | DataType::Date64)
+            ty.is_decimal()
+                || matches!(
+                    ty,
+                    DataType::Timestamp(_, _) | DataType::Date64 | DataType::Null
+                )
         })
     {
-        for field in integer_fields {
+        for field in storage_fields {
             if let Some((index, _)) = find_matching_struct_field(schema.fields(), field, matching)?
             {
-                integer_roots[index] = true;
+                storage_roots[index] = true;
             }
         }
     }
     if !has_hints
-        && !integer_roots.contains(&true)
+        && !storage_roots.contains(&true)
         && !descriptor.columns().iter().any(|c| is_nanos_timestamp(c))
     {
         return Ok(None);
@@ -350,9 +365,9 @@ fn reconciled_read_schema(
     let fields = schema
         .fields()
         .iter()
-        .zip(integer_roots)
-        .map(|(field, integer_read)| {
-            reconcile_parquet_field(field, &mut columns, integer_read, durations)
+        .zip(storage_roots)
+        .map(|(field, storage_read)| {
+            reconcile_parquet_field(field, &mut columns, storage_read, durations)
         })
         .collect::<Result<Fields>>()?;
     Ok((fields != schema.fields)
@@ -562,7 +577,8 @@ impl ReadFormat for ParquetReadFormat {
                         Ok(Some((_, source)))
                             if source.data_type().is_unsigned_integer()
                                 || (dictionary_value_type(source.data_type()).is_decimal()
-                                    && is_parquet_integer_target(field.data_type()))
+                                    && (is_parquet_integer_target(field.data_type())
+                                        || field.data_type().is_binary()))
                                 || temporal_statistics_types(
                                     source,
                                     field.data_type(),
@@ -603,9 +619,9 @@ impl ReadFormat for ParquetReadFormat {
             .zip(statistics.column_statistics.iter_mut())
         {
             if dictionary_value_type(source.data_type()).is_decimal()
-                && is_parquet_integer_target(field.data_type())
+                && (is_parquet_integer_target(field.data_type()) || field.data_type().is_binary())
             {
-                // Footer bounds describe scaled decimal values. The scan returns unscaled integers.
+                // Footer bounds use signed decimal ordering. Raw bytes use unsigned lexicographic ordering.
                 *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
             } else if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
                 // Wrapping can reorder values and map different source values to the same integer.
@@ -705,13 +721,15 @@ impl ReadFormat for ParquetReadFormat {
         );
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 
-        let integer_fields: Fields = projected
+        let storage_fields: Fields = projected
             .iter()
             .filter(|field| {
                 Schema::new([Arc::clone(field)])
                     .flattened_fields()
                     .iter()
-                    .any(|leaf| is_parquet_integer_target(leaf.data_type()))
+                    .any(|leaf| {
+                        is_parquet_integer_target(leaf.data_type()) || leaf.data_type().is_binary()
+                    })
             })
             .cloned()
             .collect();
@@ -734,7 +752,7 @@ impl ReadFormat for ParquetReadFormat {
                 if let Some(schema) = reconciled_read_schema(
                     metadata,
                     &physical,
-                    &integer_fields,
+                    &storage_fields,
                     self.matching,
                     DurationHints::Storage,
                 )? {

@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, downcast_integer_array};
-use datafusion::arrow::compute::take;
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, FixedSizeBinaryBuilder, downcast_integer_array,
+};
+use datafusion::arrow::compute::{cast, take};
 use datafusion::arrow::datatypes::{
-    DECIMAL128_MAX_PRECISION, DataType, Field, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, IntervalUnit, TimeUnit,
+    DECIMAL128_MAX_PRECISION, DataType, Decimal256Type, Field, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, IntervalUnit, TimeUnit,
 };
 use datafusion_common::{Result, internal_err, plan_err};
 
@@ -15,6 +17,7 @@ use crate::uuid::is_uuid_field;
 use crate::variant::is_variant_storage_field;
 
 pub const INTEGER_STORAGE_META_KEY: &str = "sail.parquet.integer_storage";
+pub const FIXED_BYTE_WIDTH_META_KEY: &str = "sail.parquet.fixed_byte_width";
 
 /// Canonical Arrow representations for Spark SQL values. Parquet stores lists and
 /// byte arrays independently of the offset widths in the embedded Arrow schema.
@@ -158,7 +161,7 @@ pub fn validate_parquet_field(
                         .get(INTEGER_STORAGE_META_KEY)
                         .is_some_and(|ty| ty == "INT64")) => {}
         (actual, expected)
-            if actual.is_decimal()
+            if (actual.is_decimal() || actual.is_null())
                 && match physical
                     .metadata()
                     .get(INTEGER_STORAGE_META_KEY)
@@ -168,6 +171,7 @@ pub fn validate_parquet_field(
                     Some("INT64") => *expected == DataType::Int64,
                     _ => false,
                 } => {}
+        (_, expected) if fixed_decimal_byte_width(physical, expected).is_some() => {}
         // BYTE_ARRAY supplies either the raw bytes or their UTF-8 interpretation.
         // FIXED_LEN_BYTE_ARRAY only supplies binary data. Check this before normalization.
         (actual, expected) if is_parquet_byte_array(actual) && is_parquet_byte_array(expected) => {}
@@ -189,6 +193,49 @@ pub fn validate_parquet_field(
         }
     }
     Ok(())
+}
+
+pub(crate) fn fixed_decimal_byte_width(source: &Field, requested: &DataType) -> Option<i32> {
+    if !source.data_type().is_decimal() || !requested.is_binary() {
+        return None;
+    }
+    source
+        .metadata()
+        .get(FIXED_BYTE_WIDTH_META_KEY)?
+        .parse::<i32>()
+        .ok()
+        .filter(|width| *width > 0)
+}
+
+/// Restore the signed, big-endian bytes of a fixed-length Parquet decimal.
+pub(crate) fn fixed_decimal_bytes(
+    source: &ArrayRef,
+    width: i32,
+    requested: &DataType,
+) -> Result<ArrayRef> {
+    let (precision, scale) = match *source.data_type() {
+        DataType::Decimal32(p, s)
+        | DataType::Decimal64(p, s)
+        | DataType::Decimal128(p, s)
+        | DataType::Decimal256(p, s) => (p, s),
+        ref ty => return internal_err!("Expected a decimal, got {ty}"),
+    };
+    let decimal = cast(source, &DataType::Decimal256(precision, scale))?;
+    let mut bytes = vec![0; width as usize];
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(source.len(), width);
+    for value in decimal.as_primitive::<Decimal256Type>() {
+        if let Some(value) = value {
+            let value = value.to_be_bytes();
+            let keep = bytes.len().min(value.len());
+            let (extension, digits) = bytes.split_at_mut(width as usize - keep);
+            extension.fill(if value[0] & 0x80 == 0 { 0 } else { 0xff });
+            digits.copy_from_slice(&value[value.len() - keep..]);
+            builder.append_value(&bytes)?;
+        } else {
+            builder.append_null();
+        }
+    }
+    Ok(cast(&builder.finish(), requested)?)
 }
 
 pub fn is_parquet_integer_target(ty: &DataType) -> bool {

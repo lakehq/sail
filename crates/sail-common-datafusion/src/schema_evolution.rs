@@ -25,8 +25,9 @@ use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
 use crate::parquet_schema::{
-    cast_parquet_integer, is_parquet_integer_target, parquet_integer_cast_wraps,
-    parquet_temporal_storage_cast, parquet_unscaled_integer, validate_parquet_field,
+    cast_parquet_integer, fixed_decimal_byte_width, fixed_decimal_bytes, is_parquet_integer_target,
+    parquet_integer_cast_wraps, parquet_temporal_storage_cast, parquet_unscaled_integer,
+    validate_parquet_field,
 };
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
@@ -795,7 +796,8 @@ fn can_cast_field_with_schema_evolution(
 
     if cast_mode == SchemaEvolutionCastMode::Parquet
         && (parquet_temporal_storage_cast(source.data_type(), target.data_type()).is_some()
-            || (source.data_type().is_decimal() && is_parquet_integer_target(target.data_type())))
+            || (source.data_type().is_decimal() && is_parquet_integer_target(target.data_type()))
+            || fixed_decimal_byte_width(source, target.data_type()).is_some())
     {
         return Ok(true);
     }
@@ -1163,6 +1165,7 @@ impl SchemaEvolutionCastColumnExpr {
     fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
         cast_array_with_schema_evolution_inner(
             array,
+            Some(&self.input_field),
             self.target_field.as_ref(),
             &self.cast_options,
             self.matching,
@@ -1239,6 +1242,7 @@ pub fn cast_array_with_schema_evolution(
 ) -> Result<ArrayRef> {
     cast_array_with_schema_evolution_inner(
         source,
+        None,
         target_field,
         cast_options,
         matching,
@@ -1254,6 +1258,7 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
 ) -> Result<ArrayRef> {
     cast_array_with_schema_evolution_inner(
         source,
+        None,
         target_field,
         cast_options,
         matching,
@@ -1263,6 +1268,7 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
 
 fn cast_array_with_schema_evolution_inner(
     source: &ArrayRef,
+    source_field: Option<&Field>,
     target_field: &Field,
     cast_options: &CastOptions,
     matching: StructFieldMatching,
@@ -1277,12 +1283,20 @@ fn cast_array_with_schema_evolution_inner(
     }
 
     if cast_mode == SchemaEvolutionCastMode::Parquet
+        && let Some(width) =
+            source_field.and_then(|field| fixed_decimal_byte_width(field, target_field.data_type()))
+    {
+        return fixed_decimal_bytes(source, width, target_field.data_type());
+    }
+
+    if cast_mode == SchemaEvolutionCastMode::Parquet
         && source.data_type().is_decimal()
         && is_parquet_integer_target(target_field.data_type())
     {
         let integer = parquet_unscaled_integer(source, target_field.data_type())?;
         return cast_array_with_schema_evolution_inner(
             &integer,
+            None,
             target_field,
             cast_options,
             matching,
@@ -1344,6 +1358,12 @@ fn cast_array_with_schema_evolution_inner(
         _ => None,
     };
     let source = offset_cast.as_ref().unwrap_or(source);
+    let element_field = match source.data_type() {
+        DataType::List(element)
+        | DataType::LargeList(element)
+        | DataType::FixedSizeList(element, _) => Some(element.as_ref()),
+        _ => None,
+    };
 
     match target_field.data_type() {
         DataType::Struct(target_fields) => cast_struct_array_with_schema_evolution(
@@ -1362,6 +1382,7 @@ fn cast_array_with_schema_evolution_inner(
             };
             let casted_values = cast_array_with_schema_evolution_inner(
                 source_list.values(),
+                element_field,
                 target_elem.as_ref(),
                 cast_options,
                 matching,
@@ -1383,6 +1404,7 @@ fn cast_array_with_schema_evolution_inner(
             };
             let casted_values = cast_array_with_schema_evolution_inner(
                 source_list.values(),
+                element_field,
                 target_elem.as_ref(),
                 cast_options,
                 matching,
@@ -1412,6 +1434,7 @@ fn cast_array_with_schema_evolution_inner(
             }
             let casted_values = cast_array_with_schema_evolution_inner(
                 source_list.values(),
+                element_field,
                 target_elem.as_ref(),
                 cast_options,
                 matching,
@@ -1453,6 +1476,7 @@ fn cast_array_with_schema_evolution_inner(
                 ) {
                     Some(i) => kv_arrays.push(cast_array_with_schema_evolution_inner(
                         source_map.entries().column(i),
+                        Some(&source_map.entries().fields()[i]),
                         target_child.as_ref(),
                         cast_options,
                         matching,
@@ -1553,9 +1577,10 @@ fn cast_struct_array_to_fields(
     for target_child in target_fields {
         fields.push(Arc::clone(target_child));
         match find_matching_struct_field(source_struct.fields(), target_child, matching)? {
-            Some((source_index, _)) => {
+            Some((source_index, source_child)) => {
                 arrays.push(cast_array_with_schema_evolution_inner(
                     source_struct.column(source_index),
+                    Some(source_child),
                     target_child.as_ref(),
                     cast_options,
                     matching,

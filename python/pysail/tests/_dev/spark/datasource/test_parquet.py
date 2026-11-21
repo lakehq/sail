@@ -402,6 +402,31 @@ def test_parquet_integer_backed_decimals_read_as_unscaled_integers(spark, tmp_pa
         spark.read.option("mergeSchema", False).parquet(str(tmp_path)).collect()
 
 
+def test_parquet_requested_integer_from_null_column(spark, tmp_path):
+    pq.write_table(pa.table({"v": pa.array([7], pa.int32())}), tmp_path / "a.parquet")
+    path = tmp_path / "b.parquet"
+    pq.write_table(pa.table({"v": pa.nulls(2)}), path)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("v").collect() == [(None,), (None,), (7,)]
+    assert df.where("v IS NULL").count() == 2
+    assert df.selectExpr("count(v)", "min(v)").collect() == [(1, 7)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema("v STRING").parquet(str(path)).collect()
+
+
+@pytest.mark.parametrize("use_dictionary", [True, False])
+def test_parquet_requested_binary_from_decimal(spark, tmp_path, use_dictionary):
+    path = tmp_path / "decimal.parquet"
+    values = pa.array([Decimal("-1.00"), Decimal("1.00"), None], pa.decimal128(7, 2))
+    items = pa.ListArray.from_arrays([0, 1, 2, 3], values)
+    pq.write_table(pa.table({"v": values, "items": items}), path, use_dictionary=use_dictionary)
+    df = spark.read.schema("v BINARY, items ARRAY<BINARY>").parquet(str(path))
+    assert df.selectExpr("hex(v)").collect() == [("FFFFFF9C",), ("00000064",), (None,)]
+    assert df.selectExpr("hex(items[0])").collect() == [("FFFFFF9C",), ("00000064",), (None,)]
+    assert df.selectExpr("hex(min(v))", "hex(max(v))", "count(v)").collect() == [("00000064", "FFFFFF9C", 2)]
+    assert df.where("v > unhex('7f')").selectExpr("hex(v)").collect() == [("FFFFFF9C",)]
+
+
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
 def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_path, unit):
     # The footer declares a plain INT64. Spark reads its stored value for every Arrow timestamp hint.
