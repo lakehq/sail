@@ -43,7 +43,7 @@ pub async fn load_parquet_scan_metadata(
         metadata_cache,
         metadata_size_hint,
         concurrency,
-        |_| Ok(()),
+        |_, _| Ok(()),
     )
     .await
 }
@@ -55,7 +55,7 @@ pub async fn load_parquet_scan_metadata_with_validation(
     metadata_cache: &Arc<FileMetadataCache>,
     metadata_size_hint: Option<usize>,
     concurrency: usize,
-    validate: impl Fn(&FileMetaData) -> Result<()> + Sync,
+    validate: impl Fn(&mut PartitionedFile, &FileMetaData) -> Result<()> + Sync,
 ) -> Result<Vec<FileGroup>> {
     let validate = &validate;
     let (mut files, statistics): (Vec<_>, Vec<_>) = file_groups
@@ -73,7 +73,7 @@ pub async fn load_parquet_scan_metadata_with_validation(
                 .with_file_metadata_cache(Some(Arc::clone(metadata_cache)))
                 .fetch_metadata()
                 .await?;
-            validate(metadata.file_metadata())?;
+            validate(file, metadata.file_metadata())?;
             let row_groups = metadata
                 .row_groups()
                 .iter()

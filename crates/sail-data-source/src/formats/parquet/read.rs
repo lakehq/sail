@@ -12,21 +12,24 @@ use datafusion::datasource::physical_plan::parquet::{
     CachedParquetFileReaderFactory, Int96Coercer,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::parquet::arrow::parquet_to_arrow_schema;
-use datafusion::parquet::basic::Type as PhysicalType;
+use datafusion::parquet::arrow::{ProjectionMask, parquet_to_arrow_schema};
+use datafusion::parquet::basic::{ConvertedType, Type as PhysicalType};
 use datafusion::parquet::file::metadata::FileMetaData;
-use datafusion::parquet::schema::types::SchemaDescriptor;
+use datafusion::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, SchemaDescriptor};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, plan_err};
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, internal_datafusion_err, plan_err,
+};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
-    normalize_parquet_field, parquet_integer_cast_wraps, validate_parquet_field,
+    INTEGER_STORAGE_META_KEY, is_parquet_integer_target, normalize_parquet_field,
+    parquet_integer_cast_wraps, parquet_temporal_storage_cast, validate_parquet_field,
 };
 use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
 use sail_common_datafusion::schema::nullable_query_field;
@@ -56,39 +59,86 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     }
 }
 
-/// An Arrow timestamp in seconds can be stored as an unannotated INT64 with
-/// the timestamp type recorded only in the embedded Arrow schema. Spark reads
-/// these leaves as longs, including inside structs, lists, and maps.
-fn reinterpret_second_timestamps_as_int64(field: &Arc<Field>, physical: &Field) -> Arc<Field> {
-    let ty = match (field.data_type(), physical.data_type()) {
-        (DataType::Timestamp(TimeUnit::Second, _), DataType::Int64) => DataType::Int64,
-        (DataType::Struct(fields), DataType::Struct(actual)) => {
-            DataType::Struct(reconcile_parquet_fields(fields, actual))
-        }
-        (DataType::List(child), DataType::List(actual)) => {
-            DataType::List(reinterpret_second_timestamps_as_int64(child, actual))
-        }
-        (DataType::LargeList(child), DataType::List(actual)) => {
-            DataType::LargeList(reinterpret_second_timestamps_as_int64(child, actual))
-        }
-        (DataType::FixedSizeList(child, size), DataType::List(actual)) => {
-            DataType::FixedSizeList(reinterpret_second_timestamps_as_int64(child, actual), *size)
-        }
-        (DataType::Map(entries, sorted), DataType::Map(actual, _)) => DataType::Map(
-            reinterpret_second_timestamps_as_int64(entries, actual),
-            *sorted,
-        ),
-        _ => return Arc::clone(field),
-    };
-    Arc::new(field.as_ref().clone().with_data_type(ty))
+fn dictionary_value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        other => other,
+    }
 }
 
-fn reconcile_parquet_fields(fields: &Fields, physical: &Fields) -> Fields {
-    fields
-        .iter()
-        .zip(physical)
-        .map(|(field, actual)| reinterpret_second_timestamps_as_int64(field, actual))
-        .collect()
+fn is_unannotated_int64(column: &ColumnDescriptor) -> bool {
+    column.physical_type() == PhysicalType::INT64
+        && column.logical_type_ref().is_none()
+        && column.converted_type() == ConvertedType::NONE
+}
+
+/// Arrow lists and maps may rename or elide Parquet group wrappers. Both schemas
+/// retain the same depth-first leaf order, so each leaf consumes one descriptor.
+fn reconcile_parquet_field<'a>(
+    field: &Arc<Field>,
+    columns: &mut impl Iterator<Item = &'a ColumnDescPtr>,
+    for_integer_read: bool,
+) -> Result<Arc<Field>> {
+    let data_type = dictionary_value_type(field.data_type());
+    let ty = match data_type {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| reconcile_parquet_field(f, columns, for_integer_read))
+                .collect::<Result<Fields>>()?,
+        ),
+        DataType::List(child) => {
+            DataType::List(reconcile_parquet_field(child, columns, for_integer_read)?)
+        }
+        DataType::LargeList(child) => {
+            DataType::LargeList(reconcile_parquet_field(child, columns, for_integer_read)?)
+        }
+        DataType::FixedSizeList(child, size) => DataType::FixedSizeList(
+            reconcile_parquet_field(child, columns, for_integer_read)?,
+            *size,
+        ),
+        DataType::Map(entries, sorted) => DataType::Map(
+            reconcile_parquet_field(entries, columns, for_integer_read)?,
+            *sorted,
+        ),
+        _ => {
+            let column = columns.next().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Missing Parquet descriptor for Arrow field {}",
+                    field.name()
+                )
+            })?;
+            match data_type {
+                DataType::Timestamp(_, _) | DataType::Date64 if is_unannotated_int64(column) => {
+                    DataType::Int64
+                }
+                DataType::Date64
+                    if for_integer_read && column.physical_type() == PhysicalType::INT32 =>
+                {
+                    DataType::Date32
+                }
+                ty if for_integer_read
+                    && (matches!(ty, DataType::Timestamp(_, _)) || ty.is_decimal()) =>
+                {
+                    // The same Arrow type can originate from different Parquet physical types.
+                    let mut field = field.as_ref().clone().with_data_type(data_type.clone());
+                    match column.physical_type() {
+                        ty @ (PhysicalType::INT32 | PhysicalType::INT64) => {
+                            field
+                                .metadata_mut()
+                                .insert(INTEGER_STORAGE_META_KEY.to_owned(), ty.to_string());
+                        }
+                        _ => {
+                            field.metadata_mut().remove(INTEGER_STORAGE_META_KEY);
+                        }
+                    }
+                    return Ok(Arc::new(field));
+                }
+                _ => return Ok(Arc::clone(field)),
+            }
+        }
+    };
+    Ok(Arc::new(field.as_ref().clone().with_data_type(ty)))
 }
 
 /// Spark reads INT96 as TIMESTAMP whatever the `ARROW:schema` hint says, while `Int96Coercer`
@@ -152,17 +202,94 @@ fn parquet_file_schema(
         ),
         None => schema,
     };
-    if !schema
-        .flattened_fields()
+    let descriptor = file_metadata.schema_descr();
+    if !descriptor
+        .columns()
         .iter()
-        .any(|field| matches!(field.data_type(), DataType::Timestamp(TimeUnit::Second, _)))
+        .any(|column| is_unannotated_int64(column))
+        || !schema.flattened_fields().iter().any(|field| {
+            matches!(
+                dictionary_value_type(field.data_type()),
+                DataType::Timestamp(_, _) | DataType::Date64
+            )
+        })
     {
         return Ok(schema);
     }
-    // Only seconds timestamps need a comparison with the schema without Arrow hints.
-    let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
-    let fields = reconcile_parquet_fields(schema.fields(), physical.fields());
+    let mut columns = descriptor.columns().iter();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| reconcile_parquet_field(field, &mut columns, false))
+        .collect::<Result<Fields>>()?;
     Ok(Schema::new_with_metadata(fields, schema.metadata))
+}
+
+/// Return the logical type represented by the footer statistics and its integer storage.
+fn temporal_statistics_types(
+    source: &Field,
+    requested: &DataType,
+    descriptor: &SchemaDescriptor,
+) -> Option<(DataType, DataType)> {
+    let ty = dictionary_value_type(source.data_type());
+    if ty == &DataType::Date64 && requested.is_numeric() {
+        let column = descriptor
+            .columns()
+            .iter()
+            .find(|c| c.path().parts().len() == 1 && c.name() == source.name())?;
+        // Arrow represents a DATE as milliseconds when a Date64 hint is present.
+        // An unannotated INT64 carrying the same hint retains all its raw ticks.
+        return match column.physical_type() {
+            PhysicalType::INT32 => parquet_temporal_storage_cast(&DataType::Date32, requested)
+                .map(|storage| (DataType::Date32, storage)),
+            PhysicalType::INT64 if requested == &DataType::Int64 => {
+                Some((DataType::Int64, DataType::Int64))
+            }
+            _ => None,
+        };
+    }
+    parquet_temporal_storage_cast(ty, requested).map(|storage| (ty.clone(), storage))
+}
+
+/// Prepare just the decoder columns whose requested integers may refer to raw temporal values.
+fn integer_read_schema(
+    metadata: &FileMetaData,
+    schema: &Schema,
+    requested: &Fields,
+    matching: StructFieldMatching,
+) -> Result<Option<Schema>> {
+    let mut candidates = Vec::new();
+    for field in requested {
+        if let Some((index, source)) = find_matching_struct_field(schema.fields(), field, matching)?
+            && Schema::new([Arc::clone(source)])
+                .flattened_fields()
+                .iter()
+                .any(|leaf| {
+                    let ty = dictionary_value_type(leaf.data_type());
+                    ty.is_decimal() || matches!(ty, DataType::Timestamp(_, _) | DataType::Date64)
+                })
+        {
+            candidates.push(index);
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    let descriptor = metadata.schema_descr();
+    let mask = ProjectionMask::roots(descriptor, candidates.iter().copied());
+    let mut columns = descriptor
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, column)| mask.leaf_included(i).then_some(column));
+    let mut fields = schema.fields().to_vec();
+    for index in candidates {
+        fields[index] = reconcile_parquet_field(&fields[index], &mut columns, true)?;
+    }
+    Ok((fields.as_slice() != schema.fields().as_ref())
+        .then(|| Schema::new_with_metadata(fields, schema.metadata.clone())))
 }
 
 #[async_trait::async_trait]
@@ -362,6 +489,14 @@ impl ReadFormat for ParquetReadFormat {
                     match find_matching_struct_field(physical.fields(), field, self.matching)? {
                         Some((_, source))
                             if source.data_type().is_unsigned_integer()
+                                || (dictionary_value_type(source.data_type()).is_decimal()
+                                    && is_parquet_integer_target(field.data_type()))
+                                || temporal_statistics_types(
+                                    source,
+                                    field.data_type(),
+                                    file_metadata.schema_descr(),
+                                )
+                                .is_some()
                                 || parquet_integer_cast_wraps(
                                     source.data_type(),
                                     field.data_type(),
@@ -390,9 +525,31 @@ impl ReadFormat for ParquetReadFormat {
             .zip(stats_schema.fields())
             .zip(statistics.column_statistics.iter_mut())
         {
-            if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
+            if dictionary_value_type(source.data_type()).is_decimal()
+                && is_parquet_integer_target(field.data_type())
+            {
+                // Footer bounds describe scaled decimal values. The scan returns unscaled integers.
+                *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+            } else if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
                 // Wrapping can reorder values and map different source values to the same integer.
                 *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+            } else if let Some((from, storage)) =
+                temporal_statistics_types(source, field.data_type(), file_metadata.schema_descr())
+            {
+                if parquet_integer_cast_wraps(&from, &storage)
+                    || parquet_integer_cast_wraps(&storage, field.data_type())
+                {
+                    *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+                } else {
+                    let convert = |bound: &Precision<datafusion_common::ScalarValue>| {
+                        bound
+                            .cast_to(&from)?
+                            .cast_to(&storage)?
+                            .cast_to(field.data_type())
+                    };
+                    column.min_value = convert(&column.min_value).unwrap_or(Precision::Absent);
+                    column.max_value = convert(&column.max_value).unwrap_or(Precision::Absent);
+                }
             } else if source.data_type().is_unsigned_integer()
                 && source.data_type() != field.data_type()
             {
@@ -443,6 +600,10 @@ impl ReadFormat for ParquetReadFormat {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
 
+        if let Some(unit) = &options.global.coerce_int96 {
+            parse_coerce_int96_string(unit)?;
+        }
+
         // Partition columns have no physical field. Validate only projected file columns.
         let file_schema = input.schema.file_schema();
         let projected: Fields = match &input.projection {
@@ -462,31 +623,42 @@ impl ReadFormat for ParquetReadFormat {
         );
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 
-        let coerce_int96 = options
-            .global
-            .coerce_int96
-            .as_deref()
-            .map(parse_coerce_int96_string)
-            .transpose()?;
-        let coerce_int96_tz = options.global.coerce_int96_tz.as_deref().map(Arc::from);
+        let integer_fields: Fields = projected
+            .iter()
+            .filter(|field| {
+                Schema::new([Arc::clone(field)])
+                    .flattened_fields()
+                    .iter()
+                    .any(|leaf| is_parquet_integer_target(leaf.data_type()))
+            })
+            .cloned()
+            .collect();
         input.file_groups = load_parquet_scan_metadata_with_validation(
             input.file_groups,
             &store,
             &metadata_cache,
             options.global.metadata_size_hint,
             ctx.config_options().execution.meta_fetch_concurrency.into(),
-            |metadata| {
+            |file, metadata| {
                 // Physical projection pushdown selects struct leaves after this pass.
                 // The expression adapter validates them once it has the final projection.
                 let mut fields = projected
                     .iter()
                     .filter(|field| !matches!(field.data_type(), DataType::Struct(_)))
                     .peekable();
-                if fields.peek().is_none() {
+                if fields.peek().is_none() && integer_fields.is_empty() {
                     return Ok(());
                 }
-                let physical =
-                    parquet_file_schema(metadata, coerce_int96, coerce_int96_tz.as_ref())?;
+                let mut physical = parquet_to_arrow_schema(
+                    metadata.schema_descr(),
+                    metadata.key_value_metadata(),
+                )?;
+                if let Some(schema) =
+                    integer_read_schema(metadata, &physical, &integer_fields, self.matching)?
+                {
+                    physical = schema;
+                    file.arrow_schema = Some(Arc::new(physical.clone()));
+                }
                 for field in fields {
                     if let Some((_, actual)) =
                         find_matching_struct_field(physical.fields(), field, self.matching)?

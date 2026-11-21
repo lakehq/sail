@@ -13,6 +13,8 @@ use datafusion_common::{Result, internal_err, plan_err};
 use crate::schema_evolution::{StructFieldMatching, find_matching_struct_field};
 use crate::variant::is_variant_storage_field;
 
+pub const INTEGER_STORAGE_META_KEY: &str = "sail.parquet.integer_storage";
+
 /// Canonical Arrow representations for Spark SQL values. Parquet stores lists and
 /// byte arrays independently of the offset widths in the embedded Arrow schema.
 pub fn normalize_parquet_field(
@@ -122,9 +124,24 @@ pub fn validate_parquet_field(
         (DataType::Map(actual, _), DataType::Map(field, _)) => {
             validate_parquet_field(path, field, actual, matching)?;
         }
-        // An unannotated INT64 can carry an embedded Arrow seconds timestamp hint.
-        // The decoder presents the hinted type while schema inference uses the physical long.
-        (DataType::Timestamp(TimeUnit::Second, _), DataType::Int64) => {}
+        (actual, expected)
+            if parquet_temporal_storage_cast(actual, expected).is_some()
+                && (!matches!(actual, DataType::Timestamp(_, _))
+                    || physical
+                        .metadata()
+                        .get(INTEGER_STORAGE_META_KEY)
+                        .is_some_and(|ty| ty == "INT64")) => {}
+        (actual, expected)
+            if actual.is_decimal()
+                && match physical
+                    .metadata()
+                    .get(INTEGER_STORAGE_META_KEY)
+                    .map(String::as_str)
+                {
+                    Some("INT32") => is_parquet_integer_target(expected),
+                    Some("INT64") => *expected == DataType::Int64,
+                    _ => false,
+                } => {}
         // BYTE_ARRAY supplies either the raw bytes or their UTF-8 interpretation.
         // FIXED_LEN_BYTE_ARRAY only supplies binary data. Check this before normalization.
         (actual, expected) if is_parquet_byte_array(actual) && is_parquet_byte_array(expected) => {}
@@ -146,6 +163,58 @@ pub fn validate_parquet_field(
         }
     }
     Ok(())
+}
+
+pub fn is_parquet_integer_target(ty: &DataType) -> bool {
+    matches!(
+        ty,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float64
+            | DataType::Date32
+    )
+}
+
+/// Read an integer-backed decimal without applying its logical scale. The footer
+/// validator checks that the physical integer width supports the requested reader.
+pub(crate) fn parquet_unscaled_integer(
+    source: &ArrayRef,
+    requested: &DataType,
+) -> Result<ArrayRef> {
+    let unscaled = match source.data_type() {
+        DataType::Decimal32(p, _) => DataType::Decimal32(*p, 0),
+        DataType::Decimal64(p, _) => DataType::Decimal64(*p, 0),
+        DataType::Decimal128(p, _) => DataType::Decimal128(*p, 0),
+        DataType::Decimal256(p, _) => DataType::Decimal256(*p, 0),
+        ty => return internal_err!("Expected a decimal, got {ty}"),
+    };
+    let data = source
+        .to_data()
+        .into_builder()
+        .data_type(unscaled)
+        .build()?;
+    let values = datafusion::arrow::array::make_array(data);
+    let storage = if *requested == DataType::Int64 {
+        DataType::Int64
+    } else {
+        DataType::Int32
+    };
+    Ok(datafusion::arrow::compute::cast(&values, &storage)?)
+}
+
+/// Spark reads temporal annotations through their signed Parquet storage when the
+/// requested type uses an integer reader. A requested DATE likewise uses INT32 days.
+pub fn parquet_temporal_storage_cast(source: &DataType, requested: &DataType) -> Option<DataType> {
+    use DataType::*;
+    match (source, requested) {
+        (Dictionary(_, values), _) => parquet_temporal_storage_cast(values, requested),
+        (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32 | Time32(_), Date32)
+        | (Date32 | Time32(_), Int8 | Int16 | Int32 | Int64 | Float64) => Some(Int32),
+        (Timestamp(_, _) | Time64(_), Int64) => Some(Int64),
+        _ => None,
+    }
 }
 
 /// Spark retains the low bits when reading a byte or short. Reading UINT32 or

@@ -25,7 +25,8 @@ use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
 use crate::parquet_schema::{
-    cast_parquet_integer, parquet_integer_cast_wraps, validate_parquet_field,
+    cast_parquet_integer, is_parquet_integer_target, parquet_integer_cast_wraps,
+    parquet_temporal_storage_cast, parquet_unscaled_integer, validate_parquet_field,
 };
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
@@ -781,6 +782,13 @@ fn can_cast_field_with_schema_evolution(
         return Ok(true);
     }
 
+    if cast_mode == SchemaEvolutionCastMode::Parquet
+        && (parquet_temporal_storage_cast(source.data_type(), target.data_type()).is_some()
+            || (source.data_type().is_decimal() && is_parquet_integer_target(target.data_type())))
+    {
+        return Ok(true);
+    }
+
     match (source.data_type(), target.data_type()) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
             validate_struct_compatibility_with_variant(
@@ -1244,6 +1252,35 @@ fn cast_array_with_schema_evolution_inner(
     if source.data_type() == target_field.data_type() {
         return Ok(Arc::clone(source));
     }
+
+    if cast_mode == SchemaEvolutionCastMode::Parquet
+        && source.data_type().is_decimal()
+        && is_parquet_integer_target(target_field.data_type())
+    {
+        let integer = parquet_unscaled_integer(source, target_field.data_type())?;
+        return cast_array_with_schema_evolution_inner(
+            &integer,
+            target_field,
+            cast_options,
+            matching,
+            cast_mode,
+        );
+    }
+
+    let storage;
+    let source = if cast_mode == SchemaEvolutionCastMode::Parquet
+        && let Some(ty) =
+            parquet_temporal_storage_cast(source.data_type(), target_field.data_type())
+    {
+        storage = if parquet_integer_cast_wraps(source.data_type(), &ty) {
+            cast_parquet_integer(source.as_ref(), &ty)?
+        } else {
+            cast_with_options(source, &ty, cast_options)?
+        };
+        &storage
+    } else {
+        source
+    };
 
     if cast_mode == SchemaEvolutionCastMode::Parquet
         && parquet_integer_cast_wraps(source.data_type(), target_field.data_type())

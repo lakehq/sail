@@ -294,13 +294,103 @@ def test_parquet_single_footer_widens_small_integers(spark, tmp_path):
     assert df.collect() == [Row(value=42)] * 3
 
 
-def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
-    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
-    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
-    # and reads the column as long, so Sail must too.
-    path = tmp_path / "arrow_second_timestamp.parquet"
+def test_parquet_single_footer_reads_raw_temporal_values(spark, tmp_path):
+    for file, types, value in [
+        ("a", [pa.date32(), pa.int32(), pa.int64(), pa.int64(), pa.int64()], 1),
+        ("b", [pa.int32(), pa.date32(), pa.timestamp("ms", tz="UTC"), pa.timestamp("us"), pa.timestamp("ns")], -42),
+    ]:
+        columns = {
+            name: pa.array([value, None], ty)
+            for name, ty in zip(["day", "days", "millis", "micros", "nanos"], types, strict=True)
+        }
+        if file == "b":
+            columns["days"] = columns["days"].cast(pa.date64())
+            columns["micros"] = columns["micros"].dictionary_encode()
+        columns["nested"] = pa.StructArray.from_arrays([columns["nanos"]], names=["ticks"])
+        columns["unchanged"] = pa.array([1_234, None], pa.timestamp("ms", tz="UTC"))
+        pq.write_table(pa.table(columns), tmp_path / f"{file}.parquet", use_dictionary=False)
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr(
+        "unix_date(day)", "days", "millis", "micros", "nanos", "nested.ticks", "unix_millis(unchanged)"
+    ).orderBy("days").collect() == [
+        (None,) * 7,
+        (None,) * 7,
+        (-42, -42, -42, -42, -42, -42, 1_234),
+        (1, 1, 1, 1, 1, 1, 1_234),
+    ]
+    assert df.selectExpr("unix_date(min(day))", "min(days)", "min(millis)", "min(micros)", "min(nanos)").collect() == [
+        (-42, -42, -42, -42, -42)
+    ]
+    assert df.where("days < 0 AND millis < 0 AND micros < 0").selectExpr("unix_date(day)").collect() == [(-42,)]
+
+
+def test_parquet_single_footer_reads_date_and_time_storage(spark, tmp_path):
+    names = ["tiny", "small", "whole", "wide", "day", "clock"]
+    types = [pa.int8(), pa.int16(), pa.int64(), pa.float64(), pa.date32(), pa.int64()]
+    first = {name: pa.array([1], ty) for name, ty in zip(names, types, strict=True)}
+    first["nested"] = pa.StructArray.from_arrays([first["tiny"], first["clock"]], names=["tiny", "clock"])
+    pq.write_table(pa.table(first), tmp_path / "a.parquet", use_dictionary=False)
+
+    days = pa.array([32768, -42, None], pa.date32())
+    later = dict.fromkeys(names[:4], days)
+    later["day"] = pa.array([123, -42, None], pa.int16())
+    later["clock"] = pa.array([1234, 5678, None], pa.time64("us"))
+    later["nested"] = pa.StructArray.from_arrays([days, later["clock"]], names=["tiny", "clock"])
+    pq.write_table(pa.table(later), tmp_path / "b.parquet", use_dictionary=False)
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("clock").selectExpr(
+        "tiny", "small", "whole", "wide", "unix_date(day)", "clock", "nested.tiny", "nested.clock"
+    ).collect() == [
+        (None,) * 8,
+        (1, 1, 1, 1.0, 1, 1, 1, 1),
+        (0, -32768, 32768, 32768.0, 123, 1234, 0, 1234),
+        (-42, -42, -42, -42.0, -42, 5678, -42, 5678),
+    ]
+    assert df.selectExpr("min(small)", "max(whole)", "max(wide)", "max(clock)").collect() == [
+        (-32768, 32768, 32768.0, 5678)
+    ]
+    assert df.where("small = -32768 AND nested.clock > 1000").selectExpr("unix_date(day)").collect() == [(123,)]
+
+
+def test_parquet_single_footer_rejects_int96_as_bigint(spark, tmp_path):
+    for file, ty in [("a", pa.int64()), ("b", pa.timestamp("us"))]:
+        value = pa.array([42], ty)
+        nested = pa.StructArray.from_arrays([value, pa.array([1])], names=["value", "id"])
+        pq.write_table(
+            pa.table({"value": value, "nested": nested}),
+            tmp_path / f"{file}.parquet",
+            use_deprecated_int96_timestamps=True,
+        )
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.select("nested.id").collect() == [(1,), (1,)]
+    for column in ["value", "nested.value"]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.select(column).collect()
+
+
+def test_parquet_integer_backed_decimals_read_as_unscaled_integers(spark, tmp_path):
+    first = pa.table({"i": pa.array([1], pa.int32()), "l": pa.array([1], pa.int64())})
+    pq.write_table(first, tmp_path / "a.parquet")
+    values = [Decimal("-1234.56"), Decimal("78.90"), None]
+    decimals = pa.table({"i": pa.array(values, pa.decimal128(7, 2)), "l": pa.array(values, pa.decimal128(15, 2))})
+    pq.write_table(decimals, tmp_path / "b.parquet", store_decimal_as_integer=True, use_dictionary=False)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("i").collect() == [(None, None), (-123456, -123456), (1, 1), (7890, 7890)]
+    assert df.selectExpr("min(i)", "max(l)").collect() == [(-123456, 7890)]
+
+    pq.write_table(decimals, tmp_path / "c.parquet", store_decimal_as_integer=False, use_dictionary=False)
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.option("mergeSchema", False).parquet(str(tmp_path)).collect()
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_path, unit):
+    # The footer declares a plain INT64. Spark reads its stored value for every Arrow timestamp hint.
+    path = tmp_path / "arrow_timestamp_hint.parquet"
     encoded_arrow_schema = base64.b64encode(
-        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+        pa.schema([pa.field("ts", pa.timestamp(unit))]).serialize().to_pybytes()
     ).decode()
     table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
     with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
