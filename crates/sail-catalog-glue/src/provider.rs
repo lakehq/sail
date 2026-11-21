@@ -779,12 +779,15 @@ impl CatalogProvider for GlueCatalogProvider {
             .into_paginator()
             .send();
 
-        while let Some(page) = paginator
-            .next()
-            .await
-            .transpose()
-            .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?
-        {
+        while let Some(page) = paginator.next().await.transpose().map_err(|e| {
+            if e.as_service_error()
+                .is_some_and(|err| err.is_entity_not_found_exception())
+            {
+                CatalogError::NotFound(CatalogObject::Database, database_name.clone())
+            } else {
+                CatalogError::External(format!("Failed to list tables: {e}"))
+            }
+        })? {
             for tbl in page.table_list() {
                 // Filter out views - they should be listed via list_views
                 if tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW" {
@@ -1065,12 +1068,15 @@ impl CatalogProvider for GlueCatalogProvider {
             .into_paginator()
             .send();
 
-        while let Some(page) = paginator
-            .next()
-            .await
-            .transpose()
-            .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?
-        {
+        while let Some(page) = paginator.next().await.transpose().map_err(|e| {
+            if e.as_service_error()
+                .is_some_and(|err| err.is_entity_not_found_exception())
+            {
+                CatalogError::NotFound(CatalogObject::Database, database_name.clone())
+            } else {
+                CatalogError::External(format!("Failed to list views: {e}"))
+            }
+        })? {
             for tbl in page.table_list() {
                 if tbl.table_type().unwrap_or_default() == "VIRTUAL_VIEW" {
                     views.push(self.view_to_status(database, tbl)?);

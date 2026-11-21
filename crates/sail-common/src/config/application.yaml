@@ -499,6 +499,14 @@
     available to the driver may not be the same as that available to the workers.
   experimental: true
 
+- key: execution.return_write_metrics
+  type: boolean
+  default: "false"
+  description: |
+    Return row counts for supported SQL writes through Spark Connect.
+    A client can override the server default for its session with `sail.execution.return_write_metrics`.
+  experimental: true
+
 - key: execution.collect_statistics
   type: boolean
   default: "true"

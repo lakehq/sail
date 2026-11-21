@@ -82,13 +82,17 @@ fn commit_output_batch(
     schema: SchemaRef,
     output: &CommitOutput,
     row_count: u64,
+    action_counts: &[i64; 4],
     added_data_files_count: usize,
     removed_delete_files_count: usize,
 ) -> Result<RecordBatch> {
     match output {
         CommitOutput::Command(CommandOutput::Empty) => Ok(RecordBatch::new_empty(schema)),
         CommitOutput::Command(CommandOutput::Count) => commit_count_batch(schema, row_count),
-        CommitOutput::Command(_) => internal_err!("unsupported Iceberg command result"),
+        CommitOutput::Command(output @ CommandOutput::AffectedRows) => {
+            output.batch(&action_counts[..1])
+        }
+        CommitOutput::Command(output @ CommandOutput::MergeRows) => output.batch(action_counts),
         CommitOutput::RewriteDataFiles {
             rewritten_data_files_count,
             rewritten_bytes_count,
@@ -789,7 +793,7 @@ impl ExecutionPlan for IcebergCommitExec {
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
             {
-                return commit_output_batch(schema, &output, 0, 0, 0);
+                return commit_output_batch(schema, &output, 0, &[0; 4], 0, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -798,6 +802,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
+            let action_counts = match (&output, &commit_meta.action_summary) {
+                (
+                    CommitOutput::Command(CommandOutput::MergeRows | CommandOutput::AffectedRows),
+                    Some(summary),
+                ) => summary.affected_counts()?,
+                _ if !commit_meta.removed_data_file_paths.is_empty() => [-1; 4],
+                _ => [0; 4],
+            };
             let skip_empty_commit = commit_meta.skip_empty_commit;
             let mut removed_data_file_paths = planned_removed_data_file_paths;
             removed_data_file_paths.extend(commit_meta.removed_data_file_paths);
@@ -834,6 +846,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     schema,
                     &output,
                     commit_info.row_count,
+                    &action_counts,
                     added_data_files_count,
                     0,
                 );
@@ -995,6 +1008,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     schema,
                     &output,
                     commit_info.row_count,
+                    &action_counts,
                     added_data_files_count,
                     0,
                 );
@@ -1049,7 +1063,14 @@ impl ExecutionPlan for IcebergCommitExec {
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
                 {
-                    return commit_output_batch(schema, &output, commit_info.row_count, 0, 0);
+                    return commit_output_batch(
+                        schema,
+                        &output,
+                        commit_info.row_count,
+                        &action_counts,
+                        0,
+                        0,
+                    );
                 }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
@@ -1175,6 +1196,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                     schema,
                                     &output,
                                     commit_info.row_count,
+                                    &action_counts,
                                     added_data_files_count,
                                     0,
                                 );
@@ -1260,6 +1282,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         schema,
                         &output,
                         commit_info.row_count,
+                        &action_counts,
                         added_data_files_count,
                         0,
                     );
@@ -1419,6 +1442,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 schema,
                                 &output,
                                 commit_info.row_count,
+                                &action_counts,
                                 added_data_files_count,
                                 removed_delete_files_count,
                             );
@@ -1514,6 +1538,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     schema,
                     &output,
                     commit_info.row_count,
+                    &action_counts,
                     added_data_files_count,
                     removed_delete_files_count,
                 );

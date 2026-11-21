@@ -549,6 +549,7 @@ mod shuffle_backend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
+    pub return_write_metrics: bool,
     pub batch_size: usize,
     pub default_parallelism: usize,
     pub collect_statistics: bool,

@@ -1798,11 +1798,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 use r#gen::iceberg_commit_exec_node::Output;
                 let commit = match output {
                     Some(Output::CommandOutput(output)) => {
-                        let output = Self::try_decode_command_output(output)?;
-                        if !matches!(output, CommandOutput::Empty | CommandOutput::Count) {
-                            return plan_err!("unsupported Iceberg command output");
-                        }
-                        commit.with_output(output)
+                        commit.with_output(Self::try_decode_command_output(output)?)
                     }
                     Some(Output::RewriteDataFilesOutput(output)) => commit
                         .with_rewrite_data_files_output(
@@ -7894,7 +7890,12 @@ mod tests {
                 output
             );
         }
-        for output in [CommandOutput::Empty, CommandOutput::Count] {
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::Count,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+        ] {
             let iceberg: Arc<dyn ExecutionPlan> = Arc::new(
                 IcebergCommitExec::new(
                     input.clone(),

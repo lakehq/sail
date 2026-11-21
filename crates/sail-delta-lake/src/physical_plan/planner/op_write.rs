@@ -11,9 +11,10 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelOperationType};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
+use super::change_data::{tag_row_operation, validate_change_data_input};
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
@@ -180,9 +181,6 @@ async fn build_overwrite_if_plan(
         && !ctx.config().identity_columns_to_track.is_empty();
     let (aligned_new, aligned_old) = align_schemas_for_union(Arc::clone(&input), old_data_plan)?;
     let union_plan = if single_stream_cdf {
-        use sail_common_datafusion::datasource::RowLevelOperationType;
-
-        use super::change_data::{tag_row_operation, validate_change_data_input};
         validate_change_data_input(&aligned_new)?;
         let deleted = build_old_data_plan(
             ctx,
@@ -199,6 +197,11 @@ async fn build_overwrite_if_plan(
             tag_row_operation(aligned_new, RowLevelOperationType::Insert)?,
             tag_row_operation(aligned_old, RowLevelOperationType::Copy)?,
             tag_row_operation(deleted, RowLevelOperationType::MatchedDelete)?,
+        ])?
+    } else if sail_common_datafusion::command::return_write_metrics(ctx.session().config())? {
+        UnionExec::try_new(vec![
+            tag_row_operation(aligned_new, RowLevelOperationType::Insert)?,
+            tag_row_operation(aligned_old, RowLevelOperationType::Copy)?,
         ])?
     } else {
         UnionExec::try_new(vec![aligned_new, aligned_old])?

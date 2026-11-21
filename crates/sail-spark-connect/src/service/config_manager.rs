@@ -398,6 +398,7 @@ mod tests {
             "session".to_string(),
             "user".to_string(),
             SparkSessionOptions {
+                return_write_metrics: false,
                 execution_heartbeat_interval: Duration::from_secs(60),
                 parquet_binary_as_string,
             },

@@ -252,11 +252,11 @@ async fn plan_metadata_delete(
             _
         )
     );
-    let paths = if skip_empty_commit {
-        Vec::new()
+    let (paths, deleted_rows) = if skip_empty_commit {
+        (Vec::new(), Some(0))
     } else {
         let Some(paths) = crate::logical::row_level::target_scan(node.raw_target())?
-            .metadata_delete_paths(session, &predicate)
+            .metadata_delete_files(session, &predicate)
             .await?
         else {
             return Ok(None);
@@ -279,6 +279,9 @@ async fn plan_metadata_delete(
     )?;
     let batch = encode_commit_meta(CommitMeta {
         table_uri: table_url.to_string(),
+        action_summary: (node.output()
+            == sail_common_datafusion::command::CommandOutput::AffectedRows)
+            .then(|| crate::operation_metrics::IcebergActionSummary::metadata_delete(deleted_rows)),
         removed_data_file_paths: paths,
         // Only a provably false or NULL predicate skips the commit, not an
         // ordinary metadata DELETE whose original predicate prunes all files.

@@ -16,7 +16,7 @@ use sail_logical_plan::row_level::{
 use crate::logical::merge::ensure_merge_metadata_columns;
 use crate::logical::row_level::target_write_state;
 
-pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
+pub(crate) fn expand_delete_node(info: DeleteInfo, counts: bool) -> Result<LogicalPlan> {
     let (mode, snapshot_id) = target_write_state(&info.target_plan, RowLevelCommand::Delete)?;
     super::row_level::validate_row_level_columns(
         &info.input_schema,
@@ -133,7 +133,11 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         condition,
         info.target,
     )
-    .with_output(CommandOutput::Empty)
+    .with_output(if counts {
+        CommandOutput::AffectedRows
+    } else {
+        CommandOutput::Empty
+    })
     .with_expected_snapshot_id(Some(snapshot_id));
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(node),

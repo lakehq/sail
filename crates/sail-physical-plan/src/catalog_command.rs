@@ -112,6 +112,11 @@ impl ExecutionPlan for CatalogCommandExec {
                 .execute(context.as_ref(), manager.as_ref())
                 .await
                 .map_err(|e| match e {
+                    CatalogError::NotFound(sail_catalog::error::CatalogObject::Schema, name) => {
+                        DataFusionError::External(Box::new(
+                            sail_common_datafusion::error::SchemaNotFoundError(name),
+                        ))
+                    }
                     CatalogError::CommitStateUnknown(_) => DataFusionError::External(Box::new(e)),
                     _ => datafusion_common::exec_datafusion_err!("{e}"),
                 })?;

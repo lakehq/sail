@@ -14,6 +14,7 @@ use sail_common::spec;
 use sail_function::scalar::array::array_transform::ArrayTransform;
 use sail_function::scalar::conversion::to_string::ToUtf8;
 use sail_function::scalar::datetime::timestamp::Timestamp;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 use sail_function::scalar::r#struct::struct_rename::StructRename;
 use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_logical_optimizer::type_coercion::{
@@ -847,6 +848,19 @@ fn coerce_comparison_pair(
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
+
+    // A DATE compared with TIMESTAMP denotes midnight in the session time zone.
+    // Resolve it before DataFusion chooses a common type for the join keys.
+    let timezone = config.session_timezone_label();
+    match (&left_type, &right_type) {
+        (DataType::Date32 | DataType::Date64, DataType::Timestamp(_, Some(_))) => {
+            return Ok((cast_timestamp_ntz_to_ltz(left, &timezone, false), right));
+        }
+        (DataType::Timestamp(_, Some(_)), DataType::Date32 | DataType::Date64) => {
+            return Ok((left, cast_timestamp_ntz_to_ltz(right, &timezone, false)));
+        }
+        _ => {}
+    }
 
     if config.ansi_mode
         && widens_float_comparison(&[(&left, &left_type), (&right, &right_type)])

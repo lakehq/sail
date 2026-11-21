@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::str::FromStr;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr::{self, FieldMetadata};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::SparkZone;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
@@ -68,18 +66,18 @@ impl PlanResolver<'_> {
         let timezone = if timezone.is_empty() {
             None
         } else {
-            Some(timezone.parse::<Tz>()?)
+            Some(SparkZone::parse(timezone)?)
         };
         let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
             (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
             | (spec::TimestampType::WithLocalTimeZone, None, _) => {
-                let tz = Tz::from_str(&self.config.session_timezone)?;
-                let datetime = localize_with_fallback(&tz, &datetime)?;
+                let tz = SparkZone::parse(&self.config.session_timezone)?;
+                let datetime = tz.localize(&datetime)?;
                 (datetime, spec::TimestampType::WithLocalTimeZone)
             }
             (spec::TimestampType::Configured, Some(tz), _)
             | (spec::TimestampType::WithLocalTimeZone, Some(tz), _) => {
-                let datetime = localize_with_fallback(&tz, &datetime)?;
+                let datetime = tz.localize(&datetime)?;
                 (datetime, spec::TimestampType::WithLocalTimeZone)
             }
             (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)

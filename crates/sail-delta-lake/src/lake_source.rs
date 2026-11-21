@@ -167,7 +167,9 @@ impl DataSource for DeltaLakeSource {
                 Arc::new(input),
                 DeltaWriteNodeOptions {
                     identity_columns_to_track,
-                    output: if sql_insert {
+                    output: if sql_insert
+                        && !sail_common_datafusion::command::return_write_metrics(ctx.config())?
+                    {
                         CommandOutput::Empty
                     } else {
                         CommandOutput::Count

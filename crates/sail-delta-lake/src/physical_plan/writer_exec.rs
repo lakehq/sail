@@ -1161,7 +1161,18 @@ impl DeltaWriterExec {
             encode_actions(
                 output_actions,
                 Some(ExecCommitMeta {
-                    row_count: total_rows,
+                    row_count: if matches!(
+                        operation,
+                        Some(DeltaOperation::Write {
+                            predicate: Some(_),
+                            ..
+                        })
+                    ) && merge_row_metrics.uses_operation
+                    {
+                        merge_row_metrics.inserted
+                    } else {
+                        total_rows
+                    },
                     operation,
                     operation_metrics,
                     identity_high_water_marks: (!identity_candidates.is_empty()).then_some(

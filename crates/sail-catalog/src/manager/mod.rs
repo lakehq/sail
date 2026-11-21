@@ -86,6 +86,25 @@ impl CatalogManager {
         Ok((state.get_catalog(&catalog)?, database))
     }
 
+    fn listing_error(catalog: &str, namespace: &Namespace, error: CatalogError) -> CatalogError {
+        if !matches!(
+            error,
+            CatalogError::NotFound(
+                CatalogObject::Database | CatalogObject::Namespace | CatalogObject::Schema,
+                _
+            )
+        ) {
+            return error;
+        }
+        let name = std::iter::once(catalog)
+            .chain(std::iter::once(namespace.head.as_ref()))
+            .chain(namespace.tail.iter().map(AsRef::as_ref))
+            .map(|part| format!("`{}`", part.replace('`', "``")))
+            .collect::<Vec<_>>()
+            .join(".");
+        CatalogError::NotFound(CatalogObject::Schema, name)
+    }
+
     pub(super) fn resolve_database<T: AsRef<str>>(
         &self,
         database: &[T],

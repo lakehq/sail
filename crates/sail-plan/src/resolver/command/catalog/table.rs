@@ -338,13 +338,18 @@ impl PlanResolver<'_> {
                 format!("-{}", uuid::Uuid::new_v4()),
             ),
         };
-        Ok(format!(
+        let path = format!(
             "{}{}{}{}",
             base,
             object_store::path::DELIMITER,
             name,
             suffix,
-        ))
+        );
+        if sail_data_source::parse_absolute_directory_url(&path).is_some() {
+            Ok(path)
+        } else {
+            Ok(sail_data_source::resolve_table_url(path)?.to_string())
+        }
     }
 
     fn resolve_catalog_table_partition_by(
