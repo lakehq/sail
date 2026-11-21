@@ -644,7 +644,6 @@ pub(crate) async fn resolve_read_urls(
     expand_input_globs: bool,
 ) -> Result<Vec<Vec<ListingTableUrl>>> {
     let mut urls = vec![];
-    let mut seen = HashSet::new();
     for path in paths {
         let alternatives = if expand_input_globs {
             GlobUrl::parse_with_syntax(&path, ReadPathSyntax::HadoopGlob)?
@@ -675,6 +674,7 @@ pub(crate) async fn resolve_read_urls(
             return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
         }
         if expand_input_globs {
+            let mut seen = HashSet::new();
             matches.retain(|url| {
                 !url.prefix()
                     .parts()

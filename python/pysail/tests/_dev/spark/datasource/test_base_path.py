@@ -346,6 +346,19 @@ def test_base_path_missing_input(spark, tmp_path, missing):
         spark.read.option("basePath", str(tmp_path)).schema("id INT").json(paths).collect()
 
 
+@pytest.mark.parametrize("second", ["row.json", "."])
+@pytest.mark.parametrize("mode", ["default", "basePath", "recursiveFileLookup"])
+def test_unpartitioned_overlapping_inputs(spark, tmp_path, second, mode):
+    (tmp_path / "row.json").write_text('{"id":1}')
+    reader = spark.read.schema("id INT")
+    if mode == "basePath":
+        reader = reader.option(mode, str(tmp_path))
+    elif mode == "recursiveFileLookup":
+        reader = reader.option(mode, True)
+    df = reader.json([str(tmp_path), str(tmp_path / second)])
+    assert df.collect() == [Row(id=1)] * (1 if mode == "recursiveFileLookup" else 2)
+
+
 @pytest.mark.parametrize("path", ["empty", "emp*/"])
 def test_base_path_empty_directory(spark, tmp_path, path):
     (tmp_path / "empty").mkdir()

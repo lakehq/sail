@@ -440,12 +440,15 @@ async fn list_files_for_scan<'a>(
 
     let meta_fetch_concurrency: usize =
         ctx.config_options().execution.meta_fetch_concurrency.into();
-    // Distinct input roots can still select the same file (a directory and one of its files).
+    // Spark enumerates each input separately for a flat table. Partitioned and recursive
+    // scans instead work from one list of distinct leaf files.
+    let deduplicate = table_paths.len() > 1
+        && (source.config().recursive_file_lookup || !partition_fields.is_empty());
     let mut seen = HashSet::new();
     let file_list = stream::iter(file_list)
         .flatten_unordered(meta_fetch_concurrency)
         .try_filter(|file| {
-            future::ready(table_paths.len() == 1 || seen.insert(file.object_meta.location.clone()))
+            future::ready(!deduplicate || seen.insert(file.object_meta.location.clone()))
         });
 
     let files = file_list

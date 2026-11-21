@@ -23,6 +23,7 @@ pub struct ListingTableSourceConfig {
     pub output_projection: Option<Vec<usize>>,
     pub base_path: Option<Arc<BasePathPartitions>>,
     pub table_paths: Vec<ListingTableUrl>,
+    pub recursive_file_lookup: bool,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,

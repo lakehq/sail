@@ -362,6 +362,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             output_projection,
             table_paths: urls.into_iter().flatten().collect(),
+            recursive_file_lookup: recursive,
             base_path,
             schema,
             constraints,

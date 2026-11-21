@@ -209,6 +209,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: vec![],
+            recursive_file_lookup: false,
             base_path: None,
             output_projection: None,
             schema: TableSchema::from(schema),
