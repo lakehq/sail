@@ -1,26 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::fmt::Write;
+use std::num::NonZeroU8;
+use std::sync::{Arc, LazyLock};
 
+use arrow::array::timezone::Tz;
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use bigdecimal::{BigDecimal, ToPrimitive};
 use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::catalog::Session;
-use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_err};
+use datafusion_common::{
+    Result, ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
+};
 use datafusion_datasource::ListingTableUrl;
 use object_store::path::Path;
-use percent_encoding::percent_decode_str;
+use regex::Regex;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
-use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_common_datafusion::utils::datetime::{arrow_timezone_label, localize_with_fallback};
+use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::url::resolve_table_url;
 
 const HIVE_NULL: &str = "__HIVE_DEFAULT_PARTITION__";
 
 #[derive(Clone, Debug)]
-pub struct BasePathPartitions {
+pub(super) struct BasePathOptions {
     pub(super) root: ListingTableUrl,
     case_sensitive: bool,
     timestamp_type: Option<DataType>,
@@ -59,7 +66,7 @@ pub(super) fn resolve_base_path(
     options: &[OptionLayer],
     urls: &[ListingTableUrl],
     path: &str,
-) -> Result<BasePathPartitions> {
+) -> Result<BasePathOptions> {
     let url = resolve_table_url(path.to_owned())?;
     if url.scheme() == "file" && !url.to_file_path().is_ok_and(|p| p.is_dir()) {
         return plan_err!("Option 'basePath' must be an existing directory: {path}");
@@ -104,7 +111,7 @@ pub(super) fn resolve_base_path(
         TimeUnit::Microsecond,
         (!ntz).then(|| Arc::from(arrow_timezone_label(session_zone).as_ref())),
     );
-    Ok(BasePathPartitions {
+    Ok(BasePathOptions {
         root: base,
         case_sensitive,
         timestamp_type: infer.then_some(timestamp_type),
@@ -162,10 +169,93 @@ fn partition_path<'a>(
 }
 
 fn decoded(value: &str) -> Cow<'_, str> {
-    percent_decode_str(value)
-        .decode_utf8()
-        .unwrap_or(Cow::Borrowed(value))
+    let Some(first) = value.find('%') else {
+        return Cow::Borrowed(value);
+    };
+    let mut result = value[..first].to_owned();
+    let mut rest = &value[first..];
+    // Hive unescapes each %XX as a character while preserving literal Unicode and invalid escapes.
+    while let Some((prefix, suffix)) = rest.split_once('%') {
+        result.push_str(prefix);
+        if let Some(hex) = suffix.get(..2)
+            && hex.as_bytes().iter().all(u8::is_ascii_hexdigit)
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            result.push(char::from(byte));
+            rest = &suffix[2..];
+        } else {
+            result.push('%');
+            rest = suffix;
+        }
+    }
+    result.push_str(rest);
+    Cow::Owned(result)
 }
+
+fn java_double(value: &str) -> Option<f64> {
+    // Double.parseDouble accepts ASCII whitespace, numeric suffixes, and C99 hex floats.
+    let value = value.trim_matches(|c| c <= ' ');
+    let unsigned = value.strip_prefix(['+', '-']).unwrap_or(value);
+    let number = match unsigned {
+        "Infinity" => f64::INFINITY,
+        "NaN" => f64::NAN,
+        _ => {
+            let literal = unsigned
+                .strip_suffix(['d', 'D', 'f', 'F'])
+                .unwrap_or(unsigned);
+            if let Some(hex) = literal
+                .strip_prefix("0x")
+                .or_else(|| literal.strip_prefix("0X"))
+            {
+                hex_double(hex)?
+            } else {
+                if !literal.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+                    return None;
+                }
+                literal.parse().ok()?
+            }
+        }
+    };
+    Some(if value.starts_with('-') {
+        -number
+    } else {
+        number
+    })
+}
+
+fn hex_double(hex: &str) -> Option<f64> {
+    // A Java hex float uses a binary exponent. Express its significand in binary too,
+    // so lexical can round the entire value once, including subnormal values.
+    const FORMAT: u128 = lexical_core::NumberFormatBuilder::new()
+        .mantissa_radix(2)
+        .exponent_radix(NonZeroU8::new(10))
+        .required_exponent_notation(true)
+        .no_special(true)
+        .build_strict();
+    let (significand, exponent) = hex.split_once(['p', 'P'])?;
+    let mut binary = String::new();
+    for c in significand.chars() {
+        if c == '.' {
+            binary.push('.');
+        } else {
+            write!(binary, "{:04b}", c.to_digit(16)?).ok()?;
+        }
+    }
+    binary.push('p');
+    binary.push_str(exponent);
+    lexical_core::parse_with_options::<f64, FORMAT>(
+        binary.as_bytes(),
+        &lexical_core::parse_float_options::HEX_FLOAT,
+    )
+    .ok()
+}
+
+// Spark uses yyyy-MM-dd and yyyy-MM-dd HH:mm:ss[.S] during partition inference.
+#[expect(clippy::expect_used)]
+static PARTITION_DATETIME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[0-9]{4}|-[0-9]{4,}|\+[0-9]{5,})-[0-9]{2}-[0-9]{2}(?: [0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9])?)?$")
+        .expect("valid partition datetime pattern")
+});
 
 fn integer_decimal(value: &str) -> Option<ScalarValue> {
     // BigDecimal accepts underscores in numeric literals. Spark uses Java decimal syntax.
@@ -197,14 +287,19 @@ fn infer_partition_type(current: &DataType, value: &str, timestamp_type: &DataTy
         DataType::Int64
     } else if let Some(decimal) = integer_decimal(value) {
         decimal.data_type()
-    } else if value.parse::<f64>().is_ok() {
+    } else if java_double(value).is_some() {
         DataType::Float64
-    } else if value.parse::<NaiveDate>().is_ok() {
+    } else if PARTITION_DATETIME.is_match(value) && value.parse::<NaiveDate>().is_ok() {
         DataType::Date32
-    } else if NaiveDateTime::parse_from_str(&decoded(value), "%Y-%m-%d %H:%M:%S%.f").is_ok() {
-        timestamp_type.clone()
     } else {
-        DataType::Utf8
+        let value = decoded(value);
+        if PARTITION_DATETIME.is_match(&value)
+            && NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f").is_ok()
+        {
+            timestamp_type.clone()
+        } else {
+            DataType::Utf8
+        }
     };
     match (current, &inferred) {
         (DataType::Null, _) => inferred,
@@ -227,11 +322,15 @@ fn infer_partition_type(current: &DataType, value: &str, timestamp_type: &DataTy
     }
 }
 
+/// Typed partition values indexed by the leaf directory of each file.
+pub type BasePathPartitions = HashMap<Path, Vec<ScalarValue>>;
+
 #[derive(Default)]
 pub(super) struct PartitionDiscovery {
     columns: Option<Vec<(String, DataType)>>,
     base: Option<String>,
     conflicting_bases: bool,
+    directories: HashMap<Path, Vec<String>>,
 }
 
 impl PartitionDiscovery {
@@ -239,8 +338,12 @@ impl PartitionDiscovery {
         &mut self,
         root: &ListingTableUrl,
         file: &Path,
-        options: Option<&BasePathPartitions>,
+        options: Option<&BasePathOptions>,
     ) -> Result<bool> {
+        let directory = options.and_then(|_| file.parent());
+        if let Some(values) = directory.as_ref().and_then(|dir| self.directories.get(dir)) {
+            return Ok(!values.is_empty());
+        }
         let path = partition_path(root, file, options.is_some())?;
         let parts = path.columns;
         if let Some(options) = options {
@@ -250,6 +353,12 @@ impl PartitionDiscovery {
                     .as_ref()
                     .is_some_and(|b| !b.eq_ignore_ascii_case(&path.base));
             self.base.get_or_insert(path.base);
+            if let Some(directory) = directory {
+                self.directories.insert(
+                    directory,
+                    parts.iter().map(|(_, value)| (*value).to_owned()).collect(),
+                );
+            }
             if parts.is_empty() {
                 return Ok(false);
             }
@@ -282,66 +391,96 @@ impl PartitionDiscovery {
         Ok(true)
     }
 
-    pub(super) fn into_fields(self, nullable: bool) -> Result<Vec<FieldRef>> {
+    pub(super) fn has_partitions(&self) -> bool {
+        self.columns
+            .as_ref()
+            .is_some_and(|columns| !columns.is_empty())
+    }
+
+    pub(super) fn fields(&self, nullable: bool) -> Result<Vec<FieldRef>> {
         if self.conflicting_bases && self.columns.is_some() {
             return plan_err!("Conflicting partition directory structures below basePath");
         }
         Ok(self
             .columns
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(key, ty)| Arc::new(Field::new(key, ty, nullable)))
+            .iter()
+            .flatten()
+            .map(|(key, ty)| Arc::new(Field::new(key, ty.clone(), nullable)))
             .collect())
+    }
+
+    pub(super) fn resolve_values(
+        self,
+        options: &BasePathOptions,
+        fields: &[FieldRef],
+    ) -> Result<BasePathPartitions> {
+        self.directories
+            .into_iter()
+            .filter(|(_, values)| !values.is_empty())
+            .map(|(directory, values)| {
+                let values = fields
+                    .iter()
+                    .zip(values)
+                    .map(|(field, value)| cast_partition_value(options, &value, field.data_type()))
+                    .collect::<Result<_>>()?;
+                Ok((directory, values))
+            })
+            .collect()
     }
 }
 
-pub(super) fn partition_values(
-    options: &BasePathPartitions,
-    file: &Path,
-    fields: &[FieldRef],
-) -> Result<Option<Vec<ScalarValue>>> {
-    let parts = partition_path(&options.root, file, true)?.columns;
-    if parts.is_empty() {
-        return Ok(None);
+fn cast_partition_value(
+    options: &BasePathOptions,
+    value: &str,
+    ty: &DataType,
+) -> Result<ScalarValue> {
+    if value == HIVE_NULL {
+        return ScalarValue::try_from(ty);
     }
-    if parts.len() < fields.len() {
-        return plan_err!("missing partition columns in {file}");
+    let result = parse_partition_value(options, value, ty);
+    match result {
+        Err(_) if !options.validate => ScalarValue::try_from(ty),
+        result => result,
     }
-    fields
-        .iter()
-        .zip(parts)
-        .map(|(field, (name, value))| {
-            if !names_match(&name, field.name(), options.case_sensitive) {
-                return plan_err!(
-                    "expected partition column {} in {file}, found {name}",
-                    field.name()
-                );
-            }
-            let ty = field.data_type();
-            if value == HIVE_NULL {
-                return ScalarValue::try_from(ty);
-            }
-            let result = match ty {
-                DataType::Timestamp(unit, Some(_)) => {
-                    let local = DataType::Timestamp(*unit, Some(options.timezone.clone()));
-                    ScalarValue::try_from_string(decoded(value).into_owned(), &local)
-                        .and_then(|v| v.cast_to(ty))
-                }
-                DataType::Timestamp(_, None) | DataType::Utf8 => {
-                    ScalarValue::try_from_string(decoded(value).into_owned(), ty)
-                }
-                DataType::Decimal128(_, _) if let Some(decimal) = integer_decimal(value) => {
-                    decimal.cast_to(ty)
-                }
-                _ => ScalarValue::try_from_string(value.to_owned(), ty),
+}
+
+fn parse_partition_value(
+    options: &BasePathOptions,
+    value: &str,
+    ty: &DataType,
+) -> Result<ScalarValue> {
+    match ty {
+        DataType::Float32 | DataType::Float64 => {
+            let number = java_double(value).ok_or_else(|| {
+                plan_datafusion_err!("invalid floating-point partition value: {value}")
+            })?;
+            ScalarValue::Float64(Some(number)).cast_to(ty)
+        }
+        DataType::Timestamp(unit, Some(_)) => {
+            let value = decoded(value);
+            let timezone: Tz = options.timezone.parse()?;
+            let local = if let Ok((datetime, "")) =
+                parse_timestamp(&value).and_then(|ts| ts.into_naive())
+            {
+                let instant = localize_with_fallback(&timezone, &datetime)?;
+                ScalarValue::TimestampMicrosecond(
+                    Some(instant.timestamp_micros()),
+                    Some(options.timezone.clone()),
+                )
+            } else {
+                let local_type = DataType::Timestamp(*unit, Some(options.timezone.clone()));
+                ScalarValue::try_from_string(value.into_owned(), &local_type)?
             };
-            match result {
-                Err(_) if !options.validate => ScalarValue::try_from(ty),
-                result => result,
-            }
-        })
-        .collect::<Result<_>>()
-        .map(Some)
+            local.cast_to(ty)
+        }
+        DataType::Timestamp(_, None) | DataType::Utf8 => {
+            ScalarValue::try_from_string(decoded(value).into_owned(), ty)
+        }
+        DataType::Decimal128(_, _) if let Some(decimal) = integer_decimal(value) => {
+            decimal.cast_to(ty)
+        }
+        _ => ScalarValue::try_from_string(value.to_owned(), ty),
+    }
 }
 
 /// Partition values come from directories even when a file has a column with the same name.
@@ -382,12 +521,7 @@ pub(super) fn split_discovered_partitions(
 
     // CSV and text readers need the physical width even for projected-away columns.
     // With an explicit schema CSV assigns the remaining data fields from the first slot.
-    if let Some(physical) = positional_schema
-        && physical
-            .fields()
-            .iter()
-            .any(|f| partition_index(f.name()).is_some())
-    {
+    if let Some(physical) = positional_schema {
         let mut data = file_fields.into_iter();
         let mut physical_fields = Vec::new();
         for (i, field) in physical.fields().iter().enumerate() {

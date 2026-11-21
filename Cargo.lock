@@ -7271,6 +7271,7 @@ dependencies = [
  "educe",
  "futures",
  "glob",
+ "lexical-core",
  "log",
  "memchr",
  "object_store",

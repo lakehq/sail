@@ -195,7 +195,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .path_glob_filter()
             .map(PathGlobFilter::parse)
             .transpose()?;
-        let (sampled_files, inferred) = sample_listing_files(
+        let (sampled_files, discovery) = sample_listing_files(
             ctx,
             &urls,
             path_glob_filter.as_ref(),
@@ -203,6 +203,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             recursive,
         )
         .await?;
+        let inferred = discovery.fields(base_path.is_some())?;
         let inferred_names: Vec<_> = inferred.iter().map(|f| f.name().clone()).collect();
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
@@ -324,6 +325,13 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
         }
 
+        let base_path = base_path
+            .map(|options| {
+                discovery
+                    .resolve_values(&options, &partition_fields)
+                    .map(Arc::new)
+            })
+            .transpose()?;
         let schema = TableSchema::builder(schema)
             .with_table_partition_cols(partition_fields)
             .build();

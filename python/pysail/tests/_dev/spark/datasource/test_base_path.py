@@ -204,11 +204,11 @@ def test_base_path_recursive_file_lookup(spark, tmp_path):
     assert df.orderBy("id").collect() == [Row(id=1), Row(id=2)]
 
 
-@pytest.mark.parametrize("pattern", ["p=1*/row.json", "p=1*"])
+@pytest.mark.parametrize("pattern", ["p=1*/row.json", "p=1*", "p=1*/"])
 def test_base_path_glob_matches_partition_directories(spark, tmp_path, pattern):
     for path in ["p=1", "p=11", "p=2"]:
         write_json_partition(tmp_path, path)
-    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / pattern))
+    df = spark.read.option("basePath", str(tmp_path)).json(f"{tmp_path}/{pattern}")
     assert df.orderBy("p").collect() == [Row(id=1, p=1), Row(id=1, p=11)]
     assert len(df.inputFiles()) == 2
 
@@ -265,6 +265,16 @@ def test_base_path_overlapping_text_value(spark, tmp_path):
         ("9007199254740993E2", "decimal(18,0)", Decimal(900719925474099300)),
         ("__HIVE_DEFAULT_PARTITION__", "void", None),
         ("%31", "string", "1"),
+        ("2025-1-2", "string", "2025-1-2"),
+        ("2025-01-01 10%3A10%3A10.123456", "string", "2025-01-01 10:10:10.123456"),
+        ("inf", "string", "inf"),
+        ("0x1.8p1", "double", 3.0),
+        ("-0X1.8P+1F", "double", -3.0),
+        ("0x1p-1074", "double", float.fromhex("0x1p-1074")),
+        ("0x1.00000000000008p0", "double", 1.0),
+        ("1.25d", "double", 1.25),
+        ("%C3%A9", "string", "Ã©"),
+        ("雪%FF%2F%xx", "string", "雪ÿ/%xx"),
     ],
 )
 def test_base_path_partition_literal(spark, tmp_path, token, expected_type, value):
@@ -306,3 +316,61 @@ def test_base_path_unpartitioned_root(spark, tmp_path):
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
     assert df.collect() == [Row(id=2)]
     assert len(df.inputFiles()) == 1
+
+
+@pytest.mark.parametrize("overlap", ["p=1", "p=1/row.json"])
+def test_base_path_overlapping_inputs(spark, tmp_path, overlap):
+    for partition in ["p=1", "p=2"]:
+        write_json_partition(tmp_path, partition)
+    paths = [str(tmp_path / "p=*"), str(tmp_path / overlap)]
+    df = spark.read.option("basePath", str(tmp_path)).json(paths)
+    assert df.orderBy("p").collect() == [Row(id=1, p=1), Row(id=1, p=2)]
+    assert len(df.inputFiles()) == 2
+
+
+def test_base_path_unmatched_input_glob(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    paths = [str(tmp_path / "p=1"), str(tmp_path / "missing*")]
+    with pytest.raises(Exception, match=r"Path does not exist.*missing"):
+        spark.read.option("basePath", str(tmp_path)).schema("id INT").json(paths).collect()
+
+
+def test_base_path_glob_matches_empty_directory(spark, tmp_path):
+    (tmp_path / "empty").mkdir()
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT").json(f"{tmp_path}/emp*/")
+    assert df.collect() == []
+
+
+def test_base_path_partial_csv_schema(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "row.csv").write_text("value,other\n42,foo\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True).schema("value STRING, p INT").csv(str(part))
+    assert df.collect() == [Row(value="42", p=1)]
+
+
+def test_base_path_timestamp_dst_transitions(spark, tmp_path):
+    for token in ["2025-03-09 02%3A30%3A00", "2025-11-02 01%3A30%3A00"]:
+        write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.options(basePath=str(tmp_path), timeZone="America/New_York").json(str(tmp_path))
+    # New York shifts 02:30 forward to 03:30 in spring and uses the first 01:30 in autumn.
+    assert df.selectExpr("unix_seconds(p) AS seconds").orderBy("seconds").collect() == [
+        Row(seconds=1741505400),
+        Row(seconds=1762061400),
+    ]
+
+
+def test_base_path_validates_filtered_partition(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    part = tmp_path / "p=bogus"
+    part.mkdir()
+    (part / "row.txt").write_text('{"id":2}')
+    reader = spark.read.options(basePath=str(tmp_path), pathGlobFilter="*.json").schema("id INT, p INT")
+    with pytest.raises(Exception, match="bogus"):
+        reader.json(str(tmp_path)).collect()
+
+
+def test_base_path_hive_escaped_partition_name(spark, tmp_path):
+    write_json_partition(tmp_path, "caf%E9=1")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.select("café").collect() == [Row(1)]

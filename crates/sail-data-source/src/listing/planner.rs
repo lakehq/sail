@@ -4,6 +4,7 @@
 // The listing table planner is adapted from the DataFusion `ListingTable` implementation,
 // specifically the `TableProvider::scan_with_args` trait method.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -39,7 +40,6 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
-use crate::listing::partition::partition_values;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -417,12 +417,15 @@ async fn list_files_for_scan<'a>(
         let files = if let Some((base, schema)) = base_partitions {
             files
                 .try_filter_map(move |mut file| async move {
-                    let Some(values) =
-                        partition_values(base, &file.object_meta.location, partition_fields)?
+                    let Some(values) = file
+                        .object_meta
+                        .location
+                        .parent()
+                        .and_then(|dir| base.get(&dir))
                     else {
                         return Ok(None);
                     };
-                    file.partition_values = values;
+                    file.partition_values.clone_from(values);
                     filter_partitioned_file(file, predicate, schema)
                 })
                 .boxed()
@@ -435,7 +438,13 @@ async fn list_files_for_scan<'a>(
 
     let meta_fetch_concurrency: usize =
         ctx.config_options().execution.meta_fetch_concurrency.into();
-    let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
+    // Distinct input roots can still select the same file (a directory and one of its files).
+    let mut seen = HashSet::new();
+    let file_list = stream::iter(file_list)
+        .flatten_unordered(meta_fetch_concurrency)
+        .try_filter(|file| {
+            future::ready(table_paths.len() == 1 || seen.insert(file.object_meta.location.clone()))
+        });
 
     let files = file_list
         .map(|part_file| async {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::mem;
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
 use futures::TryStreamExt;
-use glob::{MatchOptions, Pattern};
+use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
@@ -545,21 +545,45 @@ pub(crate) async fn resolve_read_urls(
     expand_input_globs: bool,
 ) -> Result<Vec<ListingTableUrl>> {
     let mut urls = vec![];
+    let mut seen = HashSet::new();
     for path in paths {
-        for url in GlobUrl::parse(&path)? {
+        let alternatives = GlobUrl::parse(&path)?;
+        let expanded = expand_input_globs && alternatives.len() > 1;
+        let mut matches = vec![];
+        for url in alternatives {
             let url = rewrite_directory_url(url, ctx).await?;
             if expand_input_globs && let Some(pattern) = url.glob {
-                urls.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
+                matches.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
             } else {
-                urls.push(attach_default_glob(url)?.try_into()?);
+                let url: ListingTableUrl = attach_default_glob(url)?.try_into()?;
+                // Brace expansion can produce literal alternatives with no wildcard left.
+                if expanded && url.is_collection() {
+                    let exists = if url.get_url().scheme() == "file" {
+                        url.get_url().to_file_path().is_ok_and(|p| p.is_dir())
+                    } else {
+                        let store = ctx.runtime_env().object_store(&url)?;
+                        store.list(Some(url.prefix())).try_next().await?.is_some()
+                    };
+                    if !exists {
+                        continue;
+                    }
+                }
+                matches.push(url);
             }
         }
+        if expand_input_globs && matches.is_empty() {
+            return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
+        }
+        urls.extend(
+            matches
+                .into_iter()
+                .filter(|url| !expand_input_globs || seen.insert(url.as_str().to_owned())),
+        );
     }
     Ok(urls)
 }
 
-/// Spark expands input globs to roots before partition discovery. Match against
-/// the full relative path, including Hive directories, and keep matched directories as roots.
+/// Expand one path component at a time so directories (including empty ones) can be roots.
 async fn expand_listing_roots(
     ctx: &dyn Session,
     base: Url,
@@ -567,38 +591,53 @@ async fn expand_listing_roots(
 ) -> Result<Vec<ListingTableUrl>> {
     let root = ListingTableUrl::try_new(base.clone(), None)?;
     let store = ctx.runtime_env().object_store(&root)?;
-    let mut files = crate::listing::utils::list_all_files(&root, ctx, store.as_ref(), None).await?;
-    let mut roots = BTreeSet::new();
-    let options = MatchOptions {
-        require_literal_separator: true,
-        ..MatchOptions::new()
-    };
-    while let Some(file) = files.try_next().await? {
-        let Some(parts) = root.strip_prefix(&file.location) else {
-            continue;
-        };
-        let relative = parts.collect::<Vec<_>>().join("/");
-        for end in relative
-            .match_indices('/')
-            .map(|(i, _)| i)
-            .chain([relative.len()])
-        {
-            let path = &relative[..end];
-            if pattern.matches_with(path, options) {
-                roots.insert((path.to_owned(), end < relative.len()));
-                break;
+    let directory_only = pattern.as_str().ends_with('/');
+    let mut parents = vec![root.prefix().clone()];
+    let mut matches = vec![];
+    let components = pattern
+        .as_str()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(Pattern::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| plan_datafusion_err!("{e}"))?;
+    for (index, component) in components.iter().enumerate() {
+        let last = index + 1 == components.len();
+        let mut children = vec![];
+        for parent in parents {
+            let entries = store.list_with_delimiter(Some(&parent)).await?;
+            let selected = |path: &object_store::path::Path| {
+                path.filename().is_some_and(|name| component.matches(name))
+                    && !crate::listing::utils::has_hidden_path_component(&root, path)
+            };
+            children.extend(entries.common_prefixes.into_iter().filter(&selected));
+            if last && !directory_only {
+                matches.extend(
+                    entries
+                        .objects
+                        .into_iter()
+                        .map(|o| o.location)
+                        .filter(&selected)
+                        .map(|path| (path, false)),
+                );
             }
         }
+        parents = children;
     }
-    roots
+    matches.extend(parents.into_iter().map(|path| (path, true)));
+    matches.sort_unstable();
+    matches
         .into_iter()
         .map(|(path, directory)| {
             let mut url = base.clone();
+            let parts = root.strip_prefix(&path).ok_or_else(|| {
+                plan_datafusion_err!("matched path {path} is outside glob root {root}")
+            })?;
             {
                 let mut segments = url
                     .path_segments_mut()
                     .map_err(|_| plan_datafusion_err!("invalid listing root: {base}"))?;
-                segments.pop_if_empty().extend(path.split('/'));
+                segments.pop_if_empty().extend(parts);
                 if directory {
                     segments.push("");
                 }

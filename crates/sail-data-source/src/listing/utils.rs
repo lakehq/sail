@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
@@ -20,7 +19,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::listing_table_ref;
 
-use crate::listing::partition::{BasePathPartitions, PartitionDiscovery};
+use crate::listing::partition::{BasePathOptions, PartitionDiscovery};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -165,9 +164,9 @@ pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
     path_glob_filter: Option<&PathGlobFilter>,
-    base_path: Option<&BasePathPartitions>,
+    base_path: Option<&BasePathOptions>,
     recursive: bool,
-) -> Result<(Vec<ListingFileSample<'a>>, Vec<FieldRef>)> {
+) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
     const SAMPLE_SIZE: usize = 10;
     let mut discovery = PartitionDiscovery::default();
     let mut samples = vec![];
@@ -211,13 +210,12 @@ pub(super) async fn sample_listing_files<'a>(
         });
         unpartitioned.push(direct_files);
     }
-    let fields = discovery.into_fields(base_path.is_some())?;
-    if base_path.is_some() && fields.is_empty() {
+    if base_path.is_some() && !discovery.has_partitions() {
         for (sample, files) in samples.iter_mut().zip(unpartitioned) {
             sample.objects = files;
         }
     }
-    Ok((samples, fields))
+    Ok((samples, discovery))
 }
 
 pub(super) fn is_direct_input(url: &ListingTableUrl, path: &Path) -> bool {

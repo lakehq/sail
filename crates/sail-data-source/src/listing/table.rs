@@ -21,7 +21,7 @@ use crate::url::PathGlobFilter;
 pub struct ListingTableSourceConfig {
     /// File scan indices in public column order when physical columns overlap partitions.
     pub output_projection: Option<Vec<usize>>,
-    pub base_path: Option<BasePathPartitions>,
+    pub base_path: Option<Arc<BasePathPartitions>>,
     pub table_paths: Vec<ListingTableUrl>,
     pub schema: TableSchema,
     pub constraints: Constraints,
