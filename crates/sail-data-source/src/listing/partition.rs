@@ -22,7 +22,7 @@ use regex::Regex;
 use sail_common::spec;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
-use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
 use sail_function::scalar::datetime::timestamp::TimestampParser;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
 use sail_sql_analyzer::parser::parse_date;
@@ -38,6 +38,7 @@ pub(super) struct BasePathOptions {
     timestamp_type: Option<DataType>,
     supports_time: bool,
     validate: bool,
+    ansi: bool,
     ignore_invalid_paths: bool,
     local_timestamp_parser: TimestampParser,
 }
@@ -123,6 +124,7 @@ pub(super) fn resolve_base_path(
         .as_deref()
         .unwrap_or("UTC");
     let timezone = read_option(options, "timeZone").unwrap_or(session_zone);
+    SparkZone::parse(timezone)?;
     let timestamp_type = DataType::Timestamp(
         TimeUnit::Microsecond,
         (!ntz).then(|| Arc::from(arrow_timezone_label(session_zone).as_ref())),
@@ -135,6 +137,7 @@ pub(super) fn resolve_base_path(
         // the SQL syntax for declaring a TIME column is disabled.
         supports_time: service.is_none() || option("spark.sql.timeType.enabled")?.is_some(),
         validate: boolean("spark.sql.sources.validatePartitionColumns")?,
+        ansi: boolean("spark.sql.ansi.enabled")?,
         local_timestamp_parser: TimestampParser::Ltz {
             default_timezone: timezone.to_owned(),
         },
@@ -182,7 +185,7 @@ fn partition_path<'a>(
         }
     }
     if with_base_path
-        && base_len == 0
+        && (base_len == 0 || columns.is_empty())
         && root
             .prefix()
             .filename()
@@ -323,24 +326,28 @@ fn normalize_decimal_digits(value: &str) -> Cow<'_, str> {
     )
 }
 
-fn integer_decimal(value: &str) -> Option<ScalarValue> {
-    // BigDecimal accepts underscores in numeric literals. Spark uses Java decimal syntax.
+// Spark first constructs a decimal literal, whose precision and scale must fit Decimal128.
+fn partition_decimal(value: &str) -> Option<ScalarValue> {
+    // Rust BigDecimal also accepts underscores in numeric literals.
     if value.contains('_') {
         return None;
     }
     let decimal = value.parse::<BigDecimal>().ok()?;
     let scale = decimal.fractional_digit_count();
-    if scale > 0 {
-        return None;
-    }
-    let precision = decimal.digits().checked_add(scale.unsigned_abs())?;
+    let precision = if scale < 0 {
+        decimal.digits().checked_add(scale.unsigned_abs())?
+    } else {
+        decimal.digits().max(scale as u64)
+    };
     if precision > 38 {
         return None;
     }
+    let scale = scale.max(0);
+    let (unscaled, _) = decimal.with_scale(scale).into_bigint_and_exponent();
     Some(ScalarValue::Decimal128(
-        Some(decimal.to_i128()?),
+        Some(unscaled.to_i128()?),
         precision as u8,
-        0,
+        scale as i8,
     ))
 }
 
@@ -358,7 +365,8 @@ fn infer_partition_type(
         DataType::Int32
     } else if normalized.parse::<i64>().is_ok() {
         DataType::Int64
-    } else if let Some(decimal) = integer_decimal(&normalized) {
+    } else if let Some(decimal @ ScalarValue::Decimal128(_, _, 0)) = partition_decimal(&normalized)
+    {
         decimal.data_type()
     } else if java_double(value).is_some() {
         DataType::Float64
@@ -526,7 +534,16 @@ fn cast_partition_value(
     }
     let result = parse_partition_value(options, value, field);
     match result {
-        Err(_) if !options.validate => ScalarValue::try_from(ty),
+        Err(_)
+            if !options.validate
+                || (!options.ansi
+                    && matches!(
+                        ty,
+                        DataType::Date32 | DataType::Timestamp(_, _) | DataType::Time64(_)
+                    )) =>
+        {
+            ScalarValue::try_from(ty)
+        }
         result => result,
     }
 }
@@ -577,16 +594,10 @@ fn parse_partition_value(
             .map(|v| ScalarValue::Int64(Some(v)))
             .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}")),
         DataType::Decimal128(_, _) => {
-            let value = normalize_decimal_digits(value);
-            if value.contains('_') || value.parse::<BigDecimal>().is_err() {
-                return plan_err!("invalid decimal partition value: {value}");
-            }
-            // Spark reads a valid decimal that overflows the declared precision as null.
-            match integer_decimal(&value) {
-                Some(decimal) => decimal.cast_to(ty),
-                None => ScalarValue::try_from_string(value.into_owned(), ty),
-            }
-            .or_else(|_| ScalarValue::try_from(ty))
+            let literal = partition_decimal(&normalize_decimal_digits(value))
+                .ok_or_else(|| plan_datafusion_err!("invalid decimal partition value: {value}"))?;
+            // A representable literal that overflows the declared precision becomes null.
+            literal.cast_to(ty).or_else(|_| ScalarValue::try_from(ty))
         }
         DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond) => {
             let qualifier = match field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) {

@@ -109,6 +109,7 @@ pub struct ListingFileSample<'a> {
     pub url: &'a ListingTableUrl,
     pub store: Arc<dyn ObjectStore>,
     pub objects: Vec<ObjectMeta>,
+    pub(super) has_empty_file: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +252,17 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 (Arc::new(schema), physical)
             }
             None => {
+                let format = T::name();
+                if (base_path.is_some() || recursive)
+                    && matches!(format, "csv" | "json" | "parquet")
+                    && !sampled_files.iter().any(|sample| {
+                        !sample.objects.is_empty() || (format != "parquet" && sample.has_empty_file)
+                    })
+                {
+                    return plan_err!(
+                        "[UNABLE_TO_INFER_SCHEMA] Unable to infer schema for {format}. It must be specified manually."
+                    );
+                }
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;

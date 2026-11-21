@@ -23,6 +23,7 @@ use url::Url;
 enum PatternSegment {
     Asterisk,
     QuestionMark,
+    Quoted(char),
     Character(char),
     CharacterClass {
         negated: bool,
@@ -45,7 +46,7 @@ impl PatternSegment {
     /// Note that the syntax is different from the `glob` crate.
     /// 1. We use `^` for negated character classes.
     /// 2. We support alternation (e.g. `{a,b}`).
-    fn sequence_parser<'a>() -> impl Parser<'a, &'a str, Vec<Self>> {
+    fn sequence_parser<'a>(backslash_quotes: bool) -> impl Parser<'a, &'a str, Vec<Self>> {
         let character_class = choice((
             any()
                 .then_ignore(just('-'))
@@ -62,12 +63,16 @@ impl PatternSegment {
                 none_of("]").repeated().at_least(1).to_slice(),
             )),
         );
-        let pattern = recursive(|pattern| {
+        let pattern = recursive(move |pattern| {
             let alternation = pattern
                 .and_is(just(',').not())
                 .and_is(just('}').not())
                 .and_is(whitespace().at_least(1).not());
             choice((
+                just('\\')
+                    .filter(move |_| backslash_quotes)
+                    .ignore_then(any())
+                    .map(PatternSegment::Quoted),
                 just('*').map(|_| PatternSegment::Asterisk),
                 just('?').map(|_| PatternSegment::QuestionMark),
                 just('^')
@@ -214,6 +219,7 @@ impl PatternSegment {
         match self {
             // Special characters such as `*` and `?` do not appear as a character in the segment.
             // They must be part of a character class if they need to be matched literally.
+            PatternSegment::Quoted(value) => vec![Pattern::escape(&value.to_string())],
             PatternSegment::Character(value) => vec![value.to_string()],
             PatternSegment::Asterisk => vec!["*".to_string()],
             PatternSegment::QuestionMark => vec!["?".to_string()],
@@ -228,8 +234,8 @@ impl PatternSegment {
     }
 }
 
-fn expand_glob_pattern(pattern: &str) -> Result<Vec<String>> {
-    let patterns = PatternSegment::sequence_parser()
+fn expand_glob_pattern(pattern: &str, backslash_quotes: bool) -> Result<Vec<String>> {
+    let patterns = PatternSegment::sequence_parser(backslash_quotes)
         .parse(pattern)
         .into_result()
         .map_err(|_| plan_datafusion_err!("glob pattern: {pattern}"))?;
@@ -441,20 +447,24 @@ impl GlobUrl {
         if syntax == ReadPathSyntax::HadoopLiteral {
             return Ok(vec![(path.to_owned(), None)]);
         }
-        let paths = expand_glob_pattern(path)?
-            .into_iter()
-            .map(|x| {
-                let (prefix, suffix) = Self::split_glob_path(&x)?;
-                let suffix = if uri {
-                    Self::create_percent_decoded_pattern(&suffix)?
-                } else if suffix.is_empty() {
-                    None
-                } else {
-                    Some(Pattern::new(&suffix).map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?)
-                };
-                Ok((prefix, suffix))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let paths =
+            expand_glob_pattern(path, syntax == ReadPathSyntax::HadoopGlob && !cfg!(windows))?
+                .into_iter()
+                .map(|x| {
+                    let (prefix, suffix) = Self::split_glob_path(&x, syntax)?;
+                    let suffix = if uri {
+                        Self::create_percent_decoded_pattern(&suffix)?
+                    } else if suffix.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            Pattern::new(&suffix)
+                                .map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?,
+                        )
+                    };
+                    Ok((prefix, suffix))
+                })
+                .collect::<Result<Vec<_>>>()?;
         Ok(paths)
     }
 
@@ -500,14 +510,14 @@ impl GlobUrl {
     /// The glob path should be expanded already, so no alternation should be present.
     /// The base path is the longest path that does not contain any glob patterns.
     /// For example, `"a/b/c*"` would be split into `"a/b/"` and `"c*"`.
-    fn split_glob_path(s: &str) -> Result<(String, String)> {
+    fn split_glob_path(s: &str, syntax: ReadPathSyntax) -> Result<(String, String)> {
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut chars = s.chars();
         let mut part = String::new();
         while let Some(c) = chars.next() {
             match c {
-                '/' | '\\' => {
+                '/' | '\\' if c == '/' || cfg!(windows) || syntax == ReadPathSyntax::UrlGlob => {
                     prefix.push_str(&part);
                     prefix.push(c);
                     part.clear();
@@ -538,7 +548,7 @@ pub struct PathGlobFilter {
 impl PathGlobFilter {
     pub fn parse(pattern: &str) -> Result<Self> {
         let parse = || -> Result<Self> {
-            let patterns = expand_glob_pattern(pattern)?
+            let patterns = expand_glob_pattern(pattern, !cfg!(windows))?
                 .into_iter()
                 .map(|pattern| {
                     GlobUrl::create_percent_decoded_pattern(&pattern)?
@@ -884,7 +894,7 @@ mod tests {
 
     #[test]
     fn test_pattern_segment_parser() {
-        let parser = PatternSegment::sequence_parser();
+        let parser = PatternSegment::sequence_parser(false);
         let test = |input: &'static str, expected: Vec<PatternSegment>| {
             let result = parser.parse(input).into_result().unwrap();
             assert_eq!(result, expected);
@@ -1019,7 +1029,7 @@ mod tests {
 
     #[test]
     fn test_pattern_segment_expansion() {
-        let parser = PatternSegment::sequence_parser();
+        let parser = PatternSegment::sequence_parser(false);
         let test = |input: &'static str, expected: &[&str]| {
             let patterns = parser.parse(input).into_result().unwrap();
             let result = PatternSegment::expand_sequence(patterns);

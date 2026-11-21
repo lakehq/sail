@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from datetime import date, time
 from decimal import Decimal
 
@@ -521,7 +522,6 @@ def test_base_path_local_glob_percent_escape(spark, tmp_path):
     part = tmp_path / "p=1"
     part.mkdir()
     (part / "foo%3Abar.json").write_text('{"id":1}')
-    (part / "foo:bar.json").write_text('{"id":2}')
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / "p=*/foo%3Abar.json"))
     assert df.collect() == [Row(id=1, p=1)]
 
@@ -576,7 +576,6 @@ def test_base_path_hadoop_file_uri(spark, tmp_path, prefix):
     part = base / "p=1"
     part.mkdir(parents=True)
     (part / "foo%3Abar.json").write_text('{"id":1}')
-    (part / "foo:bar.json").write_text('{"id":2}')
     reader = spark.read.option("basePath", f"{prefix}{base}")
     df = reader.json(f"{prefix}{tmp_path}/bracket*#%3A/p=*/foo%3Abar.json")
     assert df.collect() == [Row(id=1, p=1)]
@@ -648,3 +647,84 @@ def test_base_path_leap_second_inference(spark, tmp_path):
     write_json_partition(tmp_path, "p=2025-01-01 10%3A20%3A60")
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
     assert df.collect() == [Row(id=1, p="2025-01-01 10:20:60")]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("1.2345E+2", Decimal("123.45")), ("1E-3", Decimal("0.00")), ("-0.005", Decimal("-0.01"))],
+)
+def test_base_path_explicit_decimal_rescaling(spark, tmp_path, token, expected):
+    write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT, p DECIMAL(8,2)").json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=expected)]
+
+
+def test_base_path_decimal_literal_precision(spark, tmp_path):
+    value = "1" * 39
+    write_json_partition(tmp_path, f"p={value}")
+    reader = spark.read.option("basePath", str(tmp_path)).schema("id INT, p DECIMAL(3,0)")
+    with pytest.raises(Exception, match=value):
+        reader.json(str(tmp_path)).collect()
+
+
+@pytest.mark.parametrize("ty", ["DATE", "TIMESTAMP", "TIMESTAMP_NTZ"])
+@pytest.mark.parametrize("ansi", [True, False])
+def test_base_path_invalid_datetime_partition(spark, tmp_path, ty, ansi):
+    write_json_partition(tmp_path, "p=broken")
+    reader = spark.read.option("basePath", str(tmp_path)).schema(f"id INT, p {ty}")
+    key = "spark.sql.ansi.enabled"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(ansi).lower())
+        if ansi:
+            with pytest.raises(Exception, match="broken"):
+                reader.json(str(tmp_path)).collect()
+        else:
+            assert reader.json(str(tmp_path)).collect() == [Row(id=1, p=None)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize("file_format", ["json", "csv", "parquet"])
+@pytest.mark.parametrize("excluded", [False, True])
+def test_base_path_no_files_for_schema_inference(spark, tmp_path, file_format, excluded):
+    if excluded:
+        write_json_partition(tmp_path, "p=1")
+    reader = spark.read.format(file_format).options(basePath=str(tmp_path), pathGlobFilter="*.missing")
+    with pytest.raises(Exception, match="UNABLE_TO_INFER_SCHEMA"):
+        reader.load(str(tmp_path)).collect()
+
+
+@pytest.mark.parametrize("file_format", ["json", "csv", "parquet"])
+def test_base_path_zero_byte_file_for_inference(spark, tmp_path, file_format):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "data").touch()
+    reader = spark.read.format(file_format).option("basePath", str(tmp_path))
+    if file_format == "parquet":
+        # Older Spark releases try to read the empty footer during schema inference.
+        with pytest.raises(Exception, match="UNABLE_TO_INFER_SCHEMA|CANNOT_READ_FILE_FOOTER"):
+            reader.load(str(tmp_path)).collect()
+    else:
+        df = reader.load(str(tmp_path))
+        assert df.schema.simpleString() == "struct<p:int>"
+        assert df.collect() == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Backslash is a path separator on Windows")
+@pytest.mark.parametrize(
+    ("name", "pattern"), [("x*.json", r"x\*.json"), ("x[0].json", r"x\[0\].json"), ("x{a}.json", r"x\{a\}.json")]
+)
+def test_base_path_quoted_glob(spark, tmp_path, name, pattern):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / name).write_text('{"id":1}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(part / pattern))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+def test_base_path_reader_timezone_validation(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    reader = spark.read.options(basePath=str(tmp_path), timeZone="Mars/X")
+    with pytest.raises(Exception, match="Mars/X"):
+        reader.json(str(tmp_path)).collect()

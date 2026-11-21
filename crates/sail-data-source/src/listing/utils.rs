@@ -178,10 +178,9 @@ pub(super) async fn sample_listing_files<'a>(
         let store = ctx.runtime_env().object_store(first)?;
         let mut objects = Vec::new();
         let mut direct = Vec::new();
-        for url in roots {
-            if base_path.is_none() && objects.len() == SAMPLE_SIZE && !(parquet && recursive) {
-                break;
-            }
+        let mut has_empty_file = false;
+        let mut has_direct_empty_file = false;
+        'roots: for url in roots {
             let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
@@ -196,25 +195,30 @@ pub(super) async fn sample_listing_files<'a>(
                     }
                     continue;
                 }
-                let selected = selected && file.size > 0;
-                if let Some(base) = base_path {
-                    let partitioned = discovery.observe(&base.root, &file.location, Some(base))?;
-                    if selected && partitioned && objects.len() < SAMPLE_SIZE {
-                        objects.push(file);
-                    } else if selected
-                        && !partitioned
-                        && direct.len() < SAMPLE_SIZE
-                        && is_direct_input(url, &file.location)
-                    {
-                        direct.push(file);
+                // Partition discovery sees even empty files and files excluded by pathGlobFilter.
+                let (sample, empty) = if let Some(base) = base_path {
+                    if discovery.observe(&base.root, &file.location, Some(base))? {
+                        (&mut objects, &mut has_empty_file)
+                    } else if is_direct_input(url, &file.location) {
+                        (&mut direct, &mut has_direct_empty_file)
+                    } else {
+                        continue;
                     }
-                } else if selected && objects.len() < SAMPLE_SIZE {
-                    if !recursive {
+                } else {
+                    if !recursive && selected && file.size > 0 {
                         discovery.observe(url, &file.location, None)?;
                     }
-                    objects.push(file);
-                    if objects.len() == SAMPLE_SIZE && !(parquet && recursive) {
-                        break;
+                    (&mut objects, &mut has_empty_file)
+                };
+                if selected {
+                    if file.size == 0 {
+                        *empty = true;
+                    } else if sample.len() < SAMPLE_SIZE {
+                        sample.push(file);
+                    }
+                    if base_path.is_none() && sample.len() == SAMPLE_SIZE && !(parquet && recursive)
+                    {
+                        break 'roots;
                     }
                 }
             }
@@ -223,12 +227,14 @@ pub(super) async fn sample_listing_files<'a>(
             url: first,
             store,
             objects,
+            has_empty_file,
         });
-        direct_samples.push(direct);
+        direct_samples.push((direct, has_direct_empty_file));
     }
     if base_path.is_some() && !discovery.has_partitions() {
-        for (sample, direct) in samples.iter_mut().zip(direct_samples) {
+        for (sample, (direct, empty)) in samples.iter_mut().zip(direct_samples) {
             sample.objects = direct;
+            sample.has_empty_file = empty;
         }
         summary = direct_summary;
     }
@@ -237,6 +243,7 @@ pub(super) async fn sample_listing_files<'a>(
             url,
             store,
             objects: vec![object],
+            has_empty_file: false,
         }];
     }
     Ok((samples, discovery))
