@@ -35,10 +35,10 @@ use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::metadata::{type_metadata, widest_interval_metadata};
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
-    FIXED_BYTE_WIDTH_META_KEY, INTEGER_STORAGE_META_KEY, is_parquet_integer_target,
-    normalize_parquet_field, parquet_integer_cast_wraps, parquet_temporal_storage_cast,
-    validate_parquet_field,
+    ParquetStorage, is_parquet_integer_target, normalize_parquet_field, parquet_integer_cast_wraps,
+    parquet_temporal_storage_cast, validate_parquet_field,
 };
+use sail_common_datafusion::parquet_source::ParquetStorageSource;
 use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
 use sail_common_datafusion::schema::nullable_query_field;
 use sail_common_datafusion::schema_evolution::{
@@ -129,35 +129,21 @@ fn reconcile_parquet_field<'a>(
     columns: &mut impl Iterator<Item = &'a ColumnDescPtr>,
     for_storage_read: bool,
     durations: DurationHints,
+    storage: &mut Vec<Arc<Field>>,
 ) -> Result<Arc<Field>> {
     let data_type = dictionary_value_type(field.data_type());
+    let mut children = Vec::new();
+    let mut child = |f: &Arc<Field>| {
+        reconcile_parquet_field(f, columns, for_storage_read, durations, &mut children)
+    };
     let ty = match data_type {
-        DataType::Struct(fields) => DataType::Struct(
-            fields
-                .iter()
-                .map(|f| reconcile_parquet_field(f, columns, for_storage_read, durations))
-                .collect::<Result<Fields>>()?,
-        ),
-        DataType::List(child) => DataType::List(reconcile_parquet_field(
-            child,
-            columns,
-            for_storage_read,
-            durations,
-        )?),
-        DataType::LargeList(child) => DataType::LargeList(reconcile_parquet_field(
-            child,
-            columns,
-            for_storage_read,
-            durations,
-        )?),
-        DataType::FixedSizeList(child, size) => DataType::FixedSizeList(
-            reconcile_parquet_field(child, columns, for_storage_read, durations)?,
-            *size,
-        ),
-        DataType::Map(entries, sorted) => DataType::Map(
-            reconcile_parquet_field(entries, columns, for_storage_read, durations)?,
-            *sorted,
-        ),
+        DataType::Struct(fields) => {
+            DataType::Struct(fields.iter().map(child).collect::<Result<Fields>>()?)
+        }
+        DataType::List(field) => DataType::List(child(field)?),
+        DataType::LargeList(field) => DataType::LargeList(child(field)?),
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(child(field)?, *size),
+        DataType::Map(entries, sorted) => DataType::Map(child(entries)?, *sorted),
         _ => {
             let column = columns.next().ok_or_else(|| {
                 internal_datafusion_err!(
@@ -165,62 +151,52 @@ fn reconcile_parquet_field<'a>(
                     field.name()
                 )
             })?;
-            if is_nanos_timestamp(column)
-                && let DataType::Timestamp(_, zone) = data_type
-            {
-                // Arrow can apply a microsecond INT96 hint to an INT64 NANOS timestamp.
-                // Keep its actual unit and storage for raw BIGINT reads and timestamp validation.
-                let mut field = field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()));
-                field
-                    .metadata_mut()
-                    .insert(INTEGER_STORAGE_META_KEY.to_owned(), "INT64".to_owned());
-                return Ok(Arc::new(field));
-            }
-            if hinted_integer_type(field, durations)
-                && let Some(storage) = unannotated_integer(column)
-            {
-                return Ok(Arc::new(field.as_ref().clone().with_data_type(storage)));
-            }
-            match data_type {
-                DataType::Date64
-                    if for_storage_read && column.physical_type() == PhysicalType::INT32 =>
-                {
-                    DataType::Date32
-                }
-                ty if for_storage_read
-                    && (matches!(ty, DataType::Timestamp(_, _) | DataType::Null)
-                        || ty.is_decimal()) =>
-                {
-                    // The same Arrow type can originate from different Parquet physical types.
-                    let mut field = field.as_ref().clone().with_data_type(data_type.clone());
-                    field.metadata_mut().remove(FIXED_BYTE_WIDTH_META_KEY);
-                    if ty.is_decimal()
-                        && column.physical_type() == PhysicalType::FIXED_LEN_BYTE_ARRAY
-                    {
-                        field.metadata_mut().insert(
-                            FIXED_BYTE_WIDTH_META_KEY.to_owned(),
-                            column.type_length().to_string(),
-                        );
+            let nanos = is_nanos_timestamp(column);
+            let needs_storage = for_storage_read
+                && (data_type.is_decimal()
+                    || matches!(data_type, DataType::Timestamp(_, _) | DataType::Null));
+            if nanos || needs_storage {
+                let physical = match column.physical_type() {
+                    PhysicalType::INT32 => Some(DataType::Int32),
+                    PhysicalType::INT64 => Some(DataType::Int64),
+                    PhysicalType::FIXED_LEN_BYTE_ARRAY if data_type.is_decimal() => {
+                        Some(DataType::FixedSizeBinary(column.type_length()))
                     }
-                    match column.physical_type() {
-                        ty @ (PhysicalType::INT32 | PhysicalType::INT64) => {
-                            field
-                                .metadata_mut()
-                                .insert(INTEGER_STORAGE_META_KEY.to_owned(), ty.to_string());
-                        }
-                        _ => {
-                            field.metadata_mut().remove(INTEGER_STORAGE_META_KEY);
-                        }
-                    }
-                    return Ok(Arc::new(field));
+                    _ => None,
+                };
+                if let Some(physical) = physical {
+                    storage.push(Arc::new(Field::new(
+                        field.name(),
+                        physical,
+                        field.is_nullable(),
+                    )));
                 }
-                _ => return Ok(Arc::clone(field)),
+            }
+            if nanos && let DataType::Timestamp(_, zone) = data_type {
+                DataType::Timestamp(TimeUnit::Nanosecond, zone.clone())
+            } else if hinted_integer_type(field, durations)
+                && let Some(physical) = unannotated_integer(column)
+            {
+                physical
+            } else if for_storage_read
+                && data_type == &DataType::Date64
+                && column.physical_type() == PhysicalType::INT32
+            {
+                DataType::Date32
+            } else if needs_storage {
+                data_type.clone()
+            } else {
+                return Ok(Arc::clone(field));
             }
         }
     };
+    if !children.is_empty() {
+        storage.push(Arc::new(Field::new_struct(
+            field.name(),
+            children,
+            field.is_nullable(),
+        )));
+    }
     Ok(Arc::new(field.as_ref().clone().with_data_type(ty)))
 }
 
@@ -292,6 +268,7 @@ fn parquet_file_schema(
         &[],
         StructFieldMatching::Name,
         durations,
+        &mut Vec::new(),
     )?
     .unwrap_or(schema))
 }
@@ -335,6 +312,7 @@ fn reconciled_read_schema(
     storage_fields: &[Arc<Field>],
     matching: StructFieldMatching,
     durations: DurationHints,
+    storage: &mut Vec<Arc<Field>>,
 ) -> Result<Option<Schema>> {
     let descriptor = metadata.schema_descr();
     let leaves = schema.flattened_fields();
@@ -374,7 +352,7 @@ fn reconciled_read_schema(
         .iter()
         .zip(storage_roots)
         .map(|(field, storage_read)| {
-            reconcile_parquet_field(field, &mut columns, storage_read, durations)
+            reconcile_parquet_field(field, &mut columns, storage_read, durations, storage)
         })
         .collect::<Result<Fields>>()?;
     Ok((fields != schema.fields)
@@ -756,16 +734,19 @@ impl ReadFormat for ParquetReadFormat {
                     metadata.schema_descr(),
                     metadata.key_value_metadata(),
                 )?;
+                let mut storage = Vec::new();
                 if let Some(schema) = reconciled_read_schema(
                     metadata,
                     &physical,
                     &storage_fields,
                     self.matching,
                     DurationHints::Storage,
+                    &mut storage,
                 )? {
                     physical = schema;
                     file.arrow_schema = Some(Arc::new(physical.clone()));
                 }
+                let storage = Schema::new(storage);
                 for field in projected
                     .iter()
                     .filter(|field| !field.data_type().is_nested())
@@ -773,8 +754,17 @@ impl ReadFormat for ParquetReadFormat {
                     if let Some((_, actual)) =
                         find_matching_struct_field(physical.fields(), field, self.matching)?
                     {
-                        validate_parquet_field(field.name(), field, actual, self.matching)?;
+                        validate_parquet_field(
+                            field.name(),
+                            field,
+                            actual,
+                            storage.fields().find(actual.name()).map(|(_, f)| f),
+                            self.matching,
+                        )?;
                     }
+                }
+                if !storage.fields().is_empty() {
+                    file.extensions.insert(ParquetStorage(Arc::new(storage)));
                 }
                 Ok(())
             },
@@ -788,7 +778,12 @@ impl ReadFormat for ParquetReadFormat {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
 
-        let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
+        let source = ParquetStorageSource::wrap_if_needed(
+            Arc::new(source),
+            self.matching,
+            &input.file_groups,
+        );
+        let config = FileScanConfigBuilder::new(input.object_store_url, source)
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)

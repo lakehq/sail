@@ -427,6 +427,33 @@ def test_parquet_requested_binary_from_decimal(spark, tmp_path, use_dictionary):
     assert df.where("v > unhex('7f')").selectExpr("hex(v)").collect() == [("FFFFFF9C",)]
 
 
+def test_parquet_binary_from_mixed_width_decimals(spark, tmp_path):
+    narrow, wide = tmp_path / "narrow.parquet", tmp_path / "wide.parquet"
+    values = pa.array([Decimal("-2.00"), Decimal("2.00"), None], pa.decimal128(7, 2))
+    pq.write_table(pa.table({"v": values}), narrow, store_schema=False)
+    # PyArrow uses the minimum width for each precision. This fixture was written
+    # as DECIMAL(18,2) and both precision fields in the footer were set to 7.
+    wide.write_bytes(
+        base64.b64decode(
+            "UEFSMRUAFSwVLCwVBhUAFQYVBhwAAAACAAAAAwP/////////nAAAAAAAAABkFQQZLDUAGAZzY2hlbWEVAgAVDhUQFQIYAXYlChUE"
+            "FQ4sXBUEFQ4AAAAWBhkcGRwmABwVDhklBgAZGAF2FQAWBhZSFlImCEkcFQAVABUCADwpBhkmAgQAAAAWUhYGJggWUgAoIHBhcnF1"
+            "ZXQtY3BwLWFycm93IHZlcnNpb24gMjQuMC4wGRwcAAAAigAAAFBBUjE="
+        )
+    )
+    assert pq.read_schema(narrow) == pq.read_schema(wide)
+    assert [pq.ParquetFile(path).schema.column(0).length for path in (narrow, wide)] == [4, 8]
+
+    df = spark.read.schema("v BINARY").parquet(str(tmp_path))
+    assert df.selectExpr("hex(v) AS h").orderBy("h").collect() == [
+        (None,),
+        (None,),
+        ("0000000000000064",),
+        ("000000C8",),
+        ("FFFFFF38",),
+        ("FFFFFFFFFFFFFF9C",),
+    ]
+
+
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
 def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_path, unit):
     # The footer declares a plain INT64. Spark reads its stored value for every Arrow timestamp hint.

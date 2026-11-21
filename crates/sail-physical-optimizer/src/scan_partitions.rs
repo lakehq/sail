@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::config::ConfigOptions;
-use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::filter::FilterExec;
@@ -21,6 +20,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{FileRange, PartitionedFile};
+use sail_common_datafusion::parquet_source::ParquetStorageSource;
 use sail_common_datafusion::scan::ParquetScanMetadata;
 
 /// Correct automatic parallelism using Parquet's actual units of scan work.
@@ -75,7 +75,7 @@ fn rewrite(plan: Arc<dyn ExecutionPlan>, config: &ConfigOptions) -> Result<Arc<d
     if config.optimizer.repartition_file_scans
         && let Some(source) = plan.downcast_ref::<DataSourceExec>()
         && let Some(scan) = source.data_source().downcast_ref::<FileScanConfig>()
-        && scan.file_source.is::<ParquetSource>()
+        && ParquetStorageSource::parquet_source(scan.file_source.as_ref()).is_some()
         && let Some(groups) =
             repartition_row_groups(scan, config.optimizer.repartition_file_min_size)
     {
@@ -108,9 +108,7 @@ fn scan_partition_count(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     }
     let source = plan.downcast_ref::<DataSourceExec>()?;
     let scan = source.data_source().downcast_ref::<FileScanConfig>()?;
-    if !scan.file_source.is::<ParquetSource>() {
-        return None;
-    }
+    ParquetStorageSource::parquet_source(scan.file_source.as_ref())?;
     // Only apply this to scans with row-group planning metadata.
     scan.file_groups
         .iter()

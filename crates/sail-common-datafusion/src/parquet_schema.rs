@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::{cast, take};
 use datafusion::arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DataType, Decimal256Type, Field, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, IntervalUnit, TimeUnit,
+    Int32Type, Int64Type, IntervalUnit, SchemaRef, TimeUnit,
 };
 use datafusion_common::{Result, internal_err, plan_err};
 
@@ -16,8 +16,19 @@ use crate::schema_evolution::{StructFieldMatching, find_matching_struct_field};
 use crate::uuid::is_uuid_field;
 use crate::variant::is_variant_storage_field;
 
-pub const INTEGER_STORAGE_META_KEY: &str = "sail.parquet.integer_storage";
-pub const FIXED_BYTE_WIDTH_META_KEY: &str = "sail.parquet.fixed_byte_width";
+/// Sparse tree of Parquet storage types for fields with ambiguous Arrow representations.
+#[derive(Debug, Clone)]
+pub struct ParquetStorage(pub SchemaRef);
+
+pub(crate) fn storage_child<'a>(
+    storage: Option<&'a Arc<Field>>,
+    name: &str,
+) -> Option<&'a Arc<Field>> {
+    let DataType::Struct(fields) = storage?.data_type() else {
+        return None;
+    };
+    fields.find(name).map(|(_, field)| field)
+}
 
 /// Canonical Arrow representations for Spark SQL values. Parquet stores lists and
 /// byte arrays independently of the offset widths in the embedded Arrow schema.
@@ -113,6 +124,7 @@ pub fn validate_parquet_field(
     path: &str,
     requested: &Field,
     physical: &Arc<Field>,
+    storage: Option<&Arc<Field>>,
     matching: StructFieldMatching,
 ) -> Result<()> {
     match (physical.data_type(), requested.data_type()) {
@@ -123,7 +135,7 @@ pub fn validate_parquet_field(
                     .clone()
                     .with_data_type(values.as_ref().clone()),
             );
-            validate_parquet_field(path, requested, &plain, matching)?;
+            validate_parquet_field(path, requested, &plain, storage, matching)?;
         }
         (DataType::Struct(actual), DataType::Struct(fields)) => {
             for field in fields {
@@ -132,6 +144,7 @@ pub fn validate_parquet_field(
                         &format!("{path}.{}", field.name()),
                         field,
                         source,
+                        storage_child(storage, source.name()),
                         matching,
                     )?;
                 }
@@ -143,35 +156,47 @@ pub fn validate_parquet_field(
             | DataType::FixedSizeList(actual, _),
             DataType::List(field) | DataType::LargeList(field),
         ) => {
-            validate_parquet_field(&format!("{path}[]"), field, actual, matching)?;
+            validate_parquet_field(
+                &format!("{path}[]"),
+                field,
+                actual,
+                storage_child(storage, actual.name()),
+                matching,
+            )?;
         }
         (DataType::Map(actual, _), DataType::Map(field, _)) => {
+            let entries = storage_child(storage, actual.name());
             let (Some(physical), Some(requested)) = (map_fields(actual), map_fields(field)) else {
                 return internal_err!("Expected two map entry fields in Parquet column {path}");
             };
             for (source, target) in physical.iter().zip(requested) {
-                validate_parquet_field(path, target, source, matching)?;
+                validate_parquet_field(
+                    path,
+                    target,
+                    source,
+                    storage_child(entries, source.name()),
+                    matching,
+                )?;
             }
         }
         (actual, expected)
             if parquet_temporal_storage_cast(actual, expected).is_some()
                 && (!matches!(actual, DataType::Timestamp(_, _))
-                    || physical
-                        .metadata()
-                        .get(INTEGER_STORAGE_META_KEY)
-                        .is_some_and(|ty| ty == "INT64")) => {}
+                    || matches!(storage.map(|f| f.data_type()), Some(DataType::Int64))) => {}
         (actual, expected)
             if (actual.is_decimal() || actual.is_null())
-                && match physical
-                    .metadata()
-                    .get(INTEGER_STORAGE_META_KEY)
-                    .map(String::as_str)
-                {
-                    Some("INT32") => is_parquet_int32_target(expected),
-                    Some("INT64") => is_parquet_int64_target(expected),
+                && match storage.map(|f| f.data_type()) {
+                    Some(DataType::Int32) => is_parquet_int32_target(expected),
+                    Some(DataType::Int64) => is_parquet_int64_target(expected),
                     _ => false,
                 } => {}
-        (_, expected) if fixed_decimal_byte_width(physical, expected).is_some() => {}
+        (actual, expected)
+            if actual.is_decimal()
+                && expected.is_binary()
+                && matches!(
+                    storage.map(|f| f.data_type()),
+                    Some(DataType::FixedSizeBinary(_))
+                ) => {}
         // BYTE_ARRAY supplies either the raw bytes or their UTF-8 interpretation.
         // FIXED_LEN_BYTE_ARRAY only supplies binary data. Check this before normalization.
         (actual, expected) if is_parquet_byte_array(actual) && is_parquet_byte_array(expected) => {}
@@ -183,7 +208,7 @@ pub fn validate_parquet_field(
             } else {
                 normalize_parquet_field(physical, None, false)
             };
-            if !parquet_primitive_type_compatible(&actual, expected) {
+            if !parquet_primitive_type_compatible(&actual, expected, storage) {
                 return plan_err!(
                     "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
                      Parquet column `{path}`. Expected {expected}, actual Parquet type {}.",
@@ -193,18 +218,6 @@ pub fn validate_parquet_field(
         }
     }
     Ok(())
-}
-
-pub(crate) fn fixed_decimal_byte_width(source: &Field, requested: &DataType) -> Option<i32> {
-    if !source.data_type().is_decimal() || !requested.is_binary() {
-        return None;
-    }
-    source
-        .metadata()
-        .get(FIXED_BYTE_WIDTH_META_KEY)?
-        .parse::<i32>()
-        .ok()
-        .filter(|width| *width > 0)
 }
 
 /// Restore the signed, big-endian bytes of a fixed-length Parquet decimal.
@@ -351,7 +364,11 @@ pub(crate) fn cast_parquet_integer(array: &dyn Array, requested: &DataType) -> R
     )
 }
 
-fn parquet_primitive_type_compatible(field: &Field, requested: &DataType) -> bool {
+fn parquet_primitive_type_compatible(
+    field: &Field,
+    requested: &DataType,
+    storage: Option<&Arc<Field>>,
+) -> bool {
     let physical = field.data_type();
     if physical == requested || parquet_integer_cast_wraps(physical, requested) {
         return true;
@@ -406,10 +423,7 @@ fn parquet_primitive_type_compatible(field: &Field, requested: &DataType) -> boo
         (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
             DataType::Timestamp(TimeUnit::Microsecond, _),
-        ) => field
-            .metadata()
-            .get(INTEGER_STORAGE_META_KEY)
-            .is_none_or(|ty| ty != "INT64"),
+        ) => !matches!(storage.map(|f| f.data_type()), Some(DataType::Int64)),
         (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => true,
         (DataType::Date32, DataType::Timestamp(_, None)) => true,
         (physical, requested) if is_string_type(physical) && is_string_type(requested) => true,
