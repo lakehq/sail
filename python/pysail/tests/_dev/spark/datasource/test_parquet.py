@@ -1609,6 +1609,28 @@ def test_parquet_validates_case_insensitive_nested_field(spark, tmp_path):
         df.collect()
 
 
+@pytest.mark.parametrize(("is_map", "element"), [(False, "items[0]"), (True, "items['k']")])
+def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, element):
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        item_type = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        item = {"good": i, "bad": "two" if i else 1}
+        if is_map:
+            values = pa.array([[("k", item)]], pa.map_(pa.string(), item_type))
+        else:
+            values = pa.array([[item]], pa.list_(item_type))
+        pq.write_table(pa.table({"items": values}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr(f"{element}.good AS v").orderBy("v").collect() == [(0,), (1,)]
+    invalid = [f"{element}.bad", "items"]
+    if not is_map:
+        assert sorted(df.select("items.good").collect()) == [([0],), ([1],)]
+        invalid.append("items.bad")
+    for expression in invalid:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.selectExpr(expression).collect()
+
+
 def test_parquet_merge_dictionary_with_plain_string(spark, tmp_path):
     pq.write_table(pa.table({"color": pa.array(["red"]).dictionary_encode()}), tmp_path / "a.parquet")
     pq.write_table(pa.table({"color": ["blue"]}), tmp_path / "b.parquet")

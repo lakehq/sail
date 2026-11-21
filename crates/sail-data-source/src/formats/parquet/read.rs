@@ -742,7 +742,7 @@ impl ReadFormat for ParquetReadFormat {
             options.global.metadata_size_hint,
             ctx.config_options().execution.meta_fetch_concurrency.into(),
             |file, metadata| {
-                // Physical projection pushdown selects struct leaves after this pass.
+                // Physical projection pushdown selects nested leaves after this pass.
                 // The expression adapter validates them once it has the final projection.
                 if projected.is_empty() {
                     return Ok(());
@@ -763,7 +763,7 @@ impl ReadFormat for ParquetReadFormat {
                 }
                 for field in projected
                     .iter()
-                    .filter(|field| !matches!(field.data_type(), DataType::Struct(_)))
+                    .filter(|field| !field.data_type().is_nested())
                 {
                     if let Some((_, actual)) =
                         find_matching_struct_field(physical.fields(), field, self.matching)?
