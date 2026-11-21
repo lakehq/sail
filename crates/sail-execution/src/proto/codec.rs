@@ -111,8 +111,6 @@ use sail_common_datafusion::input_file::{
 };
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
-use sail_common_datafusion::parquet_schema::ParquetStorage;
-use sail_common_datafusion::parquet_source::ParquetStorageSource;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionCastMode, SchemaEvolutionDefaultExpr,
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
@@ -698,7 +696,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 struct_field_matching,
                 cast_mode,
                 virtual_columns,
-                file_storage,
             }) => {
                 let mut base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
@@ -762,7 +759,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }
-                let mut config = parse_protobuf_file_scan_config(
+                let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     proto_converter,
@@ -771,33 +768,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let struct_field_matching =
                     Self::try_decode_struct_field_matching(struct_field_matching)?;
                 let cast_mode = Self::try_decode_schema_evolution_cast_mode(cast_mode)?;
-                if !file_storage.is_empty() {
-                    let storage = file_storage
-                        .into_iter()
-                        .map(|(path, bytes)| {
-                            Ok((path, ParquetStorage(Arc::new(try_decode_schema(&bytes)?))))
-                        })
-                        .collect::<Result<HashMap<_, _>>>()?;
-                    for group in &mut config.file_groups {
-                        for index in 0..group.len() {
-                            let file = &mut group[index];
-                            if let Some(storage) = storage.get(file.object_meta.location.as_ref()) {
-                                file.extensions.insert(storage.clone());
-                            }
-                        }
-                    }
-                    config.file_source = ParquetStorageSource::wrap_if_needed(
-                        Arc::clone(&config.file_source),
-                        struct_field_matching,
-                        &config.file_groups,
-                    );
-                }
                 let adapter_factory =
                     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::with_cast_mode(
                         struct_field_matching,
                         cast_mode,
                     );
-                let source = FileScanConfigBuilder::from(config)
+                let source = FileScanConfigBuilder::from(source)
                     .with_expr_adapter(Some(Arc::new(adapter_factory)))
                     .build();
                 let scan = DataSourceExec::new(Arc::new(source));
@@ -2708,7 +2684,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         options,
                     })
-                } else if let Some(parquet_source) = ParquetStorageSource::parquet_source(file_source.as_ref()) {
+                } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -2730,17 +2706,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .transpose()?;
                     let (struct_field_matching, cast_mode) =
                         Self::parquet_schema_evolution_modes(file_scan)?;
-                    let mut file_storage = HashMap::new();
-                    for file in file_scan.file_groups.iter().flat_map(|group| group.iter()) {
-                        if let Some(storage) = file.extensions.get::<ParquetStorage>() {
-                            let path = file.object_meta.location.as_ref();
-                            if !file_storage.contains_key(path) {
-                                file_storage.insert(path.to_owned(), try_encode_schema(&storage.0)?);
-                            }
-                        }
-                    }
                     NodeKind::Parquet(r#gen::ParquetExecNode {
-                        file_storage,
                         base_config,
                         options,
                         predicate,
@@ -5114,12 +5080,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                     matching,
                     cast_mode,
-                )
-                .with_parquet_storage(
-                    node.parquet_storage
-                        .as_deref()
-                        .map(try_decode_field_ref)
-                        .transpose()?,
                 );
                 Ok(Arc::new(cast))
             }
@@ -5186,7 +5146,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.target_field().as_ref(),
                 cast.matching(),
                 cast.cast_mode(),
-                cast.parquet_storage(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
         } else if let Some(default) = node.downcast_ref::<SchemaEvolutionDefaultExpr>() {
@@ -5241,7 +5200,6 @@ impl RemoteExecutionCodec {
             target_schema,
             struct_field_matching,
             cast_mode,
-            ..
         } = node;
         if inputs.len() != 1 {
             return plan_err!(
@@ -5281,14 +5239,12 @@ impl RemoteExecutionCodec {
         target_field: &Field,
         matching: StructFieldMatching,
         cast_mode: SchemaEvolutionCastMode,
-        parquet_storage: Option<&Arc<Field>>,
     ) -> Result<CastColumnExprNode> {
         let input_schema = Schema::new(vec![input_field.clone()]);
         let input_schema = try_encode_schema(&input_schema)?;
         let target_schema = Schema::new(vec![target_field.clone()]);
         let target_schema = try_encode_schema(&target_schema)?;
         Ok(CastColumnExprNode {
-            parquet_storage: parquet_storage.map(try_encode_field_ref).transpose()?,
             input_schema,
             target_schema,
             struct_field_matching: Self::try_encode_struct_field_matching(matching),

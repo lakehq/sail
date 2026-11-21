@@ -173,7 +173,6 @@ message CastColumnExprNode {
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
   SchemaEvolutionCastMode cast_mode = 4;
-  optional bytes parquet_storage = 5;
 }
 
 message LambdaExprNode {
@@ -829,7 +828,6 @@ message ParquetExecNode {
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionCastMode cast_mode = 6;
   repeated bytes virtual_columns = 7;
-  map<string, bytes> file_storage = 8;
 }
 
 message ArrowExecNode {

@@ -506,21 +506,14 @@ impl GlobUrl {
         if syntax == ReadPathSyntax::HadoopLiteral {
             return Ok(vec![(path.to_owned(), None)]);
         }
-        let paths = expand_glob_pattern(path, syntax)?
+        expand_glob_pattern(path, syntax)?
             .into_iter()
             .map(|x| {
                 let (prefix, suffix) = Self::split_glob_path(&x, syntax)?;
-                let suffix = if uri {
-                    Self::create_percent_decoded_pattern(&suffix)?
-                } else if suffix.is_empty() {
-                    None
-                } else {
-                    Some(Pattern::new(&suffix).map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?)
-                };
-                Ok((prefix, suffix))
+                let pattern = Self::parse_glob_suffix(&suffix, uri)?;
+                Ok((prefix, pattern))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(paths)
+            .collect()
     }
 
     fn normalize_hadoop_glob_path(path: &str) -> Cow<'_, str> {
@@ -552,13 +545,17 @@ impl GlobUrl {
         Cow::Owned(format!("{prefix}{}", parts.join("/")))
     }
 
-    fn create_percent_decoded_pattern(s: &str) -> Result<Option<Pattern>> {
+    fn parse_glob_suffix(s: &str, uri: bool) -> Result<Option<Pattern>> {
         if s.is_empty() {
             return Ok(None);
         }
-        let decoded = percent_decode(s.as_bytes())
-            .decode_utf8()
-            .map_err(|e| plan_datafusion_err!("{e}: {s}"))?;
+        let decoded = if uri {
+            percent_decode(s.as_bytes())
+                .decode_utf8()
+                .map_err(|e| plan_datafusion_err!("{e}: {s}"))?
+        } else {
+            Cow::Borrowed(s)
+        };
         let pattern =
             Pattern::new(decoded.as_ref()).map_err(|e| plan_datafusion_err!("{e}: {s}"))?;
         Ok(Some(pattern))
@@ -691,13 +688,13 @@ pub(crate) async fn resolve_read_urls(
 ) -> Result<Vec<Vec<ListingTableUrl>>> {
     let mut urls = vec![];
     for path in paths {
-        let alternatives = if expand_input_globs {
-            GlobUrl::parse_with_syntax(&path, ReadPathSyntax::HadoopGlob)?
+        let syntax = if expand_input_globs {
+            ReadPathSyntax::HadoopGlob
         } else {
-            GlobUrl::parse(&path)?
+            ReadPathSyntax::UrlGlob
         };
         let mut matches = vec![];
-        for url in alternatives {
+        for url in GlobUrl::parse_with_syntax(&path, syntax)? {
             let url = rewrite_directory_url(url, ctx).await?;
             if expand_input_globs && let Some(pattern) = url.glob {
                 matches.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
@@ -716,10 +713,10 @@ pub(crate) async fn resolve_read_urls(
                 matches.push(url);
             }
         }
-        if expand_input_globs && matches.is_empty() {
-            return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
-        }
         if expand_input_globs {
+            if matches.is_empty() {
+                return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
+            }
             matches.retain(|url| {
                 !url.prefix()
                     .parts()
@@ -798,7 +795,6 @@ async fn expand_listing_roots(
         parents = children;
     }
     matches.extend(parents.into_iter().map(|path| (path, true)));
-    matches.sort_unstable();
     matches
         .into_iter()
         .map(|(path, directory)| {

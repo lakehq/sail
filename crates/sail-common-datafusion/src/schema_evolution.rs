@@ -25,9 +25,9 @@ use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
 use crate::parquet_schema::{
-    cast_parquet_integer, fixed_decimal_bytes, is_parquet_integer_target,
+    cast_parquet_integer, fixed_decimal_byte_width, fixed_decimal_bytes, is_parquet_integer_target,
     parquet_integer_cast_wraps, parquet_temporal_storage_cast, parquet_unscaled_integer,
-    storage_child, validate_parquet_field,
+    validate_parquet_field,
 };
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
@@ -224,7 +224,6 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
             physical_file_schema,
             StructFieldMatching::Name,
             SchemaEvolutionCastMode::Strict,
-            None,
         )
     }
 }
@@ -233,7 +232,6 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
 pub struct SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
-    parquet_storage: Option<SchemaRef>,
 }
 
 impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
@@ -244,23 +242,20 @@ impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
         Self {
             matching,
             cast_mode,
-            parquet_storage: None,
         }
     }
 
     pub fn new(matching: StructFieldMatching) -> Self {
-        Self::with_cast_mode(matching, SchemaEvolutionCastMode::Strict)
+        Self {
+            matching,
+            cast_mode: SchemaEvolutionCastMode::Strict,
+        }
     }
 
     pub fn new_relaxed_timezone(matching: StructFieldMatching) -> Self {
-        Self::with_cast_mode(matching, SchemaEvolutionCastMode::RelaxedTimezone)
-    }
-
-    pub(crate) fn for_parquet_file(matching: StructFieldMatching, storage: SchemaRef) -> Self {
         Self {
             matching,
-            cast_mode: SchemaEvolutionCastMode::Parquet,
-            parquet_storage: Some(storage),
+            cast_mode: SchemaEvolutionCastMode::RelaxedTimezone,
         }
     }
 }
@@ -276,7 +271,6 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactoryWit
             physical_file_schema,
             self.matching,
             self.cast_mode,
-            self.parquet_storage.clone(),
         )
     }
 }
@@ -286,7 +280,6 @@ fn create_schema_evolution_adapter(
     physical_file_schema: SchemaRef,
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
-    parquet_storage: Option<SchemaRef>,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let column_mapping = create_column_mapping(
         &logical_file_schema,
@@ -299,7 +292,6 @@ fn create_schema_evolution_adapter(
         logical_file_schema,
         physical_file_schema,
         column_mapping,
-        parquet_storage,
         matching,
         cast_mode,
     }))
@@ -379,7 +371,6 @@ struct SchemaEvolutionPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     column_mapping: Vec<ColumnMapping>,
-    parquet_storage: Option<SchemaRef>,
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
 }
@@ -390,7 +381,6 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
             column_mapping: &self.column_mapping,
-            parquet_storage: self.parquet_storage.as_deref(),
             matching: self.matching,
             cast_mode: self.cast_mode,
         };
@@ -406,16 +396,11 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
     logical_file_schema: &'a Schema,
     physical_file_schema: &'a Schema,
     column_mapping: &'a [ColumnMapping],
-    parquet_storage: Option<&'a Schema>,
     matching: StructFieldMatching,
     cast_mode: SchemaEvolutionCastMode,
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
-    fn storage_field(&self, name: &str) -> Option<&Arc<Field>> {
-        self.parquet_storage?.fields().find(name).map(|(_, f)| f)
-    }
-
     fn rewrite_parquet(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         expr.transform_down(|expr| {
             if let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>()
@@ -628,7 +613,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         };
         let mut logical = &self.logical_file_schema.fields()[index];
         let mut physical = &self.physical_file_schema.fields()[*physical_index];
-        let mut storage = self.storage_field(physical.name());
         let mut leaf: Arc<dyn PhysicalExpr> =
             Arc::new(Column::new(physical.name(), *physical_index));
         if !path.is_empty() {
@@ -659,7 +643,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 )))));
                 logical = field;
                 physical = source;
-                storage = storage_child(storage, source.name());
             }
             leaf = Arc::new(ScalarFunctionExpr::try_new(
                 Arc::new(function.fun().clone()),
@@ -669,13 +652,11 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             )?);
         }
         let target = logical.as_ref().clone().with_data_type(requested.clone());
-        validate_parquet_field(logical.name(), &target, physical, storage, self.matching)?;
+        validate_parquet_field(logical.name(), &target, physical, self.matching)?;
         if requested == physical.data_type() {
             return Ok(Some(leaf));
         }
-        Ok(Some(
-            self.apply_type_cast(leaf, &target, physical, storage)?.data,
-        ))
+        Ok(Some(self.apply_type_cast(leaf, &target, physical)?.data))
     }
 
     fn rewrite_expr(
@@ -845,7 +826,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             column.index() != physical_index || column.name() != physical_field.name();
         let needs_type_cast = logical_field.data_type() != physical_field.data_type();
 
-        let storage = self.storage_field(physical_field.name());
         match (needs_column_update, needs_type_cast) {
             (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
@@ -853,11 +833,11 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                     Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
-            (false, true) => self.apply_type_cast(expr, logical_field, physical_field, storage),
+            (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
                 let new_column =
                     Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
-                self.apply_type_cast(Arc::new(new_column), logical_field, physical_field, storage)
+                self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
             }
         }
     }
@@ -867,7 +847,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         column_expr: Arc<dyn PhysicalExpr>,
         logical_field: &Field,
         physical_field: &Field,
-        storage: Option<&Arc<Field>>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if self.cast_mode == SchemaEvolutionCastMode::Parquet
             && logical_field.data_type().is_nested()
@@ -876,7 +855,6 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 logical_field.name(),
                 logical_field,
                 &Arc::new(physical_field.clone()),
-                storage,
                 self.matching,
             )?;
         }
@@ -917,8 +895,7 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             None,
             self.matching,
             self.cast_mode,
-        )
-        .with_parquet_storage(storage.cloned());
+        );
         Ok(Transformed::yes(Arc::new(cast)))
     }
 }
@@ -1066,7 +1043,7 @@ fn can_cast_field_with_schema_evolution(
     if cast_mode == SchemaEvolutionCastMode::Parquet
         && (parquet_temporal_storage_cast(source.data_type(), target.data_type()).is_some()
             || (source.data_type().is_decimal() && is_parquet_integer_target(target.data_type()))
-            || (source.data_type().is_decimal() && target.data_type().is_binary()))
+            || fixed_decimal_byte_width(source, target.data_type()).is_some())
     {
         return Ok(true);
     }
@@ -1308,7 +1285,6 @@ fn validate_map_entries_compatibility(
 pub struct SchemaEvolutionCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
     input_field: Arc<Field>,
-    parquet_storage: Option<Arc<Field>>,
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
     matching: StructFieldMatching,
@@ -1318,7 +1294,6 @@ pub struct SchemaEvolutionCastColumnExpr {
 impl PartialEq for SchemaEvolutionCastColumnExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && self.parquet_storage == other.parquet_storage
             && self.input_field.eq(&other.input_field)
             && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
@@ -1331,7 +1306,6 @@ impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.input_field.hash(state);
-        self.parquet_storage.hash(state);
         self.target_field.hash(state);
         self.cast_options.hash(state);
         self.matching.hash(state);
@@ -1412,20 +1386,10 @@ impl SchemaEvolutionCastColumnExpr {
             expr,
             input_field,
             target_field,
-            parquet_storage: None,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
             matching,
             cast_mode,
         }
-    }
-
-    pub fn with_parquet_storage(mut self, storage: Option<Arc<Field>>) -> Self {
-        self.parquet_storage = storage;
-        self
-    }
-
-    pub fn parquet_storage(&self) -> Option<&Arc<Field>> {
-        self.parquet_storage.as_ref()
     }
 
     pub fn input_field(&self) -> &Arc<Field> {
@@ -1447,7 +1411,7 @@ impl SchemaEvolutionCastColumnExpr {
     fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
         cast_array_with_schema_evolution_inner(
             array,
-            self.parquet_storage.as_ref(),
+            Some(&self.input_field),
             self.target_field.as_ref(),
             &self.cast_options,
             self.matching,
@@ -1501,10 +1465,14 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
         let child = children.pop().ok_or_else(|| {
             DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
-        Ok(Arc::new(Self {
-            expr: child,
-            ..self.as_ref().clone()
-        }))
+        Ok(Arc::new(Self::from_parts(
+            child,
+            Arc::clone(&self.input_field),
+            Arc::clone(&self.target_field),
+            Some(self.cast_options.clone()),
+            self.matching,
+            self.cast_mode,
+        )))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1546,7 +1514,7 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
 
 fn cast_array_with_schema_evolution_inner(
     source: &ArrayRef,
-    storage: Option<&Arc<Field>>,
+    source_field: Option<&Field>,
     target_field: &Field,
     cast_options: &CastOptions,
     matching: StructFieldMatching,
@@ -1561,11 +1529,10 @@ fn cast_array_with_schema_evolution_inner(
     }
 
     if cast_mode == SchemaEvolutionCastMode::Parquet
-        && source.data_type().is_decimal()
-        && target_field.data_type().is_binary()
-        && let Some(DataType::FixedSizeBinary(width)) = storage.map(|f| f.data_type())
+        && let Some(width) =
+            source_field.and_then(|field| fixed_decimal_byte_width(field, target_field.data_type()))
     {
-        return fixed_decimal_bytes(source, *width, target_field.data_type());
+        return fixed_decimal_bytes(source, width, target_field.data_type());
     }
 
     if cast_mode == SchemaEvolutionCastMode::Parquet
@@ -1583,17 +1550,17 @@ fn cast_array_with_schema_evolution_inner(
         );
     }
 
-    let storage_array;
+    let storage;
     let source = if cast_mode == SchemaEvolutionCastMode::Parquet
         && let Some(ty) =
             parquet_temporal_storage_cast(source.data_type(), target_field.data_type())
     {
-        storage_array = if parquet_integer_cast_wraps(source.data_type(), &ty) {
+        storage = if parquet_integer_cast_wraps(source.data_type(), &ty) {
             cast_parquet_integer(source.as_ref(), &ty)?
         } else {
             cast_with_options(source, &ty, cast_options)?
         };
-        &storage_array
+        &storage
     } else {
         source
     };
@@ -1640,14 +1607,13 @@ fn cast_array_with_schema_evolution_inner(
     let element_field = match source.data_type() {
         DataType::List(element)
         | DataType::LargeList(element)
-        | DataType::FixedSizeList(element, _) => storage_child(storage, element.name()),
+        | DataType::FixedSizeList(element, _) => Some(element.as_ref()),
         _ => None,
     };
 
     match target_field.data_type() {
         DataType::Struct(target_fields) => cast_struct_array_with_schema_evolution(
             source,
-            storage,
             target_fields,
             cast_options,
             matching,
@@ -1742,10 +1708,6 @@ fn cast_array_with_schema_evolution_inner(
                 );
             };
 
-            let entries_storage = match source.data_type() {
-                DataType::Map(entries, _) => storage_child(storage, entries.name()),
-                _ => None,
-            };
             let num_entries = source_map.entries().len();
             let mut kv_arrays: Vec<ArrayRef> = Vec::with_capacity(target_kv_fields.len());
             let mut kv_fields: Vec<Arc<Field>> = Vec::with_capacity(target_kv_fields.len());
@@ -1760,7 +1722,7 @@ fn cast_array_with_schema_evolution_inner(
                 ) {
                     Some(i) => kv_arrays.push(cast_array_with_schema_evolution_inner(
                         source_map.entries().column(i),
-                        storage_child(entries_storage, source_map.entries().fields()[i].name()),
+                        Some(&source_map.entries().fields()[i]),
                         target_child.as_ref(),
                         cast_options,
                         matching,
@@ -1803,7 +1765,6 @@ fn cast_variant_array_with_schema_evolution(
     let unshredded = Arc::new(unshredded.into_inner()) as ArrayRef;
     cast_struct_array_to_fields(
         &unshredded,
-        None,
         target_fields,
         cast_options,
         StructFieldMatching::Name,
@@ -1813,7 +1774,6 @@ fn cast_variant_array_with_schema_evolution(
 
 fn cast_struct_array_with_schema_evolution(
     source: &ArrayRef,
-    storage: Option<&Arc<Field>>,
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
     matching: StructFieldMatching,
@@ -1840,19 +1800,11 @@ fn cast_struct_array_with_schema_evolution(
         matching,
         cast_mode,
     )?;
-    cast_struct_array_to_fields(
-        source,
-        storage,
-        target_fields,
-        cast_options,
-        matching,
-        cast_mode,
-    )
+    cast_struct_array_to_fields(source, target_fields, cast_options, matching, cast_mode)
 }
 
 fn cast_struct_array_to_fields(
     source: &ArrayRef,
-    storage: Option<&Arc<Field>>,
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
     matching: StructFieldMatching,
@@ -1874,7 +1826,7 @@ fn cast_struct_array_to_fields(
             Some((source_index, source_child)) => {
                 arrays.push(cast_array_with_schema_evolution_inner(
                     source_struct.column(source_index),
-                    storage_child(storage, source_child.name()),
+                    Some(source_child),
                     target_child.as_ref(),
                     cast_options,
                     matching,
@@ -1967,7 +1919,6 @@ mod tests {
             legacy,
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         assert!(
             adapter
@@ -1984,7 +1935,6 @@ mod tests {
             identified,
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         assert_eq!(
             adapter
@@ -2004,7 +1954,6 @@ mod tests {
             reused,
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         assert_eq!(
             adapter
@@ -2023,7 +1972,6 @@ mod tests {
             Arc::new(Schema::empty()),
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         assert!(
             adapter
@@ -2060,7 +2008,6 @@ mod tests {
             physical.clone(),
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         let batch = RecordBatch::try_new(physical, vec![Arc::new(Int64Array::from(vec![1, 2]))])?;
         let expression = adapter.rewrite(Arc::new(Column::new("values", 0)))?;
@@ -2110,7 +2057,6 @@ mod tests {
                 Arc::clone(&physical),
                 matching,
                 SchemaEvolutionCastMode::Strict,
-                None,
             )?;
             let expr = adapter.rewrite(Arc::new(Column::new("position", 0)))?;
             assert!(
@@ -2162,7 +2108,6 @@ mod tests {
             Arc::clone(&physical_schema),
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
 
         let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_b", 0)))?;
@@ -2181,7 +2126,6 @@ mod tests {
             physical_schema,
             StructFieldMatching::FieldId,
             SchemaEvolutionCastMode::Strict,
-            None,
         )?;
         let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_a", 0)))?;
         let column = rewritten

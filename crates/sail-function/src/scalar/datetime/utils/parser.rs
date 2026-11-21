@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// The parsed pieces of a timestamp string: nine integer segments
-/// (year, month, day, hour, minute, second, microsecond, and two spare zone
+/// (year, month, day, hour, minute, second, fractional second, and two spare zone
 /// segments), an optional timezone string, and whether only a time was given.
 pub(crate) struct ParsedTimestamp {
     pub(crate) segments: [i64; 9],
-    nanos_within_micro: i64,
     pub(crate) timezone: Option<String>,
     pub(crate) just_time: bool,
 }
@@ -24,6 +23,10 @@ fn is_whitespace_or_iso_control(value: u8) -> bool {
 
 /// Splits a Spark timestamp string into numeric and timezone components.
 pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
+    parse_timestamp_components(value, 6)
+}
+
+fn parse_timestamp_components(value: &str, fraction_precision: usize) -> Option<ParsedTimestamp> {
     let bytes = value.as_bytes();
     let mut segments: [i64; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
     let mut segment = 0usize;
@@ -43,7 +46,6 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     }
 
     let mut fractional_digits = 0usize;
-    let mut nanos_within_micro = 0;
     let mut just_time = false;
     let mut timezone = None;
     let mut year_sign = None;
@@ -59,11 +61,8 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
             let parsed = i64::from(byte - b'0');
             if segment == 6 {
                 fractional_digits += 1;
-                if (6..9).contains(&current_digits) {
-                    nanos_within_micro += parsed * [100, 10, 1][current_digits - 6];
-                }
             }
-            if segment != 6 || current_digits < 6 {
+            if segment != 6 || current_digits < fraction_precision {
                 current_value = current_value.checked_mul(10)?.checked_add(parsed)?;
             }
             current_digits += 1;
@@ -157,7 +156,7 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     }
     segments[segment] = current_value;
 
-    while fractional_digits < 6 {
+    while fractional_digits < fraction_precision {
         segments[6] *= 10;
         fractional_digits += 1;
     }
@@ -165,7 +164,6 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     segments[0] *= year_sign.unwrap_or(1);
     Some(ParsedTimestamp {
         segments,
-        nanos_within_micro,
         timezone,
         just_time,
     })
@@ -179,8 +177,8 @@ pub fn parse_time_nanoseconds(value: &str) -> Option<i64> {
         Some((clock, suffix)) if suffix.eq_ignore_ascii_case("PM") => (clock, Some(true)),
         _ => (value, None),
     };
-    let parsed = parse_timestamp_string(clock)?;
-    let [_, _, _, hour, minute, second, micros, _, _] = parsed.segments;
+    let parsed = parse_timestamp_components(clock, 9)?;
+    let [_, _, _, hour, minute, second, nanos, _, _] = parsed.segments;
     if !parsed.just_time || parsed.timezone.is_some() || minute >= 60 || second >= 60 {
         return None;
     }
@@ -190,7 +188,7 @@ pub fn parse_time_nanoseconds(value: &str) -> Option<i64> {
         _ => return None,
     };
     let seconds = (hour * 60 + minute) * 60 + second;
-    Some(seconds * 1_000_000_000 + micros * 1_000 + parsed.nanos_within_micro)
+    Some(seconds * 1_000_000_000 + nanos)
 }
 
 #[cfg(test)]

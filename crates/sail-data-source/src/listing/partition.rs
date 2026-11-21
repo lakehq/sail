@@ -383,9 +383,7 @@ fn infer_partition_type(
     timestamp_parser: &TimestampParser,
 ) -> DataType {
     let normalized = normalize_decimal_digits(value);
-    let inferred = if value == HIVE_NULL {
-        DataType::Null
-    } else if normalized.parse::<i32>().is_ok() {
+    let inferred = if normalized.parse::<i32>().is_ok() {
         DataType::Int32
     } else if normalized.parse::<i64>().is_ok() {
         DataType::Int64
@@ -411,7 +409,6 @@ fn infer_partition_type(
     };
     match (current, &inferred) {
         (DataType::Null, _) => inferred,
-        (_, DataType::Null) => current.clone(),
         (a, b) if a == b => inferred,
         (DataType::Int32, DataType::Int64) | (DataType::Int64, DataType::Int32) => DataType::Int64,
         (DataType::Int32, DataType::Float64) | (DataType::Float64, DataType::Int32) => {
