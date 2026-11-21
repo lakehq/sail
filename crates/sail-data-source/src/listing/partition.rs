@@ -7,9 +7,9 @@ use std::num::NonZeroU8;
 use std::sync::{Arc, LazyLock};
 
 use arrow::datatypes::Date32Type;
-use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use bigdecimal::{BigDecimal, ToPrimitive};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use datafusion::catalog::Session;
 use datafusion_common::{
     Result, ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
@@ -19,10 +19,12 @@ use icu_properties::CodePointMapData;
 use icu_properties::props::GeneralCategory;
 use object_store::path::Path;
 use regex::Regex;
+use sail_common::spec;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp::TimestampParser;
+use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
 use sail_sql_analyzer::parser::parse_date;
 
 use crate::url::resolve_base_directory_url;
@@ -38,6 +40,16 @@ pub(super) struct BasePathOptions {
     validate: bool,
     ignore_invalid_paths: bool,
     local_timestamp_parser: TimestampParser,
+}
+
+impl BasePathOptions {
+    fn timestamp_parser(&self, ty: &DataType) -> &TimestampParser {
+        if matches!(ty, DataType::Timestamp(_, Some(_))) {
+            &self.local_timestamp_parser
+        } else {
+            &TimestampParser::Ntz
+        }
+    }
 }
 
 pub(super) fn read_option<'a>(options: &'a [OptionLayer], name: &str) -> Option<&'a str> {
@@ -168,6 +180,15 @@ fn partition_path<'a>(
         } else if with_base_path && !columns.is_empty() {
             break;
         }
+    }
+    if with_base_path
+        && base_len == 0
+        && root
+            .prefix()
+            .filename()
+            .is_some_and(|n| n.eq_ignore_ascii_case("_temporary"))
+    {
+        return Ok(None);
     }
     columns.reverse();
     Ok(Some(PartitionPath {
@@ -328,6 +349,7 @@ fn infer_partition_type(
     value: &str,
     timestamp_type: &DataType,
     supports_time: bool,
+    timestamp_parser: &TimestampParser,
 ) -> DataType {
     let normalized = normalize_decimal_digits(value);
     let inferred = if value == HIVE_NULL {
@@ -345,7 +367,8 @@ fn infer_partition_type(
     } else {
         let value = decoded(value);
         if PARTITION_DATETIME.is_match(&value)
-            && NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f").is_ok()
+            && value.contains(' ')
+            && timestamp_parser.parse_unformatted(&value).is_ok()
         {
             timestamp_type.clone()
         } else if supports_time && PARTITION_TIME.is_match(&value) {
@@ -440,7 +463,13 @@ impl PartitionDiscovery {
             *ty = if let Some(options) = options
                 && let Some(timestamp_type) = &options.timestamp_type
             {
-                infer_partition_type(ty, value, timestamp_type, options.supports_time)
+                infer_partition_type(
+                    ty,
+                    value,
+                    timestamp_type,
+                    options.supports_time,
+                    options.timestamp_parser(timestamp_type),
+                )
             } else {
                 DataType::Utf8
             };
@@ -478,7 +507,7 @@ impl PartitionDiscovery {
                 let values = fields
                     .iter()
                     .zip(values)
-                    .map(|(field, value)| cast_partition_value(options, &value, field.data_type()))
+                    .map(|(field, value)| cast_partition_value(options, &value, field))
                     .collect::<Result<_>>()?;
                 Ok((directory, values))
             })
@@ -489,12 +518,13 @@ impl PartitionDiscovery {
 fn cast_partition_value(
     options: &BasePathOptions,
     value: &str,
-    ty: &DataType,
+    field: &Field,
 ) -> Result<ScalarValue> {
+    let ty = field.data_type();
     if value == HIVE_NULL || *ty == DataType::Null {
         return ScalarValue::try_from(ty);
     }
-    let result = parse_partition_value(options, value, ty);
+    let result = parse_partition_value(options, value, field);
     match result {
         Err(_) if !options.validate => ScalarValue::try_from(ty),
         result => result,
@@ -504,8 +534,9 @@ fn cast_partition_value(
 fn parse_partition_value(
     options: &BasePathOptions,
     value: &str,
-    ty: &DataType,
+    field: &Field,
 ) -> Result<ScalarValue> {
+    let ty = field.data_type();
     match ty {
         DataType::Float32 | DataType::Float64 => {
             let number = java_double(value).ok_or_else(|| {
@@ -514,12 +545,9 @@ fn parse_partition_value(
             ScalarValue::Float64(Some(number)).cast_to(ty)
         }
         DataType::Timestamp(_, zone) => {
-            let parser = if zone.is_some() {
-                &options.local_timestamp_parser
-            } else {
-                &TimestampParser::Ntz
-            };
-            let micros = parser.parse_unformatted(&decoded(value))?;
+            let micros = options
+                .timestamp_parser(ty)
+                .parse_unformatted(&decoded(value))?;
             ScalarValue::TimestampMicrosecond(Some(micros), zone.clone()).cast_to(ty)
         }
         DataType::Date32 => {
@@ -533,17 +561,58 @@ fn parse_partition_value(
         DataType::Utf8 | DataType::Time32(_) | DataType::Time64(_) => {
             ScalarValue::try_from_string(decoded(value).into_owned(), ty)
         }
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+            // Released Spark versions parse an Int and narrow it for byte and short partitions.
             let integer = normalize_decimal_digits(value)
-                .parse::<i64>()
+                .parse::<i32>()
                 .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}"))?;
-            ScalarValue::Int64(Some(integer)).cast_to(ty)
+            Ok(match ty {
+                DataType::Int8 => ScalarValue::Int8(Some(integer as i8)),
+                DataType::Int16 => ScalarValue::Int16(Some(integer as i16)),
+                _ => ScalarValue::Int32(Some(integer)),
+            })
         }
+        DataType::Int64 => normalize_decimal_digits(value)
+            .parse::<i64>()
+            .map(|v| ScalarValue::Int64(Some(v)))
+            .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}")),
         DataType::Decimal128(_, _) => {
             let value = normalize_decimal_digits(value);
+            if value.contains('_') || value.parse::<BigDecimal>().is_err() {
+                return plan_err!("invalid decimal partition value: {value}");
+            }
+            // Spark reads a valid decimal that overflows the declared precision as null.
             match integer_decimal(&value) {
                 Some(decimal) => decimal.cast_to(ty),
                 None => ScalarValue::try_from_string(value.into_owned(), ty),
+            }
+            .or_else(|_| ScalarValue::try_from(ty))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond) => {
+            let qualifier = match field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) {
+                Some(metadata) => spec::SparkIntervalMetadata::from_json(metadata)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+                None if matches!(ty, DataType::Duration(_)) => {
+                    spec::SparkIntervalMetadata::DayTime {
+                        start_field: spec::DayTimeIntervalField::Day,
+                        end_field: spec::DayTimeIntervalField::Second,
+                    }
+                }
+                None => spec::SparkIntervalMetadata::YearMonth {
+                    start_field: spec::YearMonthIntervalField::Year,
+                    end_field: spec::YearMonthIntervalField::Month,
+                },
+            };
+            match parse_interval_with_qualifier(&decoded(value), qualifier).map_err(|e| {
+                plan_datafusion_err!("invalid interval partition value {value}: {e}")
+            })? {
+                IntervalValue::YearMonth { months, .. } => {
+                    Ok(ScalarValue::IntervalYearMonth(Some(months)))
+                }
+                IntervalValue::Microsecond { microseconds, .. } => {
+                    Ok(ScalarValue::DurationMicrosecond(Some(microseconds)))
+                }
+                _ => plan_err!("unexpected interval partition value: {value}"),
             }
         }
         _ => ScalarValue::try_from_string(value.to_owned(), ty),

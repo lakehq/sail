@@ -568,3 +568,83 @@ def test_base_path_file_glob_schema_sample(spark, tmp_path):
     df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path / "p=*/row.parquet"))
     assert df.schema.simpleString() == "struct<id:bigint,p:string>"
     assert df.where("p <> 'zzz'").count() == 10
+
+
+@pytest.mark.parametrize("prefix", ["file:", "file://"])
+def test_base_path_hadoop_file_uri(spark, tmp_path, prefix):
+    base = tmp_path / "bracket[old]#%3A"
+    part = base / "p=1"
+    part.mkdir(parents=True)
+    (part / "foo%3Abar.json").write_text('{"id":1}')
+    (part / "foo:bar.json").write_text('{"id":2}')
+    reader = spark.read.option("basePath", f"{prefix}{base}")
+    df = reader.json(f"{prefix}{tmp_path}/bracket*#%3A/p=*/foo%3Abar.json")
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+def test_base_path_temporary_directory_as_root(spark, tmp_path):
+    base = tmp_path / "_temporary"
+    write_json_partition(base, "p=1")
+    df = spark.read.option("basePath", str(base)).schema("id INT").json(str(base))
+    assert df.columns == ["id"]
+    assert df.collect() == []
+
+
+def test_base_path_summary_prefix_in_data_filename(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "_metadata=bar").write_text('{"id":1}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+def test_base_path_glob_streaming_metadata(spark, tmp_path):
+    write_json_partition(tmp_path, "data")
+    log = tmp_path / "_spark_metadata"
+    log.mkdir()
+    (log / "0").write_text('{"id":3}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / "*"))
+    assert df.collect() == [Row(id=1)]
+    assert len(df.inputFiles()) == 1
+
+
+def test_listing_brace_alternative_schema_sample(spark, tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    for i in range(12):
+        (a / f"{i}.json").write_text('{"id":1}')
+    b = tmp_path / "b"
+    b.mkdir()
+    (b / "row.json").write_text('{"extra":"b"}')
+    df = spark.read.json(str(tmp_path / "{a,b}"))
+    assert df.where("extra IS NOT NULL").select("extra").collect() == [Row(extra="b")]
+
+
+@pytest.mark.parametrize(
+    ("ty", "token", "expected"), [("TINYINT", "128", -128), ("SMALLINT", "65535", -1), ("DECIMAL(3,0)", "1000", None)]
+)
+def test_base_path_numeric_partition_overflow(spark, tmp_path, ty, token, expected):
+    write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).schema(f"id INT, p {ty}").json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=expected)]
+
+
+@pytest.mark.parametrize(
+    ("ty", "token", "expected"),
+    [
+        ("YEAR TO MONTH", "1-2", "1-2"),
+        ("YEAR TO MONTH", "INTERVAL '1-2' YEAR TO MONTH", "1-2"),
+        ("DAY TO SECOND", "1 02%3A03%3A04", "1 02:03:04"),
+        ("HOUR TO MINUTE", "12%3A34", "12:34"),
+    ],
+)
+def test_base_path_interval_partition(spark, tmp_path, ty, token, expected):
+    write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).schema(f"id INT, p INTERVAL {ty}").json(str(tmp_path))
+    assert df.selectExpr("CAST(p AS STRING) AS value").collect() == [Row(value=f"INTERVAL '{expected}' {ty}")]
+
+
+def test_base_path_leap_second_inference(spark, tmp_path):
+    write_json_partition(tmp_path, "p=2025-01-01 10%3A20%3A60")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p="2025-01-01 10:20:60")]

@@ -317,7 +317,7 @@ pub fn matches_path_glob_filter(
 }
 
 pub(super) fn is_summary_file(name: &str) -> bool {
-    name.starts_with("_common_metadata") || name.starts_with("_metadata")
+    !name.contains('=') && (name.starts_with("_common_metadata") || name.starts_with("_metadata"))
 }
 
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.

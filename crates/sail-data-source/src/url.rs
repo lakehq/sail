@@ -341,14 +341,34 @@ pub struct GlobUrl {
     pub glob: Option<Pattern>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadPathSyntax {
+    UrlGlob,
+    HadoopGlob,
+    HadoopLiteral,
+}
+
 impl GlobUrl {
     pub fn new(base: Url, glob: Option<Pattern>) -> Self {
         Self { base, glob }
     }
 
     pub fn parse(s: &str) -> Result<Vec<GlobUrl>> {
+        Self::parse_with_syntax(s, ReadPathSyntax::UrlGlob)
+    }
+
+    fn parse_with_syntax(s: &str, syntax: ReadPathSyntax) -> Result<Vec<GlobUrl>> {
         if std::path::Path::new(s).is_absolute() {
-            return GlobUrl::parse_file_path(s);
+            return Self::parse_file_path(s, syntax);
+        }
+        // Hadoop also accepts file:/absolute/path without an authority.
+        if syntax != ReadPathSyntax::UrlGlob
+            && let Some((scheme, path)) = s.split_once(':')
+            && scheme.eq_ignore_ascii_case("file")
+            && path.starts_with('/')
+            && !path.starts_with("//")
+        {
+            return Self::parse_file_path(path, syntax);
         }
         let url = RawGlobUrl::parser()
             .parse(s)
@@ -378,21 +398,33 @@ impl GlobUrl {
                 let Ok(url) = Url::parse(&base) else {
                     return plan_err!("base URL: {s}");
                 };
-                Self::parse_glob_path(if path.is_empty() { "/" } else { path }, true)?
-                    .into_iter()
-                    .map(|(prefix, suffix)| {
-                        let mut url = url.clone();
+                // Hadoop Path(String) treats percent signs as literal path characters.
+                // HTTP URLs continue to use URL escapes, queries, and fragments.
+                let uri_escapes =
+                    syntax == ReadPathSyntax::UrlGlob || matches!(url.scheme(), "http" | "https");
+                Self::parse_glob_path(
+                    if path.is_empty() { "/" } else { path },
+                    syntax,
+                    uri_escapes,
+                )?
+                .into_iter()
+                .map(|(prefix, suffix)| {
+                    let mut url = url.clone();
+                    if uri_escapes {
                         url.set_path(&prefix);
-                        Ok(Self::new(url, suffix))
-                    })
-                    .collect()
+                    } else {
+                        url.set_path(&prefix.replace('%', "%25"));
+                    }
+                    Ok(Self::new(url, suffix))
+                })
+                .collect()
             }
-            RawGlobUrl::RelativePath(x) => GlobUrl::parse_file_path(x),
+            RawGlobUrl::RelativePath(x) => Self::parse_file_path(x, syntax),
         }
     }
 
-    fn parse_file_path(path: &str) -> Result<Vec<Self>> {
-        Self::parse_glob_path(path, false)?
+    fn parse_file_path(path: &str, syntax: ReadPathSyntax) -> Result<Vec<Self>> {
+        Self::parse_glob_path(path, syntax, false)?
             .into_iter()
             .map(|(prefix, suffix)| {
                 let url = Self::url_from_file_path(&prefix)?;
@@ -401,7 +433,14 @@ impl GlobUrl {
             .collect()
     }
 
-    fn parse_glob_path(path: &str, uri: bool) -> Result<Vec<(String, Option<Pattern>)>> {
+    fn parse_glob_path(
+        path: &str,
+        syntax: ReadPathSyntax,
+        uri: bool,
+    ) -> Result<Vec<(String, Option<Pattern>)>> {
+        if syntax == ReadPathSyntax::HadoopLiteral {
+            return Ok(vec![(path.to_owned(), None)]);
+        }
         let paths = expand_glob_pattern(path)?
             .into_iter()
             .map(|x| {
@@ -557,7 +596,11 @@ pub(crate) async fn resolve_read_urls(
     let mut urls = vec![];
     let mut seen = HashSet::new();
     for path in paths {
-        let alternatives = GlobUrl::parse(&path)?;
+        let alternatives = if expand_input_globs {
+            GlobUrl::parse_with_syntax(&path, ReadPathSyntax::HadoopGlob)?
+        } else {
+            GlobUrl::parse(&path)?
+        };
         let mut matches = vec![];
         for url in alternatives {
             let url = rewrite_directory_url(url, ctx).await?;
@@ -581,12 +624,18 @@ pub(crate) async fn resolve_read_urls(
         if expand_input_globs && matches.is_empty() {
             return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
         }
-        urls.push(
-            matches
-                .into_iter()
-                .filter(|url| !expand_input_globs || seen.insert(url.as_str().to_owned()))
-                .collect(),
-        );
+        if expand_input_globs {
+            matches.retain(|url| {
+                !url.prefix()
+                    .parts()
+                    .any(|part| part.as_ref() == "_spark_metadata")
+                    && seen.insert(url.as_str().to_owned())
+            });
+            urls.push(matches);
+        } else {
+            // Preserve the existing sample per listing URL for ordinary reads.
+            urls.extend(matches.into_iter().map(|url| vec![url]));
+        }
     }
     Ok(urls)
 }
@@ -716,10 +765,13 @@ pub(crate) fn resolve_base_directory_url(path: &str) -> Result<Url> {
     if path.is_empty() {
         return plan_err!("Option 'basePath' cannot be empty");
     }
-    if let Some(url) = parse_absolute_directory_url(path) {
-        return Ok(url);
+    let mut url = GlobUrl::parse_with_syntax(path, ReadPathSyntax::HadoopLiteral)?
+        .one()?
+        .base;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
     }
-    GlobUrl::url_from_file_path(path)
+    Ok(url)
 }
 
 /// Parse an absolute directory location without glob expansion or filesystem probes.
