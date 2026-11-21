@@ -20,6 +20,7 @@ use icu_properties::props::GeneralCategory;
 use object_store::path::Path;
 use regex::Regex;
 use sail_common::spec;
+use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
@@ -164,8 +165,12 @@ pub(super) fn resolve_base_path(
     })
 }
 
-pub(super) fn names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
+fn directory_names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
     a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
+}
+
+pub(super) fn schema_names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
+    a == b || (!case_sensitive && spark_case_insensitive_name_eq(a, b))
 }
 
 fn parent_and_name(path: &str) -> (&str, &str) {
@@ -472,7 +477,7 @@ impl PartitionDiscovery {
                 && self
                     .base
                     .as_ref()
-                    .is_some_and(|b| !names_match(b, &base, false));
+                    .is_some_and(|b| !directory_names_match(b, &base, false));
             self.base.get_or_insert(base);
             if let Some(directory) = directory {
                 self.directories.insert(
@@ -495,7 +500,7 @@ impl PartitionDiscovery {
             || columns
                 .iter()
                 .zip(&parts)
-                .any(|((key, _), (name, _))| !names_match(key, name, case_sensitive))
+                .any(|((key, _), (name, _))| !directory_names_match(key, name, case_sensitive))
         {
             return plan_err!("found mixed partition columns at {file}: {columns:?} and {parts:?}");
         }
@@ -526,7 +531,11 @@ impl PartitionDiscovery {
             .is_some_and(|columns| !columns.is_empty())
     }
 
-    pub(super) fn fields(&self, nullable: bool) -> Result<Vec<FieldRef>> {
+    pub(super) fn fields(
+        &self,
+        options: Option<&BasePathOptions>,
+        schema: Option<&Schema>,
+    ) -> Result<Vec<FieldRef>> {
         if self.conflicting_bases && self.columns.is_some() {
             return plan_err!("Conflicting partition directory structures below basePath");
         }
@@ -534,7 +543,17 @@ impl PartitionDiscovery {
             .columns
             .iter()
             .flatten()
-            .map(|(key, ty)| Arc::new(Field::new(key, ty.clone(), nullable)))
+            .map(|(key, ty)| {
+                // Spark looks up partition name and type overrides using lowercased directory keys.
+                if let Some((options, schema)) = options.zip(schema)
+                    && let Some(field) = schema.fields().iter().find(|field| {
+                        directory_names_match(key, field.name(), options.case_sensitive)
+                    })
+                {
+                    return Arc::new(field.as_ref().clone().with_nullable(true));
+                }
+                Arc::new(Field::new(key, ty.clone(), options.is_some()))
+            })
             .collect())
     }
 
@@ -681,24 +700,25 @@ fn parse_partition_value(
 /// A user schema may override the discovered type or omit the partition column altogether.
 pub(super) fn split_discovered_partitions(
     schema: &Schema,
-    discovered: &[FieldRef],
+    partitions: Vec<FieldRef>,
     explicit_schema: bool,
     case_sensitive: bool,
     positional_schema: Option<&Schema>,
 ) -> (SchemaRef, Vec<FieldRef>, Option<Vec<String>>) {
     let partition_index = |name: &str| {
-        discovered
-            .iter()
-            .position(|f| names_match(name, f.name(), case_sensitive))
+        partitions.iter().position(|field| {
+            if explicit_schema {
+                schema_names_match(name, field.name(), case_sensitive)
+            } else {
+                directory_names_match(name, field.name(), case_sensitive)
+            }
+        })
     };
-    let mut partitions = discovered.to_vec();
     let mut file_fields = Vec::new();
     let mut output = Vec::new();
     for field in schema.fields() {
         if let Some(i) = partition_index(field.name()) {
-            if explicit_schema {
-                partitions[i] = Arc::new(field.as_ref().clone().with_nullable(true));
-            } else {
+            if !explicit_schema {
                 // Keep an overlapping partition column at its inferred file position.
                 output.push(partitions[i].name().clone());
             }
@@ -770,7 +790,7 @@ mod tests {
             assert!(discovery.observe(root, &file, Some(&options))?);
         }
         assert!(matches!(
-            discovery.fields(true),
+            discovery.fields(Some(&options), None),
             Err(datafusion_common::DataFusionError::Plan(message))
                 if message.contains("Conflicting partition directory structures")
         ));

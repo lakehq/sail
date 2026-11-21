@@ -451,6 +451,27 @@ def test_base_path_explicit_partition_field_case(spark, tmp_path):
     assert df.collect() == [Row(id=1, P=1)]
 
 
+@pytest.mark.parametrize("row", ['{"id":7}', '{"id":7,"s":98,"S":99}'])
+def test_base_path_long_s_partition_field(spark, tmp_path, row):
+    part = tmp_path / "s=1"
+    part.mkdir()
+    (part / "row.json").write_text(row)
+    df = (
+        spark.read.option("basePath", str(tmp_path))
+        .schema("id INT, `\N{LATIN SMALL LETTER LONG S}` STRING")
+        .json(str(part))
+    )
+    assert df.schema.simpleString() == "struct<id:int,s:int>"
+    assert df.collect() == [Row(id=7, s=1)]
+
+
+def test_base_path_long_s_partition_directories(spark, tmp_path):
+    for path in ["s=1", "\N{LATIN SMALL LETTER LONG S}=2"]:
+        write_json_partition(tmp_path, path)
+    with pytest.raises(Exception, match=r"(?i)(mixed partition columns|conflicting partition column)"):
+        spark.read.option("basePath", str(tmp_path)).json(str(tmp_path)).collect()
+
+
 def test_base_path_unpartitioned_root(spark, tmp_path):
     write_json_partition(tmp_path, "nested")
     (tmp_path / "row.json").write_text('{"id":2}')
