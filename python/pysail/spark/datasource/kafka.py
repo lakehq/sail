@@ -19,7 +19,7 @@ import re
 import sys
 import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
 
 _LOGGER = logging.getLogger(__name__)
-_POLL_SLICE_S = 0.25
 
 
 # ============================================================================
@@ -587,58 +586,28 @@ def _split_offset_ranges(
 class _ReadState:
     next_offset: int
     last_progress: float
-    skipped_ranges: int = 0
-    first_skipped: int | None = None
-    last_skipped: int | None = None
-    pending_gaps: list[tuple[int, int]] = field(default_factory=list)
-
-    def skip(self, start: int, end: int) -> None:
-        if end <= start:
-            return
-        self.skipped_ranges += 1
-        self.first_skipped = start if self.first_skipped is None else min(self.first_skipped, start)
-        self.last_skipped = end if self.last_skipped is None else max(self.last_skipped, end)
+    partial_read: bool = False
 
 
+@dataclass(kw_only=True, repr=False, eq=False)
 class KafkaDataSourceReader(DataSourceReader):
-    def __init__(
-        self,
-        *,
-        subscription: tuple[str, object],
-        starting_offsets: str | dict[str, dict[str, int]] | None,
-        ending_offsets: str | dict[str, dict[str, int]] | None,
-        starting_timestamps: int | dict[str, dict[str, int]] | None,
-        ending_timestamps: int | dict[str, dict[str, int]] | None,
-        starting_ts_strategy: str,
-        client_config: dict[str, str],
-        include_headers: bool,
-        poll_timeout_s: float,
-        max_batch_rows: int,
-        max_batch_bytes: int,
-        max_batch_wait_s: float,
-        stall_timeout_s: float,
-        admin_timeout_s: float,
-        fail_on_data_loss: bool,
-        min_partitions: int | None,
-        max_records_per_partition: int | None,
-    ) -> None:
-        self.subscription = subscription
-        self.starting_offsets = starting_offsets
-        self.ending_offsets = ending_offsets
-        self.starting_timestamps = starting_timestamps
-        self.ending_timestamps = ending_timestamps
-        self.starting_ts_strategy = starting_ts_strategy
-        self.client_config = client_config
-        self.include_headers = include_headers
-        self.poll_timeout_s = poll_timeout_s
-        self.max_batch_rows = max_batch_rows
-        self.max_batch_bytes = max_batch_bytes
-        self.max_batch_wait_s = max_batch_wait_s
-        self.stall_timeout_s = stall_timeout_s
-        self.admin_timeout_s = admin_timeout_s
-        self.fail_on_data_loss = fail_on_data_loss
-        self.min_partitions = min_partitions
-        self.max_records_per_partition = max_records_per_partition
+    subscription: tuple[str, object]
+    starting_offsets: str | dict[str, dict[str, int]] | None
+    ending_offsets: str | dict[str, dict[str, int]] | None
+    starting_timestamps: int | dict[str, dict[str, int]] | None
+    ending_timestamps: int | dict[str, dict[str, int]] | None
+    starting_ts_strategy: str
+    client_config: dict[str, str]
+    include_headers: bool
+    poll_timeout_s: float
+    max_batch_rows: int
+    max_batch_bytes: int
+    max_batch_wait_s: float
+    stall_timeout_s: float
+    admin_timeout_s: float
+    fail_on_data_loss: bool
+    min_partitions: int | None
+    max_records_per_partition: int | None
 
     # ------------------------------------------------------------------
     # Partition planning — talks to the broker once on the driver
@@ -747,7 +716,6 @@ class KafkaDataSourceReader(DataSourceReader):
             batch_started = state.last_progress
 
             def flush() -> Iterator[pa.RecordBatch]:
-                _report_pending_gaps(consumer, tp, state, timeout_s=self.admin_timeout_s)
                 batch = buf.to_batch(schema)
                 paused = time.monotonic()
                 yield batch
@@ -760,26 +728,20 @@ class KafkaDataSourceReader(DataSourceReader):
                     yield from flush()
                     batch_started = time.monotonic()
                     continue
-                _check_stall(
-                    tp,
-                    state.last_progress,
-                    stall_timeout_s=self.stall_timeout_s,
-                    next_offset=state.next_offset,
-                    end_offset=end,
-                )
-                remaining = self.stall_timeout_s - (now - state.last_progress)
-                timeout = min(self.poll_timeout_s, _POLL_SLICE_S, remaining)
+                idle_s = now - state.last_progress
+                if idle_s >= self.stall_timeout_s:
+                    msg = (
+                        f"Kafka read stalled: no messages for {idle_s:.0f}s on "
+                        f"{tp.topic}[{tp.partition}] at offset {state.next_offset}, expected up to {end}. "
+                        f"Broker may be unreachable or the partition leader unavailable. "
+                        f"Raise 'stallTimeoutMs' if the topic is simply idle."
+                    )
+                    raise TimeoutError(msg)
+                timeout = min(self.poll_timeout_s, self.stall_timeout_s - idle_s)
                 if len(buf):
                     timeout = min(timeout, self.max_batch_wait_s - (now - batch_started))
                 record = consumer.poll(max(timeout, 0.0))
                 if record is None:
-                    _check_stall(
-                        tp,
-                        state.last_progress,
-                        stall_timeout_s=self.stall_timeout_s,
-                        next_offset=state.next_offset,
-                        end_offset=end,
-                    )
                     continue
 
                 error = record.error()
@@ -801,13 +763,6 @@ class KafkaDataSourceReader(DataSourceReader):
                         if record.offset() > state.next_offset:
                             state.next_offset = record.offset()
                             state.last_progress = time.monotonic()
-                        _check_stall(
-                            tp,
-                            state.last_progress,
-                            stall_timeout_s=self.stall_timeout_s,
-                            next_offset=state.next_offset,
-                            end_offset=end,
-                        )
                         continue
                     if code in _OUT_OF_RANGE_CODES:
                         recovered = _recover_out_of_range(
@@ -819,19 +774,12 @@ class KafkaDataSourceReader(DataSourceReader):
                             end_offset=end,
                         )
                         if recovered is None:
-                            state.skip(state.next_offset, end)
+                            state.partial_read = True
                             break
-                        state.skip(state.next_offset, recovered)
                         if recovered > state.next_offset:
+                            state.partial_read = True
                             state.last_progress = time.monotonic()
                         state.next_offset = recovered
-                        _check_stall(
-                            tp,
-                            state.last_progress,
-                            stall_timeout_s=self.stall_timeout_s,
-                            next_offset=state.next_offset,
-                            end_offset=end,
-                        )
                         continue
                     raise KafkaException(error)
 
@@ -844,19 +792,15 @@ class KafkaDataSourceReader(DataSourceReader):
                         f"[{partition.kafka_partition}] while offset {state.next_offset} was requested"
                     )
                     raise ValueError(msg)
-                if record_offset > state.next_offset:
-                    if self.fail_on_data_loss:
-                        _check_offset_gap(
-                            consumer,
-                            tp,
-                            admin_timeout_s=self.admin_timeout_s,
-                            next_offset=state.next_offset,
-                            record_offset=record_offset,
-                            end_offset=end,
-                        )
-                    else:
-                        # Permissive reads only need watermarks for warning diagnostics; defer per batch.
-                        state.pending_gaps.append((state.next_offset, min(record_offset, end)))
+                if record_offset > state.next_offset and self.fail_on_data_loss:
+                    _check_offset_gap(
+                        consumer,
+                        tp,
+                        admin_timeout_s=self.admin_timeout_s,
+                        next_offset=state.next_offset,
+                        record_offset=record_offset,
+                        end_offset=end,
+                    )
                 if record_offset >= end:
                     break
 
@@ -872,19 +816,14 @@ class KafkaDataSourceReader(DataSourceReader):
                     yield from flush()
                     batch_started = time.monotonic()
 
-            _report_pending_gaps(consumer, tp, state, timeout_s=self.admin_timeout_s)
             if len(buf) > 0:
                 yield buf.to_batch(schema)
         finally:
-            if state is not None and state.skipped_ranges:
+            if state is not None and state.partial_read:
                 _LOGGER.warning(
-                    "Kafka partial read on %s[%s]: skipped %s offset interval(s), spanning [%s, %s); "
-                    "failOnDataLoss=false (offset spans are not counts of lost records)",
+                    "Kafka partial read on %s[%s]: skipped unavailable offsets; failOnDataLoss=false",
                     partition.topic,
                     partition.kafka_partition,
-                    state.skipped_ranges,
-                    state.first_skipped,
-                    state.last_skipped,
                 )
             unwinding = sys.exc_info()[0] is not None
             try:
@@ -910,17 +849,6 @@ def _query_watermarks(consumer: Consumer, tp: TopicPartition, *, timeout_s: floa
         raise TimeoutError(msg) from e
 
 
-def _report_pending_gaps(consumer: Consumer, tp: TopicPartition, state: _ReadState, *, timeout_s: float) -> None:
-    """Classify permissive-read gaps once per batch for the final partial-read warning."""
-    if not state.pending_gaps:
-        return
-    low, _ = _query_watermarks(consumer, tp, timeout_s=timeout_s)
-    for start, end in state.pending_gaps:
-        if low > start:
-            state.skip(start, end)
-    state.pending_gaps.clear()
-
-
 def _bind_partition_range(
     consumer: Consumer, partition: KafkaInputPartition, *, timeout_s: float = 10.0
 ) -> tuple[int, int]:
@@ -936,28 +864,6 @@ def _bind_partition_range(
     if end == _SPARK_OFFSET_LATEST:
         end = high
     return start, end
-
-
-def _check_stall(
-    tp: TopicPartition,
-    last_progress: float,
-    *,
-    stall_timeout_s: float,
-    next_offset: int,
-    end_offset: int,
-) -> None:
-    """Fail a read that has produced nothing for longer than ``stallTimeoutMs``."""
-    idle_s = time.monotonic() - last_progress
-    if idle_s < stall_timeout_s:
-        return
-    msg = (
-        f"Kafka read stalled: no messages for {idle_s:.0f}s on "
-        f"{tp.topic}[{tp.partition}] at offset "
-        f"{next_offset}, expected up to {end_offset}. Broker may be "
-        f"unreachable or the partition leader unavailable. "
-        f"Raise 'stallTimeoutMs' if the topic is simply idle."
-    )
-    raise TimeoutError(msg)
 
 
 def _recover_out_of_range(
@@ -994,14 +900,14 @@ def _check_offset_gap(
     next_offset: int,
     record_offset: int,
     end_offset: int,
-) -> int:
+) -> None:
     """Distinguish unreadable in-log gaps (compaction/control markers) from retention data loss.
 
     Always queries fresh watermarks because the log start can advance between gaps.
     """
     low, _ = _query_watermarks(consumer, tp, timeout_s=admin_timeout_s)
     if low <= next_offset:
-        return low
+        return
     msg = (
         f"Data loss on {tp.topic}[{tp.partition}]: offsets {next_offset} to "
         f"{min(record_offset, end_offset) - 1} were requested but are no longer in the log, which now starts at "
@@ -1033,7 +939,7 @@ def _eof_is_terminal(
     if high >= end_offset:
         return True
     if not fail_on_data_loss:
-        state.skip(next_offset, end_offset)
+        state.partial_read = True
         return True
     msg = (
         f"Data loss on {tp.topic}[{tp.partition}]: reached end of log at offset "

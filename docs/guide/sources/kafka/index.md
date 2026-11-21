@@ -102,7 +102,7 @@ Option names are case-insensitive, as in Spark.
 | `includeHeaders`                     | No         | `false`     | Whether to project the `headers` column.                                                                                                                                            |
 | `minPartitions`                      | No         |             | Approximate target number of input partitions; empty ranges and proportional rounding can affect the result. Positive signed 32-bit integer.                                        |
 | `maxRecordsPerPartition`             | No         |             | Offset-span splitting hint, not a hard bound on records or memory. Positive signed 64-bit integer. See parallelism below.                                                           |
-| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`    | Effective idle polling budget in milliseconds. Also accepted as `pollTimeoutMs`; the Spark-standard name wins. Internally the budget is polled in slices of at most 250 ms.         |
+| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`    | Poll timeout in milliseconds, capped by the remaining idle and nonempty-batch wait budgets. Also accepted as `pollTimeoutMs`; the Spark-standard name wins.                         |
 | `maxBatchRows`                       | No         | `10000`     | Maximum rows per Arrow `RecordBatch` returned to the executor. Sail-specific.                                                                                                       |
 | `maxBatchBytes`                      | No         | `8388608`   | Estimated Arrow payload bytes per batch; positive signed 32-bit integer. A single oversized record is emitted intact in its own batch. Sail-specific.                               |
 | `maxBatchWaitMs`                     | No         | `250`       | Target maximum active time to accumulate a nonempty batch. Positive finite milliseconds. Broker metadata calls may extend this. Sail-specific.                                      |
@@ -323,13 +323,10 @@ compacted records, transaction control markers, and aborted records under `read_
 Spark skips them. The two are told apart by the log's start offset, as `KafkaDataConsumer` tells them
 apart.
 
-When missing offsets are skipped, the reader logs one partial-read summary per task with the number
-and enclosing span of skipped intervals. An offset span is not an exact count of lost records.
-
 Strict reads refresh the broker watermarks for each offset gap to detect retention, which adds
-round trips on compacted or transactional topics. With `failOnDataLoss=false`, gaps are classified
-once per output batch for the partial-read warning. This observation is made at batch delivery;
-it cannot determine whether an interval was compacted before retention passed it.
+round trips on compacted or transactional topics. With `failOnDataLoss=false`, ordinary gaps are
+skipped without a watermark lookup or warning. Explicit out-of-range recovery or truncated EOF
+produces one partial-read warning per task; the reader does not count or classify all skipped offsets.
 
 ### Resource Limits and Cancellation
 

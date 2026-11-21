@@ -24,7 +24,8 @@ if pyspark_version() < (4, 0):
 
 pytest.importorskip("confluent_kafka")
 
-from concurrent.futures import TimeoutError as FuturesTimeoutError
+from concurrent.futures import Future
+from types import SimpleNamespace
 
 from confluent_kafka import IsolationLevel, KafkaError, KafkaException
 from confluent_kafka.admin._listoffsets import EarliestSpec, TimestampSpec
@@ -40,54 +41,13 @@ _TOPIC = "orders"
 # ---------------------------------------------------------------------------
 
 
-class _FakeError:
-    def __init__(self, code, message="fake error"):
-        self._code = code
-        self._message = message
-
-    def code(self):
-        return self._code
-
-    def __str__(self):
-        return self._message
-
-
-class _FakeFuture:
-    """Stand-in for the ``concurrent.futures.Future`` the admin calls return.
-
-    ``never_resolves`` models a broker that leaves the future pending, which is
-    what a bare ``Future.result()`` would wait on indefinitely.
-    """
-
-    def __init__(self, result=None, exception=None, *, never_resolves=False):
-        self._result = result
-        self._exception = exception
-        self._never_resolves = never_resolves
-
-    def result(self, timeout=None):  # noqa: ARG002
-        if self._never_resolves:
-            raise FuturesTimeoutError
-        if self._exception is not None:
-            raise self._exception
-        return self._result
-
-
-class _FakePartitionInfo:
-    def __init__(self, partition_id):
-        self.id = partition_id
-
-
-class _FakeTopicDescription:
-    """Stand-in for ``TopicDescription``, the result of ``describe_topics``."""
-
-    def __init__(self, partitions, *, is_internal=False):
-        self.partitions = [_FakePartitionInfo(p) for p in partitions]
-        self.is_internal = is_internal
-
-
-class _FakeListOffsetsResult:
-    def __init__(self, offset):
-        self.offset = offset
+def _future(result=None, exception=None):
+    future = Future()
+    if exception is None:
+        future.set_result(result)
+    else:
+        future.set_exception(exception)
+    return future
 
 
 class _FakeTopicMeta:
@@ -95,11 +55,6 @@ class _FakeTopicMeta:
         self.partitions = dict.fromkeys(partitions)
         self.error = error
         self.is_internal = is_internal
-
-
-class _FakeMetadata:
-    def __init__(self, topics):
-        self.topics = topics
 
 
 class _FakeMessage:
@@ -139,17 +94,17 @@ class _FakeMessage:
 
 def _eof_message():
     """An EOF event with no usable offset, exercising the fallback path."""
-    return _FakeMessage(-1, error=_FakeError(KafkaError._PARTITION_EOF))  # noqa: SLF001
+    return _FakeMessage(-1, error=KafkaError(KafkaError._PARTITION_EOF))  # noqa: SLF001
 
 
 def _eof_message_at(offset):
     """An EOF event as librdkafka reports one, carrying the position it reached."""
-    return _FakeMessage(offset, error=_FakeError(KafkaError._PARTITION_EOF))  # noqa: SLF001
+    return _FakeMessage(offset, error=KafkaError(KafkaError._PARTITION_EOF))  # noqa: SLF001
 
 
 def _offset_out_of_range_message():
     """The error `auto.offset.reset=error` produces for an unserviceable offset."""
-    return _FakeMessage(-1, error=_FakeError(KafkaError._AUTO_OFFSET_RESET))  # noqa: SLF001
+    return _FakeMessage(-1, error=KafkaError(KafkaError._AUTO_OFFSET_RESET))  # noqa: SLF001
 
 
 class _FakeConsumer:
@@ -217,22 +172,27 @@ class _FakeAdminClient:
         self.hang = False
 
     def list_topics(self, timeout=None):  # noqa: ARG002
-        return _FakeMetadata(self.state.topics)
+        return SimpleNamespace(topics=self.state.topics)
 
     def describe_topics(self, topic_collection, request_timeout=None):  # noqa: ARG002
         out = {}
         for name in topic_collection.topic_names:
             if self.hang:
-                out[name] = _FakeFuture(never_resolves=True)
+                out[name] = Future()
                 continue
             meta = self.state.topics.get(name)
             if meta is None:
-                error = _FakeError(KafkaError.UNKNOWN_TOPIC_OR_PART, "unknown topic")
-                out[name] = _FakeFuture(exception=KafkaException(error))
+                error = KafkaError(KafkaError.UNKNOWN_TOPIC_OR_PART, "unknown topic")
+                out[name] = _future(exception=KafkaException(error))
             elif meta.error is not None:
-                out[name] = _FakeFuture(exception=KafkaException(meta.error))
+                out[name] = _future(exception=KafkaException(meta.error))
             else:
-                out[name] = _FakeFuture(_FakeTopicDescription(sorted(meta.partitions), is_internal=meta.is_internal))
+                out[name] = _future(
+                    SimpleNamespace(
+                        partitions=[SimpleNamespace(id=p) for p in sorted(meta.partitions)],
+                        is_internal=meta.is_internal,
+                    )
+                )
         return out
 
     def list_offsets(self, specs, isolation_level=None, request_timeout=None):  # noqa: ARG002
@@ -244,13 +204,13 @@ class _FakeAdminClient:
             if isinstance(spec, TimestampSpec):
                 offset, error = self.state.times.get((tp.topic, tp.partition, spec.timestamp), (-1, None))
                 if error is not None:
-                    out[tp] = _FakeFuture(exception=KafkaException(error))
+                    out[tp] = _future(exception=KafkaException(error))
                     continue
             elif isinstance(spec, EarliestSpec):
                 offset = low
             else:
                 offset = high
-            out[tp] = _FakeFuture(_FakeListOffsetsResult(offset))
+            out[tp] = _future(SimpleNamespace(offset=offset))
         return out
 
 
@@ -373,9 +333,9 @@ class TestPlanning:
             reader.partitions()
 
     def test_topic_error_is_relayed(self, consumer_factory):
-        consumer = _FakeConsumer(topics={_TOPIC: _FakeTopicMeta([0], error=_FakeError(29, "authorization failed"))})
+        consumer = _FakeConsumer(topics={_TOPIC: _FakeTopicMeta([0], error=KafkaError(29, "authorization failed"))})
         reader = _reader(consumer_factory, consumer)
-        with pytest.raises(ValueError, match="is not available: authorization failed"):
+        with pytest.raises(ValueError, match=r"is not available: .*authorization failed"):
             reader.partitions()
 
     def test_json_sentinels_are_late_bound_too(self, consumer_factory):
@@ -406,7 +366,8 @@ class TestPlanning:
         assert _ranges(partitions) == [(_TOPIC, 0, 2, 7)]
         assert consumer.admin.list_offsets_calls == 0
 
-    def test_unresolved_admin_future_does_not_hang_planning(self, consumer_factory):
+    def test_unresolved_admin_future_does_not_hang_planning(self, consumer_factory, monkeypatch):
+        monkeypatch.setattr(kafka_module, "_FUTURE_TIMEOUT_MARGIN_S", 0)
         # `Future.result()` with no timeout blocks forever. librdkafka normally
         # completes the future itself via `request_timeout`, but if it does not,
         # planning must still give up rather than wedge the query.
@@ -597,7 +558,7 @@ class TestTimestampResolution:
     def test_lookup_error_is_surfaced(self, consumer_factory):
         # A per-partition error carries an invalid offset; treating it as "no
         # match" would turn a broker failure into a silently empty read.
-        consumer = _FakeConsumer(times={(_TOPIC, 0, 500): (-1001, _FakeError(7, "leader not available"))})
+        consumer = _FakeConsumer(times={(_TOPIC, 0, 500): (-1001, KafkaError(7, "leader not available"))})
         reader = _reader(consumer_factory, consumer, startingTimestamp="500")
         with pytest.raises(ValueError, match="Failed to look up offsets for"):
             reader.partitions()
@@ -888,7 +849,7 @@ class TestReadLifecycle:
                     "assert reader.max_batch_bytes == 1024; "
                     "assert reader.client_config['sasl.password'] == 'test-only-secret'; "
                     "assert not hasattr(parts[0], 'client_config'); "
-                    "assert 'test-only-secret' not in repr(parts[0]); "
+                    "assert 'test-only-secret' not in repr(parts[0]) + repr(reader); "
                     "assert (parts[0].topic, parts[0].start_offset, parts[0].end_offset) == ('orders', -2, -1); "
                     "print('deserialized')"
                 ),
@@ -938,10 +899,10 @@ class TestReadLifecycle:
 
         monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
         consumer = IdleConsumer()
-        reader = _reader(consumer_factory, consumer, stallTimeoutMs="10", pollTimeoutMs="80")
+        reader = _reader(consumer_factory, consumer, stallTimeoutMs="1000", pollTimeoutMs="2000")
         with pytest.raises(TimeoutError, match="Kafka read stalled"):
             _read_all(reader, reader.partitions()[0])
-        assert sum(timeouts) == pytest.approx(0.01)
+        assert timeouts == [1.0]
 
     def test_out_of_range_recovery_without_progress_is_bounded(self, consumer_factory, monkeypatch):
         clock = [0.0]
@@ -995,14 +956,14 @@ class TestReadLifecycle:
         assert "close" in caplog.text.lower()
         assert "test-only-secret" not in caplog.text
 
-    def test_skipped_ranges_are_reported(self, consumer_factory, caplog):
+    def test_recovery_logs_a_partial_read(self, consumer_factory, caplog):
         consumer = _FakeConsumer(
             messages=[_offset_out_of_range_message(), _FakeMessage(8), _FakeMessage(9)],
             watermarks_after_assign={(_TOPIC, 0): (8, 10)},
         )
         reader = _reader(consumer_factory, consumer, failOnDataLoss="false")
         assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [8, 9]
-        assert "[0, 8)" in caplog.text
+        assert "partial read on orders[0]" in caplog.text
 
     def test_partial_batch_is_flushed_before_the_idle_deadline(self, consumer_factory, monkeypatch):
         clock = [0.0]
@@ -1105,7 +1066,7 @@ def test_gap_error_is_limited_to_requested_offsets(consumer_factory):
         _read_all(reader, reader.partitions()[0])
 
 
-def test_permissive_gaps_use_one_lookup_per_batch(consumer_factory, monkeypatch, caplog):
+def test_permissive_gaps_need_no_watermark_lookup(consumer_factory, monkeypatch, caplog):
     consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 199)}, messages=[_FakeMessage(i) for i in range(0, 199, 2)])
     reader = _reader(
         consumer_factory,
@@ -1125,11 +1086,11 @@ def test_permissive_gaps_use_one_lookup_per_batch(consumer_factory, monkeypatch,
     monkeypatch.setattr(consumer, "get_watermark_offsets", query)
     rows = _read_all(reader, reader.partitions()[0])
     assert [r["offset"] for r in rows] == list(range(0, 199, 2))
-    assert len(calls) == 4  # noqa: PLR2004
+    assert not calls
     assert "partial read" not in caplog.text
 
 
-def test_permissive_gaps_report_retention_at_batch_delivery(consumer_factory, caplog):
+def test_permissive_gaps_do_not_classify_retention(consumer_factory, caplog):
     consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (3, 5)}, messages=[_FakeMessage(3), _FakeMessage(4)])
     reader = _reader(
         consumer_factory,
@@ -1139,10 +1100,10 @@ def test_permissive_gaps_report_retention_at_batch_delivery(consumer_factory, ca
         endingOffsets='{"orders":{"0":5}}',
     )
     assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [3, 4]
-    assert "skipped 1 offset interval(s), spanning [0, 3)" in caplog.text
+    assert "partial read" not in caplog.text
 
 
-def test_deferred_gap_and_eof_warning_cover_the_whole_skipped_span(consumer_factory, caplog):
+def test_truncated_eof_logs_a_partial_read(consumer_factory, caplog):
     consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (2, 3)}, messages=[_FakeMessage(2), _eof_message_at(3)])
     reader = _reader(
         consumer_factory,
@@ -1152,4 +1113,4 @@ def test_deferred_gap_and_eof_warning_cover_the_whole_skipped_span(consumer_fact
         endingOffsets='{"orders":{"0":5}}',
     )
     assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [2]
-    assert "skipped 2 offset interval(s), spanning [0, 5)" in caplog.text
+    assert caplog.text.count("partial read on orders[0]") == 1
