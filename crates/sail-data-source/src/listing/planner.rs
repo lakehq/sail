@@ -41,6 +41,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::qualified_partition_path;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -419,12 +420,9 @@ async fn list_files_for_scan<'a>(
         let files = if let Some((base, schema)) = base_partitions {
             files
                 .try_filter_map(move |mut file| async move {
-                    let Some(values) = file
-                        .object_meta
-                        .location
-                        .parent()
-                        .and_then(|dir| base.get(&dir))
-                    else {
+                    let Some(values) = file.object_meta.location.parent().and_then(|dir| {
+                        base.get(&qualified_partition_path(table_path, dir.as_ref()))
+                    }) else {
                         return Ok(None);
                     };
                     file.partition_values.clone_from(values);

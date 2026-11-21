@@ -101,18 +101,19 @@ pub(super) fn resolve_base_path(
                 return plan_err!("Option 'basePath' must be a directory: {path}");
             }
         }
-        HashSet::from([base.prefix().to_string()])
+        HashSet::from([qualified_partition_path(&base, base.prefix().as_ref())])
     } else {
         // Spark stops partition discovery at any input directory or parent of an input file.
         urls.iter()
             .flatten()
             .map(|url| {
                 let path = url.prefix().as_ref();
-                if url.is_collection() {
-                    path.to_owned()
+                let directory = if url.is_collection() {
+                    path
                 } else {
-                    parent_and_name(path).0.to_owned()
-                }
+                    parent_and_name(path).0
+                };
+                qualified_partition_path(url, directory)
             })
             .collect()
     };
@@ -171,6 +172,14 @@ fn parent_and_name(path: &str) -> (&str, &str) {
     path.rsplit_once('/').unwrap_or(("", path))
 }
 
+/// Object store paths exclude the scheme and authority. Spark compares qualified directories.
+pub(super) fn qualified_partition_path(root: &ListingTableUrl, directory: &str) -> String {
+    format!(
+        "{}/{directory}",
+        &root.get_url()[..url::Position::BeforePath]
+    )
+}
+
 struct PartitionPath<'a> {
     base: &'a str,
     columns: Vec<(Cow<'a, str>, &'a str)>,
@@ -204,7 +213,10 @@ fn partition_path<'a>(
         if part.eq_ignore_ascii_case("_temporary") {
             return Ok(None);
         }
-        if options.roots.contains(base) {
+        if options
+            .roots
+            .contains(&qualified_partition_path(root, base))
+        {
             break;
         }
         if let Some((name, value)) = part.split_once('=') {
@@ -428,14 +440,14 @@ fn infer_partition_type(
 }
 
 /// Typed partition values indexed by the leaf directory of each file.
-pub type BasePathPartitions = HashMap<Path, Vec<ScalarValue>>;
+pub type BasePathPartitions = HashMap<String, Vec<ScalarValue>>;
 
 #[derive(Default)]
 pub(super) struct PartitionDiscovery {
     columns: Option<Vec<(String, DataType)>>,
     base: Option<String>,
     conflicting_bases: bool,
-    directories: HashMap<Path, Vec<String>>,
+    directories: HashMap<String, Vec<String>>,
 }
 
 impl PartitionDiscovery {
@@ -445,7 +457,8 @@ impl PartitionDiscovery {
         file: &Path,
         options: Option<&BasePathOptions>,
     ) -> Result<bool> {
-        let directory = options.and_then(|_| file.parent());
+        let directory =
+            options.map(|_| qualified_partition_path(root, parent_and_name(file.as_ref()).0));
         if let Some(values) = directory.as_ref().and_then(|dir| self.directories.get(dir)) {
             return Ok(!values.is_empty());
         }
@@ -454,12 +467,13 @@ impl PartitionDiscovery {
         };
         let parts = path.columns;
         if let Some(options) = options {
+            let base = qualified_partition_path(root, path.base);
             self.conflicting_bases |= !options.ignore_invalid_paths
                 && self
                     .base
                     .as_ref()
-                    .is_some_and(|b| !names_match(b, path.base, false));
-            self.base.get_or_insert_with(|| path.base.to_owned());
+                    .is_some_and(|b| !names_match(b, &base, false));
+            self.base.get_or_insert(base);
             if let Some(directory) = directory {
                 self.directories.insert(
                     directory,
@@ -734,4 +748,32 @@ pub(super) fn split_discovered_partitions(
         partitions,
         projection,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+
+    #[test]
+    fn partition_discovery_keeps_object_stores_apart() -> Result<()> {
+        let inputs = [
+            vec![ListingTableUrl::parse("s3://bucket-a/table/")?],
+            vec![ListingTableUrl::parse("s3://bucket-b/table/")?],
+        ];
+        let state = SessionContext::new().state();
+        let options = resolve_base_path(&state, false, &[], &inputs, None)?;
+        let mut discovery = PartitionDiscovery::default();
+        let file = Path::from("table/p=1/part.parquet");
+        for root in inputs.iter().flatten() {
+            assert!(discovery.observe(root, &file, Some(&options))?);
+        }
+        assert!(matches!(
+            discovery.fields(true),
+            Err(datafusion_common::DataFusionError::Plan(message))
+                if message.contains("Conflicting partition directory structures")
+        ));
+        Ok(())
+    }
 }
