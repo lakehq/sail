@@ -5534,6 +5534,11 @@ impl RemoteExecutionCodec {
             .transpose()?;
         Ok(DeltaCommitContext {
             base_snapshot,
+            transaction: context
+                .transaction_json
+                .as_deref()
+                .map(|s| self.try_decode_json(s, "Delta transaction"))
+                .transpose()?,
             identity_columns_to_track: context.identity_columns_to_track.clone(),
             identity_writer_partitions: context
                 .identity_writer_partitions
@@ -5556,6 +5561,11 @@ impl RemoteExecutionCodec {
             .transpose()?;
         Ok(r#gen::DeltaCommitContext {
             base_snapshot,
+            transaction_json: context
+                .transaction
+                .as_ref()
+                .map(|txn| self.try_encode_json(txn, "Delta transaction"))
+                .transpose()?,
             identity_columns_to_track: context.identity_columns_to_track.clone(),
             identity_writer_partitions: context
                 .identity_writer_partitions

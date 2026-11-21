@@ -85,7 +85,7 @@ impl CheckpointRetentionTimestamps {
     }
 }
 
-fn retention_cutoff_timestamp(
+pub(crate) fn retention_cutoff_timestamp(
     reference_timestamp: i64,
     retention_duration: std::time::Duration,
     property_name: &str,
@@ -2534,7 +2534,7 @@ mod tests {
         };
         let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
         let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
-        let header = load_replayed_table_header(2, log_store.as_ref(), Some(&base), None)
+        let header = load_replayed_table_header(2, log_store.as_ref(), Some(&base), None, false)
             .await?
             .ok_or_else(|| DeltaTableError::generic("checkpoint must produce a table header"))?;
 
@@ -2633,7 +2633,7 @@ mod tests {
         let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
         let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
         // An older hint is required to select the incremental checkpoint header branch.
-        let header = load_replayed_table_header(4, log_store.as_ref(), Some(&base), None)
+        let header = load_replayed_table_header(4, log_store.as_ref(), Some(&base), None, false)
             .await?
             .ok_or_else(|| DeltaTableError::generic("checkpoint must produce a table header"))?;
         assert_eq!(header.version, 4);

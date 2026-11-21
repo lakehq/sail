@@ -15,6 +15,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
 pub struct BarrierNode {
     preconditions: Vec<Arc<LogicalPlan>>,
+    skip_preconditions_on_empty_exec: bool,
     plan: Arc<LogicalPlan>,
 }
 
@@ -22,8 +23,20 @@ impl BarrierNode {
     pub fn new(preconditions: Vec<Arc<LogicalPlan>>, plan: Arc<LogicalPlan>) -> Self {
         Self {
             preconditions,
+            skip_preconditions_on_empty_exec: false,
             plan,
         }
+    }
+
+    /// The preconditions belong to the main operation and can be elided when
+    /// physical planning replaces that operation with an EmptyExec.
+    pub fn with_skip_preconditions_on_empty_exec(mut self, skip: bool) -> Self {
+        self.skip_preconditions_on_empty_exec = skip;
+        self
+    }
+
+    pub fn skip_preconditions_on_empty_exec(&self) -> bool {
+        self.skip_preconditions_on_empty_exec
     }
 
     pub fn preconditions(&self) -> &[Arc<LogicalPlan>] {
@@ -72,6 +85,7 @@ impl UserDefinedLogicalNodeCore for BarrierNode {
         };
         Ok(Self {
             preconditions: inputs.into_iter().map(Arc::new).collect(),
+            skip_preconditions_on_empty_exec: self.skip_preconditions_on_empty_exec,
             plan: Arc::new(plan),
         })
     }
