@@ -39,7 +39,7 @@ except ImportError as e:
     raise ImportError(msg) from e
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Iterator, Mapping
 
 _LOGGER = logging.getLogger(__name__)
 _POLL_SLICE_S = 0.25
@@ -425,34 +425,14 @@ class KafkaInputPartition(InputPartition):
         kafka_partition: int,
         start_offset: int,
         end_offset: int,
-        client_config: dict[str, str],
-        include_headers: bool,
-        poll_timeout_s: float,
-        max_batch_rows: int,
-        max_batch_bytes: int,
-        max_batch_wait_s: float,
-        stall_timeout_s: float,
-        admin_timeout_s: float,
-        fail_on_data_loss: bool,
     ) -> None:
         super().__init__(partition_id)
         self.topic = topic
         self.kafka_partition = kafka_partition
         self.start_offset = start_offset
         self.end_offset = end_offset  # exclusive
-        self.client_config = client_config
-        self.include_headers = include_headers
-        self.poll_timeout_s = poll_timeout_s
-        self.max_batch_rows = max_batch_rows
-        self.max_batch_bytes = max_batch_bytes
-        self.max_batch_wait_s = max_batch_wait_s
-        self.stall_timeout_s = stall_timeout_s
-        self.admin_timeout_s = admin_timeout_s
-        self.fail_on_data_loss = fail_on_data_loss
 
     def __repr__(self) -> str:
-        # InputPartition's default repr includes every attribute, including
-        # passwords in client_config. Show only the task's range identity.
         return (
             f"KafkaInputPartition(topic={self.topic!r}, kafka_partition={self.kafka_partition}, "
             f"start_offset={self.start_offset}, end_offset={self.end_offset})"
@@ -465,20 +445,13 @@ class KafkaInputPartition(InputPartition):
 
 
 def _divide_range(start: int, end: int, parts: int) -> list[tuple[int, int]]:
-    """Split ``[start, end)`` into ``parts`` contiguous chunks.
+    """Split ``[start, end)`` into ``parts`` chunks, placing remainders last.
 
-    Mirrors ``KafkaOffsetRangeCalculator.getDividedPartition``, which takes
-    ``remaining / (parts - i)`` records for chunk ``i``. Chunks differ by at most
-    one record, and because each chunk is sized against what is left, the
-    remainder lands in the *last* chunks — dividing ten records three ways gives
-    3/3/4, not 4/3/3. Distributing it the other way would put every split
-    boundary in a different place than Spark.
-
-    Empty chunks are dropped, as Spark drops them with ``filter(_.size > 0)``.
+    Mirrors ``KafkaOffsetRangeCalculator.getDividedPartition`` (10 over 3 -> 3/3/4)
+    and drops empty chunks.
     """
     remaining = end - start
-    # When parts exceeds the offset span, Spark's leading chunks are empty.
-    # Skipping those iterations leaves exactly the same nonempty boundaries.
+    # Clamp parts to skip empty leading iterations when parts > remaining.
     parts = min(max(parts, 1), max(remaining, 1))
     out: list[tuple[int, int]] = []
     offset = start
@@ -493,13 +466,7 @@ def _divide_range(start: int, end: int, parts: int) -> list[tuple[int, int]]:
 
 
 def _check_range(rng: tuple[str, int, int, int]) -> tuple[str, int, int, int] | None:
-    """Reject an inverted range and drop an empty one.
-
-    Only reachable once both endpoints are concrete. Spark applies the same two
-    rules — ``KafkaSourceRDD.compute`` asserts ``fromOffset <= untilOffset`` and
-    returns an empty iterator when they are equal — but does so per task, since
-    a late-bound range has no size until it is read.
-    """
+    """Reject an inverted concrete range and return ``None`` for an empty one."""
     topic, partition, start, end = rng
     if end < start:
         msg = (
@@ -518,12 +485,7 @@ def _resolve_sentinels(
     timeout_s: float,
     isolation_level: IsolationLevel,
 ) -> list[tuple[str, int, int, int]]:
-    """Bind any ``earliest``/``latest`` sentinel still present in ``ranges``.
-
-    ``_list_offsets`` is keyed by partition, so a partition needing both
-    watermarks cannot ask for them in one request; the two endpoints are batched
-    into one call each instead.
-    """
+    """Resolve ``earliest``/``latest`` sentinels with at most one ``list_offsets`` call per endpoint."""
     need_low = {(topic, part) for topic, part, start, _ in ranges if start == _SPARK_OFFSET_EARLIEST}
     need_high = {(topic, part) for topic, part, _, end in ranges if end == _SPARK_OFFSET_LATEST}
     if not need_low and not need_high:
@@ -547,12 +509,10 @@ def _resolve_sentinels(
 def _restore_outer_bounds(
     ranges: list[tuple[str, int, int, int]], outer: dict[tuple[str, int], tuple[int, int]]
 ) -> list[tuple[str, int, int, int]]:
-    """Put each partition's original endpoints back on its first and last chunk.
+    """Restore each partition's original endpoints onto its first and last chunk.
 
-    Mirrors ``getOffsetRangesFromUnresolvedOffsets``, which after dividing a
-    range copies the pre-resolution ``fromOffset`` onto the head chunk and
-    ``untilOffset`` onto the last one. Splitting therefore fixes only the
-    *interior* boundaries; a late-bound start or end stays late-bound.
+    Mirrors ``getOffsetRangesFromUnresolvedOffsets``: only interior split points
+    are fixed; late-bound outer sentinels stay late-bound.
     """
     first: dict[tuple[str, int], int] = {}
     last: dict[tuple[str, int], int] = {}
@@ -571,11 +531,7 @@ def _restore_outer_bounds(
 
 
 def _part_count(size: int, total_size: int, min_parts: int) -> int:
-    """How many chunks a range of ``size`` gets, per Spark's ``getPartCount``.
-
-    Scala's ``math.round`` is floor(x + 0.5); Python's ``round`` is banker's
-    rounding, which would place split boundaries differently.
-    """
+    """Match Scala's ``math.round`` (``floor(x + 0.5)``), not Python's banker's rounding."""
     return max(math.floor(size / total_size * min_parts + 0.5), 1)
 
 
@@ -585,14 +541,7 @@ def _split_offset_ranges(
     min_partitions: int | None,
     max_records_per_partition: int | None,
 ) -> list[tuple[str, int, int, int]]:
-    """Apply Spark's ``minPartitions``/``maxRecordsPerPartition`` splitting.
-
-    ``KafkaOffsetRangeCalculator.getRanges`` first caps each range at
-    ``maxRecordsPerPartition``, then — if the result still has fewer partitions
-    than ``minPartitions`` — splits ranges further in proportion to their size.
-    Ignoring these options would silently change both parallelism and the
-    observable partition count relative to Spark.
-    """
+    """Apply Spark's ``maxRecordsPerPartition`` then ``minPartitions`` splitting."""
     if max_records_per_partition is not None:
         divided: list[tuple[str, int, int, int]] = []
         for topic, partition, start, end in ranges:
@@ -610,18 +559,9 @@ def _split_offset_ranges(
     if total_size == 0:
         return ranges
 
-    # Spark splits in two passes. Ranges whose proportional share rounds down to
-    # a single chunk are set aside first, and the remaining `minPartitions`
-    # budget is then divided among the rest against *their* combined size only.
-    # A single proportional pass would let one large range claim the whole
-    # budget while the small ranges still contribute a partition each, so the
-    # result overshoots: sizes [100, 1, 1] with minPartitions=4 would yield 6
-    # ranges instead of Spark's 4.
-    #
-    # `unsplit` is keyed by (topic, partition) rather than by range, matching
-    # Spark's `unsplitRangeTopicPartitions`: when `maxRecordsPerPartition` has
-    # already divided one Kafka partition, one small piece pins every piece of
-    # that partition to a single chunk.
+    # Two-pass split matching Spark's unsplitRangeTopicPartitions: set aside ranges
+    # rounding to 1 chunk (keyed by (topic, partition)), then allocate the remaining
+    # minPartitions budget across the rest so small ranges do not inflate the total.
     unsplit = [r for r in ranges if _part_count(r[3] - r[2], total_size, min_partitions) == 1]
     unsplit_tps = {(topic, partition) for topic, partition, _, _ in unsplit}
     split_total_size = total_size - sum(end - start for _, _, start, end in unsplit)
@@ -629,8 +569,6 @@ def _split_offset_ranges(
 
     out: list[tuple[str, int, int, int]] = []
     for topic, partition, start, end in ranges:
-        # `split_total_size` is only zero when every range is unsplit, and then
-        # this branch is never taken, so it cannot divide by zero.
         parts = (
             1 if (topic, partition) in unsplit_tps else _part_count(end - start, split_total_size, split_min_partitions)
         )
@@ -701,47 +639,18 @@ class KafkaDataSourceReader(DataSourceReader):
         self.fail_on_data_loss = fail_on_data_loss
         self.min_partitions = min_partitions
         self.max_records_per_partition = max_records_per_partition
-        self._cancel_check: Callable[[], bool] | None = None
-
-    def _set_cancel_callback(self, callback: Callable[[], bool]) -> None:
-        """Optional worker-side cancellation hook; never pickled.
-
-        Sail's Python data source runtime does not install it yet, so today a
-        cancelled read stops when the runtime next fails to hand off a batch and
-        closes the generator, which runs the read loop's ``finally``.
-        """
-        self._cancel_check = callback
 
     # ------------------------------------------------------------------
     # Partition planning — talks to the broker once on the driver
     # ------------------------------------------------------------------
 
     def partitions(self) -> list[InputPartition]:
-        # A short-lived AdminClient enumerates partitions and resolves offsets,
-        # as Spark's `KafkaOffsetReaderAdmin` does. Executors get their own
-        # consumer; nothing here is reused across the driver/executor boundary.
-        # AdminClient exposes no `close()` — the handle is released when it goes
-        # out of scope, so there is nothing to unwind in a `finally`.
-        #
-        # `earliest`/`latest` are deliberately *not* resolved here. Spark's
-        # `fetchPartitionOffsets` returns the -2/-1 sentinels for those limits
-        # ("Obtain TopicPartition offsets with late binding support") and binds
-        # them per task in `KafkaSourceRDD.resolveRange`. Freezing them on the
-        # driver would drop records produced between planning and task start,
-        # and — worse — an `earliest` start frozen at planning can age out of
-        # the log before the task runs, failing a query Spark completes by
-        # simply re-resolving. Explicit offsets and timestamps are resolved
-        # here, as they are in Spark.
+        # Short-lived AdminClient matching Spark's KafkaOffsetReaderAdmin (exposes no close()).
+        # earliest/latest remain -2/-1 sentinels until each task binds them in read().
         admin = AdminClient(_build_admin_config(self.client_config))
         admin_timeout_s = self.admin_timeout_s
         isolation_level = _planning_isolation_level(self.client_config)
 
-        # One enumeration serves both endpoints. Spark calls `fetchPartitionOffsets`
-        # once per endpoint and throws `IllegalStateException("different topic
-        # partitions")` when the two disagree — a check that exists precisely
-        # because it enumerates twice. A single snapshot cannot disagree with
-        # itself, so reproducing the double fetch would only add a broker
-        # round-trip and a way to fail a query that is otherwise consistent.
         tps = _list_topic_partitions(admin, self.subscription, timeout_s=admin_timeout_s)
         for spec, option_name in (
             (self.starting_offsets, "startingOffsets"),
@@ -780,26 +689,13 @@ class KafkaDataSourceReader(DataSourceReader):
             (tp.topic, tp.partition, starts[(tp.topic, tp.partition)], ends[(tp.topic, tp.partition)]) for tp in tps
         ]
 
-        # An inverted range is fatal wherever it is noticed: Spark asserts
-        # `fromOffset <= untilOffset` in `KafkaSourceRDD.compute`, per task.
-        # Where both endpoints are already concrete the verdict cannot change
-        # between here and the task, so failing now names the partition before
-        # any task is launched. Ranges still carrying a sentinel have no size
-        # until they are bound, and `read()` applies the same check there.
-        # Empty ranges still plan a partition on the unsplit path. Only the
-        # splitting path drops them, as Spark's getRanges does.
+        # Fail fast on concrete inverted ranges; empty ranges stay on the unsplit path.
         for rng in ranges:
             if rng[2] >= 0 and rng[3] >= 0:
                 _check_range(rng)
 
-        # Splitting needs concrete sizes, so it forces the sentinels to be
-        # resolved. Spark does the same in `getOffsetRangesFromUnresolvedOffsets`
-        # and then puts the unresolved endpoints back on the outer chunks, so
-        # the overall range stays late-bound even when it has been divided.
-        #
-        # Spark 4.1 KafkaOffsetReaderAdmin.shouldDivvyUpLargePartitions tests
-        # unresolved sizes. Preserve that behavior: parallelism must not silently
-        # change an otherwise late-bound read into fixed interior ranges.
+        # Match Spark 4.1 shouldDivvyUpLargePartitions (tests unresolved sizes), then
+        # resolve only to place interior split points and restore outer sentinels.
         needs_split = (
             self.max_records_per_partition is not None
             and any(end - start > self.max_records_per_partition for _, _, start, end in ranges)
@@ -822,15 +718,6 @@ class KafkaDataSourceReader(DataSourceReader):
                 kafka_partition=partition,
                 start_offset=start,
                 end_offset=end,
-                client_config=self.client_config,
-                include_headers=self.include_headers,
-                poll_timeout_s=self.poll_timeout_s,
-                max_batch_rows=self.max_batch_rows,
-                max_batch_bytes=self.max_batch_bytes,
-                max_batch_wait_s=self.max_batch_wait_s,
-                stall_timeout_s=self.stall_timeout_s,
-                admin_timeout_s=self.admin_timeout_s,
-                fail_on_data_loss=self.fail_on_data_loss,
             )
             for pid, (topic, partition, start, end) in enumerate(ranges)
         ]
@@ -844,49 +731,55 @@ class KafkaDataSourceReader(DataSourceReader):
             msg = f"Expected KafkaInputPartition, got {type(partition)}"
             raise TypeError(msg)
 
-        schema = _build_schema(include_headers=partition.include_headers)
-
-        consumer = Consumer(_build_consumer_config(partition.client_config))
+        schema = _build_schema(include_headers=self.include_headers)
+        consumer = Consumer(_build_consumer_config(self.client_config))
         state = None
         try:
-            if self._cancel_check is not None and self._cancel_check():
-                return
-            start, end = _bind_partition_range(consumer, partition)
+            start, end = _bind_partition_range(consumer, partition, timeout_s=self.admin_timeout_s)
             if _check_range((partition.topic, partition.kafka_partition, start, end)) is None:
-                return  # empty range; nothing to read
+                return
 
             tp = TopicPartition(partition.topic, partition.kafka_partition, start)
             consumer.assign([tp])
 
-            buf = _RowBuffer(include_headers=partition.include_headers)
+            buf = _RowBuffer(include_headers=self.include_headers)
             state = _ReadState(next_offset=start, last_progress=time.monotonic())
             batch_started = state.last_progress
 
+            def flush() -> Iterator[pa.RecordBatch]:
+                _report_pending_gaps(consumer, tp, state, timeout_s=self.admin_timeout_s)
+                batch = buf.to_batch(schema)
+                paused = time.monotonic()
+                yield batch
+                # Downstream backpressure is not broker idle time.
+                state.last_progress += time.monotonic() - paused
+
             while state.next_offset < end:
-                if self._cancel_check is not None and self._cancel_check():
-                    return
                 now = time.monotonic()
-                if len(buf) and now - batch_started >= partition.max_batch_wait_s:
-                    _report_pending_gaps(consumer, tp, partition, state)
-                    batch = buf.to_batch(schema)
-                    paused = time.monotonic()
-                    yield batch
-                    # Downstream backpressure is not broker idle time.
-                    state.last_progress += time.monotonic() - paused
+                if len(buf) and now - batch_started >= self.max_batch_wait_s:
+                    yield from flush()
                     batch_started = time.monotonic()
                     continue
-                _check_stall(partition, state.last_progress, next_offset=state.next_offset, end_offset=end)
-                remaining = partition.stall_timeout_s - (now - state.last_progress)
-                timeout = min(partition.poll_timeout_s, _POLL_SLICE_S, remaining)
+                _check_stall(
+                    tp,
+                    state.last_progress,
+                    stall_timeout_s=self.stall_timeout_s,
+                    next_offset=state.next_offset,
+                    end_offset=end,
+                )
+                remaining = self.stall_timeout_s - (now - state.last_progress)
+                timeout = min(self.poll_timeout_s, _POLL_SLICE_S, remaining)
                 if len(buf):
-                    timeout = min(timeout, partition.max_batch_wait_s - (now - batch_started))
+                    timeout = min(timeout, self.max_batch_wait_s - (now - batch_started))
                 record = consumer.poll(max(timeout, 0.0))
-                if self._cancel_check is not None and self._cancel_check():
-                    return
                 if record is None:
-                    # Internal short polls preserve the effective idle deadline
-                    # while allowing cancellation and partial-batch delivery.
-                    _check_stall(partition, state.last_progress, next_offset=state.next_offset, end_offset=end)
+                    _check_stall(
+                        tp,
+                        state.last_progress,
+                        stall_timeout_s=self.stall_timeout_s,
+                        next_offset=state.next_offset,
+                        end_offset=end,
+                    )
                     continue
 
                 error = record.error()
@@ -896,24 +789,34 @@ class KafkaDataSourceReader(DataSourceReader):
                         if _eof_is_terminal(
                             consumer,
                             tp,
-                            partition,
+                            fail_on_data_loss=self.fail_on_data_loss,
+                            admin_timeout_s=self.admin_timeout_s,
                             message_offset=record.offset(),
                             next_offset=state.next_offset,
                             end_offset=end,
                             state=state,
                         ):
                             break
-                        # A queued EOF the log has since grown past: the records
-                        # it was generated ahead of are still on their way.
-                        # An EOF can advance past invisible/control records.
+                        # Stale EOF the log has grown past; it can still advance past control records.
                         if record.offset() > state.next_offset:
                             state.next_offset = record.offset()
                             state.last_progress = time.monotonic()
-                        _check_stall(partition, state.last_progress, next_offset=state.next_offset, end_offset=end)
+                        _check_stall(
+                            tp,
+                            state.last_progress,
+                            stall_timeout_s=self.stall_timeout_s,
+                            next_offset=state.next_offset,
+                            end_offset=end,
+                        )
                         continue
                     if code in _OUT_OF_RANGE_CODES:
                         recovered = _recover_out_of_range(
-                            consumer, tp, partition, next_offset=state.next_offset, end_offset=end
+                            consumer,
+                            tp,
+                            fail_on_data_loss=self.fail_on_data_loss,
+                            admin_timeout_s=self.admin_timeout_s,
+                            next_offset=state.next_offset,
+                            end_offset=end,
                         )
                         if recovered is None:
                             state.skip(state.next_offset, end)
@@ -922,7 +825,13 @@ class KafkaDataSourceReader(DataSourceReader):
                         if recovered > state.next_offset:
                             state.last_progress = time.monotonic()
                         state.next_offset = recovered
-                        _check_stall(partition, state.last_progress, next_offset=state.next_offset, end_offset=end)
+                        _check_stall(
+                            tp,
+                            state.last_progress,
+                            stall_timeout_s=self.stall_timeout_s,
+                            next_offset=state.next_offset,
+                            end_offset=end,
+                        )
                         continue
                     raise KafkaException(error)
 
@@ -930,55 +839,40 @@ class KafkaDataSourceReader(DataSourceReader):
 
                 record_offset = record.offset()
                 if record_offset < state.next_offset:
-                    # Kafka is answering a fetch that was never made. Spark
-                    # raises here as well rather than dropping the record: "we
-                    # probably misunderstand Kafka internal mechanism".
                     msg = (
                         f"Kafka returned offset {record_offset} for {partition.topic}"
                         f"[{partition.kafka_partition}] while offset {state.next_offset} was requested"
                     )
                     raise ValueError(msg)
                 if record_offset > state.next_offset:
-                    if partition.fail_on_data_loss:
+                    if self.fail_on_data_loss:
                         _check_offset_gap(
                             consumer,
                             tp,
-                            partition,
+                            admin_timeout_s=self.admin_timeout_s,
                             next_offset=state.next_offset,
                             record_offset=record_offset,
                             end_offset=end,
                         )
                     else:
-                        # Permissive reads need the watermark only for diagnostics.
-                        # Bound the pending intervals by the Arrow batch size and
-                        # classify them with one lookup before delivering the batch.
+                        # Permissive reads only need watermarks for warning diagnostics; defer per batch.
                         state.pending_gaps.append((state.next_offset, min(record_offset, end)))
                 if record_offset >= end:
                     break
 
-                record_bytes = _record_size(record, include_headers=partition.include_headers)
-                if len(buf) and buf.size_bytes + record_bytes > partition.max_batch_bytes:
-                    _report_pending_gaps(consumer, tp, partition, state)
-                    batch = buf.to_batch(schema)
-                    paused = time.monotonic()
-                    yield batch
-                    state.last_progress += time.monotonic() - paused
-                    if self._cancel_check is not None and self._cancel_check():
-                        return
+                record_bytes = _record_size(record, include_headers=self.include_headers)
+                if len(buf) and buf.size_bytes + record_bytes > self.max_batch_bytes:
+                    yield from flush()
                 if not len(buf):
                     batch_started = time.monotonic()
-                buf.append(record, size_bytes=record_bytes)
+                buf.append(record, record_bytes)
                 state.next_offset = record_offset + 1
 
-                if len(buf) >= partition.max_batch_rows or buf.size_bytes >= partition.max_batch_bytes:
-                    _report_pending_gaps(consumer, tp, partition, state)
-                    batch = buf.to_batch(schema)
-                    paused = time.monotonic()
-                    yield batch
-                    state.last_progress += time.monotonic() - paused
+                if len(buf) >= self.max_batch_rows or buf.size_bytes >= self.max_batch_bytes:
+                    yield from flush()
                     batch_started = time.monotonic()
 
-            _report_pending_gaps(consumer, tp, partition, state)
+            _report_pending_gaps(consumer, tp, state, timeout_s=self.admin_timeout_s)
             if len(buf) > 0:
                 yield buf.to_batch(schema)
         finally:
@@ -996,61 +890,47 @@ class KafkaDataSourceReader(DataSourceReader):
             try:
                 consumer.close()
             except Exception:
-                # Do not expose client exception text: it may contain security
-                # configuration. A cleanup failure must not mask a read error.
+                # Omit client exception text (may contain security config) and do not mask read errors.
                 _LOGGER.warning("Failed to close Kafka consumer for %s[%s]", partition.topic, partition.kafka_partition)
                 if not unwinding:
                     raise
 
 
-def _query_watermarks(consumer: Consumer, tp: TopicPartition, partition: KafkaInputPartition) -> tuple[int, int]:
-    """Query fresh offsets, adding task context to the client's timeout error."""
+def _query_watermarks(consumer: Consumer, tp: TopicPartition, *, timeout_s: float) -> tuple[int, int]:
+    """Query fresh watermarks, adding task context to client timeouts."""
     try:
-        return consumer.get_watermark_offsets(tp, timeout=partition.admin_timeout_s, cached=False)
+        return consumer.get_watermark_offsets(tp, timeout=timeout_s, cached=False)
     except KafkaException as e:
-        # KafkaException wraps a KafkaError, including on watermark timeouts.
         if e.args[0].code() != KafkaError._TIMED_OUT:  # noqa: SLF001
             raise
         msg = (
             f"Timed out querying offsets for {tp.topic}[{tp.partition}] after "
-            f"{partition.admin_timeout_s:g}s; check broker connectivity or raise 'adminTimeoutMs'."
+            f"{timeout_s:g}s; check broker connectivity or raise 'adminTimeoutMs'."
         )
         raise TimeoutError(msg) from e
 
 
-def _report_pending_gaps(
-    consumer: Consumer, tp: TopicPartition, partition: KafkaInputPartition, state: _ReadState
-) -> None:
-    """Classify permissive-read gaps once per output batch for the final warning.
-
-    The observation is made at batch delivery time; it cannot establish whether
-    an interval was compacted before retention passed it. Strict reads instead
-    check each gap immediately and never reuse this observation.
-    """
+def _report_pending_gaps(consumer: Consumer, tp: TopicPartition, state: _ReadState, *, timeout_s: float) -> None:
+    """Classify permissive-read gaps once per batch for the final partial-read warning."""
     if not state.pending_gaps:
         return
-    low, _ = _query_watermarks(consumer, tp, partition)
+    low, _ = _query_watermarks(consumer, tp, timeout_s=timeout_s)
     for start, end in state.pending_gaps:
         if low > start:
             state.skip(start, end)
     state.pending_gaps.clear()
 
 
-def _bind_partition_range(consumer: Consumer, partition: KafkaInputPartition) -> tuple[int, int]:
-    """Bind this partition's ``earliest``/``latest`` sentinels at task start.
-
-    Mirrors ``KafkaSourceRDD.resolveRange``, which late-binds any negative
-    endpoint against the watermarks the consumer sees when the task actually
-    runs. Doing it here rather than on the driver is what lets the read pick up
-    records produced since planning, and what keeps an ``earliest`` start valid
-    when the log has aged on in the meantime.
-
-    Fully concrete ranges skip the broker round-trip entirely.
-    """
+def _bind_partition_range(
+    consumer: Consumer, partition: KafkaInputPartition, *, timeout_s: float = 10.0
+) -> tuple[int, int]:
+    """Late-bind ``earliest``/``latest`` sentinels at task start, mirroring ``KafkaSourceRDD.resolveRange``."""
     start, end = partition.start_offset, partition.end_offset
     if start >= 0 and end >= 0:
         return start, end
-    low, high = _query_watermarks(consumer, TopicPartition(partition.topic, partition.kafka_partition), partition)
+    low, high = _query_watermarks(
+        consumer, TopicPartition(partition.topic, partition.kafka_partition), timeout_s=timeout_s
+    )
     if start == _SPARK_OFFSET_EARLIEST:
         start = low
     if end == _SPARK_OFFSET_LATEST:
@@ -1059,19 +939,20 @@ def _bind_partition_range(consumer: Consumer, partition: KafkaInputPartition) ->
 
 
 def _check_stall(
-    partition: KafkaInputPartition,
+    tp: TopicPartition,
     last_progress: float,
     *,
+    stall_timeout_s: float,
     next_offset: int,
     end_offset: int,
 ) -> None:
     """Fail a read that has produced nothing for longer than ``stallTimeoutMs``."""
     idle_s = time.monotonic() - last_progress
-    if idle_s < partition.stall_timeout_s:
+    if idle_s < stall_timeout_s:
         return
     msg = (
         f"Kafka read stalled: no messages for {idle_s:.0f}s on "
-        f"{partition.topic}[{partition.kafka_partition}] at offset "
+        f"{tp.topic}[{tp.partition}] at offset "
         f"{next_offset}, expected up to {end_offset}. Broker may be "
         f"unreachable or the partition leader unavailable. "
         f"Raise 'stallTimeoutMs' if the topic is simply idle."
@@ -1082,71 +963,47 @@ def _check_stall(
 def _recover_out_of_range(
     consumer: Consumer,
     tp: TopicPartition,
-    partition: KafkaInputPartition,
     *,
+    fail_on_data_loss: bool,
+    admin_timeout_s: float,
     next_offset: int,
     end_offset: int,
 ) -> int | None:
-    """Handle a fetch the broker refuses because the offset is out of range.
-
-    The consumer runs with ``auto.offset.reset=error``, librdkafka's equivalent
-    of the ``none`` Spark forces on executors, so an offset that has aged out of
-    the log surfaces here rather than being moved for us. That is what makes
-    ``failOnDataLoss`` implementable at all: under ``earliest`` librdkafka
-    applies the policy in *both* directions, so a start that is past the end of
-    the log rewinds to the beginning of the partition and delivers records the
-    planner never asked for.
-
-    Spark reports data loss when ``failOnDataLoss`` is set, and otherwise
-    recovers to the earliest offset that is both still in the log and inside the
-    planned range (``getEarliestAvailableOffsetBetween``), giving up once the two
-    no longer overlap. Returns the offset to resume from, or ``None`` when there
-    is nothing left to read.
-    """
-    if partition.fail_on_data_loss:
+    """Handle an out-of-range fetch: fail under ``failOnDataLoss``, else clamp to the available overlap."""
+    if fail_on_data_loss:
         msg = (
-            f"Data loss on {partition.topic}[{partition.kafka_partition}]: offset {next_offset} is no "
+            f"Data loss on {tp.topic}[{tp.partition}]: offset {next_offset} is no "
             f"longer available on the broker. Records were removed after planning (retention or "
             f"truncation), or the offset is past the end of the log. "
             f"Set 'failOnDataLoss' to false to skip missing records."
         )
         raise ValueError(msg)
-    low, high = _query_watermarks(consumer, tp, partition)
+    low, high = _query_watermarks(consumer, tp, timeout_s=admin_timeout_s)
     if next_offset >= high or low >= end_offset:
         return None
     recovered = max(next_offset, low)
-    consumer.seek(TopicPartition(partition.topic, partition.kafka_partition, recovered))
+    consumer.seek(TopicPartition(tp.topic, tp.partition, recovered))
     return recovered
 
 
 def _check_offset_gap(
     consumer: Consumer,
     tp: TopicPartition,
-    partition: KafkaInputPartition,
     *,
+    admin_timeout_s: float,
     next_offset: int,
     record_offset: int,
     end_offset: int,
 ) -> int:
-    """Classify offsets Kafka passed over, returning the log's earliest offset.
+    """Distinguish unreadable in-log gaps (compaction/control markers) from retention data loss.
 
-    ``record_offset > next_offset`` means the offsets in between were not
-    delivered, and ``KafkaDataConsumer.fetchRecord`` splits that two ways.
-    If the log still starts at or below ``next_offset`` they were available but
-    unreadable — compacted away, transaction control markers, or aborted records
-    under ``read_committed`` — and Spark skips them. If the log now starts above
-    ``next_offset``, records that existed at planning time are gone, which is
-    data loss.
-
-    The log start can advance between gaps. An old observation cannot classify
-    a new gap; the broker need not report an out-of-range error for every race
-    between offset validation, retention and fetching the next available record.
+    Always queries fresh watermarks because the log start can advance between gaps.
     """
-    low, _ = _query_watermarks(consumer, tp, partition)
+    low, _ = _query_watermarks(consumer, tp, timeout_s=admin_timeout_s)
     if low <= next_offset:
         return low
     msg = (
-        f"Data loss on {partition.topic}[{partition.kafka_partition}]: offsets {next_offset} to "
+        f"Data loss on {tp.topic}[{tp.partition}]: offsets {next_offset} to "
         f"{min(record_offset, end_offset) - 1} were requested but are no longer in the log, which now starts at "
         f"{low}. Records were removed after planning (retention or truncation). "
         f"Set 'failOnDataLoss' to false to skip missing records."
@@ -1157,51 +1014,29 @@ def _check_offset_gap(
 def _eof_is_terminal(
     consumer: Consumer,
     tp: TopicPartition,
-    partition: KafkaInputPartition,
     *,
+    fail_on_data_loss: bool,
+    admin_timeout_s: float,
     message_offset: int | None,
     next_offset: int,
     end_offset: int,
     state: _ReadState,
 ) -> bool:
-    """Decide what an end-of-partition event below the planned end means.
-
-    EOF says the consumer reached the end of the log *at the position carried by
-    the event*, which librdkafka fills in when it queues the event rather than
-    when the application polls it. Three cases follow:
-
-    * The event is at or past the planned end. The read is complete.
-    * The log reaches beyond the event's position. The event was queued ahead of
-      records that are still to be delivered, so it is stale; stopping on it
-      would silently truncate the batch. The read continues.
-    * The log really does end there, below the planned end. Either the high
-      watermark still covers the planned end, in which case the offsets not seen
-      were within the available range and simply unreadable — compacted,
-      transaction control markers, aborted records — which Spark skips; or the
-      high watermark has fallen below it, meaning records that existed at
-      planning time are gone (retention, truncation, or an ``endingOffsets``
-      pointing past the log), which Spark reports as data loss.
-
-    ``end_offset`` is the bound end for this task, which for a late-bound
-    ``latest`` is the high watermark as of task start rather than planning time.
-    """
-    # A genuine EOF is generated at the high watermark, so the event's own
-    # offset is what the staleness test needs. Fall back to the reader's
-    # position when the event carries no usable offset.
+    """Classify a ``_PARTITION_EOF`` event as complete, stale (log grew past it), or data loss."""
     eof_offset = message_offset if message_offset is not None and message_offset >= 0 else None
     position = next_offset if eof_offset is None else eof_offset
     if position >= end_offset:
         return True
-    _, high = _query_watermarks(consumer, tp, partition)
+    _, high = _query_watermarks(consumer, tp, timeout_s=admin_timeout_s)
     if eof_offset is not None and high > eof_offset:
         return False
     if high >= end_offset:
         return True
-    if not partition.fail_on_data_loss:
+    if not fail_on_data_loss:
         state.skip(next_offset, end_offset)
         return True
     msg = (
-        f"Data loss on {partition.topic}[{partition.kafka_partition}]: reached end of log at offset "
+        f"Data loss on {tp.topic}[{tp.partition}]: reached end of log at offset "
         f"{next_offset}, but the read was planned up to {end_offset} and the high watermark "
         f"is now {high}. Records were removed after planning (retention or truncation), or "
         f"'endingOffsets' points past the end of the log. "
@@ -1228,6 +1063,9 @@ class _RowBuffer:
 
     def __init__(self, *, include_headers: bool) -> None:
         self.include_headers = include_headers
+        self.clear()
+
+    def clear(self) -> None:
         self.size_bytes = 0
         self.key: list[bytes | None] = []
         self.value: list[bytes | None] = []
@@ -1241,20 +1079,15 @@ class _RowBuffer:
     def __len__(self) -> int:
         return len(self.offset)
 
-    def append(self, record, *, size_bytes: int | None = None) -> None:
-        self.size_bytes += (
-            _record_size(record, include_headers=self.include_headers) if size_bytes is None else size_bytes
-        )
+    def append(self, record, size_bytes: int) -> None:
+        self.size_bytes += size_bytes
         ts_type, ts_ms = record.timestamp()  # librdkafka: 0=NotAvailable, 1=Create, 2=LogAppend
         self.key.append(record.key())
         self.value.append(record.value())
         self.topic.append(record.topic())
         self.partition.append(record.partition())
         self.offset.append(record.offset())
-        # Spark emits the -1ms Kafka reports for an untimed record rather than
-        # null, surfacing 1969-12-31 23:59:59.999; only `timestampType` is -1.
-        # Normalising here keeps that exact value whatever librdkafka reports
-        # alongside NOT_AVAILABLE.
+        # Spark surfaces -1ms (1969-12-31 23:59:59.999) for untimed records rather than null.
         if ts_type == _LIBRDKAFKA_TS_NOT_AVAILABLE:
             ts_ms = _NO_TIMESTAMP_MS
         self.timestamp_us.append(ts_ms * 1000)
@@ -1276,9 +1109,8 @@ class _RowBuffer:
         if self.include_headers:
             arrays.append(pa.array(self.headers, type=pa.list_(_HEADER_STRUCT)))
         batch = pa.record_batch(arrays, schema=schema)
-        # Arrow owns its buffers. Release Python payloads before suspension at a
-        # yield/backpressure boundary, rather than retaining both representations.
-        self.__init__(include_headers=self.include_headers)
+        # Release Python payloads before yielding across backpressure boundaries.
+        self.clear()
         return batch
 
 
@@ -1287,17 +1119,12 @@ class _RowBuffer:
 # ============================================================================
 
 
-# Extra wall-clock budget allowed on top of a request's own timeout before we
-# give up waiting for its future. librdkafka bounds the request with
-# ``request_timeout`` and completes the future with an error, so under normal
-# failure this margin is never reached and the broker's own message wins. It
-# exists only so that a future which never resolves at all cannot wedge planning
-# forever, which a bare ``Future.result()`` would.
+# Wall-clock cushion over librdkafka's request_timeout so an unresolved future cannot hang planning.
 _FUTURE_TIMEOUT_MARGIN_S = 5.0
 
 
 def _await(future, *, timeout_s: float, what: str):
-    """Resolve an admin-call future, refusing to wait indefinitely."""
+    """Resolve an admin-call future with a hard wall-clock bound."""
     try:
         return future.result(timeout=timeout_s + _FUTURE_TIMEOUT_MARGIN_S)
     except FuturesTimeoutError as e:
@@ -1310,28 +1137,13 @@ def _await(future, *, timeout_s: float, what: str):
 
 
 def _describe_topics(admin: AdminClient, topics: list[str], *, timeout_s: float) -> dict[str, list[int]]:
-    """Describe ``topics``, returning ``{topic: [partition, ...]}`` for the non-internal ones.
-
-    Mirrors Spark's ``ConsumerStrategy.retrieveAllPartitions``, which calls
-    ``admin.describeTopics(...)`` and drops whatever the broker flags with
-    ``isInternal``. That flag is the authority: only ``__consumer_offsets`` and
-    ``__transaction_state`` carry it, so a *user* topic that happens to start
-    with ``__`` stays visible, exactly as it does under Spark. Matching on the
-    name prefix instead would silently hide it.
-
-    One request covers every topic, as Spark's does.
-    """
+    """Describe ``topics`` in one request, excluding broker-flagged ``isInternal`` topics."""
     futures = admin.describe_topics(TopicCollection(topics), request_timeout=timeout_s)
     out: dict[str, list[int]] = {}
     for topic, future in futures.items():
         try:
             description = _await(future, timeout_s=timeout_s, what=f"describe topic {topic!r}")
         except KafkaException as e:
-            # A per-topic failure is not necessarily a missing topic: it also
-            # covers authorization failures (``TOPIC_AUTHORIZATION_FAILED``) and
-            # leader-election churn. Reporting all of those as "not found" sends
-            # users looking for the wrong misconfiguration, so relay what the
-            # broker actually said.
             error = e.args[0]
             if error.code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
                 msg = f"Topic {topic!r} not found on broker"
@@ -1347,26 +1159,18 @@ def _describe_topics(admin: AdminClient, topics: list[str], *, timeout_s: float)
 def _list_topic_partitions(
     admin: AdminClient, subscription: tuple[str, object], *, timeout_s: float
 ) -> list[TopicPartition]:
-    """Enumerate the (topic, partition) pairs selected by the subscription."""
+    """Enumerate the non-internal (topic, partition) pairs selected by the subscription."""
     strategy, value = subscription
 
     if strategy == "subscribePattern":
-        # Only the pattern strategy needs the full topic list; the other two
-        # name their topics up front and can go straight to `describe_topics`.
         metadata = admin.list_topics(timeout=timeout_s)
-        # `SubscribePatternStrategy` matches with `topicRegex.findFirstIn(name)`,
-        # which searches *within* the name rather than anchoring to it. Anchoring
-        # here would silently drop topics Spark reads: `subscribePattern=orders`
-        # selects `orders-eu` as well as `orders`.
+        # Unanchored search matches Spark's SubscribePatternStrategy (findFirstIn).
         names = sorted(topic for topic in metadata.topics if value.search(topic))
         if not names:
             return []
         described = _describe_topics(admin, names, timeout_s=timeout_s)
         return [TopicPartition(topic, p) for topic in sorted(described) for p in described[topic]]
 
-    # An `assign` entry with no partitions selects nothing from that topic, so
-    # it is not described at all — Spark builds its topic set from the
-    # `TopicPartition`s themselves, and an empty list produces none.
     topics = list(value) if strategy == "subscribe" else [topic for topic, parts in value.items() if parts]
     if not topics:
         return []
@@ -1375,19 +1179,12 @@ def _list_topic_partitions(
     out: list[TopicPartition] = []
     for topic in topics:
         if topic not in described:
-            # The topic exists but the broker flags it internal. Spark's
-            # `retrieveAllPartitions` filters it out of every strategy, leaving
-            # a read with no partitions rather than an error.
-            continue
+            continue  # broker-flagged internal topic
         available = described[topic]
         if strategy == "subscribe":
             out.extend(TopicPartition(topic, p) for p in available)
             continue
-        # `AssignStrategy.assignedTopicPartitions` intersects the requested
-        # partitions with the broker's: `retrieveAllPartitions(admin,
-        # topics).filter(partitions.contains(_))`. A partition that does not
-        # exist — including a negative id — is skipped rather than rejected, so
-        # an assignment naming a since-deleted partition still reads the rest.
+        # Intersect requested partitions with broker metadata, skipping nonexistent ids as Spark does.
         selected = set(value[topic])
         out.extend(TopicPartition(topic, p) for p in available if p in selected)
     return out
@@ -1399,15 +1196,7 @@ def _validate_spec_partitions(
     *,
     option_name: str,
 ) -> None:
-    """Require a per-partition spec to name exactly the assigned partitions.
-
-    Spark asserts ``partitions == partitionOffsets.keySet`` once the broker's
-    partitions are known ("If startingOffsets contains specific offsets, you
-    must specify all TopicPartitions"). Without that check an omitted partition
-    silently falls back to a watermark and an extra or misspelled one is
-    dropped, so a typo turns into a successful read of the wrong data. String
-    sentinels and global timestamps have no partition keys and pass through.
-    """
+    """Require a per-partition offset/timestamp map to match the assigned partitions exactly."""
     if not isinstance(spec, dict):
         return
     specified = {(topic, int(partition)) for topic, partitions in spec.items() for partition in partitions}
@@ -1436,18 +1225,7 @@ def _list_offsets(
     timeout_s: float,
     isolation_level: IsolationLevel,
 ) -> dict[tuple[str, int], int]:
-    """Resolve ``{(topic, partition): OffsetSpec}`` to concrete offsets in one request.
-
-    Spark's ``KafkaOffsetReaderAdmin`` resolves every partition with a single
-    ``admin.listOffsets`` call. Asking per partition instead would turn planning
-    a wide topic into one blocking round-trip per partition.
-
-    ``isolation_level`` comes from the user's ``kafka.isolation.level`` via
-    :func:`_planning_isolation_level`, as Spark's does. It changes what "latest"
-    means: under ``READ_COMMITTED`` the broker answers with the last stable
-    offset rather than the high watermark, which is exactly what a reader
-    configured that way will be able to see.
-    """
+    """Resolve ``{(topic, partition): OffsetSpec}`` in a single batched ``list_offsets`` call."""
     if not specs:
         return {}
     futures = admin.list_offsets(
@@ -1467,25 +1245,11 @@ def _list_offsets(
 
 
 def _map_offset_spec(tps: list[TopicPartition], spec: str | dict[str, dict[str, int]]) -> dict[tuple[str, int], int]:
-    """Map a starting/ending-offset spec to a per-partition offset.
-
-    ``earliest``/``latest`` — in either the string form or the JSON ``-2``/``-1``
-    form — are returned as those sentinels rather than resolved, and are bound
-    per task in :func:`_bind_partition_range`. Spark's ``fetchPartitionOffsets``
-    does the same, which is what lets a batch read pick up records produced
-    after planning and keeps an ``earliest`` start valid if the log ages on.
-
-    No broker call is made here; explicit numeric offsets are used as given.
-    """
+    """Map an offset spec to per-partition offsets, leaving ``-2``/``-1`` sentinels late-bound."""
     if spec == _SENTINEL_EARLIEST:
         return {(tp.topic, tp.partition): _SPARK_OFFSET_EARLIEST for tp in tps}
     if spec == _SENTINEL_LATEST:
         return {(tp.topic, tp.partition): _SPARK_OFFSET_LATEST for tp in tps}
-
-    # Explicit per-topic-partition JSON. `_validate_spec_partitions` has already
-    # required an entry for every assigned partition, so a lookup miss is not
-    # reachable here. `-1`/`-2` are already the sentinel values, so they pass
-    # through unchanged.
     return {(tp.topic, tp.partition): int(spec[tp.topic][str(tp.partition)]) for tp in tps}
 
 
@@ -1499,40 +1263,19 @@ def _resolve_by_timestamp(
     strategy: str,
     isolation_level: IsolationLevel,
 ) -> dict[tuple[str, int], int]:
-    """Resolve a timestamp spec to concrete offsets via a timestamp ``list_offsets``.
+    """Resolve a global or per-partition timestamp spec via ``list_offsets``.
 
-    ``spec`` is either a global ``int`` (ms since epoch, applied to every
-    partition) or a mapping ``{topic: {partition_str: ts_ms}}``.
-
-    When a partition holds no message with ``ts >= T``, Spark's behaviour
-    depends on the endpoint: an ending timestamp falls back to the latest
-    offset, while a starting timestamp follows
-    ``startingOffsetsByTimestampStrategy`` — ``error`` (the default) fails the
-    query, and ``latest`` bounds the read to what is currently in the log.
-    Always falling back would silently return an empty result for a mistaken or
-    future starting timestamp.
-
-    Note: the lookup searches the topic's actual stored timestamps. If the topic
-    is configured with ``message.timestamp.type=LogAppendTime`` the search is
-    against broker ingest time; otherwise it's against producer clocks
-    (``CreateTime``).
+    Unmatched partitions (offset ``-1``) fall back to ``latest`` for ending
+    timestamps, or follow ``startingOffsetsByTimestampStrategy`` for starting ones.
     """
     if isinstance(spec, int):
         wanted = {(tp.topic, tp.partition): OffsetSpec.for_timestamp(spec) for tp in tps}
     else:
-        # `_validate_spec_partitions` has already required an entry per assigned
-        # partition, so every lookup below is present.
         wanted = {
             (tp.topic, tp.partition): OffsetSpec.for_timestamp(int(spec[tp.topic][str(tp.partition)])) for tp in tps
         }
 
-    # A broker-side failure surfaces as a raised `KafkaException` inside
-    # `_list_offsets`, which reports it rather than letting it read as "no
-    # timestamp match" — that would turn a lookup failure into a silently empty
-    # (starting) or widened (ending) read.
     resolved = _list_offsets(admin, wanted, timeout_s=timeout_s, isolation_level=isolation_level)
-
-    # Partitions with no message at or after the timestamp come back as -1.
     unmatched = [tp for tp in tps if resolved.get((tp.topic, tp.partition), -1) < 0]
     if unmatched and endpoint == "starting" and strategy == _TS_STRATEGY_ERROR:
         tp = unmatched[0]

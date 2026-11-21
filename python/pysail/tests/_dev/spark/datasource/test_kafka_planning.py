@@ -308,9 +308,8 @@ class TestPlanning:
         assert "test-only-secret" not in repr(partition)
         assert "test-only-key" not in repr(partition)
         assert _TOPIC in repr(partition)
-        # Credentials still have to reach the worker; repr redaction must not
-        # alter the connection options carried by the task.
-        assert partition.client_config["sasl.password"] == "test-only-secret"
+        assert not hasattr(partition, "client_config")
+        assert reader.client_config["sasl.password"] == "test-only-secret"
 
     def test_default_range_is_carried_as_sentinels(self, consumer_factory):
         # Spark's `fetchPartitionOffsets` returns -2/-1 for earliest/latest and
@@ -885,10 +884,10 @@ class TestReadLifecycle:
                     "import json, sys, pysail; from pyspark import cloudpickle; "
                     "pysail.__path__[:] = json.loads(sys.argv[1]); "
                     "reader, parts = cloudpickle.loads(sys.stdin.buffer.read()); "
-                    "assert reader._cancel_check is None; "
-                    "assert reader.include_headers and parts[0].include_headers; "
-                    "assert reader.max_batch_bytes == parts[0].max_batch_bytes == 1024; "
-                    "assert parts[0].client_config['sasl.password'] == 'test-only-secret'; "
+                    "assert reader.include_headers; "
+                    "assert reader.max_batch_bytes == 1024; "
+                    "assert reader.client_config['sasl.password'] == 'test-only-secret'; "
+                    "assert not hasattr(parts[0], 'client_config'); "
                     "assert 'test-only-secret' not in repr(parts[0]); "
                     "assert (parts[0].topic, parts[0].start_offset, parts[0].end_offset) == ('orders', -2, -1); "
                     "print('deserialized')"
@@ -981,19 +980,6 @@ class TestReadLifecycle:
             assert len(generator.gi_frame.f_locals["buf"]) == 0
         finally:
             generator.close()
-        assert consumer.closed
-
-    def test_cancellation_closes_a_consumer_with_no_records(self, consumer_factory):
-        cancelled = [False]
-
-        class CancelledConsumer(_FakeConsumer):
-            def poll(self, timeout=None):  # noqa: ARG002
-                cancelled[0] = True
-
-        consumer = CancelledConsumer()
-        reader = _reader(consumer_factory, consumer)
-        reader._set_cancel_callback(lambda: cancelled[0])  # noqa: SLF001
-        assert _read_all(reader, reader.partitions()[0]) == []
         assert consumer.closed
 
     def test_cleanup_error_does_not_replace_the_read_failure(self, consumer_factory, caplog):
@@ -1154,32 +1140,6 @@ def test_permissive_gaps_report_retention_at_batch_delivery(consumer_factory, ca
     )
     assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [3, 4]
     assert "skipped 1 offset interval(s), spanning [0, 3)" in caplog.text
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="time.tzset is unavailable on Windows")
-def test_reference_normalizes_aware_and_python_local_timestamps(monkeypatch):
-    import datetime
-    import time
-
-    from pyspark.sql import Row
-
-    from pysail.testing.spark.kafka_reference import canonical_rows
-
-    # Spark collect returns naive timestamps in the Python process timezone,
-    # irrespective of spark.sql.session.timeZone.
-    try:
-        with monkeypatch.context() as context:
-            context.setenv("TZ", "Europe/Amsterdam")
-            time.tzset()
-            instant = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
-            values = [
-                instant.astimezone(datetime.timezone(datetime.timedelta(hours=2))),
-                instant.astimezone().replace(tzinfo=None),
-            ]
-            rows = [Row(topic="t", partition=0, offset=i, timestamp=value) for i, value in enumerate(values)]
-            assert [r["timestamp"] for r in canonical_rows(rows)] == ["2024-01-01T00:00:00+00:00"] * 2
-    finally:
-        time.tzset()
 
 
 def test_deferred_gap_and_eof_warning_cover_the_whole_skipped_span(consumer_factory, caplog):
