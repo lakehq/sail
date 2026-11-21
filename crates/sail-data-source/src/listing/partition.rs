@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
 use sail_function::scalar::datetime::timestamp::TimestampParser;
+use sail_function::scalar::datetime::utils::parse_time_nanoseconds;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
 use sail_sql_analyzer::parser::parse_date;
 
@@ -562,7 +563,10 @@ fn cast_partition_value(
                 || (!options.ansi
                     && matches!(
                         ty,
-                        DataType::Date32 | DataType::Timestamp(_, _) | DataType::Time64(_)
+                        DataType::Date32
+                            | DataType::Timestamp(_, _)
+                            | DataType::Time32(_)
+                            | DataType::Time64(_)
                     )) =>
         {
             ScalarValue::try_from(ty)
@@ -598,9 +602,12 @@ fn parse_partition_value(
         }
         DataType::Boolean => boolean_option("boolean partition value", Some(value), false)
             .map(|v| ScalarValue::Boolean(Some(v))),
-        DataType::Utf8 | DataType::Time32(_) | DataType::Time64(_) => {
-            ScalarValue::try_from_string(decoded(value).into_owned(), ty)
+        DataType::Time32(_) | DataType::Time64(_) => {
+            let nanos = parse_time_nanoseconds(&decoded(value))
+                .ok_or_else(|| plan_datafusion_err!("invalid time partition value: {value}"))?;
+            ScalarValue::Time64Nanosecond(Some(nanos)).cast_to(ty)
         }
+        DataType::Utf8 => Ok(ScalarValue::Utf8(Some(decoded(value).into_owned()))),
         DataType::Int8 | DataType::Int16 | DataType::Int32 => {
             // Released Spark versions parse an Int and narrow it for byte and short partitions.
             let integer = normalize_decimal_digits(value)

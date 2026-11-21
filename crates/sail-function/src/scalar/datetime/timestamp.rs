@@ -154,6 +154,7 @@ impl TimestampParser {
             segments,
             timezone,
             just_time,
+            ..
         } = parse_timestamp_string(value)
             .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
 

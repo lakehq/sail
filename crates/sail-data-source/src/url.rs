@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::mem;
 use std::path::PathBuf;
 
@@ -708,13 +707,18 @@ pub(crate) async fn resolve_read_urls(
             return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
         }
         if expand_input_globs {
-            let mut seen = HashSet::new();
             matches.retain(|url| {
                 !url.prefix()
                     .parts()
                     .any(|part| part.as_ref() == "_spark_metadata")
-                    && seen.insert(url.as_str().to_owned())
             });
+            // Hadoop sorts globStatus results across all brace alternatives of one input.
+            matches.sort_unstable_by(|a, b| {
+                a.prefix()
+                    .cmp(b.prefix())
+                    .then_with(|| a.as_str().cmp(b.as_str()))
+            });
+            matches.dedup_by(|a, b| a.as_str() == b.as_str());
             urls.push(matches);
         } else {
             // Preserve the existing sample per listing URL for ordinary reads.

@@ -229,6 +229,16 @@ def test_base_path_glob_dot_components(spark, tmp_path, uri, pattern):
     assert df.collect() == [Row(id=1, p=1)]
 
 
+@pytest.mark.parametrize("use_glob", [False, True])
+def test_base_path_multiline_csv_header_order(spark, tmp_path, use_glob):
+    for name, value in [("a", "1"), ("b", "2")]:
+        (tmp_path / f"{name}.csv").write_text(f"from_{name}\n{value}\n")
+    paths = str(tmp_path / "{b.csv,a.csv}") if use_glob else [str(tmp_path / f"{name}.csv") for name in ["b", "a"]]
+    df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True).csv(paths)
+    assert df.columns == ["from_a" if use_glob else "from_b"]
+    assert sorted(r[0] for r in df.collect()) == ["1", "2"]
+
+
 @pytest.mark.parametrize("schema", [None, "id INT, p TIMESTAMP"])
 def test_base_path_reader_timezone(spark, tmp_path, schema):
     write_json_partition(tmp_path, "p=2025-01-01 12%3A01%3A02")
@@ -503,6 +513,35 @@ def test_base_path_time_partition_before_spark_41(spark, tmp_path):
     write_json_partition(tmp_path, "p=12%3A30%3A00")
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
     assert df.collect() == [Row(id=1, p="12:30:00")]
+
+
+@pytest.mark.spark(version=">=4.1", reason="Uses an explicit TIME partition column")
+def test_base_path_explicit_time_partition(spark, tmp_path):
+    valid = {
+        "p=%201%3A2%3A3.12345678901pM%20": time(13, 2, 3, 123456),
+        "p=12%3A05%20AM": time(0, 5),
+        "p=T7": time(7),
+    }
+    invalid = ["p=1", "p=23%3A59%3A60"]
+    for path in [*valid, *invalid]:
+        write_json_partition(tmp_path, path)
+    time_key = "spark.sql.timeType.enabled"
+    ansi_key = "spark.sql.ansi.enabled"
+    previous_time, previous_ansi = spark.conf.get(time_key), spark.conf.get(ansi_key)
+    try:
+        spark.conf.set(time_key, "true")
+        spark.conf.set(ansi_key, "true")
+        reader = spark.read.option("basePath", str(tmp_path)).schema("id INT, p TIME")
+        df = reader.json([str(tmp_path / path) for path in valid])
+        assert [row.p for row in df.orderBy("p").collect()] == sorted(valid.values())
+        for path in invalid:
+            with pytest.raises(Exception, match=r"(?i)time"):
+                reader.json(str(tmp_path / path)).collect()
+        spark.conf.set(ansi_key, "false")
+        assert reader.json([str(tmp_path / path) for path in invalid]).where("p IS NULL").count() == len(invalid)
+    finally:
+        spark.conf.set(time_key, previous_time)
+        spark.conf.set(ansi_key, previous_ansi)
 
 
 @pytest.mark.parametrize("schema", [None, "id INT, `Café` STRING"])

@@ -5,6 +5,7 @@
 /// segments), an optional timezone string, and whether only a time was given.
 pub(crate) struct ParsedTimestamp {
     pub(crate) segments: [i64; 9],
+    nanos_within_micro: i64,
     pub(crate) timezone: Option<String>,
     pub(crate) just_time: bool,
 }
@@ -42,6 +43,7 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     }
 
     let mut fractional_digits = 0usize;
+    let mut nanos_within_micro = 0;
     let mut just_time = false;
     let mut timezone = None;
     let mut year_sign = None;
@@ -57,6 +59,9 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
             let parsed = i64::from(byte - b'0');
             if segment == 6 {
                 fractional_digits += 1;
+                if (6..9).contains(&current_digits) {
+                    nanos_within_micro += parsed * [100, 10, 1][current_digits - 6];
+                }
             }
             if segment != 6 || current_digits < 6 {
                 current_value = current_value.checked_mul(10)?.checked_add(parsed)?;
@@ -160,9 +165,32 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     segments[0] *= year_sign.unwrap_or(1);
     Some(ParsedTimestamp {
         segments,
+        nanos_within_micro,
         timezone,
         just_time,
     })
+}
+
+/// Parses a Spark TIME cast as nanoseconds since midnight.
+pub fn parse_time_nanoseconds(value: &str) -> Option<i64> {
+    let value = value.trim_end_matches(' ');
+    let (clock, pm) = match value.split_at_checked(value.len().saturating_sub(2)) {
+        Some((clock, suffix)) if suffix.eq_ignore_ascii_case("AM") => (clock, Some(false)),
+        Some((clock, suffix)) if suffix.eq_ignore_ascii_case("PM") => (clock, Some(true)),
+        _ => (value, None),
+    };
+    let parsed = parse_timestamp_string(clock)?;
+    let [_, _, _, hour, minute, second, micros, _, _] = parsed.segments;
+    if !parsed.just_time || parsed.timezone.is_some() || minute >= 60 || second >= 60 {
+        return None;
+    }
+    let hour = match pm {
+        Some(pm) if (1..=12).contains(&hour) => hour % 12 + if pm { 12 } else { 0 },
+        None if hour < 24 => hour,
+        _ => return None,
+    };
+    let seconds = (hour * 60 + minute) * 60 + second;
+    Some(seconds * 1_000_000_000 + micros * 1_000 + parsed.nanos_within_micro)
 }
 
 #[cfg(test)]
