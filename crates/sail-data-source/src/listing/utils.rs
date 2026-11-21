@@ -166,30 +166,41 @@ pub(super) async fn sample_listing_files<'a>(
     urls: &'a [ListingTableUrl],
     path_glob_filter: Option<&PathGlobFilter>,
     base_path: Option<&BasePathPartitions>,
+    recursive: bool,
 ) -> Result<(Vec<ListingFileSample<'a>>, Vec<FieldRef>)> {
     const SAMPLE_SIZE: usize = 10;
     let mut discovery = PartitionDiscovery::default();
     let mut samples = vec![];
+    // Keep a bounded sample of direct children in case no partitions are discovered
+    // across any of the input roots.
+    let mut unpartitioned = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
         let mut objects = vec![];
-        let mut files = list_all_files(url, ctx, store.as_ref(), path_glob_filter).await?;
+        let mut direct_files = vec![];
+        let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
         while let Some(file) = files.try_next().await? {
-            if file.size == 0 {
-                continue;
-            }
-            discovery.observe(
-                base_path.map_or(url, |p| &p.root),
-                &file.location,
-                base_path,
-            )?;
-            if objects.len() < SAMPLE_SIZE {
+            let selected =
+                file.size > 0 && matches_path_glob_filter(path_glob_filter, &file.location);
+            if let Some(base) = base_path {
+                let partitioned = discovery.observe(&base.root, &file.location, Some(base))?;
+                if selected && partitioned && objects.len() < SAMPLE_SIZE {
+                    objects.push(file);
+                } else if selected
+                    && !partitioned
+                    && direct_files.len() < SAMPLE_SIZE
+                    && is_direct_input(url, &file.location)
+                {
+                    direct_files.push(file);
+                }
+            } else if selected {
+                if !recursive {
+                    discovery.observe(url, &file.location, None)?;
+                }
                 objects.push(file);
-            }
-            // Type inference needs every selected partition value, even after the
-            // sample for physical file schema inference is full.
-            if base_path.is_none() && objects.len() == SAMPLE_SIZE {
-                break;
+                if objects.len() == SAMPLE_SIZE {
+                    break;
+                }
             }
         }
         drop(files);
@@ -198,8 +209,20 @@ pub(super) async fn sample_listing_files<'a>(
             store,
             objects,
         });
+        unpartitioned.push(direct_files);
     }
-    Ok((samples, discovery.into_fields(base_path.is_some())?))
+    let fields = discovery.into_fields(base_path.is_some())?;
+    if base_path.is_some() && fields.is_empty() {
+        for (sample, files) in samples.iter_mut().zip(unpartitioned) {
+            sample.objects = files;
+        }
+    }
+    Ok((samples, fields))
+}
+
+pub(super) fn is_direct_input(url: &ListingTableUrl, path: &Path) -> bool {
+    url.strip_prefix(path)
+        .is_some_and(|mut parts| parts.nth(1).is_none())
 }
 
 pub async fn list_all_files<'a>(

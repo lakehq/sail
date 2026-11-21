@@ -7255,6 +7255,7 @@ dependencies = [
  "arrow-pyarrow",
  "arrow-schema",
  "async-trait",
+ "bigdecimal",
  "bytes",
  "chrono",
  "chumsky 0.14.2",

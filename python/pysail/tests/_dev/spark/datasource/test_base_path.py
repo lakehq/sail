@@ -194,3 +194,115 @@ def test_base_path_empty_partition_value(spark, tmp_path):
     write_json_partition(tmp_path, "p=")
     with pytest.raises(Exception, match=r"(?i)empty.*partition column"):
         spark.read.option("basePath", str(tmp_path)).json(str(tmp_path)).collect()
+
+
+def test_base_path_recursive_file_lookup(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    (tmp_path / "loose.json").write_text('{"id":2}')
+    df = spark.read.options(basePath=str(tmp_path), recursiveFileLookup=True).json(str(tmp_path))
+    assert df.columns == ["id"]
+    assert df.orderBy("id").collect() == [Row(id=1), Row(id=2)]
+
+
+@pytest.mark.parametrize("pattern", ["p=1*/row.json", "p=1*"])
+def test_base_path_glob_matches_partition_directories(spark, tmp_path, pattern):
+    for path in ["p=1", "p=11", "p=2"]:
+        write_json_partition(tmp_path, path)
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / pattern))
+    assert df.orderBy("p").collect() == [Row(id=1, p=1), Row(id=1, p=11)]
+    assert len(df.inputFiles()) == 2
+
+
+@pytest.mark.parametrize("schema", [None, "id INT, p TIMESTAMP"])
+def test_base_path_reader_timezone(spark, tmp_path, schema):
+    write_json_partition(tmp_path, "p=2025-01-01 12%3A01%3A02")
+    reader = spark.read.options(basePath=str(tmp_path), timeZone="America/New_York")
+    if schema:
+        reader = reader.schema(schema)
+    df = reader.json(str(tmp_path))
+    assert df.selectExpr("unix_seconds(p) AS seconds").collect() == [Row(seconds=1735750862)]
+
+
+def test_base_path_explicit_csv_positions(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "rows.csv").write_text("p,data\nignored,42\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True).schema("data STRING, p INT").csv(str(part))
+    assert df.collect() == [Row(data="ignored", p=1)]
+
+
+def test_base_path_schema_sample_excludes_loose_files(spark, tmp_path):
+    for i in range(11):
+        (tmp_path / f"{i}.json").write_text('{"loose":42}')
+    write_json_partition(tmp_path, "p=1")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.columns == ["id", "p"]
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("excluded_file", ["empty.json", "nonmatching.txt"])
+def test_base_path_discovers_partitions_before_file_filtering(spark, tmp_path, excluded_file):
+    write_json_partition(tmp_path, "p=1")
+    part = tmp_path / "p=text"
+    part.mkdir()
+    (part / excluded_file).write_text("" if excluded_file == "empty.json" else '{"id":2}')
+    df = spark.read.options(basePath=str(tmp_path), pathGlobFilter="*.json").json(str(tmp_path))
+    assert df.schema["p"].dataType.simpleString() == "string"
+    assert df.collect() == [Row(id=1, p="1")]
+
+
+def test_base_path_overlapping_text_value(spark, tmp_path):
+    part = tmp_path / "value=hello"
+    part.mkdir()
+    (part / "rows.txt").write_text("one\ntwo\n")
+    df = spark.read.option("basePath", str(tmp_path)).text(str(part))
+    assert df.collect() == [Row(value="hello"), Row(value="hello")]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected_type", "value"),
+    [
+        ("9007199254740993E2", "decimal(18,0)", Decimal(900719925474099300)),
+        ("__HIVE_DEFAULT_PARTITION__", "void", None),
+        ("%31", "string", "1"),
+    ],
+)
+def test_base_path_partition_literal(spark, tmp_path, token, expected_type, value):
+    write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.schema["p"].dataType.simpleString() == expected_type
+    assert df.collect() == [Row(id=1, p=value)]
+
+
+@pytest.mark.spark(version=">=4.0", reason="Uses ignoreInvalidPartitionPaths")
+@pytest.mark.parametrize("per_read", [True, False])
+def test_base_path_ignore_invalid_partition_paths(spark, tmp_path, per_read):
+    write_json_partition(tmp_path, "p=1")
+    write_json_partition(tmp_path, "loose")
+    reader = spark.read.option("basePath", str(tmp_path))
+    key = "spark.sql.files.ignoreInvalidPartitionPaths"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(not per_read).lower())
+        if per_read:
+            reader = reader.option("ignoreInvalidPartitionPaths", True)
+        assert reader.json(str(tmp_path)).collect() == [Row(id=1, p=1)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_explicit_partition_field_case(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "row.json").write_text('{"id":1,"p":99}')
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT, P INT").json(str(part))
+    assert df.columns == ["id", "P"]
+    assert df.collect() == [Row(id=1, P=1)]
+
+
+def test_base_path_unpartitioned_root(spark, tmp_path):
+    write_json_partition(tmp_path, "nested")
+    (tmp_path / "row.json").write_text('{"id":2}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=2)]
+    assert len(df.inputFiles()) == 1

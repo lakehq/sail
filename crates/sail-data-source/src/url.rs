@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use std::mem;
 use std::path::PathBuf;
 
@@ -9,7 +10,8 @@ use chumsky::{IterParser, Parser};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
-use glob::Pattern;
+use futures::TryStreamExt;
+use glob::{MatchOptions, Pattern};
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
@@ -534,15 +536,76 @@ pub async fn resolve_listing_urls(
     ctx: &dyn Session,
     paths: Vec<String>,
 ) -> Result<Vec<ListingTableUrl>> {
+    resolve_read_urls(ctx, paths, false).await
+}
+
+pub(crate) async fn resolve_read_urls(
+    ctx: &dyn Session,
+    paths: Vec<String>,
+    expand_input_globs: bool,
+) -> Result<Vec<ListingTableUrl>> {
     let mut urls = vec![];
     for path in paths {
         for url in GlobUrl::parse(&path)? {
             let url = rewrite_directory_url(url, ctx).await?;
-            let url = attach_default_glob(url)?;
-            urls.push(url.try_into()?);
+            if expand_input_globs && let Some(pattern) = url.glob {
+                urls.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
+            } else {
+                urls.push(attach_default_glob(url)?.try_into()?);
+            }
         }
     }
     Ok(urls)
+}
+
+/// Spark expands input globs to roots before partition discovery. Match against
+/// the full relative path, including Hive directories, and keep matched directories as roots.
+async fn expand_listing_roots(
+    ctx: &dyn Session,
+    base: Url,
+    pattern: &Pattern,
+) -> Result<Vec<ListingTableUrl>> {
+    let root = ListingTableUrl::try_new(base.clone(), None)?;
+    let store = ctx.runtime_env().object_store(&root)?;
+    let mut files = crate::listing::utils::list_all_files(&root, ctx, store.as_ref(), None).await?;
+    let mut roots = BTreeSet::new();
+    let options = MatchOptions {
+        require_literal_separator: true,
+        ..MatchOptions::new()
+    };
+    while let Some(file) = files.try_next().await? {
+        let Some(parts) = root.strip_prefix(&file.location) else {
+            continue;
+        };
+        let relative = parts.collect::<Vec<_>>().join("/");
+        for end in relative
+            .match_indices('/')
+            .map(|(i, _)| i)
+            .chain([relative.len()])
+        {
+            let path = &relative[..end];
+            if pattern.matches_with(path, options) {
+                roots.insert((path.to_owned(), end < relative.len()));
+                break;
+            }
+        }
+    }
+    roots
+        .into_iter()
+        .map(|(path, directory)| {
+            let mut url = base.clone();
+            {
+                let mut segments = url
+                    .path_segments_mut()
+                    .map_err(|_| plan_datafusion_err!("invalid listing root: {base}"))?;
+                segments.pop_if_empty().extend(path.split('/'));
+                if directory {
+                    segments.push("");
+                }
+            }
+            attach_default_glob(GlobUrl::new(url, None))?.try_into()
+        })
+        .collect()
 }
 
 fn fill_directory_root_path(mut path: String) -> Result<String> {

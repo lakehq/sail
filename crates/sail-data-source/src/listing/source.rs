@@ -26,12 +26,13 @@ use sail_common_datafusion::datasource::{
 };
 use url::Url;
 
-use crate::listing::partition::{resolve_base_path, split_discovered_partitions};
+use crate::listing::partition::{
+    boolean_option, read_option, resolve_base_path, split_discovered_partitions,
+};
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{rewrite_unsupported_fields, sample_listing_files};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
-use crate::resolve_listing_urls;
-use crate::url::{PathGlobFilter, resolve_listing_writer_url};
+use crate::url::{PathGlobFilter, resolve_listing_writer_url, resolve_read_urls};
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -175,20 +176,38 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             read_case_sensitive,
         } = info;
 
-        let urls = resolve_listing_urls(ctx, paths).await?;
-        let base_path = resolve_base_path(ctx, read_case_sensitive, &options, &urls)?;
+        let recursive = boolean_option(
+            "recursiveFileLookup",
+            read_option(&options, "recursiveFileLookup"),
+            false,
+        )?;
+        if recursive && !partition_by.is_empty() {
+            return plan_err!("recursiveFileLookup is not supported for a partitioned table");
+        }
+        let path = read_option(&options, "basePath");
+        let urls = resolve_read_urls(ctx, paths, path.is_some() || recursive).await?;
+        let base_path = path
+            .filter(|_| !recursive)
+            .map(|path| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
+            .transpose()?;
         let read_format = T::read(ctx, options)?;
         let path_glob_filter = read_format
             .path_glob_filter()
             .map(PathGlobFilter::parse)
             .transpose()?;
-        let (sampled_files, inferred) =
-            sample_listing_files(ctx, &urls, path_glob_filter.as_ref(), base_path.as_ref()).await?;
+        let (sampled_files, inferred) = sample_listing_files(
+            ctx,
+            &urls,
+            path_glob_filter.as_ref(),
+            base_path.as_ref(),
+            recursive,
+        )
+        .await?;
         let inferred_names: Vec<_> = inferred.iter().map(|f| f.name().clone()).collect();
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
         let positional_partitions =
-            !inferred.is_empty() && base_path.is_some() && T::name() == "csv";
+            !inferred.is_empty() && base_path.is_some() && matches!(T::name(), "csv" | "text");
         let explicit_schema = schema.filter(|s| !s.fields().is_empty());
         let has_explicit_schema = explicit_schema.is_some();
         let (schema, physical) = match explicit_schema {
@@ -214,7 +233,14 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 let schema = if read_case_sensitive {
                     schema
                 } else if let Some(physical) = &physical {
-                    reconcile_schema_names_case_insensitive(schema, physical)?
+                    let partition_names: &[String] = if base_path.is_none() {
+                        &[]
+                    } else if partition_by.is_empty() {
+                        &inferred_names
+                    } else {
+                        &partition_by
+                    };
+                    reconcile_schema_names_case_insensitive(schema, physical, partition_names)?
                 } else {
                     // Keeps the user schema if physical schema inference is unavailable.
                     schema
@@ -400,10 +426,18 @@ async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
 
 // Reconciles a user-specified schema's field names with the physical file schema
 // case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
-fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+fn reconcile_schema_names_case_insensitive(
+    schema: Schema,
+    physical: &Schema,
+    partitions: &[String],
+) -> Result<Schema> {
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let name = field.name();
+        if partitions.iter().any(|p| p.eq_ignore_ascii_case(name)) {
+            fields.push(Arc::clone(field));
+            continue;
+        }
         let mut matches = physical
             .fields()
             .iter()

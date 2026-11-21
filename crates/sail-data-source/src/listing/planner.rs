@@ -43,7 +43,8 @@ use crate::listing::partition::partition_values;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, is_direct_input,
+    matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -380,6 +381,7 @@ async fn list_files_for_scan<'a>(
         .base_path
         .as_ref()
         .filter(|_| !partition_fields.is_empty());
+    let direct_only = source.config().base_path.is_some() && partition_fields.is_empty();
     let partition_schema = base_path
         .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
         .transpose()?;
@@ -407,7 +409,8 @@ async fn list_files_for_scan<'a>(
         let files = files.try_filter(move |file| {
             let location = &file.object_meta.location;
             futures::future::ready(
-                !has_hidden_path_component(table_path, location)
+                (!direct_only || is_direct_input(table_path, location))
+                    && !has_hidden_path_component(table_path, location)
                     && matches_path_glob_filter(path_glob_filter, location),
             )
         });
