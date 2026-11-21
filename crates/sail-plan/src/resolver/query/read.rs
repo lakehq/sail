@@ -181,9 +181,10 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let lookup = self
-            .lookup_catalog_table(&manager, &reference, required_format, state)
-            .await;
+        // The catalog lookups are boxed to keep this future small, since the recursive
+        // query resolver reserves stack for it at every level of nesting.
+        let lookup =
+            Box::pin(self.lookup_catalog_table(&manager, &reference, required_format, state)).await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
@@ -194,9 +195,13 @@ impl PlanResolver<'_> {
                 if base_reference.is_empty() {
                     return Err(error.into());
                 }
-                let base_lookup = self
-                    .lookup_catalog_table(&manager, base_reference, required_format, state)
-                    .await;
+                let base_lookup = Box::pin(self.lookup_catalog_table(
+                    &manager,
+                    base_reference,
+                    required_format,
+                    state,
+                ))
+                .await;
                 let (base_status, base_resolved) = match base_lookup {
                     Ok(lookup) => lookup,
                     // A base that names no table, such as `catalog.database` left by
