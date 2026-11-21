@@ -176,7 +176,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         } = info;
 
         let urls = resolve_listing_urls(ctx, paths).await?;
-        let base_path = resolve_base_path(&options, &urls)?;
+        let base_path = resolve_base_path(ctx, read_case_sensitive, &options, &urls)?;
         let read_format = T::read(ctx, options)?;
         let path_glob_filter = read_format
             .path_glob_filter()
@@ -187,6 +187,8 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         let inferred_names: Vec<_> = inferred.iter().map(|f| f.name().clone()).collect();
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
+        let positional_partitions =
+            !inferred.is_empty() && base_path.is_some() && T::name() == "csv";
         let explicit_schema = schema.filter(|s| !s.fields().is_empty());
         let has_explicit_schema = explicit_schema.is_some();
         let (schema, physical) = match explicit_schema {
@@ -197,7 +199,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                             .infer_schema(ctx, &sampled_files, compression)
                             .await?,
                     )
-                } else if read_case_sensitive {
+                } else if read_case_sensitive && !positional_partitions {
                     None
                 } else {
                     read_format
@@ -227,12 +229,19 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
         };
 
-        let (schema, partition_fields) = if base_path.is_some() && partition_by.is_empty() {
+        let (schema, partition_fields, output_columns) = if base_path.is_some()
+            && partition_by.is_empty()
+        {
             split_discovered_partitions(
                 &schema,
                 &inferred,
                 has_explicit_schema,
                 read_case_sensitive,
+                if positional_partitions && has_explicit_schema {
+                    physical.as_deref()
+                } else {
+                    positional_partitions.then_some(schema.as_ref())
+                },
             )
         } else if has_explicit_schema {
             let partition_by = if partition_by.is_empty() {
@@ -250,9 +259,9 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 partition_by
             };
             let (fields, schema) = get_partition_columns_and_file_schema(&schema, partition_by)?;
-            (Arc::new(schema), fields)
+            (Arc::new(schema), fields, None)
         } else if partition_by.is_empty() {
-            (schema, inferred)
+            (schema, inferred, None)
         } else {
             (
                 schema,
@@ -260,6 +269,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                     .into_iter()
                     .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
                     .collect(),
+                None,
             )
         };
         if let Some(physical) = physical {
@@ -288,12 +298,22 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
         }
 
+        let schema = TableSchema::builder(schema)
+            .with_table_partition_cols(partition_fields)
+            .build();
+        let output_projection = output_columns
+            .map(|names| {
+                names
+                    .iter()
+                    .map(|name| schema.table_schema().index_of(name))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            output_projection,
             table_paths: urls,
             base_path,
-            schema: TableSchema::builder(schema)
-                .with_table_partition_cols(partition_fields)
-                .build(),
+            schema,
             constraints,
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),

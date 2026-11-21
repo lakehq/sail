@@ -210,6 +210,7 @@ mod tests {
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: vec![],
             base_path: None,
+            output_projection: None,
             schema: TableSchema::from(schema),
             constraints: Constraints::default(),
             file_sort_order: vec![],

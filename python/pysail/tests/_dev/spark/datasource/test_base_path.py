@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from pyspark.sql import Row
@@ -82,3 +83,114 @@ def test_base_path_mixed_partition_values(spark, tmp_path):
     df = spark.read.option("basePath", str(tmp_path)).json(str(selected))
     assert df.schema["code"].dataType.simpleString() == "string"
     assert {row.code for row in df.select("code").collect()} == {*values[:-1], None}
+
+
+def write_json_partition(root, path):
+    directory = root / path
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "row.json").write_text('{"id":1}')
+
+
+def test_base_path_null_partition_filter(spark, tmp_path):
+    for path in ["p=2", "p=__HIVE_DEFAULT_PARTITION__"]:
+        write_json_partition(tmp_path, path)
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.where("p < 1").collect() == []
+    assert df.where("p IS NULL").collect() == [Row(id=1, p=None)]
+
+
+def test_base_path_decimal_partitions(spark, tmp_path):
+    values = [2**63 + 1, 2**63 + 2]
+    for value in values:
+        write_json_partition(tmp_path, f"p={value}")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.schema["p"].dataType.simpleString() == "decimal(19,0)"
+    assert df.select("p").distinct().orderBy("p").collect() == [Row(p=Decimal(value)) for value in values]
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+def test_base_path_overlapping_csv_columns(spark, tmp_path, infer_schema):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "rows.csv").write_text("p,data,other\nignored,42,abc\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True, inferSchema=infer_schema).csv(str(part))
+    data = 42 if infer_schema else "42"
+    assert df.columns == ["p", "data", "other"]
+    assert df.collect() == [Row(p=1, data=data, other="abc")]
+    assert df.select("other", "p").collect() == [Row(other="abc", p=1)]
+    assert df.where("p = 0").collect() == []
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_base_path_mixed_case_keys(spark, tmp_path, case_sensitive):
+    for path in ["P=2", "p=1"]:
+        write_json_partition(tmp_path, path)
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        reader = spark.read.option("basePath", str(tmp_path))
+        if case_sensitive:
+            with pytest.raises(Exception, match=r"(?i)(mixed partition columns|conflicting partition column)"):
+                reader.json(str(tmp_path)).collect()
+        else:
+            assert [r[0] for r in reader.json(str(tmp_path)).select("p").orderBy("p").collect()] == [1, 2]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_partition_directory_boundary(spark, tmp_path):
+    part = "outside=1/data/first%2Flast=ok"
+    write_json_partition(tmp_path, part)
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.columns == ["id", "first/last"]
+    assert df.select("first/last").collect() == [Row("ok")]
+
+
+def test_base_path_loose_file(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    (tmp_path / "loose.json").write_text('{"id":99}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("timestamp_type", ["TIMESTAMP_LTZ", "TIMESTAMP_NTZ"])
+@pytest.mark.parametrize("session_timezone", ["America/New_York"], indirect=True)
+@pytest.mark.usefixtures("session_timezone")
+def test_base_path_timestamp_partition(spark, tmp_path, timestamp_type):
+    write_json_partition(tmp_path, "p=2025-01-01 12%3A01%3A02")
+    key = "spark.sql.timestampType"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, timestamp_type)
+        df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+        expected_type = "timestamp" if timestamp_type == "TIMESTAMP_LTZ" else "timestamp_ntz"
+        assert df.schema["p"].dataType.simpleString() == expected_type
+        assert df.selectExpr("cast(p as string) AS s").collect() == [Row(s="2025-01-01 12:01:02")]
+        if timestamp_type == "TIMESTAMP_LTZ":
+            assert df.selectExpr("unix_seconds(p) AS seconds").collect() == [Row(seconds=1735750862)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize("validate", [False, True])
+def test_base_path_invalid_partition_cast(spark, tmp_path, validate):
+    write_json_partition(tmp_path, "p=oops")
+    key = "spark.sql.sources.validatePartitionColumns"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(validate).lower())
+        reader = spark.read.schema("id INT, p INT").option("basePath", str(tmp_path))
+        if validate:
+            with pytest.raises(Exception, match="oops"):
+                reader.json(str(tmp_path)).collect()
+        else:
+            assert reader.json(str(tmp_path)).collect() == [Row(id=1, p=None)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_empty_partition_value(spark, tmp_path):
+    write_json_partition(tmp_path, "p=")
+    with pytest.raises(Exception, match=r"(?i)empty.*partition column"):
+        spark.read.option("basePath", str(tmp_path)).json(str(tmp_path)).collect()

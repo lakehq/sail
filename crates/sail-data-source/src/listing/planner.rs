@@ -97,7 +97,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             return Ok(None);
         };
 
-        let projection = scan.projection.clone();
+        let projection = source.scan_projection(scan.projection.as_deref());
         let filters = unnormalize_cols(scan.filters.clone());
         let limit = scan.fetch;
 
@@ -383,7 +383,10 @@ async fn list_files_for_scan<'a>(
     let partition_schema = base_path
         .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
         .transpose()?;
+    // The listing helper inspects the boolean value bit. IS TRUE also tests validity.
+    let predicate = datafusion_expr::utils::conjunction(filters.iter().cloned()).map(Expr::is_true);
     let base_partitions = base_path.zip(partition_schema.as_ref());
+    let predicate = predicate.as_slice();
     let (listing_filters, listing_cols) = if base_partitions.is_some() {
         // List only the selected input paths. Their partition values are relative to basePath.
         (&[][..], &[][..])
@@ -411,9 +414,13 @@ async fn list_files_for_scan<'a>(
         let files = if let Some((base, schema)) = base_partitions {
             files
                 .try_filter_map(move |mut file| async move {
-                    file.partition_values =
-                        partition_values(base, &file.object_meta.location, partition_fields)?;
-                    filter_partitioned_file(file, filters, schema)
+                    let Some(values) =
+                        partition_values(base, &file.object_meta.location, partition_fields)?
+                    else {
+                        return Ok(None);
+                    };
+                    file.partition_values = values;
+                    filter_partitioned_file(file, predicate, schema)
                 })
                 .boxed()
         } else {

@@ -20,7 +20,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::listing_table_ref;
 
-use crate::listing::partition::{PartitionDiscovery, partition_type_inference_enabled};
+use crate::listing::partition::{BasePathPartitions, PartitionDiscovery};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -165,10 +165,9 @@ pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
     path_glob_filter: Option<&PathGlobFilter>,
-    base_path: Option<&ListingTableUrl>,
+    base_path: Option<&BasePathPartitions>,
 ) -> Result<(Vec<ListingFileSample<'a>>, Vec<FieldRef>)> {
     const SAMPLE_SIZE: usize = 10;
-    let infer_types = base_path.is_some() && partition_type_inference_enabled(ctx)?;
     let mut discovery = PartitionDiscovery::default();
     let mut samples = vec![];
     for url in urls {
@@ -179,7 +178,11 @@ pub(super) async fn sample_listing_files<'a>(
             if file.size == 0 {
                 continue;
             }
-            discovery.observe(base_path.unwrap_or(url), &file.location, infer_types)?;
+            discovery.observe(
+                base_path.map_or(url, |p| &p.root),
+                &file.location,
+                base_path,
+            )?;
             if objects.len() < SAMPLE_SIZE {
                 objects.push(file);
             }
@@ -196,7 +199,7 @@ pub(super) async fn sample_listing_files<'a>(
             objects,
         });
     }
-    Ok((samples, discovery.into_fields(base_path.is_some())))
+    Ok((samples, discovery.into_fields(base_path.is_some())?))
 }
 
 pub async fn list_all_files<'a>(
