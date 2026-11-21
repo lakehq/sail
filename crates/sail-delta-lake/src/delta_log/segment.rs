@@ -8,7 +8,7 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{
-    CheckpointFileSet, complete_checkpoint_file_sets, list_delta_log_entries_from,
+    CheckpointFileSet, complete_checkpoint_file_sets, list_delta_log_entries, lists_keys_in_order,
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
     parse_commit_version_from_location, parse_compacted_json_versions_from_location,
     read_last_checkpoint_hint_from_store, read_last_checkpoint_version_from_store,
@@ -82,6 +82,10 @@ impl<'a> LogSegmentResolver<'a> {
         }
     }
 
+    fn lists_keys_in_order(&self) -> bool {
+        lists_keys_in_order(&self.log_store.config().location)
+    }
+
     fn has_catalog_managed_commits_in_range(&self, start_version: i64, end_version: i64) -> bool {
         self.catalog_managed_commits
             .map(|commits| {
@@ -151,7 +155,13 @@ impl<'a> LogSegmentResolver<'a> {
         let list_offset = lower_bound.min(last_cp_hint_version);
 
         let (checksum_candidates, checkpoint_candidate, all_commits, all_compactions) =
-            list_log_files(store.clone(), list_offset, version).await?;
+            list_log_files(
+                store.clone(),
+                list_offset,
+                version,
+                self.lists_keys_in_order(),
+            )
+            .await?;
 
         let mut older_crc_base: Option<ReplayedTableHeader> = None;
         for (crc_version, meta) in &checksum_candidates {
@@ -310,8 +320,13 @@ impl<'a> LogSegmentResolver<'a> {
             .map(|v| v.saturating_sub(1).max(0))
             .unwrap_or(0);
 
-        let (_, checkpoint, all_commits, all_compactions) =
-            list_log_files(store.clone(), last_cp_hint_version, version).await?;
+        let (_, checkpoint, all_commits, all_compactions) = list_log_files(
+            store.clone(),
+            last_cp_hint_version,
+            version,
+            self.lists_keys_in_order(),
+        )
+        .await?;
 
         let start_version = match &checkpoint {
             Some(checkpoint) => checkpoint.version().saturating_add(1),
@@ -410,12 +425,13 @@ pub(crate) async fn list_log_files(
     store: Arc<dyn ObjectStore>,
     list_offset_version: i64,
     max_version: i64,
+    sorted: bool,
 ) -> DeltaResult<ListedLogFiles> {
     let last_checkpoint_hint = read_last_checkpoint_hint_from_store(store.clone()).await;
-    let entries = list_delta_log_entries_from(store.clone(), list_offset_version).await?;
+    let entries = list_delta_log_entries(store.clone(), list_offset_version, sorted).await?;
     let files = classify_log_files(entries, max_version, last_checkpoint_hint.as_ref())?;
     if files.1.is_none() && list_offset_version > 0 {
-        let entries = list_delta_log_entries_from(store, 0).await?;
+        let entries = list_delta_log_entries(store, 0, sorted).await?;
         return classify_log_files(entries, max_version, last_checkpoint_hint.as_ref());
     }
     Ok(files)
@@ -928,7 +944,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (_, checkpoint, commits, _) = list_log_files(store, 19, 20).await.unwrap();
+        let (_, checkpoint, commits, _) = list_log_files(store, 19, 20, true).await.unwrap();
         assert_eq!(checkpoint.unwrap().version(), 10);
         assert_eq!(
             commits
@@ -941,6 +957,15 @@ mod tests {
 
     #[test]
     fn catalog_managed_commit_path_normalizes_uc_filenames() {
+        // The catalog may return a commit that is published.
+        assert_eq!(
+            catalog_managed_commit_path("00000000000000000001.json").as_ref(),
+            "_delta_log/00000000000000000001.json"
+        );
+        assert_eq!(
+            catalog_managed_commit_path("/tmp/table/_delta_log/00000000000000000001.json").as_ref(),
+            "_delta_log/00000000000000000001.json"
+        );
         assert_eq!(
             catalog_managed_commit_path("00000000000000000001.uuid.json").as_ref(),
             "_delta_log/_staged_commits/00000000000000000001.uuid.json"
@@ -1104,7 +1129,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (checksums, _, _, _) = list_log_files(store, 50, 150).await.unwrap();
+        let (checksums, _, _, _) = list_log_files(store, 50, 150, true).await.unwrap();
         let found = checksums.iter().find(|(v, _)| *v == 55).map(|(v, _)| *v);
         assert_eq!(
             found,
@@ -1130,7 +1155,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (checksums, _, _, _) = list_log_files(store, 61, 150).await.unwrap();
+        let (checksums, _, _, _) = list_log_files(store, 61, 150, true).await.unwrap();
         let found = checksums
             .iter()
             .find(|(v, _)| *v >= 61 && *v < 150)
@@ -1155,7 +1180,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_, _, commits, _) = list_log_files(store, 0, 0).await.unwrap();
+        let (_, _, commits, _) = list_log_files(store, 0, 0, true).await.unwrap();
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].0, 0);
     }
@@ -1193,7 +1218,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_, checkpoint, _, _) = list_log_files(store, 0, 2).await.unwrap();
+        let (_, checkpoint, _, _) = list_log_files(store, 0, 2, true).await.unwrap();
         assert_eq!(checkpoint.unwrap().files()[0].location, selected);
     }
 }

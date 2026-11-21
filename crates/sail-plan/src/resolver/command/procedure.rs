@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
@@ -304,6 +305,7 @@ impl PlanResolver<'_> {
                     canonical_table.extend(table_status.database.iter().cloned());
                     canonical_table.push(table_status.name.clone());
                     let planning = resolve_procedure_table_planning(
+                        self.ctx,
                         manager.as_ref(),
                         &canonical_table,
                         format,
@@ -527,6 +529,7 @@ struct ProcedureTablePlanning {
 }
 
 async fn resolve_procedure_table_planning(
+    ctx: &SessionContext,
     manager: &CatalogManager,
     table: &[String],
     format: &str,
@@ -534,6 +537,7 @@ async fn resolve_procedure_table_planning(
 ) -> PlanResult<ProcedureTablePlanning> {
     let resolved = manager
         .resolve_lakehouse_table(
+            ctx,
             table,
             ResolveLakehouseTableRequest {
                 catalog_table: table.to_vec(),
@@ -737,6 +741,230 @@ fn procedure_path_source(path: String) -> SourceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod vended_credentials {
+        use async_trait::async_trait;
+        use datafusion::execution::context::SessionConfig;
+        use object_store::memory::InMemory;
+        use object_store::path::Path as ObjectPath;
+        use object_store::{ObjectStore, ObjectStoreExt};
+        use sail_catalog::error::CatalogResult;
+        use sail_catalog::lakehouse::{LakehouseCapability, TableStorageCredentialsRequest};
+        use sail_catalog::manager::CatalogManagerOptions;
+        use sail_catalog::provider::{
+            AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+            CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+        };
+        use sail_common_datafusion::catalog::delta::DELTA_UNITY_TABLE_ID_KEY;
+        use sail_common_datafusion::catalog::{
+            DatabaseStatus, StorageCredential, TableStatus, TableStorageCredentials,
+        };
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        use super::*;
+
+        const LOCATION: &str = "memory:///warehouse/items";
+
+        /// A catalog whose Delta table commits are coordinated by the catalog,
+        /// and which issues storage credentials for the table.
+        struct VendingProvider;
+
+        #[async_trait]
+        impl CatalogProvider for VendingProvider {
+            fn get_name(&self) -> &str {
+                "unity"
+            }
+
+            fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+                vec![LakehouseCapability::DeltaRatifiedCommits]
+            }
+
+            async fn get_table_storage_credentials(
+                &self,
+                _database: &Namespace,
+                _table: &str,
+                _request: TableStorageCredentialsRequest,
+            ) -> CatalogResult<Option<TableStorageCredentials>> {
+                Ok(Some(TableStorageCredentials {
+                    credential: StorageCredential::GcsOauth {
+                        token: "secret-token".to_string(),
+                    },
+                    expires_at_ms: None,
+                }))
+            }
+
+            async fn create_database(
+                &self,
+                _database: &Namespace,
+                _options: CreateDatabaseOptions,
+            ) -> CatalogResult<DatabaseStatus> {
+                unreachable!()
+            }
+
+            async fn get_database(&self, _database: &Namespace) -> CatalogResult<DatabaseStatus> {
+                unreachable!()
+            }
+
+            async fn list_databases(
+                &self,
+                _prefix: Option<&Namespace>,
+            ) -> CatalogResult<Vec<DatabaseStatus>> {
+                unreachable!()
+            }
+
+            async fn drop_database(
+                &self,
+                _database: &Namespace,
+                _options: DropDatabaseOptions,
+            ) -> CatalogResult<()> {
+                unreachable!()
+            }
+
+            async fn create_table(
+                &self,
+                _database: &Namespace,
+                _table: &str,
+                _options: CreateTableOptions,
+            ) -> CatalogResult<TableStatus> {
+                unreachable!()
+            }
+
+            async fn get_table(
+                &self,
+                _database: &Namespace,
+                table: &str,
+            ) -> CatalogResult<TableStatus> {
+                Ok(TableStatus {
+                    catalog: Some("unity".to_string()),
+                    database: vec!["default".to_string()],
+                    name: table.to_string(),
+                    kind: TableKind::Table {
+                        columns: vec![],
+                        comment: None,
+                        constraints: vec![],
+                        location: Some(LOCATION.to_string()),
+                        format: "delta".to_string(),
+                        partition_by: vec![],
+                        sort_by: vec![],
+                        bucket_by: None,
+                        properties: vec![(
+                            DELTA_UNITY_TABLE_ID_KEY.to_string(),
+                            "table-id".to_string(),
+                        )],
+                        is_external: false,
+                    },
+                })
+            }
+
+            async fn list_tables(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+                unreachable!()
+            }
+
+            async fn drop_table(
+                &self,
+                _database: &Namespace,
+                _table: &str,
+                _options: DropTableOptions,
+            ) -> CatalogResult<()> {
+                unreachable!()
+            }
+
+            async fn alter_table(
+                &self,
+                _database: &Namespace,
+                _table: &str,
+                _options: AlterTableOptions,
+            ) -> CatalogResult<()> {
+                unreachable!()
+            }
+
+            async fn create_view(
+                &self,
+                _database: &Namespace,
+                _view: &str,
+                _options: CreateViewOptions,
+            ) -> CatalogResult<TableStatus> {
+                unreachable!()
+            }
+
+            async fn get_view(
+                &self,
+                _database: &Namespace,
+                _view: &str,
+            ) -> CatalogResult<TableStatus> {
+                unreachable!()
+            }
+
+            async fn list_views(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+                unreachable!()
+            }
+
+            async fn drop_view(
+                &self,
+                _database: &Namespace,
+                _view: &str,
+                _options: DropViewOptions,
+            ) -> CatalogResult<()> {
+                unreachable!()
+            }
+        }
+
+        #[tokio::test]
+        async fn procedure_planning_accesses_catalog_managed_storage_with_vended_credentials() {
+            let file = ObjectPath::from("warehouse/items/_delta_log/0.json");
+            // Only the store that uses the vended credentials has the file.
+            let vended = Arc::new(InMemory::new());
+            let put = vended.put(&file, "{}".into()).await;
+            assert!(put.is_ok(), "{put:?}");
+            let factory: VendedStoreFactory = {
+                let vended = vended.clone();
+                Arc::new(move |_| Ok(vended.clone() as Arc<dyn ObjectStore>))
+            };
+            let manager = CatalogManager::try_new(CatalogManagerOptions {
+                catalogs: std::iter::once((
+                    "unity".to_string(),
+                    Arc::new(VendingProvider) as Arc<dyn CatalogProvider>,
+                ))
+                .collect(),
+                default_catalog: "unity".to_string(),
+                default_database: vec!["default".to_string()],
+                global_temporary_database: vec!["global_temp".to_string()],
+            });
+            assert!(manager.is_ok());
+            let Ok(manager) = manager else {
+                unreachable!();
+            };
+            let manager = Arc::new(manager);
+            let config = SessionConfig::new()
+                .with_extension(manager.clone())
+                .with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
+            let ctx = SessionContext::new_with_config(config);
+            let url = url::Url::parse(LOCATION);
+            assert!(url.is_ok(), "{url:?}");
+            let Ok(url) = url else {
+                unreachable!();
+            };
+            ctx.runtime_env()
+                .register_object_store(&url, Arc::new(InMemory::new()));
+
+            let planning = resolve_procedure_table_planning(
+                &ctx,
+                &manager,
+                &["items".to_string()],
+                "delta",
+                LakeProcedureAccess::MetadataRead,
+            )
+            .await;
+            assert!(planning.is_ok(), "{:?}", planning.err());
+            let store = ctx.runtime_env().object_store_registry.get_store(&url);
+            assert!(store.is_ok(), "{:?}", store.err());
+            let Ok(store) = store else {
+                unreachable!();
+            };
+            let read = store.get(&file).await;
+            assert!(read.is_ok(), "{read:?}");
+        }
+    }
 
     #[test]
     fn procedure_long_arrays_preserve_null_elements_and_empty_arrays() {

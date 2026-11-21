@@ -59,6 +59,7 @@ crc32fast = { workspace = true }
 educe = { workspace = true }
 
 [dev-dependencies]
+sail-object-store = { path = "../sail-object-store" }
 parquet-variant-json = { workspace = true }
 
 [build-dependencies]

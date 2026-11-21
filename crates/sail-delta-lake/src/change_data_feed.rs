@@ -26,9 +26,9 @@ use crate::datasource::{
     COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, DeltaScanConfig, df_logical_schema,
 };
 use crate::delta_log::{
-    LogStoreRef, get_actions, list_delta_log_entries_from, parse_commit_version_from_location,
-    resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
-    version_uses_in_commit_timestamps,
+    LogStoreRef, get_actions, list_delta_log_entries, lists_keys_in_order,
+    parse_commit_version_from_location, resolve_commit_timestamp_from_actions,
+    resolve_effective_protocol_and_metadata, version_uses_in_commit_timestamps,
 };
 use crate::options::r#gen::DeltaReadOptions;
 use crate::physical::scan_planner::{align_delta_scan_output, build_eager_adds_input};
@@ -684,7 +684,8 @@ async fn non_ict_timestamps(
     end: i64,
 ) -> Result<BTreeMap<i64, i64>> {
     let store = log_store.object_store(None);
-    let mut timestamps = list_delta_log_entries_from(store.clone(), start)
+    let sorted = lists_keys_in_order(&log_store.config().location);
+    let mut timestamps = list_delta_log_entries(store.clone(), start, sorted)
         .await?
         .into_iter()
         .filter_map(|meta| {

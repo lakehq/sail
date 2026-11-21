@@ -1676,6 +1676,7 @@ mod tests {
                     properties: vec![],
                     is_external: true,
                     is_write_precondition: true,
+                    staged: None,
                 };
                 let input =
                     ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
@@ -1984,6 +1985,7 @@ mod tests {
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: true,
+                staged: None,
             };
             provider
                 .create_table(&namespace, "t", options.clone())

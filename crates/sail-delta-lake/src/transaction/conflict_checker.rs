@@ -147,25 +147,28 @@ impl WinningCommitSummary {
 
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
-            Some(bytes) => {
-                let actions = get_actions(winning_commit_version, &bytes)?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                let commit_info = actions
-                    .iter()
-                    .find(|action| matches!(action, Action::CommitInfo(_)))
-                    .map(|action| match action {
-                        Action::CommitInfo(info) => info.clone(),
-                        _ => unreachable!(),
-                    });
-
-                Ok(Self {
-                    actions,
-                    commit_info,
-                })
-            }
+            Some(bytes) => Self::try_from_bytes(winning_commit_version, &bytes),
             None => Err(DeltaError::MissingVersion),
         }
+    }
+
+    /// Creates the summary from the content of the commit file of the winning commit.
+    pub fn try_from_bytes(winning_commit_version: i64, bytes: &bytes::Bytes) -> DeltaResult<Self> {
+        let actions = get_actions(winning_commit_version, bytes)?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let commit_info = actions
+            .iter()
+            .find(|action| matches!(action, Action::CommitInfo(_)))
+            .map(|action| match action {
+                Action::CommitInfo(info) => info.clone(),
+                _ => unreachable!(),
+            });
+
+        Ok(Self {
+            actions,
+            commit_info,
+        })
     }
 
     pub fn metadata_updates(&self) -> Vec<Metadata> {

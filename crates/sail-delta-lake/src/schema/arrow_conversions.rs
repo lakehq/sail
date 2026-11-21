@@ -490,4 +490,200 @@ mod tests {
         assert_eq!(value.extension_type_name(), Some(VariantType::NAME));
         Ok(())
     }
+
+    /// The Delta type of each Arrow type, which is the type of the column in the Delta log
+    /// and in the catalog, or nothing when the Arrow type cannot be written to Delta Lake.
+    #[test]
+    fn arrow_types_are_converted_to_delta_types() -> Result<(), ArrowError> {
+        use datafusion::arrow::datatypes::{IntervalUnit, UnionFields, UnionMode};
+        use serde_json::json;
+
+        let element = |data_type| Arc::new(ArrowField::new("element", data_type, true));
+        let entries = |value: ArrowDataType| {
+            Arc::new(ArrowField::new(
+                "entries",
+                ArrowDataType::Struct(
+                    vec![
+                        ArrowField::new("key", ArrowDataType::Utf8, false),
+                        ArrowField::new("value", value, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            ))
+        };
+        let variant =
+            ArrowField::try_from(&StructField::new("v", DataType::unshredded_variant(), true))?;
+        let field = |name: &str, data_type: serde_json::Value| json!({"name": name, "type": data_type, "nullable": true, "metadata": {}});
+        let array = |element_type: serde_json::Value| json!({"type": "array", "elementType": element_type, "containsNull": true});
+        let cases = vec![
+            (ArrowDataType::Boolean, Some(json!("boolean"))),
+            (ArrowDataType::Int8, Some(json!("byte"))),
+            (ArrowDataType::Int16, Some(json!("short"))),
+            (ArrowDataType::Int32, Some(json!("integer"))),
+            (ArrowDataType::Int64, Some(json!("long"))),
+            // Unsigned integers have the Delta type of the signed integer of the same width.
+            (ArrowDataType::UInt8, Some(json!("byte"))),
+            (ArrowDataType::UInt16, Some(json!("short"))),
+            (ArrowDataType::UInt32, Some(json!("integer"))),
+            (ArrowDataType::UInt64, Some(json!("long"))),
+            (ArrowDataType::Float16, None),
+            (ArrowDataType::Float32, Some(json!("float"))),
+            (ArrowDataType::Float64, Some(json!("double"))),
+            (ArrowDataType::Utf8, Some(json!("string"))),
+            (ArrowDataType::LargeUtf8, Some(json!("string"))),
+            (ArrowDataType::Utf8View, Some(json!("string"))),
+            (ArrowDataType::Binary, Some(json!("binary"))),
+            (ArrowDataType::LargeBinary, Some(json!("binary"))),
+            (ArrowDataType::BinaryView, Some(json!("binary"))),
+            (ArrowDataType::FixedSizeBinary(16), Some(json!("binary"))),
+            (ArrowDataType::Date32, Some(json!("date"))),
+            (ArrowDataType::Date64, Some(json!("date"))),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                Some(json!("timestamp_ntz")),
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                Some(json!("timestamp")),
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("+05:30".into())),
+                Some(json!("timestamp")),
+            ),
+            (ArrowDataType::Timestamp(TimeUnit::Second, None), None),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                None,
+            ),
+            (ArrowDataType::Timestamp(TimeUnit::Nanosecond, None), None),
+            (ArrowDataType::Time32(TimeUnit::Second), None),
+            (ArrowDataType::Time64(TimeUnit::Microsecond), None),
+            (ArrowDataType::Duration(TimeUnit::Microsecond), None),
+            (ArrowDataType::Interval(IntervalUnit::YearMonth), None),
+            (ArrowDataType::Interval(IntervalUnit::DayTime), None),
+            (ArrowDataType::Interval(IntervalUnit::MonthDayNano), None),
+            (
+                ArrowDataType::Decimal128(10, 2),
+                Some(json!("decimal(10,2)")),
+            ),
+            (
+                ArrowDataType::Decimal128(38, 0),
+                Some(json!("decimal(38,0)")),
+            ),
+            (ArrowDataType::Decimal128(10, -2), None),
+            (ArrowDataType::Decimal32(9, 2), None),
+            (ArrowDataType::Decimal64(18, 2), None),
+            (ArrowDataType::Decimal256(10, 2), None),
+            (ArrowDataType::Null, None),
+            (
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::Int32),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                Some(json!("string")),
+            ),
+            (
+                ArrowDataType::RunEndEncoded(
+                    Arc::new(ArrowField::new("run_ends", ArrowDataType::Int32, false)),
+                    Arc::new(ArrowField::new("values", ArrowDataType::Utf8, true)),
+                ),
+                None,
+            ),
+            (
+                ArrowDataType::Union(UnionFields::empty(), UnionMode::Sparse),
+                None,
+            ),
+            (
+                ArrowDataType::List(element(ArrowDataType::Int32)),
+                Some(array(json!("integer"))),
+            ),
+            (
+                ArrowDataType::LargeList(element(ArrowDataType::Utf8)),
+                Some(array(json!("string"))),
+            ),
+            (
+                ArrowDataType::ListView(element(ArrowDataType::Int64)),
+                Some(array(json!("long"))),
+            ),
+            (
+                ArrowDataType::LargeListView(element(ArrowDataType::Int64)),
+                Some(array(json!("long"))),
+            ),
+            (
+                ArrowDataType::FixedSizeList(element(ArrowDataType::Float64), 3),
+                Some(array(json!("double"))),
+            ),
+            (
+                ArrowDataType::Map(entries(ArrowDataType::Int32), false),
+                Some(json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "integer",
+                    "valueContainsNull": true
+                })),
+            ),
+            (
+                ArrowDataType::Map(
+                    entries(ArrowDataType::List(element(ArrowDataType::Struct(
+                        vec![ArrowField::new("x", ArrowDataType::Date32, true)].into(),
+                    )))),
+                    false,
+                ),
+                Some(json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": array(json!({
+                        "type": "struct",
+                        "fields": [field("x", json!("date"))]
+                    })),
+                    "valueContainsNull": true
+                })),
+            ),
+            (
+                ArrowDataType::List(element(ArrowDataType::Map(
+                    entries(ArrowDataType::Decimal128(5, 1)),
+                    false,
+                ))),
+                Some(array(json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "decimal(5,1)",
+                    "valueContainsNull": true
+                }))),
+            ),
+            (
+                ArrowDataType::Struct(
+                    vec![
+                        ArrowField::new(
+                            "ts",
+                            ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                            true,
+                        ),
+                        variant,
+                    ]
+                    .into(),
+                ),
+                Some(json!({
+                    "type": "struct",
+                    "fields": [field("ts", json!("timestamp_ntz")), field("v", json!("variant"))]
+                })),
+            ),
+            (
+                ArrowDataType::Struct(
+                    vec![ArrowField::new("bad", ArrowDataType::Float16, true)].into(),
+                ),
+                None,
+            ),
+        ];
+        for (arrow_type, expected) in cases {
+            let actual = DataType::try_from(&arrow_type)
+                .ok()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| ArrowError::JsonError(e.to_string()))?;
+            assert_eq!(actual, expected, "{arrow_type}");
+        }
+        Ok(())
+    }
 }

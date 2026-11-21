@@ -243,6 +243,7 @@ async fn shallow_clone_rejects_reregistered_target_during_preparation() -> TestR
                 properties: vec![],
                 is_external: false,
                 is_write_precondition: false,
+                staged: None,
             },
         )
         .await?;

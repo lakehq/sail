@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from pysail.tests._dev.spark.catalog.unity.conftest import _unique_database
 from pysail.tests._dev.spark.delta.test_delta_column_mapping_operations import (
     _KNOWN_QUERY_FAILURES,
     _QUERIES,
@@ -25,7 +26,7 @@ from pysail.tests._dev.spark.delta.test_delta_column_mapping_operations import (
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
-_DATABASE = "unity_column_mapping_test"
+_DATABASE = _unique_database("unity_column_mapping_test")
 
 
 def _create_table(spark: SparkSession, table: str, *, column_mapping_mode: str, partitioned: bool) -> None:

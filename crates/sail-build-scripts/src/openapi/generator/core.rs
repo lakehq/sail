@@ -77,16 +77,46 @@ impl<'a> OpenApiGenerator<'a> {
                 pub headers: reqwest::header::HeaderMap,
             }
 
+            #[derive(Debug)]
+            pub struct ErrorResponse<T> {
+                pub inner: T,
+                pub status: reqwest::StatusCode,
+                pub headers: reqwest::header::HeaderMap,
+                /// The response body text, or the reason the response body is invalid.
+                /// The text is cut at `MAX_ERROR_BODY_LENGTH` bytes of the response body.
+                /// This does not contain the response body text for signed requests.
+                pub body: String,
+            }
+
+            impl<T> ErrorResponse<T> {
+                /// Returns the response body text to show in the error message, which is
+                /// truncated to `MAX_ERROR_MESSAGE_BODY_LENGTH`.
+                fn body_suffix(&self) -> String {
+                    let text = self.body.as_str();
+                    if text.is_empty() {
+                        return String::new();
+                    }
+                    if text.len() <= MAX_ERROR_MESSAGE_BODY_LENGTH {
+                        return format!(": {text}");
+                    }
+                    let mut end = MAX_ERROR_MESSAGE_BODY_LENGTH;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!(": {}...", &text[..end])
+                }
+            }
+
             #[derive(Debug, thiserror::Error)]
             pub enum ApiError<E> {
                 #[error("request signing error: {0}")]
                 Sign(#[source] Box<dyn std::error::Error + Send + Sync>),
                 #[error("request error: {0}")]
                 Request(#[from] reqwest::Error),
-                #[error("response error: status code {}", .0.status)]
-                Response(Box<Response<E>>),
-                #[error("unknown error: status code {}", .0.status)]
-                Unknown(Box<Response<()>>),
+                #[error("response error: status code {}{}", .0.status, .0.body_suffix())]
+                Response(Box<ErrorResponse<E>>),
+                #[error("unknown error: status code {}{}", .0.status, .0.body_suffix())]
+                Unknown(Box<ErrorResponse<()>>),
             }
 
             impl<E> ApiError<E> {
@@ -98,6 +128,40 @@ impl<'a> OpenApiGenerator<'a> {
                         Self::Unknown(response) => Some(response.status),
                     }
                 }
+            }
+
+            /// The maximum length of an error response body that is read. The error is
+            /// parsed from the body, so the limit is well above the size of an error
+            /// that a server reports.
+            const MAX_ERROR_BODY_LENGTH: usize = 1024 * 1024;
+
+            /// The maximum length of the error response body text in an error message.
+            const MAX_ERROR_MESSAGE_BODY_LENGTH: usize = 4096;
+
+            /// Reads the error response body without buffering more than
+            /// `MAX_ERROR_BODY_LENGTH` bytes.
+            async fn read_error_body(mut response: reqwest::Response) -> Vec<u8> {
+                let mut body = Vec::new();
+                while body.len() < MAX_ERROR_BODY_LENGTH {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) => {
+                            let length = chunk.len().min(MAX_ERROR_BODY_LENGTH - body.len());
+                            body.extend_from_slice(&chunk[..length]);
+                        }
+                        Ok(None) | Err(_) => break,
+                    }
+                }
+                body
+            }
+
+            /// Returns the error response body text to keep with the error.
+            /// The body is not kept for signed requests since the server may echo
+            /// the signed request, including credentials, in the error response.
+            fn error_body_text(body: &[u8], signed: bool) -> String {
+                if signed {
+                    return String::new();
+                }
+                String::from_utf8_lossy(body).trim().to_string()
             }
 
             fn eager_percent_encode(value: impl AsRef<str>) -> String {

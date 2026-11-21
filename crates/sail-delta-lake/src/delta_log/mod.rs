@@ -10,7 +10,7 @@ mod timestamps;
 
 pub(crate) use listing::{
     CheckpointFileSet, complete_checkpoint_file_sets, latest_version_from_listing,
-    list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    list_delta_log_entries, lists_keys_in_order, parse_checkpoint_version_from_location,
     parse_checksum_version_from_location, parse_commit_version_from_location,
     parse_compacted_json_versions_from_location, read_last_checkpoint_hint_from_store,
     read_last_checkpoint_version_from_store, v2_checkpoint_path_from_hint,
@@ -27,6 +27,7 @@ pub use store::{
 };
 pub(crate) use store::{default_logstore, get_actions, get_object_store_from_context};
 pub(crate) use timestamps::{
-    resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
-    resolve_version_timestamp, version_uses_in_commit_timestamps,
+    in_commit_timestamp_from_actions, resolve_commit_timestamp_from_actions,
+    resolve_effective_protocol_and_metadata, resolve_version_timestamp,
+    version_uses_in_commit_timestamps,
 };

@@ -16,6 +16,7 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::provider::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
 use crate::token::{TemporaryToken, TokenCache};
 
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
@@ -79,9 +80,13 @@ impl CatalogCredentials for CredentialProvider {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
             CredentialProvider::TokenCredential(cache, cred) => {
-                let oauth_client = Client::builder().build().map_err(|e| {
-                    CatalogError::External(format!("Failed to build OAuth client: {e}"))
-                })?;
+                let oauth_client = Client::builder()
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(REQUEST_TIMEOUT)
+                    .build()
+                    .map_err(|e| {
+                        CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                    })?;
                 let token = cache
                     .get_or_insert_with(|| cred.fetch_token(&oauth_client))
                     .await?;
@@ -133,13 +138,22 @@ async fn non200_or_json<T: DeserializeOwned>(response: Response) -> CatalogResul
 }
 
 impl WorkspaceOAuthProvider {
+    /// Creates a provider for the workspace of the given URL.
+    ///
+    /// The token endpoint is at the root of the workspace host, so the path of the URL
+    /// (e.g. `/api/2.1/unity-catalog`) is ignored.
     pub fn new(
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
-        workspace_host: impl Into<String>,
+        workspace_url: impl Into<String>,
     ) -> Self {
+        let workspace_url = workspace_url.into();
+        let workspace_host = match reqwest::Url::parse(&workspace_url) {
+            Ok(url) if url.has_host() => url.origin().ascii_serialization(),
+            _ => workspace_url.trim_end_matches('/').to_string(),
+        };
         Self {
-            token_url: format!("{}/oidc/v1/token", workspace_host.into()),
+            token_url: format!("{workspace_host}/oidc/v1/token"),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
         }
@@ -560,6 +574,44 @@ mod tests {
                 "unexpected debug output: {output}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_workspace_oauth_token_url_is_at_the_workspace_host() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oidc/v1/token"))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .and(body_string_contains("scope=all-apis"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "workspace-token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        for workspace_url in [
+            format!("{}/api/2.1/unity-catalog", server.uri()),
+            format!("{}/", server.uri()),
+            server.uri(),
+        ] {
+            let provider = WorkspaceOAuthProvider::new("client", "secret", workspace_url);
+            let token = provider.fetch_token(&client).await.unwrap();
+            assert_eq!(token.token, "workspace-token");
+        }
+
+        let provider = WorkspaceOAuthProvider::new(
+            "client",
+            "secret",
+            "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+        );
+        assert_eq!(
+            provider.token_url,
+            "https://dbc-1.cloud.databricks.com/oidc/v1/token"
+        );
     }
 
     #[tokio::test]

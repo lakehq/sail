@@ -34,7 +34,7 @@ use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
     Action, Add, CommitAction, DeltaError, DeltaOperation, RemoveOptions, TableFeature,
 };
-use crate::table::load_delta_read_state;
+use crate::table::{SnapshotIntent, load_delta_read_state};
 use crate::transaction::{CommitBuilder, CommitProperties};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +65,7 @@ pub(crate) async fn plan(
         read_options,
         false,
         node.lakehouse_table.clone(),
+        SnapshotIntent::Write,
     )
     .await?;
     super::maintenance::validate_snapshot(&snapshot, invocation)?;
@@ -186,6 +187,8 @@ pub(crate) async fn plan(
         &PhysicalSinkMode::Append,
         true,
         &schema,
+        None,
+        None,
         Some(operation.clone()),
     )?;
     let num_bins = bins.len();

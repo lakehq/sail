@@ -184,6 +184,7 @@ impl PyCatalogProvider {
             properties: properties.unwrap_or_default(),
             is_external,
             is_write_precondition: false,
+            staged: None,
         };
         let catalog = self.catalog.clone();
         let runtime = self.runtime.clone();

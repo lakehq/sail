@@ -228,6 +228,7 @@ pub fn metadata_for_create_with_struct_type(
     mut configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
     let resolved_partition_columns = canonicalize_partition_columns(&schema, partition_columns)?;
+    crate::transaction::row_tracking::add_materialized_column_names(&mut configuration);
     Metadata::try_new(
         None,
         configuration.remove("comment"),
@@ -444,6 +445,15 @@ pub fn protocol_for_create(
             reader_features.insert(TableFeature::TypeWidening);
             writer_features.insert(TableFeature::TypeWidening);
         }
+    }
+
+    // `delta.enableRowTracking = "true"` activates RowTracking, which keeps its row ID
+    // high-water mark in a metadata domain.
+    if crate::transaction::row_tracking::row_tracking_enabled(configuration) {
+        writer_features.insert(TableFeature::RowTracking);
+    }
+    if writer_features.contains(&TableFeature::RowTracking) {
+        writer_features.insert(TableFeature::DomainMetadata);
     }
 
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint

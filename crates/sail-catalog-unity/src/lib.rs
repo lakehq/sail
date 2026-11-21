@@ -3,6 +3,7 @@
 mod config;
 mod credential;
 mod data_type;
+mod legacy_commit;
 mod provider;
 mod token;
 
@@ -49,6 +50,8 @@ pub mod r#gen {
         Struct,
         #[serde(rename = "MAP", alias = "map")]
         Map,
+        #[serde(rename = "VARIANT", alias = "variant")]
+        Variant,
         #[serde(rename = "CHAR", alias = "char")]
         Char,
         #[serde(rename = "NULL", alias = "null")]
@@ -57,6 +60,9 @@ pub mod r#gen {
         UserDefinedType,
         #[serde(rename = "TABLE_TYPE", alias = "table_type")]
         TableType,
+        /// A type name that is not known to the client (e.g. `GEOGRAPHY`), as it is on the wire.
+        #[serde(untagged)]
+        Unknown(String),
     }
 
     impl std::fmt::Display for ColumnTypeName {
@@ -79,13 +85,111 @@ pub mod r#gen {
                 Self::Array => "ARRAY",
                 Self::Struct => "STRUCT",
                 Self::Map => "MAP",
+                Self::Variant => "VARIANT",
                 Self::Char => "CHAR",
                 Self::Null => "NULL",
                 Self::UserDefinedType => "USER_DEFINED_TYPE",
                 Self::TableType => "TABLE_TYPE",
+                Self::Unknown(name) => name,
             };
             f.write_str(value)
         }
+    }
+}
+
+/// The client for the Unity Catalog Delta REST API (`delta/v1`).
+#[expect(unused_imports)]
+#[expect(clippy::enum_variant_names)]
+#[expect(clippy::vec_init_then_push)]
+pub mod delta_gen {
+    include!(concat!(env!("OUT_DIR"), "/unity_catalog_delta_gen.rs"));
+
+    // The column data type is defined manually since primitive types are bare JSON strings
+    // (e.g. `"long"`) on the wire while complex types are JSON objects.
+    /// Column data type.
+    pub type DeltaDataType = serde_json::Value;
+
+    // The struct type is defined manually so that the field types and the field metadata
+    // are sent as they are written in the Delta log.
+    /// Struct type containing named fields.
+    pub type DeltaStructType = serde_json::Value;
+
+    // The response of creating a staging table is defined manually with only the fields
+    // used for creating the table, so that the other fields are not validated.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaStagingTableResponse {
+        #[serde(rename = "table-id")]
+        pub table_id: String,
+        pub location: String,
+        #[serde(rename = "required-protocol", default)]
+        pub required_protocol: Option<DeltaProtocol>,
+        #[serde(rename = "required-properties", default)]
+        pub required_properties: Option<std::collections::HashMap<String, Option<String>>>,
+    }
+
+    // The response of loading a table is defined manually with only the fields used for
+    // commit discovery, so that the other fields are not validated.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableResponse {
+        pub metadata: DeltaLoadTableMetadata,
+        #[serde(default)]
+        pub commits: Option<Vec<DeltaLoadTableCommit>>,
+        #[serde(rename = "latest-table-version", default)]
+        pub latest_table_version: Option<i64>,
+    }
+
+    // The storage credentials are defined manually so that servers that issue no
+    // credentials for a location are accepted, and so that the secret values are not
+    // shown when the response is formatted.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaCredentialsResponse {
+        #[serde(rename = "storage-credentials", default)]
+        pub storage_credentials: Option<Vec<DeltaStorageCredential>>,
+    }
+
+    #[derive(Clone, serde::Deserialize)]
+    pub struct DeltaStorageCredential {
+        #[serde(default)]
+        pub prefix: Option<String>,
+        /// The operation that the credential is issued for, such as `READ` or `READ_WRITE`.
+        #[serde(default)]
+        pub operation: Option<String>,
+        #[serde(default)]
+        pub config: Option<std::collections::HashMap<String, Option<String>>>,
+        #[serde(rename = "expiration-time-ms", default)]
+        pub expiration_time_ms: Option<i64>,
+    }
+
+    impl std::fmt::Debug for DeltaStorageCredential {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DeltaStorageCredential")
+                .field("prefix", &self.prefix)
+                .field("operation", &self.operation)
+                .field("expiration_time_ms", &self.expiration_time_ms)
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableMetadata {
+        #[serde(rename = "table-uuid")]
+        pub table_uuid: String,
+        /// The property values are not validated.
+        #[serde(default)]
+        pub properties: Option<std::collections::HashMap<String, serde_json::Value>>,
+    }
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableCommit {
+        pub version: i64,
+        #[serde(rename = "file-name")]
+        pub file_name: String,
+        #[serde(default)]
+        pub timestamp: i64,
+        #[serde(rename = "file-size", default)]
+        pub file_size: i64,
+        #[serde(rename = "file-modification-timestamp", default)]
+        pub file_modification_timestamp: i64,
     }
 }
 

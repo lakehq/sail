@@ -16,12 +16,15 @@ use super::log_segment::LogSegmentFiles;
 use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
-    DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions, prepare_delta_write_context,
+    DeltaCommitContext, DeltaTableReplacement, DeltaWriteContext, DeltaWriterExecOptions,
+    prepare_delta_write_context,
 };
 use crate::snapshot::DeltaSnapshotConfig;
+use crate::spec::{Metadata, Protocol};
 use crate::table::{
-    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
-    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
+    CatalogSnapshotSource, DeltaSnapshot, DeltaTable, SnapshotIntent,
+    catalog_managed_commit_context, create_delta_table_with_object_store,
+    load_catalog_managed_commits_for_snapshot,
 };
 
 /// Configuration shared by all Delta planners.
@@ -53,6 +56,13 @@ pub struct DeltaPlannerConfig {
     pub identity_columns_to_track: Vec<String>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The schema of a table that is created before the data is written, with the
+    /// column mapping that the data is written with.
+    pub create_table_schema: Option<SchemaRef>,
+    /// The table definition that an overwrite gives the existing table that it replaces.
+    pub replacement: Option<DeltaTableReplacement>,
+    /// The protocol and the metadata of a table that the first commit of the write creates.
+    pub create_actions: Option<(Protocol, Metadata)>,
 }
 
 impl DeltaPlannerConfig {
@@ -80,6 +90,9 @@ impl DeltaPlannerConfig {
             identity_columns_to_track: Vec::new(),
             table_snapshot: None,
             lakehouse_table: None,
+            create_table_schema: None,
+            replacement: None,
+            create_actions: None,
         }
     }
 
@@ -111,6 +124,21 @@ impl DeltaPlannerConfig {
 
     pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
         self.metadata_schema = metadata_schema;
+        self
+    }
+
+    pub fn with_create_table_schema(mut self, create_table_schema: Option<SchemaRef>) -> Self {
+        self.create_table_schema = create_table_schema;
+        self
+    }
+
+    pub fn with_replacement(mut self, replacement: Option<DeltaTableReplacement>) -> Self {
+        self.replacement = replacement;
+        self
+    }
+
+    pub fn with_create_actions(mut self, create_actions: Option<(Protocol, Metadata)>) -> Self {
+        self.create_actions = create_actions;
         self
     }
 
@@ -260,10 +288,17 @@ impl<'a> PlannerContext<'a> {
             sink_mode,
             self.table_exists(),
             input_schema,
+            self.config.create_table_schema.as_ref(),
+            self.config.create_actions.as_ref(),
             operation_override,
         )?;
         context.commit_context.identity_columns_to_track =
             self.config.identity_columns_to_track.clone();
+        if let (Some(replacement), Some(snapshot)) =
+            (self.config.replacement.as_ref(), self.table_snapshot())
+        {
+            replacement.apply(&mut context, snapshot)?;
+        }
         Ok(context)
     }
 
@@ -328,24 +363,29 @@ impl<'a> PlannerContext<'a> {
             Ok(table)
         } else {
             let log_store = self.log_store()?;
-            let mut table_config = table_config;
-            if let Some(lakehouse_table) =
-                catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
+            let source = match catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
             {
-                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-                    &self.session,
-                    lakehouse_table,
-                    &self.config.table_url,
-                    log_store.clone(),
-                    None,
-                )
-                .await?;
+                Some(lakehouse_table) => {
+                    load_catalog_managed_commits_for_snapshot(
+                        &self.session,
+                        lakehouse_table,
+                        &self.config.table_url,
+                        log_store.clone(),
+                        None,
+                        SnapshotIntent::Write,
+                        Some(&table_config),
+                    )
+                    .await?
+                }
+                None => CatalogSnapshotSource::default(),
+            };
+            let mut table = source.into_table(log_store, table_config);
+            if table.state.is_none() {
+                table
+                    .load()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
             }
-            let mut table = DeltaTable::new(log_store, table_config);
-            table
-                .load()
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok(table)
         }
     }

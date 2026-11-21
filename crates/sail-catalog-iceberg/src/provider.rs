@@ -1437,6 +1437,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
             is_external: _,
             is_write_precondition,
+            staged: _,
         } = options;
 
         if !format.eq_ignore_ascii_case("iceberg") {
@@ -3128,6 +3129,7 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: true,
+            staged: None,
         }
     }
 
@@ -6315,10 +6317,11 @@ mod tests {
     }
 
     fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {
-        ApiError::Unknown(Box::new(crate::r#gen::Response {
+        ApiError::Unknown(Box::new(crate::r#gen::ErrorResponse {
             inner: (),
             status,
             headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
         }))
     }
 
@@ -6541,6 +6544,44 @@ mod tests {
             matches!(&result, Err(CatalogError::External(err)) if err == "Failed to load config: unknown error: status code 302 Found"),
             "unexpected result: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn sigv4_does_not_keep_invalid_response_body() {
+        let sigv4 = SigV4Options {
+            region: Some("us-east-1".to_string()),
+            service: "execute-api".to_string(),
+        };
+        let server = MockServer::start().await;
+        signed("GET", "/v1/config", &sigv4)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": "echoed-secret",
+                "defaults": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let catalog = IcebergRestCatalogProvider::new(
+            String::new(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(EmptyCatalogCredentials),
+                properties,
+                sigv4: Some(sigv4.clone()),
+            },
+        )
+        .unwrap();
+        catalog
+            .sigv4_state
+            .get_or_init(|| test_new_sigv4_state(sigv4))
+            .await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let result = catalog.get_database(&namespace).await;
+        assert!(
+            matches!(&result, Err(CatalogError::External(err)) if err == "Failed to load config: unknown error: status code 200 OK: invalid response body"),
+            "unexpected result: {result:?}"
+        );
+        assert!(!format!("{result:?}").contains("echoed-secret"));
     }
 
     #[tokio::test]

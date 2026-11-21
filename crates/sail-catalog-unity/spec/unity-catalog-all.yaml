@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileComment: Credit: https://github.com/unitycatalog/unitycatalog/blob/4fa81306825341728580f0ecd2733b58a029e53a/api/all.yaml
+# SPDX-FileComment: Credit: https://github.com/unitycatalog/unitycatalog/blob/2b17f3b5a1d06c0adbf22f4c11ea888c01a36415/api/all.yaml
 # SPDX-FileAttributionText: License: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/LICENSE
 # SPDX-FileAttributionText: Notice: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/NOTICE
 # SPDX-FileCopyrightText: Copyright (2024) Databricks, Inc.
@@ -1472,6 +1472,8 @@ paths:
         most cases the number of unbackfilled commits should be close to zero or one. But if
         clients misbehave and unbackfilled commits accumulate beyond the limit, server will
         reject further commits until more backfill is done.
+        Replaying an already-accepted commit (same version and file-name) is an idempotent no-op
+        that returns 200, so a client that lost the response can safely resend.
         WARNING: This API is experimental and may change in future versions.
       operationId: commit
       requestBody:
@@ -1499,7 +1501,7 @@ paths:
         '404':
           description: Not Found. The specified table does not exist.
         '409':
-          description: Conflict. Indicates that a commit with the same version already exists.
+          description: Conflict. Indicates that a different commit with the same version already exists.
         '429':
           description: The maximum number of unbackfilled commits per table has been reached. Please backfill some commits before retrying.
         '500':
@@ -1635,6 +1637,7 @@ components:
         - ARRAY
         - STRUCT
         - MAP
+        - VARIANT
         - CHAR
         - 'NULL'
         - USER_DEFINED_TYPE
@@ -1680,26 +1683,27 @@ components:
           type: integer
           format: int32
     TableType:
-      type: string
-      # Spec only has `MANAGED` and `EXTERNAL` in the enum, so we manually add the remaining according to the docs:
+      # Spec only has a subset of the table types in the enum, so we manually add the remaining according to the docs:
       # https://docs.databricks.com/api/workspace/tables/create#table_type
+      type: string
       enum:
         - MANAGED
         - EXTERNAL
+        - STREAMING_TABLE # Not yet fully implemented
+        - MATERIALIZED_VIEW # Not yet fully implemented
+        - METRIC_VIEW
         - VIEW
-        - MATERIALIZED_VIEW
-        - STREAMING_TABLE
         - MANAGED_SHALLOW_CLONE
         - FOREIGN
         - EXTERNAL_SHALLOW_CLONE
-        - METRIC_VIEW
     DataSourceFormat:
-      description: Data source format
-      type: string
       # Spec stops at `TEXT` in the enum, so we manually add the remaining according to the docs:
       # https://docs.databricks.com/api/workspace/tables/create#data_source_format
+      description: Data source format
+      type: string
       enum:
         - DELTA
+        - ICEBERG
         - CSV
         - JSON
         - AVRO
@@ -1728,7 +1732,6 @@ components:
         - DATABRICKS_ROW_STORE_FORMAT
         - DELTA_UNIFORM_HUDI
         - DELTA_UNIFORM_ICEBERG
-        - ICEBERG
     TableInfo:
       type: object
       properties:
@@ -1778,6 +1781,14 @@ components:
         table_id:
           description: Unique identifier for the table.
           type: string
+        view_definition:
+          description: >-
+            Definition text for view-like table types such as VIEW,
+            MATERIALIZED_VIEW, STREAMING_TABLE, and METRIC_VIEW. The format
+            depends on the table type (SQL for views, YAML for metric views).
+          type: string
+        view_dependencies:
+          "$ref": "#/components/schemas/DependencyList"
     CreateTable:
       type: object
       properties:
@@ -1807,14 +1818,20 @@ components:
           type: string
         properties:
           $ref: '#/components/schemas/SecurablePropertiesMap'
+        view_definition:
+          description: >-
+            Definition text for view-like table types such as VIEW,
+            MATERIALIZED_VIEW, STREAMING_TABLE, and METRIC_VIEW. The format
+            depends on the table type (SQL for views, YAML for metric views).
+          type: string
+        view_dependencies:
+          "$ref": "#/components/schemas/DependencyList"
       required:
         - name
         - catalog_name
         - schema_name
         - table_type
-        - data_source_format
         - columns
-        - storage_location
     StagingTableInfo:
       type: object
       properties:
@@ -2681,6 +2698,9 @@ components:
             The API client is advised to cache the credential given this expiration time.
           type: integer
           format: int64
+        url:
+          description: The normalized URL of the storage path the temporary credential was generated for.
+          type: string
     PathOperation:
       enum:
         - UNKNOWN_PATH_OPERATION
@@ -3192,8 +3212,8 @@ components:
           type: integer
           format: int64
           description: |
-            Represents the latest version of the table tracked by UC. If no commits have occurred via UC yet,
-            then UC cannot determine the latest version and returns -1. Use this field to manage pagination —
+            Represents the latest version of the table tracked by UC. For a newly created managed table
+            with no commits, this returns 0. Use this field to manage pagination —
             if the returned commits don't cover the range up to latest_table_version or end_version (whichever is smaller),
             it indicates that more unbackfilled commits may be available.
       required:

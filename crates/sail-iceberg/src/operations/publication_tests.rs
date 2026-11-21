@@ -247,6 +247,7 @@ async fn operation(f: &Fixture, writer: Writer, codec: &str) -> TestResult<Opera
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: true,
+                staged: None,
             };
             provider
                 .create_table(&namespace, "t", options.clone())

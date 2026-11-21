@@ -11,9 +11,9 @@ use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
     Projection, ScalarUDF, col, lit, when,
 };
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, staged_lake_source_create_table_info};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::LakehouseCreateRequest;
+use sail_catalog::lakehouse::{LakehouseCreateMaterialization, LakehouseCreateRequest};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
@@ -311,6 +311,9 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            create_table_schema: None,
+            replace_table_metadata: false,
+            create_table: None,
         };
         let mut preconditions = vec![];
         let mut table_replacement = None;
@@ -352,6 +355,9 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                // An overwrite with `saveAsTable` keeps the definition of an existing table.
+                sink_info.replace_table_metadata =
+                    info.is_some() && matches!(mode, WriteMode::Replace { .. });
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {
@@ -657,11 +663,13 @@ impl PlanResolver<'_> {
                         properties,
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
+                        staged: None,
                     };
                     let create_plan = self
                         .ctx
                         .extension::<CatalogManager>()?
                         .plan_lakehouse_create(
+                            self.ctx,
                             &catalog_table,
                             LakehouseCreateRequest {
                                 catalog_table: catalog_table.clone(),
@@ -676,6 +684,38 @@ impl PlanResolver<'_> {
                         sink_info.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location)],
                         });
+                    }
+                    // The catalog may stage the table and require properties for it.
+                    if let Some(staged) = &create_plan.staged {
+                        create_options.properties = staged.properties.clone();
+                    }
+                    create_options.staged = create_plan.staged.clone();
+                    // The storage metadata of the table is created before the data is
+                    // written, so the table and the data files are created with the same
+                    // schema.
+                    if !matches!(
+                        create_plan.materialization,
+                        LakehouseCreateMaterialization::None
+                    ) && let Some(lake_source) = self
+                        .ctx
+                        .extension::<DataSourceRegistry>()?
+                        .get_lake_source_if_supported(&write_format)?
+                        && let Some(schema) = lake_source.create_table_schema_for_write(
+                            input.schema().inner(),
+                            &create_options.properties,
+                        )?
+                    {
+                        for (column, field) in
+                            create_options.columns.iter_mut().zip(schema.fields())
+                        {
+                            column.data_type = field.data_type().clone();
+                            column.metadata = field
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                        }
+                        sink_info.create_table_schema = Some(schema);
                     }
                     sink_info.lakehouse_table = Some(
                         create_plan
@@ -704,7 +744,22 @@ impl PlanResolver<'_> {
                         }
                         table_replacement = Some(replacement);
                     }
-                    if table_replacement.is_none() {
+                    if table_replacement.is_none() && create_options.staged.is_some() {
+                        // The first commit of the write creates the table that the catalog
+                        // staged, and the catalog registers the table after the commit, so
+                        // a write that fails leaves no table in the catalog.
+                        sink_info.lakehouse_table = Some(
+                            create_plan
+                                .table
+                                .execution
+                                .for_operation(LakehouseOperation::Create),
+                        );
+                        sink_info.create_table =
+                            Some(Box::new(staged_lake_source_create_table_info(
+                                &create_options,
+                                create_plan.table.execution.clone(),
+                            )?));
+                    } else if table_replacement.is_none() {
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),
                             options: create_options,

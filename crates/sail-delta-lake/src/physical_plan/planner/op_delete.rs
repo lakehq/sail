@@ -211,6 +211,8 @@ pub async fn build_delete_plan(
         &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.table_exists(),
         &writer_input.schema(),
+        None,
+        None,
         operation,
     )?;
 
@@ -390,6 +392,8 @@ pub async fn build_delete_plan_mor(
             &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
             true,
             &table_schema,
+            None,
+            None,
             None,
         )?;
         Some(super::change_data::build_change_data_writer(

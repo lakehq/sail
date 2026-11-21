@@ -8,11 +8,11 @@ use moka::future::Cache as FutureCache;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
-use crate::delta_log::{LogStoreRef, StorageConfig};
+use crate::delta_log::{LogStoreRef, ReplayedTableHeader, StorageConfig};
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    DeltaSnapshot, DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
+    DeltaSnapshot, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
@@ -103,17 +103,22 @@ pub(crate) async fn load_table_uncached(
         require_files: false,
         ..Default::default()
     };
+    let mut replay_hint = None;
     if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
-        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+        let source = load_catalog_managed_commits_for_snapshot(
             context,
             lakehouse_table,
             table_url,
             log_store.clone(),
             Some(version),
+            SnapshotIntent::Read,
+            None,
         )
         .await?;
+        table_config.catalog_managed_commits = source.commits;
+        replay_hint = source.replay_hint;
     }
-    load_table_from_log_store(version, log_store, table_config).await
+    load_table_from_log_store(version, log_store, table_config, replay_hint).await
 }
 
 pub(crate) async fn load_table_with_config(
@@ -130,15 +135,16 @@ pub(crate) async fn load_table_with_config(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), StorageConfig)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    load_table_from_log_store(version, log_store, table_config).await
+    load_table_from_log_store(version, log_store, table_config, None).await
 }
 
 async fn load_table_from_log_store(
     version: i64,
     log_store: LogStoreRef,
     table_config: DeltaSnapshotConfig,
+    replay_hint: Option<ReplayedTableHeader>,
 ) -> Result<Arc<CachedTable>> {
-    let mut table = DeltaTable::new(log_store.clone(), table_config);
+    let mut table = DeltaTable::new(log_store.clone(), table_config).with_replay_hint(replay_hint);
     table
         .load_version(version)
         .await

@@ -2,7 +2,8 @@
 
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+    BeginTableAccessRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{
@@ -24,6 +25,7 @@ impl PlanResolver<'_> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let resolved = manager
             .resolve_lakehouse_table(
+                self.ctx,
                 table,
                 ResolveLakehouseTableRequest {
                     catalog_table: table.to_vec(),
@@ -33,21 +35,18 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
-        self.begin_lakehouse_table_access(
-            table,
-            resolved.execution,
-            table_access_purpose(operation),
-        )
-        .await
+        self.begin_lakehouse_table_access(table, resolved, table_access_purpose(operation))
+            .await
     }
 
     /// Begins access to a table that the catalog has already resolved.
     pub(super) async fn begin_lakehouse_table_access(
         &self,
         table: &[String],
-        execution: LakehouseExecutionContext,
+        resolved: LakehouseResolvedTable,
         access_purpose: TableAccessPurpose,
     ) -> PlanResult<LakehouseExecutionContext> {
+        let execution = resolved.execution;
         let manager = self.ctx.extension::<CatalogManager>()?;
         match manager
             .begin_table_access(

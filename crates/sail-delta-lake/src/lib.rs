@@ -23,6 +23,8 @@ pub mod session_extension;
 mod snapshot;
 pub mod spec;
 pub mod table;
+#[cfg(test)]
+mod test_store;
 mod transaction;
 mod writer;
 

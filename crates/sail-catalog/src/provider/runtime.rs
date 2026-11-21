@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 use tokio::runtime::Handle;
 
 use super::{
@@ -17,6 +17,7 @@ use crate::lakehouse::{
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
     LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
     LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    TableStorageCredentialsRequest,
 };
 
 pub struct RuntimeAwareCatalogProvider<P: CatalogProvider> {
@@ -203,6 +204,29 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to execute begin_table_access: {e}"))
+            })?
+    }
+
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .get_table_storage_credentials(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to execute get_table_storage_credentials: {e}"
+                ))
             })?
     }
 

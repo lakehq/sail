@@ -7,12 +7,13 @@ use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,
     LakehouseAuthority, LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
     LakehouseRuntimeAccess, LakehouseStatusHints, MetadataPointerAuthority, ScanAuthority,
-    TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
+    StorageAccess, TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{
     CreateTableMetadataRequirement, CreateTableOptions, LakeSourceCreateMetadataMode,
+    StagedTableCreate,
 };
 
 // TODO: Complete the remaining lakehouse catalog capability work:
@@ -61,6 +62,8 @@ pub struct LakehouseCreateRequest {
 pub struct LakehouseCreatePlan {
     pub table: LakehouseResolvedTable,
     pub materialization: LakehouseCreateMaterialization,
+    /// The state of the table when the catalog stages it before it is created.
+    pub staged: Option<Box<StagedTableCreate>>,
 }
 
 // TODO: Replace this compatibility materialization shape with protocol-specific
@@ -106,6 +109,14 @@ pub struct TableAccessSession {
     pub expires_at_ms: Option<i64>,
     pub credential_scope: Option<String>,
     pub capability_fingerprint: CapabilityFingerprint,
+}
+
+/// A request for the storage credentials that the catalog issues for a table.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TableStorageCredentialsRequest {
+    /// The storage location of the table.
+    pub location: String,
+    pub access: StorageAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,12 +173,27 @@ pub struct DeltaRatifiedCommitRequest {
     pub table_uri: String,
     pub start_version: i64,
     pub end_version: Option<i64>,
+    /// Whether the request is made to learn if the table is catalog-managed, when neither the
+    /// table properties nor the Delta log have shown that it is. The catalog answers such a
+    /// request only with an API that serves every Delta table, and the response states
+    /// whether the table is catalog-managed.
+    #[serde(default)]
+    pub discover: bool,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DeltaRatifiedCommitResponse {
     pub latest_table_version: i64,
     pub commits: Vec<DeltaRatifiedCommit>,
+    /// Whether the catalog registers a table only after version 0 of the table is published.
+    /// A table of such a catalog always has a Delta log, so a client never creates the log
+    /// of a registered table.
+    #[serde(default)]
+    pub requires_published_log: bool,
+    /// Whether the catalog states that the table is catalog-managed. A catalog that does not
+    /// state it leaves the decision to the table properties and the Delta log.
+    #[serde(default)]
+    pub catalog_managed: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -309,6 +335,7 @@ pub fn plan_lakehouse_create_from_requirement(
             runtime: None,
         },
         materialization,
+        staged: options.staged.clone(),
     }
 }
 

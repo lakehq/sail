@@ -405,8 +405,12 @@ pub async fn build_log_replay_pipeline(
 pub async fn build_log_replay_pipeline_with_options(
     ctx: &PlannerContext<'_>,
     snapshot: &DeltaSnapshot,
-    options: LogReplayOptions,
+    mut options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    // The Remove action of a file keeps the row tracking information of its Add action.
+    options.include_extended_add_metadata |= snapshot
+        .protocol()
+        .has_writer_feature(&crate::spec::TableFeature::RowTracking);
     let version = snapshot.version();
     let log_segment_files = resolve_log_segment_files(
         ctx,

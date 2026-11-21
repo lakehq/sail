@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             excluded_schemas: ["ReportMetricsRequest".to_owned(), "Snapshot".to_owned()]
                 .into_iter()
                 .collect(),
+            open_enums: Default::default(),
             raw_path_parameters: ["prefix".to_owned()].into_iter().collect(),
         },
     )?;

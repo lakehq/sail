@@ -7,6 +7,7 @@ pub mod lakehouse;
 pub mod managed;
 mod replacement;
 mod status;
+mod storage_credential;
 
 use datafusion_common::Column;
 use datafusion_expr::expr;
@@ -14,6 +15,7 @@ pub use lakehouse::*;
 pub use replacement::*;
 use serde::{Deserialize, Serialize};
 pub use status::*;
+pub use storage_credential::*;
 
 use crate::datasource::BucketBy;
 

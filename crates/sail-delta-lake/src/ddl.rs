@@ -8,14 +8,16 @@ use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
+use crate::catalog::coordinator::{
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, stage_and_publish_ratified_commits,
+};
 use crate::catalog_managed::catalog_managed_delta_table;
 use crate::delta_log::{LogStoreRef, StorageConfig};
-use crate::physical_plan::DeltaCommitExec;
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
-    DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
+    CatalogSnapshotSource, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    create_logstore_with_object_store, is_catalog_managed_commit,
     load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
@@ -26,7 +28,7 @@ pub(crate) async fn drop_check_constraint(
     lakehouse: Option<&LakehouseExecutionContext>,
     name: String,
     if_exists: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let table = open_table(ctx, path, lakehouse).await?;
     let snapshot = table
         .snapshot()
@@ -256,7 +258,7 @@ pub(crate) async fn replace_columns(
         actions.push(CommitAction::Protocol(protocol));
     }
     actions.push(CommitAction::Metadata(metadata));
-    commit(
+    let catalog_updated = commit(
         ctx,
         lakehouse,
         snapshot,
@@ -267,7 +269,7 @@ pub(crate) async fn replace_columns(
     .await?;
     Ok(
         sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
-            catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
+            catalog_updated,
             schema: Some(schema),
             properties,
             partition_by: None,
@@ -583,7 +585,7 @@ pub(crate) async fn alter_columns(
         actions.push(CommitAction::Protocol(protocol));
     }
     actions.push(CommitAction::Metadata(metadata));
-    commit(
+    let catalog_updated = commit(
         ctx,
         lakehouse,
         snapshot,
@@ -594,7 +596,7 @@ pub(crate) async fn alter_columns(
     .await?;
     Ok(
         sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
-            catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
+            catalog_updated,
             schema: Some(schema),
             properties,
             partition_by: None,
@@ -753,32 +755,60 @@ pub(crate) async fn open_table(
     path: &str,
     lakehouse: Option<&LakehouseExecutionContext>,
 ) -> Result<DeltaTable> {
+    open_table_with_config(ctx, path, lakehouse, false).await
+}
+
+/// Opens the table with the files of its snapshot.
+pub(crate) async fn open_table_with_files(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+) -> Result<DeltaTable> {
+    open_table_with_config(ctx, path, lakehouse, true).await
+}
+
+async fn open_table_with_config(
+    ctx: &TaskContext,
+    path: &str,
+    lakehouse: Option<&LakehouseExecutionContext>,
+    require_files: bool,
+) -> Result<DeltaTable> {
     let url = crate::lake_source::parse_location_to_url(path)?;
     let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
     let log_store = create_logstore_with_object_store(store, url.clone(), StorageConfig)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let mut config = DeltaSnapshotConfig {
-        require_files: false,
+    let config = DeltaSnapshotConfig {
+        require_files,
         ..Default::default()
     };
-    if let Some(lakehouse) = catalog_managed_commit_context(lakehouse) {
-        config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-            ctx,
-            lakehouse,
-            &url,
-            log_store.clone(),
-            None,
-        )
-        .await?;
+    let source = match catalog_managed_commit_context(lakehouse) {
+        Some(lakehouse) => {
+            load_catalog_managed_commits_for_snapshot(
+                ctx,
+                lakehouse,
+                &url,
+                log_store.clone(),
+                None,
+                SnapshotIntent::Write,
+                Some(&config),
+            )
+            .await?
+        }
+        None => CatalogSnapshotSource::default(),
+    };
+    let mut table = source.into_table(log_store, config);
+    if table.state.is_none() {
+        table
+            .load()
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
     }
-    let mut table = DeltaTable::new(log_store, config);
-    table
-        .load()
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
     Ok(table)
 }
 
+/// Commits the actions to the table, and returns whether the commit went to the catalog.
+/// Only a commit that uses the catalog-managed protocol goes to the catalog. Any other
+/// commit goes to the file system, which refuses to write a catalog-managed table.
 pub(crate) async fn commit(
     ctx: &TaskContext,
     lakehouse: Option<&LakehouseExecutionContext>,
@@ -786,14 +816,16 @@ pub(crate) async fn commit(
     log_store: LogStoreRef,
     actions: Vec<CommitAction>,
     operation: DeltaOperation,
-) -> Result<()> {
+) -> Result<bool> {
     let commit_properties = CommitProperties::from_session_config(ctx.session_config())?;
-    let Some(lakehouse) = catalog_managed_commit_context(lakehouse) else {
+    let Some(lakehouse) = catalog_managed_commit_context(lakehouse)
+        .filter(|_| is_catalog_managed_commit(Some(snapshot.as_ref()), &actions))
+    else {
         return CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(Some(snapshot), log_store, operation)
             .await
-            .map(|_| ())
+            .map(|_| false)
             .map_err(|error| DataFusionError::External(Box::new(error)));
     };
     let manager = ctx.extension::<CatalogManager>()?;
@@ -811,27 +843,29 @@ pub(crate) async fn commit(
         })?,
     };
     let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse.catalog_table());
-    let latest = coordinator.latest_table_version(lakehouse, &table).await?;
-    let staged = CommitBuilder::from(commit_properties)
-        .with_actions(actions.clone())
-        .build(Some(snapshot), log_store.clone(), operation)
-        .into_staged_commit_future_with_catalog_latest_version(latest)
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let backfilled =
-        DeltaCommitExec::latest_published_backfilled_version(&log_store, staged.version - 1)
-            .await?;
-    // An uncertain catalog response must retain the staged file for reconciliation.
-    coordinator
-        .commit_staged(lakehouse, &table, &staged, &actions, backfilled)
+    let response = coordinator
+        .get_ratified_commits(lakehouse, table.table_uri.clone(), 1, None)
         .await?;
-    if let Err(error) = DeltaCommitExec::publish_staged_commit(&log_store, &staged).await {
-        log::warn!(
-            "Failed to publish ratified Delta ALTER commit {}: {error}",
-            staged.version
-        );
-    }
-    Ok(())
+    let staging = CommitBuilder::from(commit_properties)
+        .with_actions(actions.clone())
+        .build(Some(snapshot.clone()), log_store.clone(), operation)
+        .into_staged_commit_future_with_catalog_latest_version(response.latest_table_version);
+    let (staged, backfilled) =
+        stage_and_publish_ratified_commits(&log_store, &response, staging).await?;
+    // The coordinator deletes the staged file when the catalog rejects the commit. An
+    // uncertain catalog response must retain the staged file for reconciliation.
+    coordinator
+        .commit_staged(
+            lakehouse,
+            &table,
+            &log_store,
+            Some(snapshot.as_ref()),
+            &staged,
+            &actions,
+            backfilled,
+        )
+        .await?;
+    Ok(true)
 }
 
 fn column_position(position: &sail_common::spec::ColumnPosition) -> String {

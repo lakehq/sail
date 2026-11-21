@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use aws_config::identity::IdentityCache;
@@ -20,7 +21,8 @@ use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
-    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, resolve_bucket_region,
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider,
+    resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
 use tokio::sync::OnceCell;
@@ -105,13 +107,57 @@ impl CredentialProvider for S3CredentialProvider {
 }
 
 pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+    get_s3_object_store_with_credentials(url, None, None).await
+}
+
+/// The regions of buckets that are discovered already.
+#[derive(Debug, Default)]
+pub(crate) struct BucketRegions(Mutex<HashMap<String, String>>);
+
+impl BucketRegions {
+    fn get(&self, bucket: &str) -> Option<String> {
+        let regions = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        regions.get(bucket).cloned()
+    }
+
+    fn set(&self, bucket: &str, region: &str) {
+        let mut regions = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        regions.insert(bucket.to_string(), region.to_string());
+    }
+}
+
+/// Discovers the region of the bucket, unless it is among the given regions.
+async fn discover_bucket_region(
+    bucket: &str,
+    regions: Option<&BucketRegions>,
+) -> object_store::Result<String> {
+    if let Some(region) = regions.and_then(|x| x.get(bucket)) {
+        return Ok(region);
+    }
+    let region = resolve_bucket_region(bucket, &ClientOptions::default()).await?;
+    if let Some(regions) = regions {
+        regions.set(bucket, &region);
+    }
+    Ok(region)
+}
+
+/// Creates the S3 object store that uses the given credentials if any,
+/// or the credentials of the environment otherwise.
+/// The region of the bucket is not discovered if it is among the given regions.
+pub(crate) async fn get_s3_object_store_with_credentials(
+    url: &Url,
+    credentials: Option<AwsCredentialProvider>,
+    regions: Option<&BucketRegions>,
+) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
 
-    if let Some(provider) = config.credentials_provider() {
+    if let Some(credentials) = credentials {
+        builder = builder.with_credentials(credentials);
+    } else if let Some(provider) = config.credentials_provider() {
         let cache = config
             .identity_cache()
             .unwrap_or_else(|| IdentityCache::lazy().build());
@@ -133,7 +179,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
 
     if should_resolve_bucket_region(&builder, url)? {
         debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
-        let region = resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?;
+        let region = discover_bucket_region(bucket.as_str(), regions).await?;
         debug!("S3 object store bucket: {bucket} resolved region: {region}");
         builder = builder.with_region(region);
     } else if region.is_none_or(|r| r.is_empty()) {
@@ -141,7 +187,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
             Some(region) if !region.as_ref().is_empty() => region.to_string(),
             _ => {
                 debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
-                resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?
+                discover_bucket_region(bucket.as_str(), regions).await?
             }
         };
         debug!("S3 object store bucket: {bucket} resolved region: {region}");

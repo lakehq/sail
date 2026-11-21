@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use moka::future::Cache;
 use moka::policy::EvictionPolicy;
 use sail_common::config::CatalogCacheConfig;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
@@ -16,6 +16,7 @@ use crate::lakehouse::{
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
     LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
     LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    TableStorageCredentialsRequest,
 };
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -358,6 +359,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
     ) -> CatalogResult<TableAccessSession> {
         self.inner
             .begin_table_access(database, table, request)
+            .await
+    }
+
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        self.inner
+            .get_table_storage_credentials(database, table, request)
             .await
     }
 
@@ -754,6 +766,8 @@ mod tests {
             Ok(DeltaRatifiedCommitResponse {
                 latest_table_version: request.start_version,
                 commits: vec![],
+                requires_published_log: false,
+                catalog_managed: false,
             })
         }
 
@@ -958,6 +972,7 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: false,
+            staged: None,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();
 
@@ -1153,6 +1168,7 @@ mod tests {
                     table_uri: "file:///tmp/table".to_string(),
                     start_version: 7,
                     end_version: None,
+                    discover: false,
                 },
             )
             .await
