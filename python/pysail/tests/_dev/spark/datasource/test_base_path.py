@@ -705,12 +705,20 @@ def test_base_path_temporary_directory_as_root(spark, tmp_path):
     assert df.collect() == []
 
 
-def test_base_path_summary_prefix_in_data_filename(spark, tmp_path):
-    part = tmp_path / "p=1"
+@pytest.mark.parametrize(
+    ("partition", "filename", "expected"),
+    [
+        ("p=1", "_metadata=bar", Row(id=1, p=1)),
+        ("p=1", "_metadata=bar._COPYING_", Row(id=1, p=1)),
+        ("_common_metadata=abc._COPYING_", "data.json", Row(id=1, _common_metadata="abc._COPYING_")),
+    ],
+)
+def test_base_path_summary_prefix_in_data_path(spark, tmp_path, partition, filename, expected):
+    part = tmp_path / partition
     part.mkdir()
-    (part / "_metadata=bar").write_text('{"id":1}')
+    (part / filename).write_text('{"id":1}')
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
-    assert df.collect() == [Row(id=1, p=1)]
+    assert df.collect() == [expected]
 
 
 def test_base_path_glob_streaming_metadata(spark, tmp_path):

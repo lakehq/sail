@@ -201,7 +201,7 @@ pub(super) async fn sample_listing_files<'a>(
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
                 let name = file.location.filename().unwrap_or_default();
-                let metadata_file = has_metadata_prefix(name);
+                let metadata_file = is_metadata_file(name);
                 let partitioned = if metadata_file {
                     true
                 } else if let Some(base) = base_path {
@@ -365,8 +365,12 @@ pub fn matches_path_glob_filter(
     })
 }
 
-pub(super) fn has_metadata_prefix(name: &str) -> bool {
-    !name.contains('=') && (name.starts_with("_common_metadata") || name.starts_with("_metadata"))
+fn has_metadata_prefix(name: &str) -> bool {
+    name.starts_with("_common_metadata") || name.starts_with("_metadata")
+}
+
+pub(super) fn is_metadata_file(name: &str) -> bool {
+    !name.contains('=') && has_metadata_prefix(name)
 }
 
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
