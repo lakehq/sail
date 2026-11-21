@@ -29,7 +29,9 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
-use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+use sail_common::geoarrow::extension::{GeoArrowEdges, GeoArrowWkbType};
+use sail_common::spec::{self, SAIL_SPARK_INTERVAL_METADATA_KEY};
+use sail_common_datafusion::data_type::DataTypeResolver;
 use sail_common_datafusion::metadata::{type_metadata, widest_interval_metadata};
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
@@ -43,7 +45,9 @@ use sail_common_datafusion::schema_evolution::{
     StructFieldMatching, find_matching_struct_field,
 };
 use sail_common_datafusion::session::config::SessionConfigService;
+use sail_common_datafusion::uuid::is_uuid_field;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_common_spark::data_type::JsonDataType;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::{SchemaSampling, parquet_path_sort_key};
@@ -354,6 +358,16 @@ fn parquet_file_schema(
     .unwrap_or(schema))
 }
 
+/// Spark writes its logical schema into the footer, including types such as intervals
+/// whose physical Parquet representation is indistinguishable from integer data.
+fn spark_footer_fields(schema: &str, resolver: &DataTypeResolver) -> Option<Fields> {
+    let json_type = serde_json::from_str::<JsonDataType>(schema).ok()?;
+    let spec::DataType::Struct { fields } = spec::DataType::try_from(json_type).ok()? else {
+        return None;
+    };
+    resolver.resolve_fields(&fields).ok()
+}
+
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
     fn configure_schema_inference(
@@ -480,14 +494,25 @@ impl ReadFormat for ParquetReadFormat {
         if !merge_schema {
             normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
         }
+        let resolver = DataTypeResolver {
+            session_timezone: Arc::from(session_timezone),
+            default_timestamp_ltz: true,
+            use_large_var_types: false,
+        };
         let schemas = schemas.into_iter().map(|(_, mut schema)| {
-            schema.fields = schema
-                .fields
+            let spark_fields = schema
+                .metadata
+                .remove("org.apache.spark.sql.parquet.row.metadata")
+                .and_then(|raw| spark_footer_fields(&raw, &resolver));
+            let has_spark_schema = spark_fields.is_some();
+            schema.fields = spark_fields
+                .as_ref()
+                .unwrap_or(&schema.fields)
                 .iter()
                 .map(|field| normalize_parquet_field(field, merge_timezone))
                 .collect();
             if options.global.skip_metadata {
-                clear_metadata(schema)
+                clear_metadata(schema, has_spark_schema)
             } else {
                 schema
             }
@@ -809,11 +834,53 @@ fn merge_parquet_fields(
     Ok(fields.into())
 }
 
+/// Spark merges these logical types as units even when their Arrow storage is a struct.
+#[derive(PartialEq, Eq)]
+enum SparkParquetLogicalType {
+    Udt(Option<String>),
+    Geo(Option<GeoArrowEdges>, Option<String>),
+    Variant,
+    Uuid,
+}
+
+fn spark_parquet_logical_type(field: &Field) -> Result<Option<SparkParquetLogicalType>> {
+    let ty = if let Some(raw) = field.metadata().get(spec::SAIL_SPARK_UDT_METADATA_KEY) {
+        let udt: spec::SparkUdtMetadata = serde_json::from_str(raw).map_err(|error| {
+            DataFusionError::Plan(format!("Invalid Spark UDT metadata: {error}"))
+        })?;
+        // Spark compares JVM user classes. The footer identifies their UDT implementation.
+        // All Python-only UDTs have a null JVM user class in Spark.
+        SparkParquetLogicalType::Udt(udt.jvm_class)
+    } else if field.extension_type_name() == Some(GeoArrowWkbType::NAME) {
+        let geo = field.try_extension_type::<GeoArrowWkbType>()?.metadata;
+        SparkParquetLogicalType::Geo(geo.edges, geo.crs.map(|crs| crs.authority_code()))
+    } else if is_variant_storage_field(field) {
+        SparkParquetLogicalType::Variant
+    } else if is_uuid_field(field) {
+        SparkParquetLogicalType::Uuid
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(ty))
+}
+
 fn merge_parquet_field(
     left: &Field,
     right: &Field,
     matching: StructFieldMatching,
 ) -> Result<Arc<Field>> {
+    let left_type = spark_parquet_logical_type(left)?;
+    let right_type = spark_parquet_logical_type(right)?;
+    if left_type != right_type {
+        return plan_err!(
+            "Cannot merge Parquet column '{}' with incompatible Spark logical types",
+            left.name()
+        );
+    }
+    let nullable = left.is_nullable() || right.is_nullable();
+    if left_type.is_some() {
+        return Ok(Arc::new(left.clone().with_nullable(nullable)));
+    }
     let ty = match (left.data_type(), right.data_type()) {
         (a, b) if a == b => a.clone(),
         (DataType::Decimal128(a, s), DataType::Decimal128(b, t)) if s == t => {
@@ -835,10 +902,7 @@ fn merge_parquet_field(
             );
         }
     };
-    let mut field = left
-        .clone()
-        .with_data_type(ty)
-        .with_nullable(left.is_nullable() || right.is_nullable());
+    let mut field = left.clone().with_data_type(ty).with_nullable(nullable);
     if matches!(
         field.data_type(),
         DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
@@ -905,14 +969,15 @@ fn normalize_widened_timestamp_timezones<K>(schemas: &mut [(K, Schema)], session
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-parquet/src/file_format.rs
 /// Clears all metadata (Schema level and field level) for a schema.
-fn clear_metadata(schema: Schema) -> Schema {
+fn clear_metadata(schema: Schema, has_spark_schema: bool) -> Schema {
     let fields = schema
         .fields()
         .iter()
         .map(|field| {
-            let metadata = if field
-                .metadata()
-                .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY)
+            let metadata = if has_spark_schema
+                || field
+                    .metadata()
+                    .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY)
             {
                 type_metadata(&FieldMetadata::from(field.as_ref())).to_hashmap()
             } else {

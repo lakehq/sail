@@ -1,11 +1,70 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+from datetime import timedelta
 from decimal import Decimal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.sql import types
+
+
+def test_parquet_spark_footer_intervals(spark, tmp_path):
+    # JVM Spark writes intervals as ordinary INT64 microseconds and INT32 months.
+    hour = types.DayTimeIntervalType.HOUR
+    logical = (
+        types.StructType()
+        .add("elapsed", types.DayTimeIntervalType(hour, hour))
+        .add("period", types.YearMonthIntervalType())
+    )
+    physical = pa.table({"elapsed": pa.array([7_200_000_000], pa.int64()), "period": pa.array([14], pa.int32())})
+    metadata = {b"org.apache.spark.sql.parquet.row.metadata": logical.json().encode()}
+    with pq.ParquetWriter(tmp_path / "a.parquet", physical.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata(metadata)
+        writer.write_table(physical)
+
+    reader = spark.read.option("mergeSchema", True)
+    df = reader.parquet(str(tmp_path))
+    assert df.schema == logical
+    assert df.selectExpr("elapsed", "EXTRACT(YEAR FROM period)", "EXTRACT(MONTH FROM period)").collect() == [
+        (timedelta(hours=2), 1, 2)
+    ]
+
+    pq.write_table(physical, tmp_path / "b.parquet")
+    with pytest.raises(Exception, match=r"CANNOT_MERGE|Cannot merge"):
+        _ = reader.parquet(str(tmp_path)).schema
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("other", ["same", "storage", "mllib"])
+def test_parquet_merge_vector_udt(spark, tmp_path, nested, other):
+    from pyspark.ml.linalg import VectorUDT
+    from pyspark.mllib.linalg import VectorUDT as MllibVectorUDT
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    def schema(data_type, marker):
+        if nested:
+            data_type = types.StructType().add("vector", data_type)
+        return types.StructType().add("v", data_type).add(marker, types.IntegerType())
+
+    vector = VectorUDT()
+    storage = vector.sqlType()
+    right = {"same": vector, "storage": storage, "mllib": MllibVectorUDT()}[other]
+    for name, value_type in [("a", vector), ("b", right)]:
+        physical = to_arrow_schema(schema(storage, name))
+        with pq.ParquetWriter(tmp_path / f"{name}.parquet", physical, store_schema=False) as writer:
+            writer.add_key_value_metadata(
+                {"org.apache.spark.sql.parquet.row.metadata": schema(value_type, name).json()}
+            )
+            writer.write_table(pa.Table.from_batches([], schema=physical))
+
+    reader = spark.read.option("mergeSchema", True)
+    if other == "same":
+        assert reader.parquet(str(tmp_path)).schema == schema(vector, "a").add("b", types.IntegerType())
+    else:
+        with pytest.raises(Exception, match=r"CANNOT_MERGE|Cannot merge"):
+            _ = reader.parquet(str(tmp_path)).schema
 
 
 @pytest.mark.parametrize("binary_as_string", [False, True])
