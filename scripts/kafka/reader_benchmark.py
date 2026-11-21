@@ -1,6 +1,7 @@
+# noqa: INP001
 """Broker-free batching probe; run each case in a fresh process for peak RSS.
 
-Run with ``python -m pysail.examples.spark.kafka_reader_benchmark``.
+Run with ``python scripts/kafka/reader_benchmark.py``.
 
 This measures Python/Arrow buffering, not Kafka throughput or total worker memory.
 Pass --baseline and the old module source on stdin to compare identical workloads.
@@ -66,13 +67,13 @@ def main():
         from pysail.spark.datasource import kafka as module
 
     class Consumer:
-        def __init__(self, config):
+        def __init__(self, config):  # noqa: ARG002
             self.offset = 0
 
         def assign(self, partitions):
             self.offset = partitions[0].offset
 
-        def poll(self, timeout):
+        def poll(self, timeout):  # noqa: ARG002
             message = _Message(self.offset, args.payload_bytes)
             self.offset += 1
             return message
@@ -113,14 +114,18 @@ def main():
         for batch in reader.read(partition):
             if first_batch_s is None:
                 first_batch_s = time.monotonic() - started
-            assert batch.column("offset").to_pylist() == list(range(rows, rows + batch.num_rows))
+            if batch.column("offset").to_pylist() != list(range(rows, rows + batch.num_rows)):
+                msg = "Benchmark returned missing or out-of-order offsets"
+                raise RuntimeError(msg)
             rows += batch.num_rows
             batches += 1
             max_batch_bytes = max(max_batch_bytes, batch.nbytes)
-    assert rows == args.rows
+    if rows != args.rows:
+        msg = f"Benchmark returned {rows} rows, expected {args.rows}"
+        raise RuntimeError(msg)
     elapsed = time.monotonic() - started
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    print(
+    sys.stdout.write(
         json.dumps(
             {
                 "baseline": args.baseline,
@@ -133,6 +138,7 @@ def main():
                 "peak_rss_bytes": peak if sys.platform == "darwin" else peak * 1024,
             }
         )
+        + "\n"
     )
 
 

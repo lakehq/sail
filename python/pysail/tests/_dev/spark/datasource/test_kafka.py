@@ -861,7 +861,7 @@ def test_schema_fields_are_nullable(spark, kafka_opts):
 
 
 @pytest.mark.parametrize(
-    "isolation,expected",
+    ("isolation", "expected"),
     [
         ("read_committed", [b"committed"]),
         ("read_uncommitted", [b"committed", b"aborted", b"open"]),
@@ -940,19 +940,20 @@ def test_concurrent_queries_share_a_group_without_committing(spark, bootstrap_se
 
 @pytest.mark.skipif(os.environ.get("SAIL_KAFKA_NATIVE_SPARK") != "1", reason="Enable the isolated native-Spark oracle")
 def test_matches_native_spark_schema_rows_and_null_states(spark, bootstrap_servers):
-    from pysail.examples.spark.kafka_reference import canonical_rows
+    from pysail.testing.spark.kafka_reference import canonical_rows
 
     topic = "sail-kafka-native-reference"
     producer = Producer({"bootstrap.servers": bootstrap_servers})
     for key, value in [(None, b""), (b"key", None), (b"", b"value")]:
         producer.produce(topic, key=key, value=value, partition=0, headers=[("same", None), ("same", b"")])
+    producer.produce(topic, key=None, value=b"no-headers", partition=0)
     _flush(producer)
     cases = [
         {
             "kafka.bootstrap.servers": bootstrap_servers,
             "subscribe": topic,
             "startingOffsets": json.dumps({topic: {"0": 0}}),
-            "endingOffsets": json.dumps({topic: {"0": 3}}),
+            "endingOffsets": json.dumps({topic: {"0": 4}}),
             "includeHeaders": include_headers,
         }
         for include_headers in ["false", "true"]
@@ -961,7 +962,7 @@ def test_matches_native_spark_schema_rows_and_null_states(spark, bootstrap_serve
     # Sail Spark Connect session leaking into the reference JVM.
     env = {k: v for k, v in os.environ.items() if k not in {"SPARK_REMOTE", "SPARK_CONNECT_MODE_ENABLED"}}
     result = subprocess.run(
-        [sys.executable, "-m", "pysail.examples.spark.kafka_reference"],
+        [sys.executable, "-m", "pysail.testing.spark.kafka_reference"],
         input=json.dumps(cases),
         text=True,
         capture_output=True,

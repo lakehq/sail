@@ -19,7 +19,7 @@ import re
 import sys
 import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -379,7 +379,9 @@ def _parse_optional_positive_int(opts: Mapping[str, str], name: str, *, max_valu
     return _parse_positive_int(opts, name, default="", max_value=max_value)
 
 
-def _parse_positive_ms(opts: Mapping[str, str], names: tuple[str, ...], default: str) -> float:
+def _parse_positive_ms(
+    opts: Mapping[str, str], names: tuple[str, ...], default: str, *, max_value: int | None = None
+) -> float:
     """Parse a positive, finite millisecond option, returning it as seconds.
 
     ``names`` are checked in order so a Spark-standard option name can take
@@ -401,6 +403,9 @@ def _parse_positive_ms(opts: Mapping[str, str], names: tuple[str, ...], default:
         raise ValueError(msg)
     if value_ms <= 0:
         msg = f"'{name}' must be positive, got {value_ms}"
+        raise ValueError(msg)
+    if max_value is not None and not 1 <= value_ms <= max_value:
+        msg = f"'{name}' must be between 1 and {max_value} milliseconds, got {raw!r}"
         raise ValueError(msg)
     return value_ms / 1000.0
 
@@ -472,6 +477,22 @@ _CONSUMER_ONLY_CONFIGS = (
     "auto.offset.reset",
     "enable.partition.eof",
     "isolation.level",
+    "queued.max.messages.kbytes",
+    "queued.min.messages",
+    "fetch.max.bytes",
+    "max.partition.fetch.bytes",
+    "fetch.message.max.bytes",
+    "fetch.min.bytes",
+    "fetch.wait.max.ms",
+    "fetch.error.backoff.ms",
+    "check.crcs",
+    "session.timeout.ms",
+    "heartbeat.interval.ms",
+    "max.poll.interval.ms",
+    "group.instance.id",
+    "auto.commit.interval.ms",
+    "partition.assignment.strategy",
+    "enable.auto.offset.store",
 )
 
 
@@ -874,14 +895,14 @@ class _ReadState:
     skipped_ranges: int = 0
     first_skipped: int | None = None
     last_skipped: int | None = None
+    pending_gaps: list[tuple[int, int]] = field(default_factory=list)
 
     def skip(self, start: int, end: int) -> None:
         if end <= start:
             return
         self.skipped_ranges += 1
-        if self.first_skipped is None:
-            self.first_skipped = start
-        self.last_skipped = end
+        self.first_skipped = start if self.first_skipped is None else min(self.first_skipped, start)
+        self.last_skipped = end if self.last_skipped is None else max(self.last_skipped, end)
 
 
 class KafkaDataSourceReader(DataSourceReader):
@@ -1089,6 +1110,7 @@ class KafkaDataSourceReader(DataSourceReader):
                     return
                 now = time.monotonic()
                 if len(buf) and now - batch_started >= partition.max_batch_wait_s:
+                    _report_pending_gaps(consumer, tp, partition, state)
                     batch = buf.to_batch(schema)
                     paused = time.monotonic()
                     yield batch
@@ -1160,20 +1182,26 @@ class KafkaDataSourceReader(DataSourceReader):
                     )
                     raise ValueError(msg)
                 if record_offset > state.next_offset:
-                    low = _check_offset_gap(
-                        consumer,
-                        tp,
-                        partition,
-                        next_offset=state.next_offset,
-                        record_offset=record_offset,
-                    )
-                    if low > state.next_offset:
-                        state.skip(state.next_offset, min(record_offset, end))
+                    if partition.fail_on_data_loss:
+                        _check_offset_gap(
+                            consumer,
+                            tp,
+                            partition,
+                            next_offset=state.next_offset,
+                            record_offset=record_offset,
+                            end_offset=end,
+                        )
+                    else:
+                        # Permissive reads need the watermark only for diagnostics.
+                        # Bound the pending intervals by the Arrow batch size and
+                        # classify them with one lookup before delivering the batch.
+                        state.pending_gaps.append((state.next_offset, min(record_offset, end)))
                 if record_offset >= end:
                     break
 
                 record_bytes = _record_size(record, include_headers=partition.include_headers)
                 if len(buf) and buf.size_bytes + record_bytes > partition.max_batch_bytes:
+                    _report_pending_gaps(consumer, tp, partition, state)
                     batch = buf.to_batch(schema)
                     paused = time.monotonic()
                     yield batch
@@ -1186,12 +1214,14 @@ class KafkaDataSourceReader(DataSourceReader):
                 state.next_offset = record_offset + 1
 
                 if len(buf) >= partition.max_batch_rows or buf.size_bytes >= partition.max_batch_bytes:
+                    _report_pending_gaps(consumer, tp, partition, state)
                     batch = buf.to_batch(schema)
                     paused = time.monotonic()
                     yield batch
                     state.last_progress += time.monotonic() - paused
                     batch_started = time.monotonic()
 
+            _report_pending_gaps(consumer, tp, partition, state)
             if len(buf) > 0:
                 yield buf.to_batch(schema)
         finally:
@@ -1208,12 +1238,45 @@ class KafkaDataSourceReader(DataSourceReader):
             unwinding = sys.exc_info()[0] is not None
             try:
                 consumer.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Do not expose client exception text: it may contain security
                 # configuration. A cleanup failure must not mask a read error.
                 _LOGGER.warning("Failed to close Kafka consumer for %s[%s]", partition.topic, partition.kafka_partition)
                 if not unwinding:
                     raise
+
+
+def _query_watermarks(consumer: Consumer, tp: TopicPartition, partition: KafkaInputPartition) -> tuple[int, int]:
+    """Query fresh offsets, adding task context to the client's timeout error."""
+    try:
+        return consumer.get_watermark_offsets(tp, timeout=partition.admin_timeout_s, cached=False)
+    except KafkaException as e:
+        # KafkaException wraps a KafkaError, including on watermark timeouts.
+        if e.args[0].code() != KafkaError._TIMED_OUT:  # noqa: SLF001
+            raise
+        msg = (
+            f"Timed out querying offsets for {tp.topic}[{tp.partition}] after "
+            f"{partition.admin_timeout_s:g}s; check broker connectivity or raise 'adminTimeoutMs'."
+        )
+        raise TimeoutError(msg) from e
+
+
+def _report_pending_gaps(
+    consumer: Consumer, tp: TopicPartition, partition: KafkaInputPartition, state: _ReadState
+) -> None:
+    """Classify permissive-read gaps once per output batch for the final warning.
+
+    The observation is made at batch delivery time; it cannot establish whether
+    an interval was compacted before retention passed it. Strict reads instead
+    check each gap immediately and never reuse this observation.
+    """
+    if not state.pending_gaps:
+        return
+    low, _ = _query_watermarks(consumer, tp, partition)
+    for start, end in state.pending_gaps:
+        if low > start:
+            state.skip(start, end)
+    state.pending_gaps.clear()
 
 
 def _bind_partition_range(consumer: Consumer, partition: KafkaInputPartition) -> tuple[int, int]:
@@ -1230,11 +1293,7 @@ def _bind_partition_range(consumer: Consumer, partition: KafkaInputPartition) ->
     start, end = partition.start_offset, partition.end_offset
     if start >= 0 and end >= 0:
         return start, end
-    low, high = consumer.get_watermark_offsets(
-        TopicPartition(partition.topic, partition.kafka_partition),
-        timeout=partition.admin_timeout_s,
-        cached=False,
-    )
+    low, high = _query_watermarks(consumer, TopicPartition(partition.topic, partition.kafka_partition), partition)
     if start == _SPARK_OFFSET_EARLIEST:
         start = low
     if end == _SPARK_OFFSET_LATEST:
@@ -1295,7 +1354,7 @@ def _recover_out_of_range(
             f"Set 'failOnDataLoss' to false to skip missing records."
         )
         raise ValueError(msg)
-    low, high = consumer.get_watermark_offsets(tp, timeout=partition.admin_timeout_s, cached=False)
+    low, high = _query_watermarks(consumer, tp, partition)
     if next_offset >= high or low >= end_offset:
         return None
     recovered = max(next_offset, low)
@@ -1310,6 +1369,7 @@ def _check_offset_gap(
     *,
     next_offset: int,
     record_offset: int,
+    end_offset: int,
 ) -> int:
     """Classify offsets Kafka passed over, returning the log's earliest offset.
 
@@ -1325,14 +1385,12 @@ def _check_offset_gap(
     a new gap; the broker need not report an out-of-range error for every race
     between offset validation, retention and fetching the next available record.
     """
-    low, _ = consumer.get_watermark_offsets(tp, timeout=partition.admin_timeout_s, cached=False)
+    low, _ = _query_watermarks(consumer, tp, partition)
     if low <= next_offset:
-        return low
-    if not partition.fail_on_data_loss:
         return low
     msg = (
         f"Data loss on {partition.topic}[{partition.kafka_partition}]: offsets {next_offset} to "
-        f"{record_offset - 1} were requested but are no longer in the log, which now starts at "
+        f"{min(record_offset, end_offset) - 1} were requested but are no longer in the log, which now starts at "
         f"{low}. Records were removed after planning (retention or truncation). "
         f"Set 'failOnDataLoss' to false to skip missing records."
     )
@@ -1377,7 +1435,7 @@ def _eof_is_terminal(
     position = next_offset if eof_offset is None else eof_offset
     if position >= end_offset:
         return True
-    _, high = consumer.get_watermark_offsets(tp, timeout=partition.admin_timeout_s, cached=False)
+    _, high = _query_watermarks(consumer, tp, partition)
     if eof_offset is not None and high > eof_offset:
         return False
     if high >= end_offset:
@@ -1785,8 +1843,8 @@ class KafkaDataSource(DataSource):
         opts = CaseInsensitiveDict(self.options)
 
         client_config = _extract_kafka_config(opts)
-        if "bootstrap.servers" not in client_config:
-            msg = "Option 'kafka.bootstrap.servers' is required for the kafka data source"
+        if not client_config.get("bootstrap.servers", "").strip():
+            msg = "Option 'kafka.bootstrap.servers' is required and must not be blank for the kafka data source"
             raise ValueError(msg)
         _validate_kafka_config(client_config)
         if "isolation.level" in client_config:
@@ -1818,7 +1876,10 @@ class KafkaDataSource(DataSource):
         stall_timeout_s = (
             _parse_positive_ms(opts, ("stallTimeoutMs",), "120000") if "stallTimeoutMs" in opts else poll_timeout_s
         )
-        admin_timeout_s = _parse_positive_ms(opts, ("adminTimeoutMs",), "10000")
+        # librdkafka admin request timeouts accept at most one hour. Other
+        # time budgets are used as Python deadlines or sliced polls, not passed
+        # directly to the admin API.
+        admin_timeout_s = _parse_positive_ms(opts, ("adminTimeoutMs",), "10000", max_value=3600000)
 
         return {
             "subscription": subscription,

@@ -592,16 +592,17 @@ impl DataSourceRegistry {
 }
 
 fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError {
-    if name.eq_ignore_ascii_case("jdbc") {
-        plan_datafusion_err!(
-            "No data source found for: {name}. \
-             The JDBC data source is provided by pysail and must be registered before use: \
-             `from pysail.spark.datasource.jdbc import JdbcDataSource`; \
-             `spark.dataSource.register(JdbcDataSource)`"
-        )
-    } else {
-        plan_datafusion_err!("No data source found for: {name}")
-    }
+    let (module, class_name, label) = match name.to_ascii_lowercase().as_str() {
+        "jdbc" => ("jdbc", "JdbcDataSource", "JDBC"),
+        "kafka" => ("kafka", "KafkaDataSource", "Kafka"),
+        _ => return plan_datafusion_err!("No data source found for: {name}"),
+    };
+    plan_datafusion_err!(
+        "No data source found for: {name}. \
+         The {label} data source is provided by pysail and must be registered before use: \
+         `from pysail.spark.datasource.{module} import {class_name}`; \
+         `spark.dataSource.register({class_name})`"
+    )
 }
 
 fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError {
@@ -797,17 +798,24 @@ mod tests {
     }
 
     #[test]
-    fn missing_jdbc_data_source_error_includes_registration_hint() -> std::result::Result<(), String>
-    {
+    fn missing_python_data_source_error_includes_registration_hint()
+    -> std::result::Result<(), String> {
         let registry = DataSourceRegistry::new();
-        let error = match registry.get_data_source("jdbc") {
-            Ok(_) => return Err("expected missing jdbc data source error".to_string()),
-            Err(error) => error.to_string(),
-        };
-
-        assert!(error.contains("No data source found for: jdbc"));
-        assert!(error.contains("from pysail.spark.datasource.jdbc import JdbcDataSource"));
-        assert!(error.contains("spark.dataSource.register(JdbcDataSource)"));
+        for (name, module, class_name) in [
+            ("jdbc", "jdbc", "JdbcDataSource"),
+            ("kafka", "kafka", "KafkaDataSource"),
+            ("KAFKA", "kafka", "KafkaDataSource"),
+        ] {
+            let error = match registry.get_data_source(name) {
+                Ok(_) => return Err(format!("expected missing {name} data source error")),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains(&format!("No data source found for: {name}")));
+            assert!(error.contains(&format!(
+                "from pysail.spark.datasource.{module} import {class_name}"
+            )));
+            assert!(error.contains(&format!("spark.dataSource.register({class_name})")));
+        }
         Ok(())
     }
 

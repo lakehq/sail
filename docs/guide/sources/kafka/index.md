@@ -326,6 +326,11 @@ apart.
 When missing offsets are skipped, the reader logs one partial-read summary per task with the number
 and enclosing span of skipped intervals. An offset span is not an exact count of lost records.
 
+Strict reads refresh the broker watermarks for each offset gap to detect retention, which adds
+round trips on compacted or transactional topics. With `failOnDataLoss=false`, gaps are classified
+once per output batch for the partial-read warning. This observation is made at batch delivery;
+it cannot determine whether an interval was compacted before retention passed it.
+
 ### Resource Limits and Cancellation
 
 Batches flush on the first of the row threshold, estimated-byte threshold, or nonempty-batch wait
@@ -344,7 +349,7 @@ The reader closes its consumer on normal completion, a read error, or explicit g
 The current runtime does not install a cooperative cancellation callback or explicitly finalize
 the iterator on every early-exit path. A cancelled query can therefore leave a reader polling until
 it yields another batch or reaches its idle timeout. Prompt cleanup after cancellation or `LIMIT`
-is not guaranteed. Metadata calls use `adminTimeoutMs`; they and `Consumer.close()` cannot be
+is not guaranteed. Metadata calls use `adminTimeoutMs` (1–3,600,000 milliseconds); they and `Consumer.close()` cannot be
 interrupted by the reader. Shutdown timing also depends on the client.
 
 ### Compatibility

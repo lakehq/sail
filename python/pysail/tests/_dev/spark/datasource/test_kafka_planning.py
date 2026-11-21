@@ -918,7 +918,7 @@ class TestReadLifecycle:
         class MovingLog(_FakeConsumer):
             def poll(self, timeout=None):
                 record = super().poll(timeout)
-                if record.offset() == 5:
+                if record.offset() == 5:  # noqa: PLR2004
                     self.watermarks[(_TOPIC, 0)] = (5, 7)
                 return record
 
@@ -948,9 +948,9 @@ class TestReadLifecycle:
         clock = [0.0]
 
         class StuckConsumer(_FakeConsumer):
-            def poll(self, timeout=None):
+            def poll(self, timeout=None):  # noqa: ARG002
                 clock[0] += 0.01
-                if clock[0] > 0.1:
+                if clock[0] > 0.1:  # noqa: PLR2004
                     pytest.fail("recovery ignored the idle deadline")
                 return _offset_out_of_range_message()
 
@@ -987,7 +987,7 @@ class TestReadLifecycle:
         cancelled = [False]
 
         class CancelledConsumer(_FakeConsumer):
-            def poll(self, timeout=None):
+            def poll(self, timeout=None):  # noqa: ARG002
                 cancelled[0] = True
 
         consumer = CancelledConsumer()
@@ -999,7 +999,8 @@ class TestReadLifecycle:
     def test_cleanup_error_does_not_replace_the_read_failure(self, consumer_factory, caplog):
         class BrokenClose(_FakeConsumer):
             def close(self):
-                raise RuntimeError("cleanup failed with test-only-secret")
+                msg = "cleanup failed with test-only-secret"
+                raise RuntimeError(msg)
 
         consumer = BrokenClose(messages=[_offset_out_of_range_message()])
         reader = _reader(consumer_factory, consumer)
@@ -1025,6 +1026,7 @@ class TestReadLifecycle:
                 if self.messages:
                     return self.messages.pop(0)
                 clock[0] += timeout
+                return None
 
         monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
         consumer = SlowConsumer(messages=[_FakeMessage(0)])
@@ -1060,3 +1062,134 @@ class TestReadLifecycle:
 @pytest.fixture(scope="module", autouse=True)
 def spark_doctest():
     """Override the parent fixture: these unit tests need no Spark server."""
+
+
+@pytest.mark.parametrize("path", ["bind", "gap", "eof", "recover"])
+def test_watermark_timeout_has_context_and_closes_consumer(consumer_factory, monkeypatch, path):
+    def timeout(*_args, **_kwargs):
+        raise KafkaException(KafkaError(KafkaError._TIMED_OUT))  # noqa: SLF001
+
+    messages = {
+        "bind": [],
+        "gap": [_FakeMessage(3)],
+        "eof": [_eof_message_at(1)],
+        "recover": [_offset_out_of_range_message()],
+    }
+    consumer = _FakeConsumer(messages=messages[path])
+    options = (
+        {}
+        if path == "bind"
+        else {
+            "startingOffsets": '{"orders":{"0":0}}',
+            "endingOffsets": '{"orders":{"0":5}}',
+        }
+    )
+    if path == "recover":
+        options["failOnDataLoss"] = "false"
+    reader = _reader(consumer_factory, consumer, **options)
+    partition = reader.partitions()[0]
+    monkeypatch.setattr(consumer, "get_watermark_offsets", timeout)
+    with pytest.raises(TimeoutError, match=r"orders\[0\].*adminTimeoutMs"):
+        _read_all(reader, partition)
+    assert consumer.closed
+
+
+def test_watermark_broker_error_is_preserved(consumer_factory, monkeypatch):
+    error = KafkaError(KafkaError.TOPIC_AUTHORIZATION_FAILED)
+
+    def denied(*_args, **_kwargs):
+        raise KafkaException(error)
+
+    consumer = _FakeConsumer()
+    reader = _reader(consumer_factory, consumer)
+    partition = reader.partitions()[0]
+    monkeypatch.setattr(consumer, "get_watermark_offsets", denied)
+    with pytest.raises(KafkaException) as exc:
+        _read_all(reader, partition)
+    assert exc.value.args[0] is error
+    assert consumer.closed
+
+
+def test_gap_error_is_limited_to_requested_offsets(consumer_factory):
+    consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (3, 11)}, messages=[_FakeMessage(10)])
+    reader = _reader(
+        consumer_factory, consumer, startingOffsets='{"orders":{"0":0}}', endingOffsets='{"orders":{"0":5}}'
+    )
+    with pytest.raises(ValueError, match="offsets 0 to 4 were requested"):
+        _read_all(reader, reader.partitions()[0])
+
+
+def test_permissive_gaps_use_one_lookup_per_batch(consumer_factory, monkeypatch, caplog):
+    consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 199)}, messages=[_FakeMessage(i) for i in range(0, 199, 2)])
+    reader = _reader(
+        consumer_factory,
+        consumer,
+        failOnDataLoss="false",
+        maxBatchRows="25",
+        startingOffsets='{"orders":{"0":0}}',
+        endingOffsets='{"orders":{"0":199}}',
+    )
+    calls = []
+    original = consumer.get_watermark_offsets
+
+    def query(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(consumer, "get_watermark_offsets", query)
+    rows = _read_all(reader, reader.partitions()[0])
+    assert [r["offset"] for r in rows] == list(range(0, 199, 2))
+    assert len(calls) == 4  # noqa: PLR2004
+    assert "partial read" not in caplog.text
+
+
+def test_permissive_gaps_report_retention_at_batch_delivery(consumer_factory, caplog):
+    consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (3, 5)}, messages=[_FakeMessage(3), _FakeMessage(4)])
+    reader = _reader(
+        consumer_factory,
+        consumer,
+        failOnDataLoss="false",
+        startingOffsets='{"orders":{"0":0}}',
+        endingOffsets='{"orders":{"0":5}}',
+    )
+    assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [3, 4]
+    assert "skipped 1 offset interval(s), spanning [0, 3)" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="time.tzset is unavailable on Windows")
+def test_reference_normalizes_aware_and_python_local_timestamps(monkeypatch):
+    import datetime
+    import time
+
+    from pyspark.sql import Row
+
+    from pysail.testing.spark.kafka_reference import canonical_rows
+
+    # Spark collect returns naive timestamps in the Python process timezone,
+    # irrespective of spark.sql.session.timeZone.
+    try:
+        with monkeypatch.context() as context:
+            context.setenv("TZ", "Europe/Amsterdam")
+            time.tzset()
+            instant = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+            values = [
+                instant.astimezone(datetime.timezone(datetime.timedelta(hours=2))),
+                instant.astimezone().replace(tzinfo=None),
+            ]
+            rows = [Row(topic="t", partition=0, offset=i, timestamp=value) for i, value in enumerate(values)]
+            assert [r["timestamp"] for r in canonical_rows(rows)] == ["2024-01-01T00:00:00+00:00"] * 2
+    finally:
+        time.tzset()
+
+
+def test_deferred_gap_and_eof_warning_cover_the_whole_skipped_span(consumer_factory, caplog):
+    consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (2, 3)}, messages=[_FakeMessage(2), _eof_message_at(3)])
+    reader = _reader(
+        consumer_factory,
+        consumer,
+        failOnDataLoss="false",
+        startingOffsets='{"orders":{"0":0}}',
+        endingOffsets='{"orders":{"0":5}}',
+    )
+    assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [2]
+    assert "skipped 2 offset interval(s), spanning [0, 5)" in caplog.text

@@ -1,6 +1,6 @@
 """Native-Spark Kafka reference; JSON read-option maps are supplied on stdin.
 
-Run with ``python -m pysail.examples.spark.kafka_reference``. Requires full
+Run with ``python -m pysail.testing.spark.kafka_reference``. Requires full
 PySpark, Java, and access to the matching Kafka connector artifact. Never
 register Sail's Python source in this process.
 """
@@ -21,15 +21,17 @@ def canonical_rows(rows):
         if isinstance(value, (bytes, bytearray)):
             return {"binary_hex": bytes(value).hex()}
         if isinstance(value, datetime.datetime):
-            return value.replace(tzinfo=datetime.timezone.utc).isoformat()
+            # Collected Spark timestamps are naive Python-local times. Convert
+            # both those and aware timestamps to UTC without relabeling an instant.
+            return value.astimezone(datetime.timezone.utc).isoformat()
         return value
 
     return [normalize(row) for row in sorted(rows, key=lambda r: (r.topic, r.partition, r.offset))]
 
 
 def main():
-    import pyspark
-    from pyspark.sql import SparkSession
+    import pyspark  # noqa: PLC0415
+    from pyspark.sql import SparkSession  # noqa: PLC0415
 
     cases = json.load(sys.stdin)
     spark = (
@@ -44,7 +46,9 @@ def main():
         for options in cases:
             frame = spark.read.format("kafka").options(**options).load()
             results.append({"schema": frame.schema.jsonValue(), "rows": canonical_rows(frame.collect())})
-        print("KAFKA_REFERENCE=" + json.dumps({"spark_version": pyspark.__version__, "results": results}))
+        sys.stdout.write(
+            "KAFKA_REFERENCE=" + json.dumps({"spark_version": pyspark.__version__, "results": results}) + "\n"
+        )
     finally:
         spark.stop()
 

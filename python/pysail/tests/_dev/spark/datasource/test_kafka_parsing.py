@@ -369,12 +369,12 @@ class TestBuildAdminConfig:
         assert all(_build_consumer_config(config)[key] == value for key, value in settings.items())
 
     @pytest.mark.parametrize(
-        "client,build_config", [(AdminClient, _build_admin_config), (Consumer, _build_consumer_config)]
+        ("client", "build_config"), [(AdminClient, _build_admin_config), (Consumer, _build_consumer_config)]
     )
     def test_invalid_security_protocol_fails_without_plaintext_fallback(self, client, build_config):
         config = _resolved(**{"kafka.security.protocol": "not-a-protocol"})["client_config"]
         # Real librdkafka validation fails before it can open a connection.
-        with pytest.raises(KafkaException, match="security.protocol"):
+        with pytest.raises(KafkaException, match=r"security\.protocol"):
             client(build_config(config))
 
     def test_consumer_only_properties_are_stripped(self):
@@ -524,13 +524,13 @@ class TestOptionCaseInsensitivity:
 
 class TestNumericOptions:
     def test_idle_deadline_defaults_to_the_effective_poll_budget(self):
-        assert _resolved(pollTimeoutMs="80")["stall_timeout_s"] == 0.08
-        assert _resolved(pollTimeoutMs="80", stallTimeoutMs="20")["stall_timeout_s"] == 0.02
+        assert _resolved(pollTimeoutMs="80")["stall_timeout_s"] == pytest.approx(0.08)
+        assert _resolved(pollTimeoutMs="80", stallTimeoutMs="20")["stall_timeout_s"] == pytest.approx(0.02)
 
     @pytest.mark.parametrize("option", ["maxBatchBytes", "maxBatchWaitMs"])
     @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf"])
     def test_batch_resource_limits_reject_invalid_values(self, option, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=option):
             _resolved(**{option: value})
 
     def test_poll_timeout_default_matches_spark(self):
@@ -585,11 +585,6 @@ class TestNumericOptions:
         assert _resolved(maxRecordsPerPartition=str(2**63 - 1))["max_records_per_partition"] == 2**63 - 1
         with pytest.raises(ValueError, match="must be at most 9223372036854775807"):
             _resolved(maxRecordsPerPartition=str(2**63))
-
-
-# ---------------------------------------------------------------------------
-# failOnDataLoss
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -794,3 +789,49 @@ class TestSchema:
 @pytest.fixture(scope="module", autouse=True)
 def spark_doctest():
     """Override the parent fixture: these unit tests need no Spark server."""
+
+
+@pytest.mark.parametrize("servers", ["", " ", "\t\n"])
+def test_blank_bootstrap_servers_fail_before_client_creation(servers):
+    with pytest.raises(ValueError, match="must not be blank"):
+        _resolved(**{"kafka.bootstrap.servers": servers})
+
+
+@pytest.mark.parametrize("timeout", ["0.5", "3600001", "1e20"])
+def test_admin_timeout_respects_client_limits(timeout):
+    with pytest.raises(ValueError, match=r"adminTimeoutMs.*between 1 and 3600000"):
+        _resolved(adminTimeoutMs=timeout)
+
+
+def test_admin_timeout_limit_does_not_restrict_python_deadlines():
+    assert _resolved(adminTimeoutMs="3600000")["admin_timeout_s"] == pytest.approx(3600)
+    assert _resolved(stallTimeoutMs="1e20")["stall_timeout_s"] == pytest.approx(1e17)
+
+
+def test_consumer_tuning_does_not_warn_on_admin_handle(caplog):
+    import logging
+
+    settings = {
+        "queued.max.messages.kbytes": "1024",
+        "queued.min.messages": "10",
+        "fetch.max.bytes": "52428800",
+        "max.partition.fetch.bytes": "1048576",
+        "fetch.message.max.bytes": "1048576",
+        "fetch.min.bytes": "1",
+        "fetch.wait.max.ms": "100",
+        "fetch.error.backoff.ms": "100",
+        "check.crcs": "true",
+        "session.timeout.ms": "45000",
+        "heartbeat.interval.ms": "3000",
+        "max.poll.interval.ms": "300000",
+        "group.instance.id": "test-reader",
+        "auto.commit.interval.ms": "5000",
+        "partition.assignment.strategy": "range",
+        "enable.auto.offset.store": "false",
+    }
+    with caplog.at_level(logging.WARNING):
+        admin = AdminClient(_build_admin_config(settings), logger=logging.getLogger(__name__))
+        admin.poll(0)
+    assert not any("consumer property" in record.message for record in caplog.records)
+    config = _build_consumer_config(settings)
+    assert all(config[key] == value for key, value in settings.items())
