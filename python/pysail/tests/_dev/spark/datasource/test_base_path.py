@@ -236,6 +236,31 @@ def test_base_path_glob_matches_partition_directories(spark, tmp_path, pattern):
 
 
 @pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("{,sub}/data.json", [1]),
+        ("{.,sub}/data.json", [1]),
+        ("x{,y}/data.json", [3, 4]),
+        ("{,sub/nested}/data.json", [0, 2]),
+        ("{{,sub},sub/nested}/data.json", [1, 2]),
+        ("{,}", []),
+    ],
+)
+def test_base_path_glob_empty_alternatives(spark, tmp_path, pattern, expected):
+    for value, directory in enumerate(["", "sub", "sub/nested", "x", "xy"]):
+        path = tmp_path / directory
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "data.json").write_text(f'{{"v":{value}}}')
+    reader = spark.read.option("basePath", str(tmp_path)).schema("v INT")
+    path = f"{tmp_path.as_uri()}/{pattern}"
+    if expected:
+        assert [row.v for row in reader.json(path).orderBy("v").collect()] == expected
+    else:
+        with pytest.raises(Exception, match="PATH_NOT_FOUND"):
+            reader.json(path).collect()
+
+
+@pytest.mark.parametrize(
     ("uri", "pattern"),
     [(False, "missing=*/../p=1/row.json"), (True, "p=*/./row.json"), (True, "p=1/row.json/missing=[/..")],
 )
@@ -246,14 +271,30 @@ def test_base_path_glob_dot_components(spark, tmp_path, uri, pattern):
     assert df.collect() == [Row(id=1, p=1)]
 
 
-@pytest.mark.parametrize("use_glob", [False, True])
-def test_base_path_multiline_csv_header_order(spark, tmp_path, use_glob):
+@pytest.mark.parametrize(
+    ("inputs", "header"),
+    [
+        (["b.csv", "a.csv"], "from_b"),
+        (["{b.csv,a.csv}"], "from_a"),
+        (["b.csv", "a*.csv"], "from_a"),
+        (["b.csv", "{a.csv}"], "from_a"),
+    ],
+)
+def test_base_path_multiline_csv_header_order(spark, tmp_path, inputs, header):
     for name, value in [("a", "1"), ("b", "2")]:
         (tmp_path / f"{name}.csv").write_text(f"from_{name}\n{value}\n")
-    paths = str(tmp_path / "{b.csv,a.csv}") if use_glob else [str(tmp_path / f"{name}.csv") for name in ["b", "a"]]
+    paths = [str(tmp_path / name) for name in inputs]
     df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True).csv(paths)
-    assert df.columns == ["from_a" if use_glob else "from_b"]
+    assert df.columns == [header]
     assert sorted(r[0] for r in df.collect()) == ["1", "2"]
+
+
+@pytest.mark.parametrize(("first", "second"), [("!", " "), ("😀", "\ue000")])
+def test_base_path_glob_uri_order(spark, tmp_path, first, second):
+    for name, header in [(first, "first"), (second, "second")]:
+        (tmp_path / f"x{name}.csv").write_text(f"{header}\n1\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True).csv(str(tmp_path / "x*.csv"))
+    assert df.columns == ["first"]
 
 
 @pytest.mark.parametrize("schema", [None, "id INT, p TIMESTAMP"])

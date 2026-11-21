@@ -13,12 +13,12 @@ use futures::TryStreamExt;
 use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
-use percent_encoding::percent_decode;
+use percent_encoding::{percent_decode, percent_encode_byte};
 use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
 /// A parsed pattern segment in a glob pattern.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum PatternSegment {
     Asterisk,
     QuestionMark,
@@ -34,7 +34,7 @@ enum PatternSegment {
 }
 
 /// A character class in a parsed pattern segment.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum CharacterClass {
     Single(char),
     Range(char, char),
@@ -134,6 +134,74 @@ impl PatternSegment {
                     })
                     .collect()
             })
+    }
+
+    fn contains_separator(&self) -> bool {
+        match self {
+            Self::Character('/') => true,
+            Self::Alternation { patterns } => {
+                patterns.iter().flatten().any(Self::contains_separator)
+            }
+            _ => false,
+        }
+    }
+
+    fn expand_hadoop_path(patterns: Vec<Self>) -> Vec<String> {
+        // Hadoop GlobExpander expands braces containing separators before matching
+        // individual path components. Such an alternative may omit a directory.
+        if let Some((index, alternatives)) =
+            patterns
+                .iter()
+                .enumerate()
+                .find_map(|(i, part)| match part {
+                    Self::Alternation { patterns } if part.contains_separator() => {
+                        Some((i, patterns))
+                    }
+                    _ => None,
+                })
+        {
+            return alternatives
+                .iter()
+                .flat_map(|alternative| {
+                    let path = patterns[..index]
+                        .iter()
+                        .chain(alternative)
+                        .chain(&patterns[index + 1..])
+                        .cloned()
+                        .collect();
+                    Self::expand_hadoop_path(path)
+                })
+                .collect();
+        }
+
+        let mut paths = vec![String::new()];
+        for (i, component) in patterns
+            .split(|p| matches!(p, Self::Character('/')))
+            .enumerate()
+        {
+            let mut names = Self::expand_sequence(component.to_vec(), ReadPathSyntax::HadoopGlob);
+            if component
+                .iter()
+                .any(|p| matches!(p, Self::Alternation { .. }))
+            {
+                // These names must match a directory entry, even when a brace arm is empty.
+                names.retain(|name| !matches!(name.as_str(), "" | "." | ".."));
+            }
+            paths = paths
+                .into_iter()
+                .flat_map(|path| {
+                    let separator = if i == 0 || path.ends_with('/') {
+                        ""
+                    } else {
+                        "/"
+                    };
+                    names
+                        .iter()
+                        .map(move |name| format!("{path}{separator}{name}"))
+                })
+                .collect();
+        }
+        paths
     }
 
     /// Convert character class choices to a glob pattern written in the syntax
@@ -252,12 +320,11 @@ impl PatternSegment {
     }
 }
 
-fn expand_glob_pattern(pattern: &str, syntax: ReadPathSyntax) -> Result<Vec<String>> {
-    let patterns = PatternSegment::sequence_parser(syntax)
+fn parse_glob_pattern(pattern: &str, syntax: ReadPathSyntax) -> Result<Vec<PatternSegment>> {
+    PatternSegment::sequence_parser(syntax)
         .parse(pattern)
         .into_result()
-        .map_err(|_| plan_datafusion_err!("glob pattern: {pattern}"))?;
-    Ok(PatternSegment::expand_sequence(patterns, syntax))
+        .map_err(|_| plan_datafusion_err!("glob pattern: {pattern}"))
 }
 
 /// A parsed URL that may contain glob patterns.
@@ -365,6 +432,24 @@ pub struct GlobUrl {
     pub glob: Option<Pattern>,
 }
 
+const HADOOP_GLOB_CHARS: [char; 7] = ['{', '}', '[', ']', '*', '?', '\\'];
+
+struct ParsedInputPath {
+    urls: Vec<GlobUrl>,
+    is_glob: bool,
+}
+
+impl ParsedInputPath {
+    fn new(path: &str, urls: Vec<GlobUrl>) -> Self {
+        // Spark classifies the qualified path before globStatus expands it. A brace
+        // expression can expand entirely into literals, including just one literal.
+        Self {
+            urls,
+            is_glob: path.contains(HADOOP_GLOB_CHARS),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReadPathSyntax {
     UrlGlob,
@@ -378,10 +463,10 @@ impl GlobUrl {
     }
 
     pub fn parse(s: &str) -> Result<Vec<GlobUrl>> {
-        Self::parse_with_syntax(s, ReadPathSyntax::UrlGlob)
+        Ok(Self::parse_with_syntax(s, ReadPathSyntax::UrlGlob)?.urls)
     }
 
-    fn parse_with_syntax(s: &str, syntax: ReadPathSyntax) -> Result<Vec<GlobUrl>> {
+    fn parse_with_syntax(s: &str, syntax: ReadPathSyntax) -> Result<ParsedInputPath> {
         if std::path::Path::new(s).is_absolute() {
             return Self::parse_file_path(s, syntax);
         }
@@ -446,28 +531,26 @@ impl GlobUrl {
                 } else {
                     path
                 };
-                Self::parse_glob_path(
-                    if path.is_empty() { "/" } else { path },
-                    syntax,
-                    uri_escapes,
-                )?
-                .into_iter()
-                .map(|(prefix, suffix)| {
-                    let mut url = url.clone();
-                    if uri_escapes {
-                        url.set_path(&prefix);
-                    } else {
-                        url.set_path(&prefix.replace('%', "%25"));
-                    }
-                    Ok(Self::new(url, suffix))
-                })
-                .collect()
+                let path = if path.is_empty() { "/" } else { path };
+                let urls = Self::parse_glob_path(path, syntax, uri_escapes)?
+                    .into_iter()
+                    .map(|(prefix, suffix)| {
+                        let mut url = url.clone();
+                        if uri_escapes {
+                            url.set_path(&prefix);
+                        } else {
+                            url.set_path(&prefix.replace('%', "%25"));
+                        }
+                        Self::new(url, suffix)
+                    })
+                    .collect();
+                Ok(ParsedInputPath::new(path, urls))
             }
             RawGlobUrl::RelativePath(x) => Self::parse_file_path(x, syntax),
         }
     }
 
-    fn parse_file_path(path: &str, syntax: ReadPathSyntax) -> Result<Vec<Self>> {
+    fn parse_file_path(path: &str, syntax: ReadPathSyntax) -> Result<ParsedInputPath> {
         #[cfg(windows)]
         let normalized;
         #[cfg(windows)]
@@ -489,13 +572,14 @@ impl GlobUrl {
         } else {
             path
         };
-        Self::parse_glob_path(path, syntax, false)?
+        let urls = Self::parse_glob_path(path, syntax, false)?
             .into_iter()
             .map(|(prefix, suffix)| {
                 let url = Self::url_from_file_path(&prefix)?;
                 Ok(Self::new(url, suffix))
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(ParsedInputPath::new(path, urls))
     }
 
     fn parse_glob_path(
@@ -506,7 +590,17 @@ impl GlobUrl {
         if syntax == ReadPathSyntax::HadoopLiteral {
             return Ok(vec![(path.to_owned(), None)]);
         }
-        expand_glob_pattern(path, syntax)?
+        let patterns = parse_glob_pattern(path, syntax)?;
+        let paths = if syntax == ReadPathSyntax::HadoopGlob
+            && patterns
+                .iter()
+                .any(|p| matches!(p, PatternSegment::Alternation { .. }))
+        {
+            PatternSegment::expand_hadoop_path(patterns)
+        } else {
+            PatternSegment::expand_sequence(patterns, syntax)
+        };
+        paths
             .into_iter()
             .map(|x| {
                 let (prefix, suffix) = Self::split_glob_path(&x, syntax)?;
@@ -520,7 +614,7 @@ impl GlobUrl {
         // The URL parser already resolves dots in the literal prefix, including at
         // drive and filesystem roots. Hadoop also resolves them in the pattern
         // before interpreting wildcards and brace alternatives.
-        let Some(glob) = path.find(['*', '?', '[', '{']) else {
+        let Some(glob) = path.find(HADOOP_GLOB_CHARS) else {
             return Cow::Borrowed(path);
         };
         let start = path[..glob].rfind('/').map_or(0, |i| i + 1);
@@ -632,12 +726,14 @@ pub struct PathGlobFilter {
 impl PathGlobFilter {
     pub fn parse(pattern: &str) -> Result<Self> {
         let parse = || -> Result<Self> {
-            let patterns = expand_glob_pattern(pattern, ReadPathSyntax::HadoopGlob)?
-                .into_iter()
-                .map(|pattern| {
-                    Pattern::new(&pattern).map_err(|e| plan_datafusion_err!("{e}: {pattern}"))
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let syntax = ReadPathSyntax::HadoopGlob;
+            let patterns =
+                PatternSegment::expand_sequence(parse_glob_pattern(pattern, syntax)?, syntax)
+                    .into_iter()
+                    .map(|pattern| {
+                        Pattern::new(&pattern).map_err(|e| plan_datafusion_err!("{e}: {pattern}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
             Ok(Self {
                 raw: pattern.to_string(),
                 patterns,
@@ -687,6 +783,7 @@ pub(crate) async fn resolve_read_urls(
     expand_input_globs: bool,
 ) -> Result<Vec<Vec<ListingTableUrl>>> {
     let mut urls = vec![];
+    let mut literal_inputs = vec![];
     for path in paths {
         let syntax = if expand_input_globs {
             ReadPathSyntax::HadoopGlob
@@ -694,7 +791,8 @@ pub(crate) async fn resolve_read_urls(
             ReadPathSyntax::UrlGlob
         };
         let mut matches = vec![];
-        for url in GlobUrl::parse_with_syntax(&path, syntax)? {
+        let input = GlobUrl::parse_with_syntax(&path, syntax)?;
+        for url in input.urls {
             let url = rewrite_directory_url(url, ctx).await?;
             if expand_input_globs && let Some(pattern) = url.glob {
                 matches.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
@@ -723,19 +821,46 @@ pub(crate) async fn resolve_read_urls(
                     .any(|part| part.as_ref() == "_spark_metadata")
             });
             // Hadoop sorts globStatus results across all brace alternatives of one input.
-            matches.sort_unstable_by(|a, b| {
-                a.prefix()
-                    .cmp(b.prefix())
-                    .then_with(|| a.as_str().cmp(b.as_str()))
+            matches.sort_by_cached_key(|url| {
+                (
+                    hadoop_path_sort_key(url.prefix().as_ref()),
+                    url.is_collection(),
+                )
             });
             matches.dedup_by(|a, b| a.as_str() == b.as_str());
-            urls.push(matches);
+            // Spark visits glob inputs first, keeping caller order within each group.
+            if input.is_glob {
+                urls.push(matches);
+            } else {
+                literal_inputs.push(matches);
+            }
         } else {
             // Preserve the existing sample per listing URL for ordinary reads.
             urls.extend(matches.into_iter().map(|url| vec![url]));
         }
     }
+    urls.extend(literal_inputs);
     Ok(urls)
+}
+
+/// Hadoop Path.compareTo compares the raw URI paths as Java UTF-16 strings.
+fn hadoop_path_sort_key(path: &str) -> Vec<u16> {
+    let mut key = Vec::with_capacity(path.len());
+    for c in path.chars() {
+        let escape = if c.is_ascii() {
+            !c.is_ascii_alphanumeric() && !"-_.!~*'():@&=+$,;/".contains(c)
+        } else {
+            c.is_whitespace() || c.is_control()
+        };
+        if escape {
+            for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+                key.extend(percent_encode_byte(byte).bytes().map(u16::from));
+            }
+        } else {
+            key.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+        }
+    }
+    key
 }
 
 async fn directory_exists(ctx: &dyn Session, url: &ListingTableUrl) -> Result<bool> {
@@ -862,6 +987,7 @@ pub(crate) fn resolve_base_directory_url(path: &str) -> Result<Url> {
         return plan_err!("Option 'basePath' cannot be empty");
     }
     let mut url = GlobUrl::parse_with_syntax(path, ReadPathSyntax::HadoopLiteral)?
+        .urls
         .one()?
         .base;
     if !url.path().ends_with('/') {
