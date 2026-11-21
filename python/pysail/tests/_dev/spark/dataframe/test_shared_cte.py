@@ -424,6 +424,33 @@ def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_pat
         spark.sql("DROP VIEW IF EXISTS shared_cte_owners")
 
 
+def test_cte_with_view_typed_column_in_exists_shares_one_evaluation(spark, tmp_path):
+    """The string columns of a Parquet table are read as Arrow view types, which only the
+    output of the query expands to plain types. The shared body of a CTE is not that output,
+    so a view-typed column that an `EXISTS` subquery correlates on keeps its type in the
+    body, which has the types of the definition and is shared."""
+    path = str(tmp_path / "shared_cte_view_types")
+    spark.sql("SELECT id, CASE WHEN id % 2 = 0 THEN 'x' ELSE 'y' END AS kind FROM range(0, 40, 1, 4)").write.parquet(
+        path
+    )
+    spark.read.parquet(path).createOrReplaceTempView("shared_cte_view_types")
+    query = """
+        WITH top AS (SELECT id, kind FROM shared_cte_view_types ORDER BY id LIMIT 10)
+        SELECT count(*) FROM top a
+        WHERE EXISTS (SELECT 1 FROM top b WHERE b.kind = a.kind AND b.id <> a.id)
+    """
+    try:
+        assert [tuple(row) for row in spark.sql(query).collect()] == [(10,)]
+        if not is_jvm_spark():
+            text = plan(spark, query)
+            shared = shares_deterministic_ctes()
+            assert ("SharedCteExec" in text) == shared, text
+            scans = sum("DataSourceExec" in line and "shared_cte_view_types/" in line for line in text.splitlines())
+            assert scans == (1 if shared else 2), text
+    finally:
+        spark.catalog.dropTempView("shared_cte_view_types")
+
+
 def test_from_and_scalar_subquery_references_share_one_evaluation(spark):
     query = f"WITH {CTE} SELECT k, n FROM c WHERE n = (SELECT max(n) FROM c) AND k > 4"  # noqa: S608
     check(spark, query, [(5, 143)], shared=False, scans=2)
