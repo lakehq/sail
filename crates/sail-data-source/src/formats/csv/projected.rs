@@ -43,6 +43,7 @@ pub struct ProjectedCsvOptions {
     pub terminator: Option<u8>,
     pub has_header: bool,
     pub truncated_rows: bool,
+    pub ignore_extra_fields: bool,
     pub batch_size: usize,
 }
 
@@ -56,6 +57,7 @@ pub struct ProjectedCsvDecoder {
     terminator: Option<u8>,
     num_columns: usize,
     truncated_rows: bool,
+    ignore_extra_fields: bool,
     batch_size: usize,
     // `(file column, output column)` sorted by file column
     wanted: Vec<(usize, usize)>,
@@ -92,6 +94,7 @@ impl ProjectedCsvDecoder {
             terminator,
             has_header,
             truncated_rows,
+            ignore_extra_fields,
             batch_size,
         } = options;
         let projected = Arc::new(schema.project(&projection)?);
@@ -125,6 +128,7 @@ impl ProjectedCsvDecoder {
             terminator,
             num_columns: schema.fields().len(),
             truncated_rows,
+            ignore_extra_fields,
             batch_size,
             builders: projection
                 .iter()
@@ -249,7 +253,8 @@ impl ProjectedCsvDecoder {
     where
         F: Fn(usize, usize) -> &'a [u8],
     {
-        if num_fields != self.num_columns && !(self.truncated_rows && num_fields < self.num_columns)
+        if (num_fields < self.num_columns && !self.truncated_rows)
+            || (num_fields > self.num_columns && !self.ignore_extra_fields)
         {
             return Err(ArrowError::CsvError(format!(
                 "incorrect number of fields for line {}, expected {} got {}",
@@ -483,6 +488,7 @@ mod tests {
             terminator: None,
             has_header: true,
             truncated_rows: false,
+            ignore_extra_fields: false,
             batch_size: 8192,
         }
     }

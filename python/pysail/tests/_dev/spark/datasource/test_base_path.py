@@ -289,6 +289,23 @@ def test_base_path_multiline_csv_header_order(spark, tmp_path, inputs, header):
     assert sorted(r[0] for r in df.collect()) == ["1", "2"]
 
 
+@pytest.mark.parametrize("infer_schema", [False, True])
+def test_base_path_multiline_csv_wider_file(spark, tmp_path, infer_schema):
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    empty = tmp_path / "header_only.csv"
+    first.write_text("x\n1\n")
+    # The second header spans multiple chunks and exceeds the replay buffer.
+    extra = "y" * 70000
+    second.write_text(f'x,"{extra}"\n2,"extra\nfield"\n')
+    empty.write_text("x,y")
+    df = spark.read.options(basePath=str(tmp_path), header=True, multiLine=True, inferSchema=infer_schema).csv(
+        [str(first), str(second), str(empty)]
+    )
+    assert df.columns == ["x"]
+    assert sorted(row.x for row in df.collect()) == ([1, 2] if infer_schema else ["1", "2"])
+
+
 @pytest.mark.parametrize("first_file", ["\n\n", "# comment\n"])
 def test_base_path_multiline_csv_first_nonempty_header(spark, tmp_path, first_file):
     first = tmp_path / "a.csv"
