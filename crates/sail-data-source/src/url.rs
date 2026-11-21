@@ -551,8 +551,7 @@ impl PathGlobFilter {
             let patterns = expand_glob_pattern(pattern, !cfg!(windows))?
                 .into_iter()
                 .map(|pattern| {
-                    GlobUrl::create_percent_decoded_pattern(&pattern)?
-                        .ok_or_else(|| plan_datafusion_err!("path glob filter cannot be empty"))
+                    Pattern::new(&pattern).map_err(|e| plan_datafusion_err!("{e}: {pattern}"))
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Self {

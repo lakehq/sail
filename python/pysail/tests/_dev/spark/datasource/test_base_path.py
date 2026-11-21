@@ -703,7 +703,7 @@ def test_base_path_zero_byte_file_for_inference(spark, tmp_path, file_format):
     reader = spark.read.format(file_format).option("basePath", str(tmp_path))
     if file_format == "parquet":
         # Older Spark releases try to read the empty footer during schema inference.
-        with pytest.raises(Exception, match="UNABLE_TO_INFER_SCHEMA|CANNOT_READ_FILE_FOOTER"):
+        with pytest.raises(Exception, match=r"UNABLE_TO_INFER_SCHEMA|CANNOT_READ_FILE_FOOTER"):
             reader.load(str(tmp_path)).collect()
     else:
         df = reader.load(str(tmp_path))
@@ -728,3 +728,25 @@ def test_base_path_reader_timezone_validation(spark, tmp_path):
     reader = spark.read.options(basePath=str(tmp_path), timeZone="Mars/X")
     with pytest.raises(Exception, match="Mars/X"):
         reader.json(str(tmp_path)).collect()
+
+
+@pytest.mark.parametrize("file_format", ["json", "csv"])
+@pytest.mark.parametrize("recursive", [False, True])
+def test_base_path_summary_only_text_format(spark, tmp_path, file_format, recursive):
+    (tmp_path / "_metadata").write_text('{"only_in_summary":1}')
+    reader = spark.read.format(file_format).options(basePath=str(tmp_path), recursiveFileLookup=recursive)
+    df = reader.load(str(tmp_path))
+    assert df.columns == []
+    assert df.collect() == []
+    with pytest.raises(Exception, match="UNABLE_TO_INFER_SCHEMA"):
+        reader.option("pathGlobFilter", "*.missing").load(str(tmp_path)).collect()
+
+
+def test_base_path_literal_percent_in_filename_filter(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "row%20a.json").write_text('{"id":1}')
+    (part / "row a.json").write_text('{"id":2}')
+    df = spark.read.options(basePath=str(tmp_path), pathGlobFilter="row%20*.json").json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=1)]
+    assert len(df.inputFiles()) == 1

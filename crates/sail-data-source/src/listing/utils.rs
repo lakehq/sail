@@ -178,8 +178,8 @@ pub(super) async fn sample_listing_files<'a>(
         let store = ctx.runtime_env().object_store(first)?;
         let mut objects = Vec::new();
         let mut direct = Vec::new();
-        let mut has_empty_file = false;
-        let mut has_direct_empty_file = false;
+        let mut has_listed_file = false;
+        let mut has_direct_file = false;
         'roots: for url in roots {
             let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
             while let Some(file) = files.try_next().await? {
@@ -187,8 +187,16 @@ pub(super) async fn sample_listing_files<'a>(
                 if let Some(name) = file.location.filename()
                     && is_summary_file(name)
                 {
-                    if parquet && selected && matches!(name, "_common_metadata" | "_metadata") {
-                        if base_path.is_some() && is_direct_input(url, &file.location) {
+                    if !selected {
+                        continue;
+                    }
+                    // JSON and CSV can infer an empty schema when the listing contains
+                    // only summary files. The summary contents are only read for Parquet.
+                    has_listed_file = true;
+                    let direct_input = is_direct_input(url, &file.location);
+                    has_direct_file |= direct_input;
+                    if parquet && matches!(name, "_common_metadata" | "_metadata") {
+                        if base_path.is_some() && direct_input {
                             keep_parquet_summary(&mut direct_summary, url, &store, &file);
                         }
                         keep_parquet_summary(&mut summary, url, &store, &file);
@@ -196,11 +204,11 @@ pub(super) async fn sample_listing_files<'a>(
                     continue;
                 }
                 // Partition discovery sees even empty files and files excluded by pathGlobFilter.
-                let (sample, empty) = if let Some(base) = base_path {
+                let (sample, listed) = if let Some(base) = base_path {
                     if discovery.observe(&base.root, &file.location, Some(base))? {
-                        (&mut objects, &mut has_empty_file)
+                        (&mut objects, &mut has_listed_file)
                     } else if is_direct_input(url, &file.location) {
-                        (&mut direct, &mut has_direct_empty_file)
+                        (&mut direct, &mut has_direct_file)
                     } else {
                         continue;
                     }
@@ -208,12 +216,11 @@ pub(super) async fn sample_listing_files<'a>(
                     if !recursive && selected && file.size > 0 {
                         discovery.observe(url, &file.location, None)?;
                     }
-                    (&mut objects, &mut has_empty_file)
+                    (&mut objects, &mut has_listed_file)
                 };
                 if selected {
-                    if file.size == 0 {
-                        *empty = true;
-                    } else if sample.len() < SAMPLE_SIZE {
+                    *listed = true;
+                    if file.size > 0 && sample.len() < SAMPLE_SIZE {
                         sample.push(file);
                     }
                     if base_path.is_none() && sample.len() == SAMPLE_SIZE && !(parquet && recursive)
@@ -227,14 +234,14 @@ pub(super) async fn sample_listing_files<'a>(
             url: first,
             store,
             objects,
-            has_empty_file,
+            has_listed_file,
         });
-        direct_samples.push((direct, has_direct_empty_file));
+        direct_samples.push((direct, has_direct_file));
     }
     if base_path.is_some() && !discovery.has_partitions() {
-        for (sample, (direct, empty)) in samples.iter_mut().zip(direct_samples) {
+        for (sample, (direct, listed)) in samples.iter_mut().zip(direct_samples) {
             sample.objects = direct;
-            sample.has_empty_file = empty;
+            sample.has_listed_file = listed;
         }
         summary = direct_summary;
     }
@@ -243,7 +250,7 @@ pub(super) async fn sample_listing_files<'a>(
             url,
             store,
             objects: vec![object],
-            has_empty_file: false,
+            has_listed_file: true,
         }];
     }
     Ok((samples, discovery))

@@ -109,7 +109,7 @@ pub struct ListingFileSample<'a> {
     pub url: &'a ListingTableUrl,
     pub store: Arc<dyn ObjectStore>,
     pub objects: Vec<ObjectMeta>,
-    pub(super) has_empty_file: bool,
+    pub(super) has_listed_file: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -256,7 +256,8 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 if (base_path.is_some() || recursive)
                     && matches!(format, "csv" | "json" | "parquet")
                     && !sampled_files.iter().any(|sample| {
-                        !sample.objects.is_empty() || (format != "parquet" && sample.has_empty_file)
+                        !sample.objects.is_empty()
+                            || (format != "parquet" && sample.has_listed_file)
                     })
                 {
                     return plan_err!(
