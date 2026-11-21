@@ -10,12 +10,41 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import TimestampNTZType, TimestampType
 
 from pysail.testing._dev.spark.utils.files import get_data_directory_size
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
+
+
+@pytest.mark.parametrize("explicit_schema", [False, True])
+def test_parquet_missing_input(spark, tmp_path, explicit_schema):
+    existing = tmp_path / "valid.parquet"
+    pq.write_table(pa.table({"id": [1]}), existing)
+    missing = tmp_path / "missing.parquet"
+    reader = spark.read.schema("id BIGINT") if explicit_schema else spark.read
+    with pytest.raises(AnalysisException, match=r"\[PATH_NOT_FOUND\]") as error:
+        reader.parquet(str(existing), str(missing)).collect()
+    assert error.value.getCondition() == "PATH_NOT_FOUND"
+    assert error.value.getSqlState() == "42K03"
+    assert missing.name in str(error.value)
+
+
+def test_parquet_empty_directory_schema(spark, tmp_path):
+    (tmp_path / "_SUCCESS").touch()
+    with pytest.raises(AnalysisException, match=r"\[UNABLE_TO_INFER_SCHEMA\]") as error:
+        spark.read.parquet(str(tmp_path)).collect()
+    assert error.value.getCondition() == "UNABLE_TO_INFER_SCHEMA"
+    assert error.value.getSqlState() == "42KD9"
+    if not is_jvm_spark():
+        assert tmp_path.name in str(error.value)
+
+    df = spark.read.schema("id BIGINT").parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<id:bigint>"
+    assert df.collect() == []
 
 
 def safe_sort_key(row):

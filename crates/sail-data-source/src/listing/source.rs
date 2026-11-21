@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::{
     DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
+use sail_common_datafusion::error::ReadPathError;
 use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
@@ -166,7 +167,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
-            lakehouse_table: _,
+            lakehouse_table,
             schema,
             constraints,
             partition_by,
@@ -183,6 +184,25 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .transpose()?;
         let urls = resolve_listing_urls(ctx, paths).await?;
         let sampled_files = sample_listing_files(ctx, &urls, path_glob_filter.as_ref()).await?;
+        if T::name() == "parquet" && lakehouse_table.is_none() {
+            for sample in &sampled_files {
+                if sample.objects.is_empty() {
+                    crate::ensure_read_path_exists(ctx, sample.url).await?;
+                }
+            }
+            if schema.is_none() && sampled_files.iter().all(|sample| sample.objects.is_empty()) {
+                let locations = urls
+                    .iter()
+                    .map(ListingTableUrl::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(ReadPathError::UnableToInferSchema {
+                    format: "Parquet".into(),
+                    locations,
+                }
+                .into());
+            }
+        }
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
         let (schema, partition_fields) = match schema {

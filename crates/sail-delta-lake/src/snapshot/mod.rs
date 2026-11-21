@@ -162,9 +162,7 @@ impl DeltaSnapshot {
                     match latest_replayable_version(log_store).await {
                         Ok(v) => v,
                         Err(crate::spec::DeltaError::MissingVersion) => {
-                            return Err(DeltaTableError::invalid_table_location(
-                                "No commit files found in _delta_log",
-                            ));
+                            return Err(DeltaTableError::TableNotFound(log_store.root_uri()));
                         }
                         Err(err) => return Err(err),
                     }

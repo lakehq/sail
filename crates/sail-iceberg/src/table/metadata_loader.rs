@@ -11,6 +11,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
+use sail_common_datafusion::error::ReadPathError;
 use url::Url;
 
 const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
@@ -216,6 +217,11 @@ pub(crate) async fn load_metadata_file_bytes(
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
+pub(crate) fn is_missing_table_metadata(error: &DataFusionError) -> bool {
+    matches!(error, DataFusionError::External(cause)
+        if matches!(cause.downcast_ref::<ReadPathError>(), Some(ReadPathError::IcebergTableNotFound(_))))
+}
+
 pub async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
@@ -266,7 +272,7 @@ pub async fn find_latest_metadata_file(
                 );
                 Ok(latest_file.clone())
             } else {
-                plan_err!("No metadata files found in table location: {}", table_url)
+                Err(ReadPathError::IcebergTableNotFound(table_url.to_string()).into())
             }
         }
         Err(e) => {

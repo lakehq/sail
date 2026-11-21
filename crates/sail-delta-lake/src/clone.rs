@@ -141,7 +141,7 @@ pub(crate) async fn prepare(
     .await
     {
         Ok(table) => Some(table),
-        Err(DeltaTableError::InvalidTableLocation(_) | DeltaTableError::FileNotFound(_)) => None,
+        Err(DeltaTableError::TableNotFound(_) | DeltaTableError::FileNotFound(_)) => None,
         Err(error) => return Err(error.into()),
     };
     let old = destination_table

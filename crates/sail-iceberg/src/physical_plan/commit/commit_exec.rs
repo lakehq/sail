@@ -52,7 +52,7 @@ use crate::spec::{
     StructType, TableMetadata, TableRequirement, Type,
 };
 use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_file_version_from_path,
+    is_missing_table_metadata, load_metadata_file_bytes, metadata_file_version_from_path,
     metadata_location_to_object_path_string, table_metadata_location,
 };
 use crate::utils::get_object_store_from_context;
@@ -910,7 +910,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 })
             };
             if let Some(Err(error)) = &latest_meta_res
-                && !error.to_string().contains("No metadata files found")
+                && !is_missing_table_metadata(error)
             {
                 return Err(DataFusionError::Plan(format!(
                     "cannot resolve Iceberg table metadata: {error}"
