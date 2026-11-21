@@ -295,8 +295,8 @@ def test_row_tracking_cannot_be_enabled_on_existing_table(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
-def test_table_with_row_tracking_property_without_the_feature(spark, tmp_path):
-    # An earlier version of Sail created tables that set the property without the feature.
+def test_table_with_row_tracking_property_without_the_feature_is_refused(spark, tmp_path):
+    # As in Delta Spark, a table that sets the property without the feature cannot be written.
     name = "row_tracking_property_only"
     path = tmp_path / "row_tracking_property_only"
     spark.createDataFrame([(1,)], "id BIGINT").write.format("delta").save(str(path))
@@ -309,18 +309,15 @@ def test_table_with_row_tracking_property_without_the_feature(spark, tmp_path):
         for statement in [
             f"INSERT INTO {name} VALUES (2)",
             f"ALTER TABLE {name} ADD COLUMNS (x INT)",
-            f"ALTER TABLE {name} ALTER COLUMN x COMMENT 'x'",
             f"ALTER TABLE {name} SET TBLPROPERTIES ('foo' = 'bar')",
-            f"ALTER TABLE {name} UNSET TBLPROPERTIES ('foo')",
             f"ALTER TABLE {name} ADD CONSTRAINT positive CHECK (id > 0)",
-            f"ALTER TABLE {name} ALTER COLUMN x SET DEFAULT 0",
-            f"INSERT INTO {name} (id) VALUES (3)",
-            f"DELETE FROM {name} WHERE id = 1",
         ]:
-            spark.sql(statement).collect()
-        assert "rowTracking" not in _effective(path, "protocol").get("writerFeatures", [])
-        assert _effective(path, "metaData")["configuration"]["delta.enableRowTracking"] == "true"
-        assert spark.table(name).orderBy("id").collect() == [Row(id=2, x=None), Row(id=3, x=0)]
+            with pytest.raises(Exception, match=r"(?i)(RowTracking|row tracking)"):
+                spark.sql(statement).collect()
+        with pytest.raises(Exception, match=r"(?i)(RowTracking|row tracking)"):
+            spark.createDataFrame([(3,)], "id BIGINT").write.format("delta").mode("overwrite").save(str(path))
+        assert len(_commits(path)) == 2
+        assert spark.table(name).collect() == [Row(id=1)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 

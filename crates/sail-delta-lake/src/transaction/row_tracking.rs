@@ -41,24 +41,6 @@ pub(crate) fn row_tracking_enabled(configuration: &HashMap<String, String>) -> b
     property_enabled(configuration, ENABLE_ROW_TRACKING)
 }
 
-/// Derives the protocol that the new metadata of an existing table requires. A table that
-/// sets `delta.enableRowTracking` without the feature, such as one that an earlier version of
-/// Sail created, does not get the feature from a commit that keeps the property.
-pub(crate) fn protocol_for_existing_table_metadata(
-    existing_protocol: &Protocol,
-    existing_configuration: &HashMap<String, String>,
-    metadata: &Metadata,
-) -> DeltaResult<Protocol> {
-    if !supports_row_tracking(existing_protocol)
-        && row_tracking_enabled(existing_configuration)
-        && row_tracking_enabled(metadata.configuration())
-    {
-        let metadata = metadata.clone().remove_config_key(ENABLE_ROW_TRACKING);
-        return crate::schema::protocol_for_metadata(&metadata);
-    }
-    crate::schema::protocol_for_metadata(metadata)
-}
-
 /// Adds the names of the materialized row tracking columns to the configuration of a new
 /// table that enables row tracking. The names follow the ones that Delta Spark generates.
 pub(crate) fn add_materialized_column_names(configuration: &mut HashMap<String, String>) {
@@ -293,15 +275,7 @@ pub(super) fn validate_row_tracking(
 ) -> DeltaResult<()> {
     let configuration = metadata.configuration();
     let supported = supports_row_tracking(protocol);
-    // A table that sets `delta.enableRowTracking` without the feature, such as one that an
-    // earlier version of Sail created, is written without row IDs, as before. Only a commit
-    // that enables row tracking on the table requires the feature.
-    let enabled = row_tracking_enabled(configuration)
-        && (supported
-            || read_snapshot.is_none_or(|snapshot| {
-                supports_row_tracking(snapshot.protocol())
-                    || !row_tracking_enabled(snapshot.metadata().configuration())
-            }));
+    let enabled = row_tracking_enabled(configuration);
     let suspended = property_enabled(configuration, ROW_TRACKING_SUSPENDED);
     if enabled && suspended {
         return Err(DeltaError::generic(format!(

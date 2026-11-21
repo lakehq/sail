@@ -4766,9 +4766,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn row_tracking_is_not_enabled_on_a_table_without_the_feature() -> DeltaResult<()> {
-        // An earlier version of Sail created tables that set `delta.enableRowTracking`
-        // without the rowTracking feature. Such a table is written without row IDs.
+    async fn row_tracking_property_without_the_feature_is_refused() -> DeltaResult<()> {
+        // As in Delta Spark, a table that sets `delta.enableRowTracking` without the
+        // rowTracking feature cannot be written.
         let log_store = test_log_store(Arc::new(InMemory::new()));
         let metadata = test_metadata(vec![("delta.enableRowTracking", "true")]);
         let bytes = actions_to_log_bytes(&[
@@ -4783,24 +4783,34 @@ mod tests {
         let snapshot = Arc::new(
             DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None).await?,
         );
-        let created = CommitBuilder::default()
-            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 1))])
-            .build(Some(snapshot), log_store.clone(), append_operation())
-            .await?;
-        let actions = read_commit_actions(&log_store, 1).await;
-        assert_eq!(row_tracking_adds(&actions), vec![("b", None, None)]);
-        assert_eq!(row_tracking_high_water_mark(&actions), None);
+        let is_feature_required = |result: &DeltaResult<()>| {
+            matches!(
+                result,
+                Err(DeltaError::Transaction(
+                    TransactionError::TableFeaturesRequired(TableFeature::RowTracking)
+                ))
+            )
+        };
 
-        // A commit that keeps the property, such as an overwrite with a new definition
-        // that keeps the protocol, is not rejected either.
-        CommitBuilder::default()
+        let result = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(row_tracking_add("b", 1))])
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                append_operation(),
+            )
+            .await
+            .map(|_| ());
+        assert!(is_feature_required(&result), "{result:?}");
+
+        let result = CommitBuilder::default()
             .with_actions(vec![
-                CommitAction::Metadata(metadata),
+                CommitAction::Metadata(metadata.clone()),
                 CommitAction::Remove(row_tracking_add("a", 3).into_remove(0)),
                 CommitAction::Add(row_tracking_add("c", 2)),
             ])
             .build(
-                created.snapshot,
+                Some(snapshot.clone()),
                 log_store.clone(),
                 DeltaOperation::Write {
                     mode: SaveMode::Overwrite,
@@ -4808,100 +4818,44 @@ mod tests {
                     predicate: None,
                 },
             )
-            .await?;
-        let actions = read_commit_actions(&log_store, 2).await;
-        assert_eq!(row_tracking_adds(&actions), vec![("c", None, None)]);
+            .await
+            .map(|_| ());
+        assert!(is_feature_required(&result), "{result:?}");
+
+        // DDL derives the protocol from the new metadata, which adds the feature, and the
+        // feature cannot be enabled on an existing table.
+        let new_metadata = metadata.add_config_key("foo".to_string(), "bar".to_string());
+        let protocol = snapshot
+            .protocol()
+            .merge_upgrade_requirements(&crate::schema::protocol_for_metadata(&new_metadata)?);
+        let result = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(new_metadata),
+            ])
+            .build(
+                Some(snapshot),
+                log_store.clone(),
+                DeltaOperation::SetTableProperties {
+                    properties: [("foo".to_string(), "bar".to_string())].into(),
+                },
+            )
+            .await
+            .map(|_| ());
+        assert!(
+            matches!(&result, Err(DeltaError::Unsupported(message)) if message.contains("row tracking")),
+            "{result:?}"
+        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn metadata_changes_keep_a_table_with_the_row_tracking_property_without_the_feature()
-    -> DeltaResult<()> {
-        // An earlier version of Sail created tables that set `delta.enableRowTracking`
-        // without the rowTracking feature. DDL commits on such a table derive the protocol
-        // from the new metadata, as the ALTER TABLE paths do, and do not add the feature.
-        let metadata = test_metadata(vec![("delta.enableRowTracking", "true")]);
-        let added_column = StructType::try_new([
-            StructField::not_null("id", DataType::LONG),
-            StructField::nullable("x", DataType::INTEGER),
-        ])?;
-        let default_column = StructType::try_new([StructField::not_null("id", DataType::LONG)
-            .with_metadata([(crate::spec::ColumnMetadataKey::CurrentDefault.as_ref(), "0")])])?;
-        let cases = [
-            (
-                metadata
-                    .clone()
-                    .add_config_key("foo".to_string(), "bar".to_string()),
-                DeltaOperation::SetTableProperties {
-                    properties: [("foo".to_string(), "bar".to_string())].into(),
-                },
-            ),
-            (
-                metadata.clone().with_schema(&added_column)?,
-                DeltaOperation::AddColumns {
-                    columns: Vec::new(),
-                },
-            ),
-            (
-                metadata.clone().add_config_key(
-                    "delta.constraints.positive".to_string(),
-                    "id > 0".to_string(),
-                ),
-                DeltaOperation::AddConstraint {
-                    name: "positive".to_string(),
-                    expr: "id > 0".to_string(),
-                },
-            ),
-            (
-                metadata.clone().with_schema(&default_column)?,
-                DeltaOperation::AlterColumn {
-                    column: serde_json::Value::Null,
-                    position: None,
-                },
-            ),
-        ];
-        for (new_metadata, operation) in cases {
-            let log_store = test_log_store(Arc::new(InMemory::new()));
-            let bytes = actions_to_log_bytes(&[
-                CommitAction::Protocol(Protocol::new(1, 2, None, None)),
-                CommitAction::Metadata(metadata.clone()),
-                CommitAction::Add(row_tracking_add("a", 3)),
-            ])
-            .unwrap();
-            log_store
-                .write_commit_entry(0, CommitOrBytes::LogBytes(bytes), Uuid::new_v4())
-                .await?;
-            let snapshot = Arc::new(
-                DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None).await?,
-            );
-            let desired = row_tracking::protocol_for_existing_table_metadata(
-                snapshot.protocol(),
-                snapshot.metadata().configuration(),
-                &new_metadata,
-            )?;
-            let protocol = snapshot.protocol().merge_upgrade_requirements(&desired);
-            assert!(
-                !protocol.has_writer_feature(&TableFeature::RowTracking),
-                "{operation:?}: {protocol:?}"
-            );
-            let mut actions = Vec::new();
-            if &protocol != snapshot.protocol() {
-                actions.push(CommitAction::Protocol(protocol));
-            }
-            actions.push(CommitAction::Metadata(new_metadata));
-            CommitBuilder::default()
-                .with_actions(actions)
-                .build(Some(snapshot), log_store.clone(), operation)
-                .await?;
-        }
-
-        // A commit that newly sets the property still requires the feature, which cannot be
-        // enabled on an existing table.
+    async fn metadata_changes_do_not_add_row_tracking_without_the_property() -> DeltaResult<()> {
         let log_store = test_log_store(Arc::new(InMemory::new()));
-        let unset = test_metadata(vec![]);
+        let metadata = test_metadata(vec![]);
         let bytes = actions_to_log_bytes(&[
             CommitAction::Protocol(Protocol::new(1, 2, None, None)),
-            CommitAction::Metadata(unset.clone()),
+            CommitAction::Metadata(metadata.clone()),
             CommitAction::Add(row_tracking_add("a", 3)),
         ])
         .unwrap();
@@ -4911,32 +4865,29 @@ mod tests {
         let snapshot = Arc::new(
             DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None).await?,
         );
-        let desired = row_tracking::protocol_for_existing_table_metadata(
-            snapshot.protocol(),
-            snapshot.metadata().configuration(),
-            &metadata,
-        )?;
-        let protocol = snapshot.protocol().merge_upgrade_requirements(&desired);
-        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
-        let result = CommitBuilder::default()
-            .with_actions(vec![
-                CommitAction::Protocol(protocol),
-                CommitAction::Metadata(metadata),
-            ])
+        let new_metadata = metadata.add_config_key("foo".to_string(), "bar".to_string());
+        let protocol = snapshot
+            .protocol()
+            .merge_upgrade_requirements(&crate::schema::protocol_for_metadata(&new_metadata)?);
+        assert!(
+            !protocol.has_writer_feature(&TableFeature::RowTracking),
+            "{protocol:?}"
+        );
+        let mut actions = Vec::new();
+        if &protocol != snapshot.protocol() {
+            actions.push(CommitAction::Protocol(protocol));
+        }
+        actions.push(CommitAction::Metadata(new_metadata));
+        CommitBuilder::default()
+            .with_actions(actions)
             .build(
                 Some(snapshot),
                 log_store.clone(),
                 DeltaOperation::SetTableProperties {
-                    properties: [("delta.enableRowTracking".to_string(), "true".to_string())]
-                        .into(),
+                    properties: [("foo".to_string(), "bar".to_string())].into(),
                 },
             )
-            .await
-            .map(|_| ());
-        assert!(
-            matches!(&result, Err(DeltaError::Unsupported(message)) if message.contains("row tracking")),
-            "{result:?}"
-        );
+            .await?;
         Ok(())
     }
 

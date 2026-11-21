@@ -1261,12 +1261,7 @@ impl DeltaLakeSource {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. Features already supported by the table are preserved;
         // equivalent legacy protocol representations may use lower version numbers.
-        let desired_protocol =
-            crate::transaction::row_tracking::protocol_for_existing_table_metadata(
-                snapshot.protocol(),
-                snapshot.metadata().configuration(),
-                &new_metadata,
-            )
+        let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
             snapshot.protocol(),
@@ -1409,12 +1404,7 @@ impl DeltaLakeSource {
             .metadata()
             .clone()
             .add_config_key(key, expression.to_string());
-        let desired_protocol =
-            crate::transaction::row_tracking::protocol_for_existing_table_metadata(
-                snapshot.protocol(),
-                snapshot.metadata().configuration(),
-                &new_metadata,
-            )
+        let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
             snapshot.protocol(),
@@ -1560,12 +1550,7 @@ impl DeltaLakeSource {
             .clone()
             .with_schema(&candidate_kernel)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let desired_protocol =
-            crate::transaction::row_tracking::protocol_for_existing_table_metadata(
-                snapshot.protocol(),
-                snapshot.metadata().configuration(),
-                &updated_metadata,
-            )
+        let desired_protocol = protocol_for_metadata(&updated_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
             snapshot.protocol(),
