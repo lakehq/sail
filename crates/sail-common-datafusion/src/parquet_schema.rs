@@ -11,6 +11,7 @@ use datafusion::arrow::datatypes::{
 use datafusion_common::{Result, internal_err, plan_err};
 
 use crate::schema_evolution::{StructFieldMatching, find_matching_struct_field};
+use crate::uuid::is_uuid_field;
 use crate::variant::is_variant_storage_field;
 
 pub const INTEGER_STORAGE_META_KEY: &str = "sail.parquet.integer_storage";
@@ -38,6 +39,7 @@ pub fn normalize_parquet_field(
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView if binary_as_string => {
             DataType::Utf8
         }
+        DataType::FixedSizeBinary(_) if is_uuid_field(field) => return Arc::clone(field),
         DataType::LargeBinary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
             DataType::Binary
         }
@@ -236,7 +238,9 @@ pub fn parquet_temporal_storage_cast(source: &DataType, requested: &DataType) ->
         (Dictionary(_, values), _) => parquet_temporal_storage_cast(values, requested),
         (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32 | Time32(_), Date32)
         | (Date32 | Time32(_), Int8 | Int16 | Int32 | Int64 | Float64) => Some(Int32),
-        (Timestamp(_, _) | Time64(_), Int64) => Some(Int64),
+        (Timestamp(_, _) | Time64(_), Int64) | (Int64, Duration(TimeUnit::Microsecond)) => {
+            Some(Int64)
+        }
         _ => None,
     }
 }

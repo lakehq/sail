@@ -406,6 +406,27 @@ def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_
     ]
 
 
+def test_parquet_explicit_interval_reads_int64_ticks(spark, tmp_path):
+    for i, ty in enumerate([pa.duration("us"), pa.int64()]):
+        ticks = pa.array([-1, None, 42], ty)
+        nested = pa.StructArray.from_arrays([ticks], names=["x"])
+        pq.write_table(pa.table({"v": ticks, "s": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.schema("v INTERVAL DAY TO SECOND, s STRUCT<x:INTERVAL DAY TO SECOND>").parquet(str(tmp_path))
+    rows = df.select("v", "s.x").orderBy("v").collect()
+    assert rows == [
+        (value, value)
+        for value in [
+            None,
+            None,
+            timedelta(microseconds=-1),
+            timedelta(microseconds=-1),
+            timedelta(microseconds=42),
+            timedelta(microseconds=42),
+        ]
+    ]
+
+
 def test_parquet_explicit_schema_uses_unannotated_integer_storage(spark, tmp_path):
     path = tmp_path / "data.parquet"
     values = pa.array([-1, 42], pa.int64())
@@ -1617,6 +1638,26 @@ def test_parquet_fixed_binary_rejects_string_schema(spark, tmp_path):
     pq.write_table(pa.table({"value": pa.array([b"abc"], type=pa.binary(3))}), path)
     with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
         spark.read.schema("value STRING").parquet(str(path)).collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks Sail preservation of Arrow UUID metadata")
+@pytest.mark.parametrize("skip_metadata", [False, True])
+@pytest.mark.parametrize("store_schema", [False, True])
+def test_parquet_uuid_storage_round_trip(spark, tmp_path, skip_metadata, store_schema):
+    value = pa.array([bytes(range(16))], type=pa.uuid())
+    nested = pa.StructArray.from_arrays([value], names=["u"])
+    source = tmp_path / "in.parquet"
+    output = tmp_path / "out"
+    pq.write_table(pa.table({"v": value, "s": nested}), source, store_schema=store_schema)
+
+    spark.read.option("skipMetadata", skip_metadata).parquet(str(source)).write.parquet(str(output))
+    parquet = pq.ParquetFile(next(output.glob("*.parquet")))
+    assert parquet.schema.column(1).logical_type.type == "UUID"
+    restored = parquet.read()
+    assert restored["s"].combine_chunks().field("u").equals(value)
+    if not skip_metadata:
+        assert parquet.schema.column(0).logical_type.type == "UUID"
+        assert restored["v"].combine_chunks().equals(value)
 
 
 def test_parquet_single_footer_preserves_epoch_across_timestamp_families(spark, tmp_path):
