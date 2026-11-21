@@ -812,3 +812,33 @@ def test_base_path_file_with_trailing_slash(spark, tmp_path, name, uri):
     path = f"{root}/p=1/{name}/"
     df = spark.read.option("basePath", str(tmp_path)).json(path)
     assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("base_path", [False, True])
+@pytest.mark.parametrize("with_summary", [False, True])
+def test_parquet_merge_disabled_selects_one_footer(spark, tmp_path, base_path, with_summary):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    pq.write_table(pa.table({"b": [2]}), part / "b.parquet")
+    pq.write_table(pa.table({"a": [1]}), part / "a.parquet")
+    if with_summary:
+        pq.write_metadata(pa.schema([("c", pa.int64())]), tmp_path / "_common_metadata")
+    reader = spark.read.option("mergeSchema", False)
+    if base_path:
+        reader = reader.option("basePath", str(tmp_path))
+    df = reader.parquet(str(tmp_path))
+    assert df.columns == ["c" if with_summary else "a", "p"]
+
+
+@pytest.mark.parametrize("pattern", ["row{,2}.json", "row{2,}.json", "row{}.json"])
+@pytest.mark.parametrize("filename_filter", [True, False])
+def test_base_path_empty_brace_alternative(spark, tmp_path, pattern, filename_filter):
+    write_json_partition(tmp_path, "p=1")
+    part = tmp_path / "p=1"
+    (part / "row2.json").write_text('{"id":2}')
+    reader = spark.read.option("basePath", str(tmp_path))
+    if filename_filter:
+        df = reader.option("pathGlobFilter", pattern).json(str(part))
+    else:
+        df = reader.json(str(part / pattern))
+    assert [row.id for row in df.orderBy("id").collect()] == ([1] if "{}" in pattern else [1, 2])

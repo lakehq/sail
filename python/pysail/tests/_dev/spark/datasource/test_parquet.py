@@ -3,6 +3,7 @@
 import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -1152,3 +1153,54 @@ def test_parquet_int96_timestamp_window_precision(spark, tmp_path):
     frame = spark.read.option("coerce_int96", "ns").parquet(str(path))
     assert frame.filter("id = 1 AND ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == []
     assert frame.filter("ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == [(2,)]
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_parquet_merge_schema_field_case(spark, tmp_path, case_sensitive):
+    for filename, name, value in [("a", "id", 1), ("b", "ID", 2)]:
+        nested = pa.array([{name: value}], type=pa.struct([(name, pa.int64())]))
+        pq.write_table(pa.table({name: [value], "nested": nested}), tmp_path / f"{filename}.parquet")
+
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+        if case_sensitive:
+            assert df.columns == ["id", "nested", "ID"]
+            assert df.orderBy(df["ID"].asc_nulls_first()).selectExpr(
+                "id", "ID", "nested.id AS first_id", "nested.ID AS second_id"
+            ).collect() == [
+                (1, None, 1, None),
+                (None, 2, None, 2),
+            ]
+        else:
+            assert df.columns == ["id", "nested"]
+            assert df.orderBy(df.id).selectExpr("id", "nested.id AS nested_id").collect() == [(1, 1), (2, 2)]
+            assert df.where("id = 2").select("nested.id").collect() == [(2,)]
+            assert df.selectExpr("min(id)", "max(id)", "count(id)").collect() == [(1, 2, 2)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_merge_schema_decimal_precision(spark, tmp_path):
+    for filename, precision, value in [("a", 5, "11.11"), ("b", 12, "12345678.90")]:
+        price = pa.array([Decimal(value)], type=pa.decimal128(precision, 2))
+        pq.write_table(pa.table({"price": price}), tmp_path / f"{filename}.parquet")
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<price:decimal(12,2)>"
+    assert df.orderBy("price").collect() == [(Decimal("11.11"),), (Decimal("12345678.90"),)]
+
+
+def test_parquet_merge_schema_statistics_cache_field_case(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"ID": [2]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        for case_sensitive, expected in [(True, (1, 1)), (False, (2, 2)), (True, (1, 1))]:
+            spark.conf.set(key, str(case_sensitive).lower())
+            df = spark.read.schema("id BIGINT").option("mergeSchema", True).parquet(str(tmp_path))
+            assert df.selectExpr("count(id)", "max(id)").collect() == [expected]
+    finally:
+        spark.conf.set(key, previous)

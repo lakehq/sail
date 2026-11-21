@@ -290,7 +290,7 @@
     (Reading) Sets whether we should merge schemas collected from all Parquet part-files.
     Defaults to the Spark configuration `spark.sql.parquet.mergeSchema`.
   supported: true
-  rust_type: bool
+  rust_type: "Option<bool>"
   scopes:
     - read
   origins:
@@ -298,12 +298,12 @@
       keys:
         - merge_schema
         - mergeSchema
-      parser: crate::options::parsers::parse_bool
+      parser: crate::options::parsers::parse_optional_bool
     - type: table_property
       keys:
         - option.merge_schema
         - option.mergeSchema
-      parser: crate::options::parsers::parse_bool
+      parser: crate::options::parsers::parse_optional_bool
 
 - key: int96_rebase_mode
   description: |

@@ -33,7 +33,7 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
-            merge_schema: Some(false),
+            merge_schema: Some(None),
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -312,11 +312,12 @@ impl ResolveOptions for ParquetReadOptions {
                 .parquet
                 .build_partial_options()?,
         );
+        // Preserve the ordinary listing sample when neither the session nor the reader sets mergeSchema.
         let key = "spark.sql.parquet.mergeSchema";
         if let Some(service) = ctx.config().get_extension::<SessionConfigService>()
-            && let Some(value) = service.get_option(key)?
+            && let Some(value) = service.get_options_with_prefix(key)?.get(key)
         {
-            partial.merge_schema = Some(crate::options::parsers::parse_bool(key, &value)?);
+            partial.merge_schema = Some(Some(crate::options::parsers::parse_bool(key, value)?));
         }
         for layer in options {
             partial.merge(layer.build_partial_options()?);

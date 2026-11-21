@@ -25,16 +25,22 @@ use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    find_matching_struct_field,
+};
 use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{NanosecondTimestamps, SchemaSampling, try_merge_normalized};
+use crate::listing::utils::{
+    NanosecondTimestamps, SchemaSampling, normalize_unsupported_fields, try_merge_normalized,
+};
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
     pub(super) options: ParquetReadOptions,
+    pub(super) matching: StructFieldMatching,
 }
 
 fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
@@ -108,8 +114,10 @@ fn coerce_hinted_int96_timestamps(
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
     fn schema_sampling(&self, ctx: &dyn Session) -> Result<SchemaSampling> {
-        if !self.options.merge_schema {
-            return Ok(SchemaSampling::PreferParquetSummary);
+        match self.options.merge_schema {
+            None => return Ok(SchemaSampling::SampleParquet),
+            Some(false) => return Ok(SchemaSampling::SingleParquet),
+            Some(true) => {}
         }
         let key = "spark.sql.parquet.respectSummaryFiles";
         let summaries_only = ctx
@@ -120,6 +128,10 @@ impl ReadFormat for ParquetReadFormat {
             .flatten()
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
         Ok(SchemaSampling::MergeParquet { summaries_only })
+    }
+
+    fn statistics_field_matching(&self) -> StructFieldMatching {
+        self.matching
     }
 
     async fn infer_compression(
@@ -244,13 +256,18 @@ impl ReadFormat for ParquetReadFormat {
         // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
         // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
         // renders such a column in the session zone; Sail currently keeps the producer's label.
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
-
-        let merged = if options.global.skip_metadata {
-            try_merge_normalized(schemas.map(clear_metadata), NanosecondTimestamps::Report)
+        let schemas = schemas.into_iter().map(|(_, schema)| {
+            if options.global.skip_metadata {
+                clear_metadata(schema)
+            } else {
+                schema
+            }
+        });
+        let merged = if self.options.merge_schema == Some(true) {
+            merge_parquet_schemas(schemas, self.matching)?
         } else {
-            try_merge_normalized(schemas, NanosecondTimestamps::Report)
-        }?;
+            try_merge_normalized(schemas, NanosecondTimestamps::Report)?
+        };
 
         let merged = if options.global.binary_as_string {
             datafusion::datasource::file_format::parquet::transform_binary_to_string(&merged)
@@ -288,8 +305,34 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
+        // StatisticsConverter resolves fields by their physical spelling. Keep the logical
+        // types and order so per-file statistics can be combined across schemas.
+        let stats_schema = if self.matching == StructFieldMatching::CaseInsensitiveName {
+            let file_metadata = metadata.file_metadata();
+            let physical = parquet_to_arrow_schema(
+                file_metadata.schema_descr(),
+                file_metadata.key_value_metadata(),
+            )?;
+            let fields = file_schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    Ok(
+                        match find_matching_struct_field(physical.fields(), field, self.matching)? {
+                            Some((_, source)) if source.name() != field.name() => {
+                                Arc::new(field.as_ref().clone().with_name(source.name()))
+                            }
+                            _ => Arc::clone(field),
+                        },
+                    )
+                })
+                .collect::<Result<Fields>>()?;
+            Arc::new(Schema::new(fields))
+        } else {
+            Arc::clone(&file_schema)
+        };
         let mut statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &stats_schema)?;
         let num_rows = match statistics.num_rows {
             Precision::Exact(num_rows) => Some(num_rows),
             _ => None,
@@ -314,7 +357,11 @@ impl ReadFormat for ParquetReadFormat {
                 );
             }
         }
-        let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
+        let ordering = if file_schema.fields() == stats_schema.fields() {
+            ordering_from_parquet_metadata(&metadata, &file_schema)?
+        } else {
+            None
+        };
         Ok(ListingFileMeta {
             statistics,
             ordering,
@@ -358,7 +405,9 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+            .with_expr_adapter(Some(Arc::new(
+                SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(self.matching),
+            )))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
@@ -381,6 +430,91 @@ impl ReadFormat for ParquetReadFormat {
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
+}
+
+/// Spark merges corresponding struct fields in first-file order and widens decimal
+/// precision when the scales agree. Lists and maps merge their child types recursively.
+fn merge_parquet_schemas(
+    schemas: impl Iterator<Item = Schema>,
+    matching: StructFieldMatching,
+) -> Result<Schema> {
+    let mut schemas =
+        schemas.map(|s| normalize_unsupported_fields(&s, NanosecondTimestamps::Report));
+    let Some(first) = schemas.next() else {
+        return Ok(Schema::empty());
+    };
+    let mut merged = first.fields.clone();
+    for schema in schemas {
+        if merged != schema.fields {
+            merged = merge_parquet_fields(&merged, &schema.fields, matching)?;
+        }
+    }
+    Ok(Schema::new_with_metadata(merged, first.metadata))
+}
+
+fn merge_parquet_fields(
+    left: &Fields,
+    right: &Fields,
+    matching: StructFieldMatching,
+) -> Result<Fields> {
+    let mut fields = Vec::new();
+    let mut used = vec![false; right.len()];
+    for field in left {
+        fields.push(match find_matching_struct_field(right, field, matching)? {
+            Some((i, other)) => {
+                used[i] = true;
+                merge_parquet_field(field, other, matching)?
+            }
+            None => Arc::new(field.as_ref().clone().with_nullable(true)),
+        });
+    }
+    fields.extend(
+        right
+            .iter()
+            .zip(used)
+            .filter(|(_, used)| !used)
+            .map(|(field, _)| Arc::new(field.as_ref().clone().with_nullable(true))),
+    );
+    Ok(fields.into())
+}
+
+fn merge_parquet_field(
+    left: &Field,
+    right: &Field,
+    matching: StructFieldMatching,
+) -> Result<Arc<Field>> {
+    let ty = match (left.data_type(), right.data_type()) {
+        (a, b) if a == b => a.clone(),
+        (DataType::Decimal128(a, s), DataType::Decimal128(b, t)) if s == t => {
+            DataType::Decimal128(*a.max(b), *s)
+        }
+        (DataType::Struct(a), DataType::Struct(b)) => {
+            DataType::Struct(merge_parquet_fields(a, b, matching)?)
+        }
+        (DataType::List(a), DataType::List(b)) => {
+            DataType::List(merge_parquet_field(a, b, matching)?)
+        }
+        (DataType::LargeList(a), DataType::LargeList(b)) => {
+            DataType::LargeList(merge_parquet_field(a, b, matching)?)
+        }
+        (DataType::FixedSizeList(a, n), DataType::FixedSizeList(b, m)) if n == m => {
+            DataType::FixedSizeList(merge_parquet_field(a, b, matching)?, *n)
+        }
+        (DataType::Map(a, sorted), DataType::Map(b, _)) => {
+            DataType::Map(merge_parquet_field(a, b, matching)?, *sorted)
+        }
+        (a, b) => {
+            return plan_err!(
+                "Cannot merge Parquet column '{}' with types {a} and {b}",
+                left.name()
+            );
+        }
+    };
+    Ok(Arc::new(
+        left.clone()
+            .with_data_type(ty)
+            .with_nullable(left.is_nullable() || right.is_nullable()),
+    ))
 }
 
 fn validate_parquet_schema(schema: &Schema, physical: &Schema) -> Result<()> {

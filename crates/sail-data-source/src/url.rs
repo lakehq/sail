@@ -86,7 +86,7 @@ impl PatternSegment {
                     }),
                 alternation
                     .repeated()
-                    .at_least(1)
+                    .at_least(usize::from(syntax == ReadPathSyntax::UrlGlob))
                     .collect()
                     .delimited_by(padding.repeated(), padding.repeated())
                     .separated_by(just(','))

@@ -36,6 +36,7 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
@@ -526,6 +527,7 @@ async fn do_collect_statistics_and_ordering(
         table: Some(statistics_cache_table_ref(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
+            source.config().read_format.statistics_field_matching(),
         )),
         // Scope the path explicitly, since the store in the table reference above depends on
         // DataFusion's `pruned_partition_list` copying it from the scoped listing URL.
@@ -576,9 +578,11 @@ async fn do_collect_statistics_and_ordering(
 fn statistics_cache_table_ref(
     table: Option<&datafusion_common::TableReference>,
     schema: &arrow::datatypes::Schema,
+    matching: StructFieldMatching,
 ) -> datafusion_common::TableReference {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
+    std::hash::Hash::hash(&matching, &mut hasher);
     for field in schema.fields() {
         std::hash::Hash::hash(field.name(), &mut hasher);
         std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);

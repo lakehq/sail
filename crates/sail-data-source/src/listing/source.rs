@@ -25,6 +25,7 @@ use sail_common_datafusion::datasource::{
     DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use url::Url;
 
 use crate::listing::partition::{
@@ -55,6 +56,11 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 pub trait ReadFormat: Debug + Send + Sync + 'static {
     fn schema_sampling(&self, _ctx: &dyn Session) -> Result<SchemaSampling> {
         Ok(SchemaSampling::Sample)
+    }
+
+    /// Per-file column identity used to calculate and cache statistics.
+    fn statistics_field_matching(&self) -> StructFieldMatching {
+        StructFieldMatching::Name
     }
 
     async fn infer_compression(
@@ -193,12 +199,18 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         let path = read_option(&options, "basePath");
         let read_format = T::read(ctx, options.clone())?;
         let sampling = read_format.schema_sampling(ctx)?;
-        let urls = resolve_read_urls(
-            ctx,
-            paths,
-            path.is_some() || recursive || matches!(sampling, SchemaSampling::MergeParquet { .. }),
-        )
-        .await?;
+        let hadoop_paths = path.is_some()
+            || recursive
+            || matches!(
+                sampling,
+                SchemaSampling::SingleParquet | SchemaSampling::MergeParquet { .. }
+            );
+        let sampling = if hadoop_paths && sampling == SchemaSampling::SampleParquet {
+            SchemaSampling::SingleParquet
+        } else {
+            sampling
+        };
+        let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
         let base_path = path
             .filter(|_| !recursive)
             .map(|path| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
@@ -263,9 +275,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
             None => {
                 let format = T::name();
-                if (base_path.is_some()
-                    || recursive
-                    || matches!(sampling, SchemaSampling::MergeParquet { .. }))
+                if hadoop_paths
                     && matches!(format, "csv" | "json" | "parquet")
                     && !sampled_files.iter().any(|sample| {
                         !sample.objects.is_empty()

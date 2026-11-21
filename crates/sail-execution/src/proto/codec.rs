@@ -5279,6 +5279,9 @@ impl RemoteExecutionCodec {
             r#gen::StructFieldMatching::Name => Ok(StructFieldMatching::Name),
             r#gen::StructFieldMatching::PhysicalName => Ok(StructFieldMatching::PhysicalName),
             r#gen::StructFieldMatching::FieldId => Ok(StructFieldMatching::FieldId),
+            r#gen::StructFieldMatching::CaseInsensitiveName => {
+                Ok(StructFieldMatching::CaseInsensitiveName)
+            }
         }
     }
 
@@ -5287,6 +5290,9 @@ impl RemoteExecutionCodec {
             StructFieldMatching::Name => r#gen::StructFieldMatching::Name,
             StructFieldMatching::PhysicalName => r#gen::StructFieldMatching::PhysicalName,
             StructFieldMatching::FieldId => r#gen::StructFieldMatching::FieldId,
+            StructFieldMatching::CaseInsensitiveName => {
+                r#gen::StructFieldMatching::CaseInsensitiveName
+            }
         }) as i32
     }
 
@@ -8062,6 +8068,7 @@ mod tests {
     fn test_struct_field_matching_proto_round_trip_and_default() -> Result<()> {
         for mode in [
             StructFieldMatching::Name,
+            StructFieldMatching::CaseInsensitiveName,
             StructFieldMatching::PhysicalName,
             StructFieldMatching::FieldId,
         ] {
@@ -8104,6 +8111,7 @@ mod tests {
 
         for matching in [
             StructFieldMatching::Name,
+            StructFieldMatching::CaseInsensitiveName,
             StructFieldMatching::PhysicalName,
             StructFieldMatching::FieldId,
         ] {

@@ -73,7 +73,10 @@ pub fn try_merge_normalized(
     }))?)
 }
 
-fn normalize_unsupported_fields(schema: &Schema, nanoseconds: NanosecondTimestamps) -> Schema {
+pub(crate) fn normalize_unsupported_fields(
+    schema: &Schema,
+    nanoseconds: NanosecondTimestamps,
+) -> Schema {
     // TODO: Apply Spark-compatible type normalization recursively inside structs, lists, and
     // maps. Only top-level fields are normalized today, so nested millisecond timestamps remain
     // unsupported even though Spark accepts them (SPARK recurses through nested timestamp leaves).
@@ -158,12 +161,17 @@ pub fn infer_listing_compression(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaSampling {
     Sample,
-    PreferParquetSummary,
-    MergeParquet { summaries_only: bool },
+    /// Ordinary Parquet reads use the existing bounded sample when mergeSchema is unset.
+    SampleParquet,
+    /// Prefer a summary footer, falling back to the lexicographically first data file.
+    SingleParquet,
+    MergeParquet {
+        summaries_only: bool,
+    },
 }
 
-/// Bound schema and compression sampling per original input, even when one glob expands
-/// to many files. Partition discovery still examines every leaf directory below basePath.
+/// Collect the files needed for schema and compression inference. Bounded samples are per
+/// original input, and partition discovery examines every leaf directory below basePath.
 pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     inputs: &'a [Vec<ListingTableUrl>],
@@ -177,8 +185,8 @@ pub(super) async fn sample_listing_files<'a>(
     let mut discovery = PartitionDiscovery::default();
     let mut samples = Vec::new();
     let mut direct_samples = Vec::new();
-    let mut summary = None;
-    let mut direct_summary = None;
+    let mut footer = None;
+    let mut direct_footer = None;
 
     for roots in inputs {
         let Some(first) = roots.first() else { continue };
@@ -215,20 +223,26 @@ pub(super) async fn sample_listing_files<'a>(
                     if !matches!(name, "_common_metadata" | "_metadata") {
                         continue;
                     }
-                    if sampling == SchemaSampling::PreferParquetSummary {
-                        if direct_input {
-                            keep_parquet_summary(&mut direct_summary, url, &store, &file);
-                        }
-                        keep_parquet_summary(&mut summary, url, &store, &file);
+                } else if file.size == 0 {
+                    continue;
+                }
+                if sampling == SchemaSampling::SingleParquet
+                    || (sampling == SchemaSampling::SampleParquet && summary_file)
+                {
+                    if direct_input {
+                        keep_parquet_footer(&mut direct_footer, url, &store, &file);
                     }
-                    if !merge {
-                        continue;
-                    }
-                } else if file.size == 0
-                    || sampling
-                        == (SchemaSampling::MergeParquet {
-                            summaries_only: true,
-                        })
+                    keep_parquet_footer(&mut footer, url, &store, &file);
+                    continue;
+                }
+                if (summary_file && !merge)
+                    || (!summary_file
+                        && matches!(
+                            sampling,
+                            SchemaSampling::MergeParquet {
+                                summaries_only: true
+                            }
+                        ))
                 {
                     continue;
                 }
@@ -238,11 +252,7 @@ pub(super) async fn sample_listing_files<'a>(
                 if (partitioned || merge) && (merge || objects.len() < SAMPLE_SIZE) {
                     objects.push(file);
                 }
-                if base_path.is_none()
-                    && !merge
-                    && objects.len() == SAMPLE_SIZE
-                    && !(sampling == SchemaSampling::PreferParquetSummary && recursive)
-                {
+                if base_path.is_none() && !merge && objects.len() == SAMPLE_SIZE {
                     break 'roots;
                 }
             }
@@ -260,9 +270,9 @@ pub(super) async fn sample_listing_files<'a>(
             sample.objects = direct;
             sample.has_listed_file = listed;
         }
-        summary = direct_summary;
+        footer = direct_footer;
     }
-    if let Some((url, store, object)) = summary {
+    if let Some((url, store, object)) = footer {
         samples = vec![ListingFileSample {
             url,
             store,
@@ -274,13 +284,17 @@ pub(super) async fn sample_listing_files<'a>(
 }
 
 // Spark prefers _common_metadata over _metadata, then the lexicographically first path.
-fn keep_parquet_summary<'a>(
+fn keep_parquet_footer<'a>(
     current: &mut Option<(&'a ListingTableUrl, Arc<dyn ObjectStore>, ObjectMeta)>,
     url: &'a ListingTableUrl,
     store: &Arc<dyn ObjectStore>,
     file: &ObjectMeta,
 ) {
-    let key = |file: &ObjectMeta| file.location.filename() == Some("_metadata");
+    let key = |file: &ObjectMeta| match file.location.filename() {
+        Some("_common_metadata") => 0,
+        Some("_metadata") => 1,
+        _ => 2,
+    };
     if current.as_ref().is_none_or(|(_, _, previous)| {
         (key(file), &file.location) < (key(previous), &previous.location)
     }) {

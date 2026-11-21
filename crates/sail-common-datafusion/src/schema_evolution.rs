@@ -192,6 +192,7 @@ impl PhysicalExpr for SchemaEvolutionDefaultExpr {
 pub enum StructFieldMatching {
     #[default]
     Name,
+    CaseInsensitiveName,
     PhysicalName,
     FieldId,
 }
@@ -702,7 +703,7 @@ fn struct_field_id(field: &Field) -> Option<&str> {
         .find_map(|key| field.metadata().get(*key).map(String::as_str))
 }
 
-fn find_matching_struct_field<'a>(
+pub fn find_matching_struct_field<'a>(
     source_fields: &'a [Arc<Field>],
     target_field: &Field,
     matching: StructFieldMatching,
@@ -712,6 +713,18 @@ fn find_matching_struct_field<'a>(
             .iter()
             .enumerate()
             .find(|(_, source)| source.name() == target_field.name()),
+        StructFieldMatching::CaseInsensitiveName => {
+            let name = target_field.name().to_lowercase();
+            let mut fields = source_fields
+                .iter()
+                .enumerate()
+                .filter(|(_, source)| source.name().to_lowercase() == name);
+            let field = fields.next();
+            if fields.next().is_some() {
+                return exec_err!("Multiple physical fields match '{}'", target_field.name());
+            }
+            field
+        }
         StructFieldMatching::PhysicalName => {
             // Synthetic list/map wrappers are matched by their container handlers; only
             // actual Delta struct fields with physicalName metadata reach this branch.
