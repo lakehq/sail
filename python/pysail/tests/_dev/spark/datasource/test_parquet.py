@@ -406,6 +406,24 @@ def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_
     ]
 
 
+def test_parquet_explicit_schema_uses_unannotated_integer_storage(spark, tmp_path):
+    path = tmp_path / "data.parquet"
+    values = pa.array([-1, 42], pa.int64())
+    table = pa.table({"v": values, "nested": pa.StructArray.from_arrays([values], names=["x"])})
+    hint = pa.schema([("v", pa.timestamp("s")), ("nested", pa.struct([("x", pa.timestamp("us"))]))])
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": base64.b64encode(hint.serialize()).decode()})
+        writer.write_table(table)
+
+    for field, column in [("v TIMESTAMP_NTZ", "v"), ("nested STRUCT<x:TIMESTAMP_NTZ>", "nested.x")]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            spark.read.schema(field).parquet(str(path)).select(column).collect()
+
+    df = spark.read.schema("v DECIMAL(20,0), nested STRUCT<x:DECIMAL(20,0)>").parquet(str(path))
+    assert df.select("v", "nested.x").orderBy("v").collect() == [(Decimal(-1), Decimal(-1)), (Decimal(42), Decimal(42))]
+    assert df.selectExpr("min(v)", "max(v)").collect() == [(Decimal(-1), Decimal(42))]
+
+
 @pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
 def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_path, requested_type):
     path = tmp_path / "int96_explicit_timestamp_schema.parquet"

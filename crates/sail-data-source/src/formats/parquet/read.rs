@@ -12,7 +12,7 @@ use datafusion::datasource::physical_plan::parquet::{
     CachedParquetFileReaderFactory, Int96Coercer,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::parquet::arrow::{ProjectionMask, parquet_to_arrow_schema};
+use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion::parquet::basic::{ConvertedType, Type as PhysicalType};
 use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, SchemaDescriptor};
@@ -66,10 +66,27 @@ fn dictionary_value_type(data_type: &DataType) -> &DataType {
     }
 }
 
-fn is_unannotated_int64(column: &ColumnDescriptor) -> bool {
-    column.physical_type() == PhysicalType::INT64
-        && column.logical_type_ref().is_none()
-        && column.converted_type() == ConvertedType::NONE
+/// Arrow can carry temporal types only as embedded hints on ordinary integer leaves.
+fn hinted_integer_type(ty: &DataType) -> bool {
+    matches!(
+        dictionary_value_type(ty),
+        DataType::Timestamp(_, _)
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Duration(_)
+    )
+}
+
+fn unannotated_integer(column: &ColumnDescriptor) -> Option<DataType> {
+    if column.logical_type_ref().is_some() || column.converted_type() != ConvertedType::NONE {
+        return None;
+    }
+    match column.physical_type() {
+        PhysicalType::INT32 => Some(DataType::Int32),
+        PhysicalType::INT64 => Some(DataType::Int64),
+        _ => None,
+    }
 }
 
 /// Arrow lists and maps may rename or elide Parquet group wrappers. Both schemas
@@ -108,10 +125,12 @@ fn reconcile_parquet_field<'a>(
                     field.name()
                 )
             })?;
+            if hinted_integer_type(data_type)
+                && let Some(storage) = unannotated_integer(column)
+            {
+                return Ok(Arc::new(field.as_ref().clone().with_data_type(storage)));
+            }
             match data_type {
-                DataType::Timestamp(_, _) | DataType::Date64 if is_unannotated_int64(column) => {
-                    DataType::Int64
-                }
                 DataType::Date64
                     if for_integer_read && column.physical_type() == PhysicalType::INT32 =>
                 {
@@ -202,27 +221,10 @@ fn parquet_file_schema(
         ),
         None => schema,
     };
-    let descriptor = file_metadata.schema_descr();
-    if !descriptor
-        .columns()
-        .iter()
-        .any(|column| is_unannotated_int64(column))
-        || !schema.flattened_fields().iter().any(|field| {
-            matches!(
-                dictionary_value_type(field.data_type()),
-                DataType::Timestamp(_, _) | DataType::Date64
-            )
-        })
-    {
-        return Ok(schema);
-    }
-    let mut columns = descriptor.columns().iter();
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| reconcile_parquet_field(field, &mut columns, false))
-        .collect::<Result<Fields>>()?;
-    Ok(Schema::new_with_metadata(fields, schema.metadata))
+    Ok(
+        reconciled_read_schema(file_metadata, &schema, &[], StructFieldMatching::Name)?
+            .unwrap_or(schema),
+    )
 }
 
 /// Return the logical type represented by the footer statistics and its integer storage.
@@ -251,44 +253,47 @@ fn temporal_statistics_types(
     parquet_temporal_storage_cast(ty, requested).map(|storage| (ty.clone(), storage))
 }
 
-/// Prepare just the decoder columns whose requested integers may refer to raw temporal values.
-fn integer_read_schema(
+/// Use the descriptor for unannotated integer leaves, independent of projection.
+/// Projected integer readers also need the backing type of annotated timestamps and decimals.
+fn reconciled_read_schema(
     metadata: &FileMetaData,
     schema: &Schema,
-    requested: &Fields,
+    integer_fields: &[Arc<Field>],
     matching: StructFieldMatching,
 ) -> Result<Option<Schema>> {
-    let mut candidates = Vec::new();
-    for field in requested {
-        if let Some((index, source)) = find_matching_struct_field(schema.fields(), field, matching)?
-            && Schema::new([Arc::clone(source)])
-                .flattened_fields()
-                .iter()
-                .any(|leaf| {
-                    let ty = dictionary_value_type(leaf.data_type());
-                    ty.is_decimal() || matches!(ty, DataType::Timestamp(_, _) | DataType::Date64)
-                })
-        {
-            candidates.push(index);
+    let descriptor = metadata.schema_descr();
+    let leaves = schema.flattened_fields();
+    let has_hints = leaves.iter().any(|f| hinted_integer_type(f.data_type()))
+        && descriptor
+            .columns()
+            .iter()
+            .any(|column| unannotated_integer(column).is_some());
+    let mut integer_roots = vec![false; schema.fields().len()];
+    if !integer_fields.is_empty()
+        && leaves.iter().any(|f| {
+            let ty = dictionary_value_type(f.data_type());
+            ty.is_decimal() || matches!(ty, DataType::Timestamp(_, _) | DataType::Date64)
+        })
+    {
+        for field in integer_fields {
+            if let Some((index, _)) = find_matching_struct_field(schema.fields(), field, matching)?
+            {
+                integer_roots[index] = true;
+            }
         }
     }
-    if candidates.is_empty() {
+    if !has_hints && !integer_roots.contains(&true) {
         return Ok(None);
     }
-    candidates.sort_unstable();
-    candidates.dedup();
-    let descriptor = metadata.schema_descr();
-    let mask = ProjectionMask::roots(descriptor, candidates.iter().copied());
-    let mut columns = descriptor
-        .columns()
+
+    let mut columns = descriptor.columns().iter();
+    let fields = schema
+        .fields()
         .iter()
-        .enumerate()
-        .filter_map(|(i, column)| mask.leaf_included(i).then_some(column));
-    let mut fields = schema.fields().to_vec();
-    for index in candidates {
-        fields[index] = reconcile_parquet_field(&fields[index], &mut columns, true)?;
-    }
-    Ok((fields.as_slice() != schema.fields().as_ref())
+        .zip(integer_roots)
+        .map(|(field, integer_read)| reconcile_parquet_field(field, &mut columns, integer_read))
+        .collect::<Result<Fields>>()?;
+    Ok((fields != schema.fields)
         .then(|| Schema::new_with_metadata(fields, schema.metadata.clone())))
 }
 
@@ -477,10 +482,7 @@ impl ReadFormat for ParquetReadFormat {
         // Read integer statistics with their physical signedness before converting
         // bounds to the scan type. UINT32 and UINT64 can exceed the signed range.
         let file_metadata = metadata.file_metadata();
-        let physical = parquet_to_arrow_schema(
-            file_metadata.schema_descr(),
-            file_metadata.key_value_metadata(),
-        )?;
+        let physical = parquet_file_schema(file_metadata, None, None)?;
         let mut ambiguous_indices = Vec::new();
         let fields = file_schema
             .fields()
@@ -654,11 +656,7 @@ impl ReadFormat for ParquetReadFormat {
             |file, metadata| {
                 // Physical projection pushdown selects struct leaves after this pass.
                 // The expression adapter validates them once it has the final projection.
-                let mut fields = projected
-                    .iter()
-                    .filter(|field| !matches!(field.data_type(), DataType::Struct(_)))
-                    .peekable();
-                if fields.peek().is_none() && integer_fields.is_empty() {
+                if projected.is_empty() {
                     return Ok(());
                 }
                 let mut physical = parquet_to_arrow_schema(
@@ -666,12 +664,15 @@ impl ReadFormat for ParquetReadFormat {
                     metadata.key_value_metadata(),
                 )?;
                 if let Some(schema) =
-                    integer_read_schema(metadata, &physical, &integer_fields, self.matching)?
+                    reconciled_read_schema(metadata, &physical, &integer_fields, self.matching)?
                 {
                     physical = schema;
                     file.arrow_schema = Some(Arc::new(physical.clone()));
                 }
-                for field in fields {
+                for field in projected
+                    .iter()
+                    .filter(|field| !matches!(field.data_type(), DataType::Struct(_)))
+                {
                     if let Some((_, actual)) =
                         find_matching_struct_field(physical.fields(), field, self.matching)?
                     {
