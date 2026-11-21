@@ -17,7 +17,7 @@ use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_e
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
 use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
-use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
@@ -385,7 +385,7 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             cast_mode: self.cast_mode,
         };
         if self.cast_mode == SchemaEvolutionCastMode::Parquet {
-            return rewriter.rewrite_parquet(expr, false);
+            return rewriter.rewrite_parquet(expr);
         }
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
@@ -401,39 +401,15 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
-    fn rewrite_parquet(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-        array_bounds: bool,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
+    fn rewrite_parquet(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         expr.transform_down(|expr| {
-            if array_bounds
-                && (expr.is::<expressions::IsNotNullExpr>()
-                    || expr
-                        .downcast_ref::<ScalarFunctionExpr>()
-                        .is_some_and(|f| f.name() == "array_length"))
-                && let [arg] = expr.children().as_slice()
-                && let Some(column) = arg.downcast_ref::<Column>()
-                && let Some((logical, physical, index)) = self.parquet_column_fields(column)
-                && matches!(
-                    logical.data_type(),
-                    DataType::List(_) | DataType::LargeList(_)
-                )
-                && matches!(
-                    physical.data_type(),
-                    DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-                )
+            if let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>()
+                && (function.name() == "array_struct_field"
+                    || ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+                        .is_some())
+                && let Some(value) = self.project_parquet_access(&expr, function.return_type())?
             {
-                // Array bounds depend only on offsets and validity.
-                let expr =
-                    expr.with_new_children(vec![Arc::new(Column::new(physical.name(), index))])?;
-                return Ok(Transformed::new(expr, true, TreeNodeRecursion::Jump));
-            }
-            if let Some(rewritten) = self.rewrite_parquet_collection_access(&expr)? {
-                return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
-            }
-            if let Some(rewritten) = self.rewrite_parquet_struct_access(&expr)? {
-                return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
+                return Ok(Transformed::new(value, true, TreeNodeRecursion::Jump));
             }
             if let Some(column) = expr.downcast_ref::<Column>() {
                 let mut rewritten = self.rewrite_column(Arc::clone(&expr), column)?;
@@ -445,140 +421,154 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         .data()
     }
 
-    fn parquet_column_fields(&self, column: &Column) -> Option<(&Arc<Field>, &Arc<Field>, usize)> {
-        let index = self.logical_file_schema.index_of(column.name()).ok()?;
-        let ColumnMapping::Physical(physical) = self.column_mapping.get(index)? else {
-            return None;
-        };
-        Some((
-            &self.logical_file_schema.fields()[index],
-            &self.physical_file_schema.fields()[*physical],
-            *physical,
-        ))
-    }
-
-    /// Narrow the struct below a collection before lookup to keep unused siblings out of the cast.
-    fn rewrite_parquet_collection_access(
+    /// Push the requested result type through each accessor to the file column. Each
+    /// enclosing struct or collection then casts only the children needed by the result.
+    fn project_parquet_access(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
+        requested: &DataType,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let Some(access) = expr.downcast_ref::<ScalarFunctionExpr>() else {
-            return Ok(None);
-        };
-        let Some((root, names)) = access.args().split_first() else {
-            return Ok(None);
-        };
-        let array_fields = access.name() == "array_struct_field";
-        if !array_fields
-            && ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_none()
-        {
-            return Ok(None);
+        let mut path = Vec::new();
+        if let Some(column) = parquet_struct_access(expr, &mut path) {
+            return self.project_parquet_path(column, &path, expr, requested);
         }
-        let getter = |expr: &Arc<dyn PhysicalExpr>| {
-            expr.downcast_ref::<ScalarFunctionExpr>()
-                .is_some_and(|f| matches!(f.name(), "spark_array_element" | "spark_map_element"))
-        };
-        if !array_fields
-            && let Some(case) = root.downcast_ref::<expressions::CaseExpr>()
-            && let Some(element) = case.else_expr().filter(|expr| getter(expr))
-        {
-            // ANSI array indexing wraps the lookup in a bounds check. Distribute the field
-            // selection over its branches so both return the selected field type.
-            let select = |branch: &Arc<dyn PhysicalExpr>| {
-                let args = std::iter::once(Arc::clone(branch))
-                    .chain(names.iter().cloned())
-                    .collect();
-                Arc::clone(expr).with_new_children(args)
-            };
-            let branches = case
-                .when_then_expr()
-                .iter()
-                .map(|(when, then)| {
-                    Ok((
-                        self.rewrite_parquet(Arc::clone(when), true)?,
-                        self.rewrite_parquet(select(then)?, true)?,
-                    ))
-                })
-                .collect::<Result<_>>()?;
-            let base = case
+        if let Some(case) = expr.downcast_ref::<expressions::CaseExpr>()
+            && case.expr().is_none()
+            && let [(condition, error)] = case.when_then_expr()
+            && let Some(cast) = error.downcast_ref::<CastExpr>()
+            && cast
                 .expr()
-                .cloned()
-                .map(|expr| self.rewrite_parquet(expr, false))
-                .transpose()?;
-            let otherwise = self.rewrite_parquet(select(element)?, false)?;
-            return Ok(Some(Arc::new(expressions::CaseExpr::try_new(
-                base,
-                branches,
-                Some(otherwise),
-            )?)));
-        }
-        let (collection, element) = if array_fields {
-            (root, None)
-        } else if getter(root)
-            && let Some(element) = root.downcast_ref::<ScalarFunctionExpr>()
-            && let [collection, key] = element.args()
-            && key.is::<Literal>()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .is_some_and(|f| f.name() == "raise_error")
+            && let Some(element) = case
+                .else_expr()
+                .and_then(|e| e.downcast_ref::<ScalarFunctionExpr>())
+            && element.name() == "spark_array_element"
         {
-            (collection, Some((element, key)))
+            return self.project_parquet_element(
+                element,
+                requested,
+                Some((condition, cast.expr())),
+            );
+        }
+        let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() else {
+            return Ok(None);
+        };
+        if matches!(function.name(), "spark_array_element" | "spark_map_element") {
+            return self.project_parquet_element(function, requested, None);
+        }
+        let Some((root, names)) = function.args().split_first() else {
+            return Ok(None);
+        };
+        let Some(path) = names
+            .iter()
+            .map(literal_field_name)
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        let field = root.return_field(self.logical_file_schema)?;
+        let narrow = if function.name() == "array_struct_field" {
+            let item = match requested {
+                DataType::List(item)
+                | DataType::LargeList(item)
+                | DataType::FixedSizeList(item, _) => item,
+                _ => return Ok(None),
+            };
+            narrow_parquet_collection(field.data_type(), &path, item.data_type())
+        } else if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() {
+            narrow_parquet_struct(field.data_type(), &path, requested)
         } else {
             return Ok(None);
         };
-        let Some(column) = collection.downcast_ref::<Column>() else {
+        let Some(narrow) = narrow else {
             return Ok(None);
         };
-        let Some((logical, physical, index)) = self.parquet_column_fields(column) else {
+        let Some(value) = self.project_parquet_access(root, &narrow)? else {
             return Ok(None);
         };
-        let path = names
-            .iter()
-            .map(|name| {
-                name.downcast_ref::<Literal>()?
-                    .value()
-                    .try_as_str()
-                    .flatten()
-            })
-            .collect::<Option<Vec<_>>>();
-        let Some(path) = path else { return Ok(None) };
-        let Some(narrow) = narrow_parquet_collection(logical, &path) else {
-            return Ok(None);
-        };
-        validate_parquet_field(logical.name(), &narrow, physical, self.matching)?;
-        let mut value = self
-            .handle_existing_column(Arc::clone(collection), column, &narrow, physical, index)?
-            .data;
-        if let Some((element, key)) = element {
-            value = Arc::new(ScalarFunctionExpr::try_new(
-                Arc::new(element.fun().clone()),
-                vec![value, Arc::clone(key)],
-                self.physical_file_schema,
-                Arc::new(element.config_options().clone()),
-            )?);
-        }
         let args = std::iter::once(value)
             .chain(names.iter().cloned())
             .collect();
         Ok(Some(Arc::new(ScalarFunctionExpr::try_new(
-            Arc::new(access.fun().clone()),
+            Arc::new(function.fun().clone()),
             args,
             self.physical_file_schema,
-            Arc::new(access.config_options().clone()),
+            Arc::new(function.config_options().clone()),
         )?)))
     }
 
-    /// Resolve a projected struct path directly against the decoder schema. Casting the
-    /// parent before accessing its child would also read and validate its unused siblings.
-    fn rewrite_parquet_struct_access(
+    fn project_parquet_element(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
+        element: &ScalarFunctionExpr,
+        requested: &DataType,
+        bounds_check: Option<(&PhysicalExprRef, &PhysicalExprRef)>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let Some(function) = ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
-        else {
+        let [collection, key] = element.args() else {
             return Ok(None);
         };
-        let mut path = Vec::new();
-        let Some(column) = parquet_struct_access(expr, &mut path) else {
+        if !key.is::<Literal>() {
+            return Ok(None);
+        }
+        let ty = collection.data_type(self.logical_file_schema)?;
+        let Some(narrow) = narrow_parquet_collection(&ty, &[], requested) else {
             return Ok(None);
         };
+        let Some(value) = self.project_parquet_access(collection, &narrow)? else {
+            return Ok(None);
+        };
+        let lookup: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(element.fun().clone()),
+            vec![Arc::clone(&value), Arc::clone(key)],
+            self.physical_file_schema,
+            Arc::new(element.config_options().clone()),
+        )?);
+        let Some((condition, error)) = bounds_check else {
+            return Ok(Some(lookup));
+        };
+        // The ANSI bounds check uses the same collection for null checks, length and
+        // the error message. Use the projected collection consistently in all branches.
+        let rewrite = |branch: &Arc<dyn PhysicalExpr>| {
+            Arc::clone(branch)
+                .transform_down(|expr| {
+                    if (expr.is::<expressions::IsNotNullExpr>()
+                        || expr
+                            .downcast_ref::<ScalarFunctionExpr>()
+                            .is_some_and(|f| f.name() == "array_length"))
+                        && let [arg] = expr.children().as_slice()
+                        && *arg == collection
+                    {
+                        return Ok(Transformed::new(
+                            expr.with_new_children(vec![Arc::clone(&value)])?,
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
+                    if let Some(column) = expr.downcast_ref::<Column>() {
+                        let mut rewritten = self.rewrite_column(Arc::clone(&expr), column)?;
+                        rewritten.tnr = TreeNodeRecursion::Jump;
+                        return Ok(rewritten);
+                    }
+                    Ok(Transformed::no(expr))
+                })
+                .data()
+        };
+        let error = Arc::new(CastExpr::new(rewrite(error)?, requested.clone(), None));
+        Ok(Some(Arc::new(expressions::CaseExpr::try_new(
+            None,
+            vec![(rewrite(condition)?, error)],
+            Some(lookup),
+        )?)))
+    }
+
+    /// Resolve a struct path using the decoder field names before casting its result.
+    fn project_parquet_path(
+        &self,
+        column: &Column,
+        path: &[&str],
+        expr: &Arc<dyn PhysicalExpr>,
+        requested: &DataType,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         let Ok(index) = self.logical_file_schema.index_of(column.name()) else {
             return Ok(None);
         };
@@ -587,43 +577,50 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         };
         let mut logical = &self.logical_file_schema.fields()[index];
         let mut physical = &self.physical_file_schema.fields()[*physical_index];
-        let mut arguments =
-            vec![Arc::new(Column::new(physical.name(), *physical_index)) as Arc<dyn PhysicalExpr>];
-        for name in path {
-            let (DataType::Struct(fields), DataType::Struct(actual)) =
-                (logical.data_type(), physical.data_type())
-            else {
+        let mut leaf: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new(physical.name(), *physical_index));
+        if !path.is_empty() {
+            let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() else {
                 return Ok(None);
             };
-            let Some((_, field)) = fields.find(name) else {
-                return Ok(None);
-            };
-            let Some((_, source)) = find_matching_struct_field(actual, field, self.matching)?
-            else {
-                if field_default(field)?.is_some() {
+            let mut args = vec![leaf];
+            for name in path {
+                let (DataType::Struct(fields), DataType::Struct(actual)) =
+                    (logical.data_type(), physical.data_type())
+                else {
                     return Ok(None);
-                }
-                return Ok(Some(Arc::new(Literal::new(ScalarValue::try_from(
-                    function.return_type(),
-                )?))));
-            };
-            arguments.push(Arc::new(Literal::new(ScalarValue::Utf8(Some(
-                source.name().clone(),
-            )))));
-            logical = field;
-            physical = source;
+                };
+                let Some((_, field)) = fields.find(name) else {
+                    return Ok(None);
+                };
+                let Some((_, source)) = find_matching_struct_field(actual, field, self.matching)?
+                else {
+                    if field_default(field)?.is_some() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(Arc::new(Literal::new(ScalarValue::try_from(
+                        requested,
+                    )?))));
+                };
+                args.push(Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                    source.name().clone(),
+                )))));
+                logical = field;
+                physical = source;
+            }
+            leaf = Arc::new(ScalarFunctionExpr::try_new(
+                Arc::new(function.fun().clone()),
+                args,
+                self.physical_file_schema,
+                Arc::new(function.config_options().clone()),
+            )?);
         }
-        validate_parquet_field(logical.name(), logical, physical, self.matching)?;
-        let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
-            Arc::new(function.fun().clone()),
-            arguments,
-            self.physical_file_schema,
-            Arc::new(function.config_options().clone()),
-        )?);
-        if logical.data_type() == physical.data_type() {
+        let target = logical.as_ref().clone().with_data_type(requested.clone());
+        validate_parquet_field(logical.name(), &target, physical, self.matching)?;
+        if requested == physical.data_type() {
             return Ok(Some(leaf));
         }
-        Ok(Some(self.apply_type_cast(leaf, logical, physical)?.data))
+        Ok(Some(self.apply_type_cast(leaf, &target, physical)?.data))
     }
 
     fn rewrite_expr(
@@ -867,26 +864,33 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
     }
 }
 
-fn narrow_parquet_collection(field: &Field, path: &[&str]) -> Option<Field> {
-    fn narrow_struct(field: &Arc<Field>, path: &[&str]) -> Option<Arc<Field>> {
-        let Some((name, tail)) = path.split_first() else {
-            return Some(Arc::clone(field));
-        };
-        let DataType::Struct(fields) = field.data_type() else {
-            return None;
-        };
-        let (_, child) = fields.find(name)?;
-        let child = narrow_struct(child, tail)?;
-        Some(Arc::new(
-            field
-                .as_ref()
-                .clone()
-                .with_data_type(DataType::Struct(vec![child].into())),
-        ))
-    }
-    let ty = match field.data_type() {
-        DataType::List(item) => DataType::List(narrow_struct(item, path)?),
-        DataType::LargeList(item) => DataType::LargeList(narrow_struct(item, path)?),
+fn narrow_parquet_struct(ty: &DataType, path: &[&str], requested: &DataType) -> Option<DataType> {
+    let Some((name, tail)) = path.split_first() else {
+        return Some(requested.clone());
+    };
+    let DataType::Struct(fields) = ty else {
+        return None;
+    };
+    let (_, child) = fields.find(name)?;
+    let ty = narrow_parquet_struct(child.data_type(), tail, requested)?;
+    Some(DataType::Struct(
+        vec![child.as_ref().clone().with_data_type(ty)].into(),
+    ))
+}
+
+fn narrow_parquet_collection(
+    ty: &DataType,
+    path: &[&str],
+    requested: &DataType,
+) -> Option<DataType> {
+    let narrow = |item: &Arc<Field>| {
+        let ty = narrow_parquet_struct(item.data_type(), path, requested)?;
+        Some(Arc::new(item.as_ref().clone().with_data_type(ty)))
+    };
+    Some(match ty {
+        DataType::List(item) => DataType::List(narrow(item)?),
+        DataType::LargeList(item) => DataType::LargeList(narrow(item)?),
+        DataType::FixedSizeList(item, size) => DataType::FixedSizeList(narrow(item)?, *size),
         DataType::Map(entries, sorted) => {
             let DataType::Struct(fields) = entries.data_type() else {
                 return None;
@@ -894,7 +898,7 @@ fn narrow_parquet_collection(field: &Field, path: &[&str]) -> Option<Field> {
             let [key, value] = fields.as_ref() else {
                 return None;
             };
-            let fields = vec![Arc::clone(key), narrow_struct(value, path)?].into();
+            let fields = vec![Arc::clone(key), narrow(value)?].into();
             DataType::Map(
                 Arc::new(
                     entries
@@ -906,8 +910,14 @@ fn narrow_parquet_collection(field: &Field, path: &[&str]) -> Option<Field> {
             )
         }
         _ => return None,
-    };
-    Some(field.clone().with_data_type(ty))
+    })
+}
+
+fn literal_field_name(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
+    expr.downcast_ref::<Literal>()?
+        .value()
+        .try_as_str()
+        .flatten()
 }
 
 /// Collect paths from both variadic get_field and chained get_field expressions.
@@ -922,13 +932,7 @@ fn parquet_struct_access<'a>(
     let (root, fields) = function.args().split_first()?;
     let column = parquet_struct_access(root, path)?;
     for field in fields {
-        path.push(
-            field
-                .downcast_ref::<Literal>()?
-                .value()
-                .try_as_str()
-                .flatten()?,
-        );
+        path.push(literal_field_name(field)?);
     }
     Some(column)
 }

@@ -1609,8 +1609,11 @@ def test_parquet_validates_case_insensitive_nested_field(spark, tmp_path):
         df.collect()
 
 
-@pytest.mark.parametrize(("is_map", "element"), [(False, "items[0]"), (True, "items['k']")])
-def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, element):
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("is_map", [False, True])
+def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, nested):
+    column = "s.items" if nested else "items"
+    element = f"{column}['k']" if is_map else f"{column}[0]"
     for i, bad_type in enumerate([pa.int64(), pa.string()]):
         item_type = pa.struct([("good", pa.int64()), ("bad", bad_type)])
         item = {"good": i, "bad": "two" if i else 1}
@@ -1618,17 +1621,54 @@ def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, elem
             values = pa.array([[("k", item)]], pa.map_(pa.string(), item_type))
         else:
             values = pa.array([[item]], pa.list_(item_type))
-        pq.write_table(pa.table({"items": values}), tmp_path / f"{i}.parquet")
+        table = (
+            pa.table({"s": pa.StructArray.from_arrays([values], names=["items"])})
+            if nested
+            else pa.table({"items": values})
+        )
+        pq.write_table(table, tmp_path / f"{i}.parquet")
 
     df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
     assert df.selectExpr(f"{element}.good AS v").orderBy("v").collect() == [(0,), (1,)]
-    invalid = [f"{element}.bad", "items"]
+    invalid = [f"{element}.bad", column]
     if not is_map:
-        assert sorted(df.select("items.good").collect()) == [([0],), ([1],)]
-        invalid.append("items.bad")
+        assert sorted(df.select(f"{column}.good").collect()) == [([0],), ([1],)]
+        invalid.append(f"{column}.bad")
     for expression in invalid:
         with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
             df.selectExpr(expression).collect()
+
+
+def test_parquet_projected_chained_collection_access(spark, tmp_path):
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        leaf = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        group = pa.struct([("members", pa.map_(pa.string(), leaf))])
+        value = {"good": i, "bad": "two" if i else 1}
+        groups = pa.array([[{"members": [("k", value)]}]], pa.list_(group))
+        pq.write_table(pa.table({"groups": groups}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr("groups[0].members['k'].good AS v").orderBy("v").collect() == [(0,), (1,)]
+    assert df.selectExpr("groups[0].members['absent'].good").collect() == [(None,), (None,)]
+    with pytest.raises(Exception, match="INVALID_ARRAY_INDEX"):
+        df.selectExpr("groups[1].members['k'].good").collect()
+
+
+def test_parquet_user_case_reads_condition_and_result_fields(spark, tmp_path):
+    ty = pa.list_(pa.struct([("v", pa.int64()), ("flag", pa.bool_())]))
+    items = pa.array([[{"v": 1, "flag": True}], [{"v": 2, "flag": False}]], ty)
+    pq.write_table(pa.table({"items": items}), tmp_path / "items.parquet")
+    df = spark.read.parquet(str(tmp_path))
+    key = "spark.sql.ansi.enabled"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "false")
+        selected = df.selectExpr(
+            "(CASE WHEN items[0].flag THEN named_struct('v', -1L, 'flag', true) ELSE items[0] END).v AS v"
+        )
+        assert selected.orderBy("v").collect() == [(-1,), (2,)]
+    finally:
+        spark.conf.set(key, previous)
 
 
 def test_parquet_merge_dictionary_with_plain_string(spark, tmp_path):
