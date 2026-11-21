@@ -111,13 +111,11 @@ def _build_schema(*, include_headers: bool) -> pa.Schema:
 _SENTINEL_EARLIEST = "earliest"
 _SENTINEL_LATEST = "latest"
 
-# Spark's magic per-partition offset sentinels.
+# Spark's per-partition offset sentinels.
 _SPARK_OFFSET_LATEST = -1
 _SPARK_OFFSET_EARLIEST = -2
 
-# Widths of the Scala types Spark parses the split options into:
-# ``minPartitions`` goes through ``String.toInt`` and ``maxRecordsPerPartition``
-# through ``String.toLong``, both of which reject anything wider.
+# Scala String.toInt / String.toLong bounds used by Spark's split options.
 _INT32_MAX = 2**31 - 1
 _INT64_MAX = 2**63 - 1
 
@@ -137,130 +135,36 @@ def _check_integer_width(value: int, *, bits: int, label: str) -> int:
     return value
 
 
-def _validate_tp_mapping(parsed: dict, *, label: str) -> dict[str, dict[str, int]]:
-    """Validate a parsed ``{topic: {partition: int}}`` JSON mapping.
+def _parse_tp_mapping(raw: str, *, option_name: str) -> dict[str, dict[str, int]]:
+    """Parse and normalize a ``{topic: {partition: int}}`` JSON mapping.
 
-    The caller has already confirmed the top-level value is a ``dict``. Here we
-    check each topic maps to an object of ``{partition: int}`` so malformed
-    shapes (e.g. ``{"t": 5}`` or ``{"t": {"0": "x"}}``) fail loudly at parse
-    time with a clear message, rather than crashing later during offset
-    resolution with an opaque ``AttributeError``/``ValueError``.
-
-    Partition keys are returned in canonical form. Spark deserializes them as
-    ``Map[Int, Long]`` (``JsonUtils.partitionOffsets``), so ``"00"``, ``" 0"``
-    and ``"0"`` all name partition 0. Keeping the spelling the user wrote would
-    pass the partition-set check — which compares ``int(key)`` — and then miss
-    on the ``str(partition)`` lookup during resolution, turning a valid Spark
-    input into a bare ``KeyError``.
+    Partition keys are canonicalized via ``int()`` (e.g. ``"00"`` -> ``"0"``) to
+    match Spark's ``Map[Int, Long]`` deserialization (last spelling wins).
     """
-    normalized: dict[str, dict[str, int]] = {}
-    for topic, partitions in parsed.items():
-        if not isinstance(partitions, dict):
-            msg = f"{label} entry for topic {topic!r} must be an object of {{partition: value}}, got: {type(partitions).__name__}"
-            raise ValueError(msg)  # noqa: TRY004
-        canonical: dict[str, int] = {}
-        for partition, value in partitions.items():
-            # Partition ids are JSON object keys, so they arrive as strings.
-            # They are compared against the broker's integer partition ids, and
-            # a non-numeric key would otherwise fail there with a bare
-            # ``invalid literal for int()``.
-            try:
-                partition_id = int(partition)
-            except ValueError as e:
-                msg = f"{label} partition id for topic {topic!r} must be an integer, got: {partition!r}"
-                raise ValueError(msg) from e
-            _check_integer_width(partition_id, bits=32, label=f"{label} partition id for topic {topic!r}")
-            # bool is an int subclass; reject it so JSON true/false isn't
-            # silently coerced to 1/0.
-            if not isinstance(value, int) or isinstance(value, bool):
-                msg = f"{label} value for topic {topic!r} partition {partition!r} must be an integer, got: {type(value).__name__}"
-                raise ValueError(msg)  # noqa: TRY004
-            _check_integer_width(value, bits=64, label=f"{label} value for topic {topic!r} partition {partition!r}")
-            # Two spellings of the same id collapse to one entry, last one
-            # winning, as they do in the Scala `Map` Spark builds.
-            canonical[str(partition_id)] = value
-        normalized[topic] = canonical
-    return normalized
-
-
-def _parse_offset_spec(raw: str, *, option_name: str) -> str | dict[str, dict[str, int]]:
-    """Parse a present ``startingOffsets`` / ``endingOffsets`` value.
-
-    Returns either the string ``"earliest"``/``"latest"`` or a mapping
-    ``{topic: {partition: offset}}``. In Spark, JSON keys are strings (partition
-    ids as strings).
-
-    Spark matches the sentinels case-insensitively and parses whatever else is
-    present as JSON, so a blank value is a parse error rather than "unset" —
-    only an *absent* option falls back to the endpoint default. Callers reach
-    this function only once the option is known to be present.
-    """
-    stripped = raw.strip()
-    lowered = stripped.lower()
-    if lowered in (_SENTINEL_EARLIEST, _SENTINEL_LATEST):
-        return lowered
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError as e:
-        msg = f"Invalid '{option_name}' value: {raw!r}. Expected 'earliest', 'latest', or JSON."
-        raise ValueError(msg) from e
+    parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         msg = f"'{option_name}' JSON must be an object, got: {type(parsed).__name__}"
         raise ValueError(msg)  # noqa: TRY004
-    return _validate_tp_mapping(parsed, label=f"'{option_name}'")
-
-
-def _parse_global_timestamp(raw: str, *, option_name: str) -> int:
-    """Parse a global ``{starting,ending}Timestamp`` (ms since epoch)."""
-    try:
-        value = int(raw.strip())
-    except ValueError as e:
-        msg = f"'{option_name}' must be an integer (ms since epoch), got {raw!r}"
-        raise ValueError(msg) from e
-    return _check_integer_width(value, bits=64, label=f"'{option_name}'")
-
-
-def _parse_timestamp_json(raw: str, *, option_name: str) -> dict[str, dict[str, int]]:
-    """Parse ``{starting,ending}OffsetsByTimestamp`` (per-tp JSON, ms since epoch)."""
-    try:
-        parsed = json.loads(raw.strip())
-    except json.JSONDecodeError as e:
-        msg = f"Invalid '{option_name}' JSON: {raw!r}"
-        raise ValueError(msg) from e
-    if not isinstance(parsed, dict):
-        msg = f"'{option_name}' JSON must be an object"
-        raise ValueError(msg)  # noqa: TRY004
-    return _validate_tp_mapping(parsed, label=f"'{option_name}'")
-
-
-def _resolve_range_option(
-    opts: Mapping[str, str], *, endpoint: str
-) -> tuple[str | dict[str, dict[str, int]] | None, int | dict[str, dict[str, int]] | None]:
-    """Select one range option per endpoint, using Spark's precedence.
-
-    ``KafkaSourceProvider.getKafkaOffsetRangeLimit`` picks the global timestamp
-    first, then the per-partition timestamp map, then the offsets — and never
-    looks at the lower-priority options, so it neither rejects combinations nor
-    parses the values it skipped. Rejecting combinations here instead would fail
-    queries that Spark runs happily, and parsing a skipped option would reject
-    values Spark never reads (a blank ``startingOffsets`` alongside a
-    ``startingTimestamp``, say).
-
-    Returns ``(offsets_spec, timestamp_spec)`` with at most one set; both are
-    ``None`` when the endpoint is unspecified and the caller applies the default
-    (earliest for starting, latest for ending).
-    """
-    global_ts_key = f"{endpoint}Timestamp"
-    per_tp_ts_key = f"{endpoint}OffsetsByTimestamp"
-    offsets_key = f"{endpoint}Offsets"
-
-    if global_ts_key in opts:
-        return None, _parse_global_timestamp(opts[global_ts_key], option_name=global_ts_key)
-    if per_tp_ts_key in opts:
-        return None, _parse_timestamp_json(opts[per_tp_ts_key], option_name=per_tp_ts_key)
-    if offsets_key in opts:
-        return _parse_offset_spec(opts[offsets_key], option_name=offsets_key), None
-    return None, None
+    normalized: dict[str, dict[str, int]] = {}
+    for topic, partitions in parsed.items():
+        if not isinstance(partitions, dict):
+            msg = f"'{option_name}' entry for topic {topic!r} must be an object of {{partition: value}}, got: {type(partitions).__name__}"
+            raise ValueError(msg)  # noqa: TRY004
+        canonical: dict[str, int] = {}
+        for partition, value in partitions.items():
+            partition_id = _check_integer_width(
+                int(partition), bits=32, label=f"'{option_name}' partition id for topic {topic!r}"
+            )
+            # bool is an int subclass; reject JSON true/false.
+            if not isinstance(value, int) or isinstance(value, bool):
+                msg = f"'{option_name}' value for topic {topic!r} partition {partition!r} must be an integer, got: {type(value).__name__}"
+                raise ValueError(msg)  # noqa: TRY004
+            _check_integer_width(
+                value, bits=64, label=f"'{option_name}' value for topic {topic!r} partition {partition!r}"
+            )
+            canonical[str(partition_id)] = value
+        normalized[topic] = canonical
+    return normalized
 
 
 def _validate_offset_spec(
@@ -269,23 +173,11 @@ def _validate_offset_spec(
     endpoint: str,
     option_name: str,
 ) -> None:
-    """Enforce Spark's batch-mode rules on an already-parsed offset spec.
+    """Enforce Spark's batch-mode rules on an offset spec.
 
-    Spark's batch Kafka source rejects ``latest`` for ``startingOffsets`` and
-    ``earliest`` for ``endingOffsets``, in both the string form and the
-    per-partition JSON form (``-1``/``-2``). Without this check the offending
-    endpoint silently resolves to a watermark that empties the range, so the
-    query returns zero rows instead of failing.
-
-    We also reject any offset below ``-2``. Only ``-1``/``-2`` are Spark
-    sentinels; everything below is a librdkafka sentinel that would be honoured
-    rather than rejected — notably ``-1000`` (``OFFSET_STORED``), which would
-    silently read from committed consumer-group offsets, and ``-1001``
-    (``OFFSET_INVALID``).
-
-    This is deliberately separate from ``_validate_tp_mapping``, which is shared
-    with the timestamp parsers where negative values are legitimate (pre-1970)
-    instants.
+    Rejects ``latest``/``-1`` at ``startingOffsets``, ``earliest``/``-2`` at
+    ``endingOffsets``, and any offset below ``-2`` (which librdkafka treats as
+    special sentinels such as ``-1000`` ``OFFSET_STORED``).
     """
     if spec is None:
         return
@@ -320,49 +212,48 @@ def _validate_offset_spec(
                 raise ValueError(msg)
 
 
-def _parse_ts_strategy(opts: Mapping[str, str]) -> str:
-    """Parse ``startingOffsetsByTimestampStrategy`` (Spark default: ``error``)."""
-    option_name = "startingOffsetsByTimestampStrategy"
-    raw = opts.get(option_name, _TS_STRATEGY_ERROR)
-    value = raw.strip().lower()
-    if value not in (_TS_STRATEGY_ERROR, _TS_STRATEGY_LATEST):
-        msg = f"'{option_name}' must be {_TS_STRATEGY_ERROR!r} or {_TS_STRATEGY_LATEST!r}, got {raw!r}"
-        raise ValueError(msg)
-    return value
+def _resolve_range_option(
+    opts: Mapping[str, str], *, endpoint: str
+) -> tuple[str | dict[str, dict[str, int]] | None, int | dict[str, dict[str, int]] | None]:
+    """Select one range option per endpoint using Spark's precedence.
 
-
-def _parse_bool(opts: Mapping[str, str], name: str, *, default: bool) -> bool:
-    """Parse a boolean option the way Scala's ``toBoolean`` does.
-
-    Spark calls ``.toBoolean`` on these, which accepts ``true``/``false`` in any
-    case and throws on anything else. Treating every non-``true`` value as false
-    would silently swallow ``includeHeaders=yes`` and ``failOnDataLoss=0``.
+    Global timestamp wins over per-partition timestamps, which win over offsets.
+    Skipped lower-priority options are not parsed, matching Spark's
+    ``KafkaSourceProvider.getKafkaOffsetRangeLimit``.
     """
-    if name not in opts:
-        return default
-    value = opts[name].strip().lower()
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    msg = f"'{name}' must be 'true' or 'false', got {opts[name]!r}"
+    global_ts_key = f"{endpoint}Timestamp"
+    per_tp_ts_key = f"{endpoint}OffsetsByTimestamp"
+    offsets_key = f"{endpoint}Offsets"
+
+    if global_ts_key in opts:
+        return None, _check_integer_width(int(opts[global_ts_key]), bits=64, label=f"'{global_ts_key}'")
+    if per_tp_ts_key in opts:
+        return None, _parse_tp_mapping(opts[per_tp_ts_key], option_name=per_tp_ts_key)
+    if offsets_key in opts:
+        stripped = opts[offsets_key].strip()
+        lowered = stripped.lower()
+        spec: str | dict[str, dict[str, int]] = (
+            lowered
+            if lowered in (_SENTINEL_EARLIEST, _SENTINEL_LATEST)
+            else _parse_tp_mapping(stripped, option_name=offsets_key)
+        )
+        _validate_offset_spec(spec, endpoint=endpoint, option_name=offsets_key)
+        return spec, None
+    return None, None
+
+
+def _parse_bool(raw: str, name: str) -> bool:
+    """Parse a boolean strictly (case-insensitive ``true``/``false``, matching Scala ``toBoolean``)."""
+    value = raw.strip().lower()
+    if value in ("true", "false"):
+        return value == "true"
+    msg = f"'{name}' must be 'true' or 'false', got {raw!r}"
     raise ValueError(msg)
 
 
-def _parse_positive_int(opts: Mapping[str, str], name: str, default: str, *, max_value: int | None = None) -> int:
-    """Parse a positive integer option, naming the option in any failure.
-
-    ``max_value`` reproduces the width of the Scala type Spark parses the option
-    into. Python integers are unbounded, so without it a value Spark rejects
-    outright — ``minPartitions=2147483648`` overflows ``String.toInt`` — is
-    accepted here and then fed to the splitter as an iteration count.
-    """
-    raw = opts.get(name, default)
-    try:
-        value = int(raw)
-    except ValueError as e:
-        msg = f"'{name}' must be an integer, got {raw!r}"
-        raise ValueError(msg) from e
+def _parse_positive_int(raw: str, name: str, *, max_value: int | None = None) -> int:
+    """Parse a positive integer option, optionally capped to a Scala/Kafka width."""
+    value = int(raw)
     if value <= 0:
         msg = f"'{name}' must be positive, got {value}"
         raise ValueError(msg)
@@ -372,37 +263,11 @@ def _parse_positive_int(opts: Mapping[str, str], name: str, default: str, *, max
     return value
 
 
-def _parse_optional_positive_int(opts: Mapping[str, str], name: str, *, max_value: int | None = None) -> int | None:
-    """Parse an optional positive integer option, returning ``None`` when absent."""
-    if name not in opts:
-        return None
-    return _parse_positive_int(opts, name, default="", max_value=max_value)
-
-
-def _parse_positive_ms(
-    opts: Mapping[str, str], names: tuple[str, ...], default: str, *, max_value: int | None = None
-) -> float:
-    """Parse a positive, finite millisecond option, returning it as seconds.
-
-    ``names`` are checked in order so a Spark-standard option name can take
-    precedence over an alias.
-
-    ``float`` accepts ``nan`` and ``inf``, and neither is caught by a ``<= 0``
-    check: ``inf`` makes ``Consumer.poll()`` block forever, which defeats the
-    stall guard entirely, and ``nan`` makes every comparison false.
-    """
-    name = next((n for n in names if n in opts), names[0])
-    raw = opts.get(name, default)
-    try:
-        value_ms = float(raw)
-    except ValueError as e:
-        msg = f"'{name}' must be a number of milliseconds, got {raw!r}"
-        raise ValueError(msg) from e
-    if not math.isfinite(value_ms):
-        msg = f"'{name}' must be a finite number of milliseconds, got {raw!r}"
-        raise ValueError(msg)
-    if value_ms <= 0:
-        msg = f"'{name}' must be positive, got {value_ms}"
+def _parse_positive_ms(raw: str, name: str, *, max_value: int | None = None) -> float:
+    """Parse a positive, finite millisecond option and return seconds."""
+    value_ms = float(raw)
+    if not math.isfinite(value_ms) or value_ms <= 0:
+        msg = f"'{name}' must be a positive, finite number of milliseconds, got {raw!r}"
         raise ValueError(msg)
     if max_value is not None and not 1 <= value_ms <= max_value:
         msg = f"'{name}' must be between 1 and {max_value} milliseconds, got {raw!r}"
@@ -410,67 +275,20 @@ def _parse_positive_ms(
     return value_ms / 1000.0
 
 
-def _extract_kafka_config(opts: Mapping[str, str]) -> dict[str, str]:
-    """Pass through any option prefixed with ``kafka.`` to librdkafka config.
-
-    Matches Spark's convention: ``kafka.bootstrap.servers`` →
-    ``bootstrap.servers``, ``kafka.security.protocol`` → ``security.protocol``,
-    etc.
-
-    ``opts`` is a ``CaseInsensitiveDict``, so iteration yields lowercased keys and
-    ``KAFKA.Bootstrap.Servers`` is matched here just as Spark matches it. Every
-    librdkafka property name is lowercase already, so lowercasing the part after
-    the prefix does not change which property is set.
-    """
-    return {k[len("kafka.") :]: v for k, v in opts.items() if k.startswith("kafka.")}
-
-
-# Consumer properties this source owns. Spark rejects the same set in
-# ``KafkaSourceProvider.validateGeneralOptions`` because each one silently
-# rewrites the read that was planned:
-#
-# * ``auto.offset.reset`` — the planner already resolved a concrete start, so a
-#   reset policy can only move it. ``earliest``/``latest`` would turn a start
-#   that aged out of the log into a silent jump instead of the data-loss error
-#   ``failOnDataLoss`` promises.
-# * ``enable.auto.commit`` — a batch read must not commit offsets; with a
-#   user-supplied ``kafka.group.id`` this would corrupt that group's position.
-# * ``enable.partition.eof`` — the read loop's termination path. Disabling it
-#   turns a clean end-of-log stop into a stall until ``stallTimeoutMs``.
-#
-# The deserializer and interceptor properties Spark also protects have no
-# librdkafka equivalent (messages arrive as raw bytes), so they are not listed.
+# Source-owned consumer properties rejected to match Spark's validateGeneralOptions:
+# overriding them silently moves planned offsets, commits group offsets, or disables EOF stop.
 _PROTECTED_KAFKA_CONFIGS = {
     "auto.offset.reset": "startingOffsets/endingOffsets",
     "enable.auto.commit": None,
     "enable.partition.eof": None,
 }
 
-
-def _validate_kafka_config(client_config: Mapping[str, str]) -> None:
-    """Reject ``kafka.*`` options that would override this source's own settings."""
-    for name, alternative in _PROTECTED_KAFKA_CONFIGS.items():
-        if name in client_config:
-            msg = f"Kafka option 'kafka.{name}' is not supported"
-            if alternative:
-                msg += f"; use the source option(s) '{alternative}' instead"
-            raise ValueError(msg)
-
-
-# Unlike Spark's ``KafkaSourceProvider.batchUniqueGroupId``, this source uses
-# a stable group id. Every read uses explicit ``consumer.assign()`` without
-# group membership and never commits offsets: there is no group-coordinated
-# partition ownership or committed state to modify. Users can override the id
-# with ``kafka.group.id`` when broker ACLs require a particular group.
+# Stable group id: reads use explicit assign() without group membership or commits,
+# so concurrent queries do not coordinate or mutate group state. Overridable via kafka.group.id.
 _DEFAULT_GROUP_ID = "sail-kafka-reader"
 
-# Consumer-only properties, stripped before building an ``AdminClient``.
-# librdkafka builds the admin handle on a producer, and logs a CONFWARN for
-# every consumer property it finds there. The user's ``kafka.*`` config is
-# shared between both clients, so a user-supplied ``kafka.group.id`` or
-# ``kafka.isolation.level`` would otherwise produce a warning on every planning
-# call. Planning still honors the isolation level: it is passed to
-# ``list_offsets`` directly (see :func:`_planning_isolation_level`).
+# Consumer-only properties stripped from AdminClient (producer-backed in librdkafka)
+# to avoid CONFWARN logs; isolation.level is passed directly to list_offsets instead.
 _CONSUMER_ONLY_CONFIGS = (
     "group.id",
     "enable.auto.commit",
@@ -497,25 +315,12 @@ _CONSUMER_ONLY_CONFIGS = (
 
 
 def _build_admin_config(client_config: dict[str, str]) -> dict[str, str]:
-    """Return the librdkafka config for the planning-time ``AdminClient``.
-
-    Mirrors Spark's ``kafkaParamsForDriver``: the user's ``kafka.*`` options
-    carry the connection and security settings, and the source contributes
-    nothing the admin protocol does not need.
-    """
+    """Return the librdkafka config for the planning-time ``AdminClient``."""
     return {k: v for k, v in client_config.items() if k not in _CONSUMER_ONLY_CONFIGS}
 
 
 def _planning_isolation_level(client_config: Mapping[str, str]) -> IsolationLevel:
-    """Return the isolation level planning-time offset lookups run under.
-
-    ``KafkaOffsetReaderAdmin`` derives its ``ListOffsetsOptions`` from the
-    driver's Kafka parameters, defaulting to the Java client's
-    ``read_uncommitted``. Pinning ``READ_UNCOMMITTED`` here instead would
-    resolve timestamps and forced split boundaries against the high watermark
-    for a user who asked for ``read_committed``, placing them past the last
-    stable offset — beyond what the reader will then be willing to return.
-    """
+    """Return the isolation level for planning-time ``list_offsets`` (Spark default: ``read_uncommitted``)."""
     value = _canonical_isolation_level(client_config.get("isolation.level", "read_uncommitted"))
     if value == "read_committed":
         return IsolationLevel.READ_COMMITTED
@@ -523,13 +328,7 @@ def _planning_isolation_level(client_config: Mapping[str, str]) -> IsolationLeve
 
 
 def _canonical_isolation_level(raw: str) -> str:
-    """Return the librdkafka spelling of a ``kafka.isolation.level`` value.
-
-    ``_resolved`` stores this spelling back into the client config, so planning
-    and the executors' consumers read one setting. librdkafka accepts only the
-    lowercase values; ``READ_COMMITTED`` passed through verbatim would plan
-    under ``read_committed`` and then fail when each task built its consumer.
-    """
+    """Normalize ``kafka.isolation.level`` to librdkafka's required lowercase spelling."""
     value = raw.strip().lower()
     if value in ("read_uncommitted", "read_committed"):
         return value
@@ -540,37 +339,15 @@ def _canonical_isolation_level(raw: str) -> str:
 def _build_consumer_config(client_config: dict[str, str]) -> dict[str, str | bool]:
     """Return the effective librdkafka config for a batch-read consumer.
 
-    Only executors build consumers; planning goes through an ``AdminClient``
-    configured by :func:`_build_admin_config`.
-
-    Source-owned settings are applied *after* the user's ``kafka.*`` options, so
-    they stay authoritative exactly as Spark's ``ConfigUpdater`` keeps its own
-    values authoritative. ``_validate_kafka_config`` has already rejected the
-    ones a user could meaningfully try to set, so this ordering only matters as
-    a second line of defence.
-
-    ``auto.offset.reset`` is always ``error``, librdkafka's equivalent of the
-    ``none`` Spark forces on executors (``kafkaParamsForExecutors``). It keeps
-    an unserviceable offset visible to the read loop, which then applies
-    ``failOnDataLoss`` itself against the planned range. Encoding the option in
-    the reset policy instead cannot work: librdkafka applies the policy in both
-    directions, so ``earliest`` rewinds a start that is *past* the end of the
-    log to the beginning of the partition.
-
-    ``isolation.level`` is pinned to the Java client's default because the two
-    clients disagree: librdkafka defaults to ``read_committed``, while Spark
-    never sets the property and so inherits ``read_uncommitted``. Left alone, a
-    topic written by a transactional producer would silently return a different
-    row set here than under Spark — aborted records dropped, and nothing past
-    the last stable offset — with planning still using the high watermark, so
-    the short read would look like a clean one. It is placed before the user's
-    config so ``kafka.isolation.level`` can still opt into ``read_committed``.
+    Pins ``isolation.level`` to ``read_uncommitted`` by default (matching the Java
+    client Spark inherits rather than librdkafka's ``read_committed``), and applies
+    source-owned settings last: ``auto.offset.reset=error`` keeps unserviceable
+    offsets visible to the read loop's ``failOnDataLoss`` logic.
     """
     return {
         "group.id": _DEFAULT_GROUP_ID,
         "isolation.level": "read_uncommitted",
-        **client_config,  # user config first...
-        # ...source-owned settings last, so they win.
+        **client_config,
         "enable.auto.commit": False,
         "auto.offset.reset": "error",
         "enable.partition.eof": True,
@@ -583,14 +360,7 @@ def _build_consumer_config(client_config: dict[str, str]) -> dict[str, str | boo
 
 
 def _parse_subscription(opts: Mapping[str, str]) -> tuple[str, object]:
-    """Parse Spark's three topic-selection strategies.
-
-    Spark requires exactly one of ``assign``, ``subscribe``, and
-    ``subscribePattern``, rejecting both zero and more than one. Returns the
-    strategy name and its parsed value: a topic list for ``subscribe``, a
-    compiled regex for ``subscribePattern``, and a ``{topic: [partition, ...]}``
-    mapping for ``assign``.
-    """
+    """Parse Spark's mutually-exclusive ``assign`` / ``subscribe`` / ``subscribePattern`` option."""
     present = [key for key in _SUBSCRIPTION_KEYS if key in opts]
     if len(present) > 1:
         msg = f"Only one of the following options may be specified: {', '.join(_SUBSCRIPTION_KEYS)}. Got: {', '.join(present)}"
@@ -605,10 +375,7 @@ def _parse_subscription(opts: Mapping[str, str]) -> tuple[str, object]:
     raw = opts[strategy]
 
     if strategy == "subscribe":
-        # Dedupe: a repeated topic would otherwise be enumerated once per
-        # occurrence, producing duplicate input partitions over the same offset
-        # range and emitting every row twice. `dict.fromkeys` preserves
-        # first-seen order so planning stays stable.
+        # Dedupe preserving order so repeated topics are not scanned twice.
         topics = list(dict.fromkeys(t.strip() for t in raw.split(",") if t.strip()))
         if not topics:
             msg = "Option 'subscribe' must list at least one topic"
@@ -626,17 +393,9 @@ def _parse_subscription(opts: Mapping[str, str]) -> tuple[str, object]:
             msg = f"Option 'subscribePattern' is not a valid regular expression: {pattern!r} ({e})"
             raise ValueError(msg) from e
 
-    try:
-        parsed = json.loads(raw.strip())
-    except json.JSONDecodeError as e:
-        msg = f"Invalid 'assign' JSON: {raw!r}. Expected {{\"topic\": [partition, ...]}}."
-        raise ValueError(msg) from e
-    # Spark's `JsonUtils.partitions` deserializes this into `Map[String,
-    # Seq[Int]]` and validates nothing beyond the shape, so an empty map, an
-    # empty partition list, and a nonexistent signed 32-bit id are accepted; the
-    # requested set is intersected with the broker's partitions later, in
-    # `_list_topic_partitions`. Rejecting them here would fail queries Spark
-    # runs — an assignment naming a partition that has since been removed, say.
+    # Like Spark's JsonUtils.partitions, accept empty maps/lists and nonexistent
+    # int32 ids; _list_topic_partitions intersects them with broker metadata.
+    parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         msg = f"'assign' JSON must be an object of {{topic: [partition, ...]}}, got: {raw!r}"
         raise ValueError(msg)  # noqa: TRY004
@@ -645,8 +404,6 @@ def _parse_subscription(opts: Mapping[str, str]) -> tuple[str, object]:
             msg = f"'assign' entry for topic {topic!r} must be an array of partition ids"
             raise ValueError(msg)  # noqa: TRY004
         for partition in partitions:
-            # bool is an int subclass; reject it so JSON true/false is not
-            # silently coerced to partition 1/0.
             if not isinstance(partition, int) or isinstance(partition, bool):
                 msg = f"'assign' partition id for topic {topic!r} must be an integer, got: {partition!r}"
                 raise ValueError(msg)  # noqa: TRY004
@@ -1834,52 +1591,66 @@ class KafkaDataSource(DataSource):
 
     @cached_property
     def _resolved(self) -> dict:
-        # Spark data source options are case-insensitive. Sail and PySpark both
-        # construct this class with a ``CaseInsensitiveDict``; re-wrapping keeps
-        # that behavior when the class is constructed directly (as the parsing
-        # tests do) and — unlike ``dict(self.options)`` — does not flatten the
-        # mapping back into a case-sensitive one, which would strand every
-        # camelCase lookup below against lowercased keys.
+        # Re-wrap to preserve case-insensitivity when constructed directly.
         opts = CaseInsensitiveDict(self.options)
 
-        client_config = _extract_kafka_config(opts)
+        # CaseInsensitiveDict yields lowercase keys, matching librdkafka property names.
+        client_config = {k[len("kafka.") :]: v for k, v in opts.items() if k.startswith("kafka.")}
         if not client_config.get("bootstrap.servers", "").strip():
             msg = "Option 'kafka.bootstrap.servers' is required and must not be blank for the kafka data source"
             raise ValueError(msg)
-        _validate_kafka_config(client_config)
+        for name, alternative in _PROTECTED_KAFKA_CONFIGS.items():
+            if name in client_config:
+                msg = f"Kafka option 'kafka.{name}' is not supported"
+                if alternative:
+                    msg += f"; use the source option(s) '{alternative}' instead"
+                raise ValueError(msg)
         if "isolation.level" in client_config:
             client_config["isolation.level"] = _canonical_isolation_level(client_config["isolation.level"])
 
         subscription = _parse_subscription(opts)
-
         starting_offsets, starting_ts = _resolve_range_option(opts, endpoint="starting")
         ending_offsets, ending_ts = _resolve_range_option(opts, endpoint="ending")
 
-        _validate_offset_spec(starting_offsets, endpoint="starting", option_name="startingOffsets")
-        _validate_offset_spec(ending_offsets, endpoint="ending", option_name="endingOffsets")
+        ts_strategy_raw = opts.get("startingOffsetsByTimestampStrategy", _TS_STRATEGY_ERROR)
+        starting_ts_strategy = ts_strategy_raw.strip().lower()
+        if starting_ts_strategy not in (_TS_STRATEGY_ERROR, _TS_STRATEGY_LATEST):
+            msg = f"'startingOffsetsByTimestampStrategy' must be {_TS_STRATEGY_ERROR!r} or {_TS_STRATEGY_LATEST!r}, got {ts_strategy_raw!r}"
+            raise ValueError(msg)
 
-        include_headers = _parse_bool(opts, "includeHeaders", default=False)
-        fail_on_data_loss = _parse_bool(opts, "failOnDataLoss", default=True)
-        max_batch_rows = _parse_positive_int(opts, "maxBatchRows", "10000")
-        max_batch_bytes = _parse_positive_int(opts, "maxBatchBytes", "8388608", max_value=_INT32_MAX)
-        max_batch_wait_s = _parse_positive_ms(opts, ("maxBatchWaitMs",), "250")
-        min_partitions = _parse_optional_positive_int(opts, "minPartitions", max_value=_INT32_MAX)
-        max_records_per_partition = _parse_optional_positive_int(opts, "maxRecordsPerPartition", max_value=_INT64_MAX)
-        # A negative poll timeout makes ``consumer.poll()`` block indefinitely,
-        # which defeats the ``stallTimeoutMs`` stall guard entirely — that guard
-        # can only count polls that return. Zero spins the read loop instead.
-        # Neither is a usable configuration, so both are rejected.
-        #
-        # The default matches Spark's batch source, which falls back to
-        # ``spark.network.timeout`` (120s) for ``kafkaConsumer.pollTimeoutMs``.
-        poll_timeout_s = _parse_positive_ms(opts, ("kafkaConsumer.pollTimeoutMs", "pollTimeoutMs"), "120000")
-        stall_timeout_s = (
-            _parse_positive_ms(opts, ("stallTimeoutMs",), "120000") if "stallTimeoutMs" in opts else poll_timeout_s
+        include_headers = _parse_bool(opts["includeHeaders"], "includeHeaders") if "includeHeaders" in opts else False
+        fail_on_data_loss = _parse_bool(opts["failOnDataLoss"], "failOnDataLoss") if "failOnDataLoss" in opts else True
+        max_batch_rows = _parse_positive_int(opts["maxBatchRows"], "maxBatchRows") if "maxBatchRows" in opts else 10000
+        max_batch_bytes = (
+            _parse_positive_int(opts["maxBatchBytes"], "maxBatchBytes", max_value=_INT32_MAX)
+            if "maxBatchBytes" in opts
+            else 8388608
         )
-        # librdkafka admin request timeouts accept at most one hour. Other
-        # time budgets are used as Python deadlines or sliced polls, not passed
-        # directly to the admin API.
-        admin_timeout_s = _parse_positive_ms(opts, ("adminTimeoutMs",), "10000", max_value=3600000)
+        max_batch_wait_s = (
+            _parse_positive_ms(opts["maxBatchWaitMs"], "maxBatchWaitMs") if "maxBatchWaitMs" in opts else 0.25
+        )
+        min_partitions = (
+            _parse_positive_int(opts["minPartitions"], "minPartitions", max_value=_INT32_MAX)
+            if "minPartitions" in opts
+            else None
+        )
+        max_records_per_partition = (
+            _parse_positive_int(opts["maxRecordsPerPartition"], "maxRecordsPerPartition", max_value=_INT64_MAX)
+            if "maxRecordsPerPartition" in opts
+            else None
+        )
+        # Default matches Spark's fallback to spark.network.timeout (120s).
+        poll_key = "kafkaConsumer.pollTimeoutMs" if "kafkaConsumer.pollTimeoutMs" in opts else "pollTimeoutMs"
+        poll_timeout_s = _parse_positive_ms(opts[poll_key], poll_key) if poll_key in opts else 120.0
+        stall_timeout_s = (
+            _parse_positive_ms(opts["stallTimeoutMs"], "stallTimeoutMs") if "stallTimeoutMs" in opts else poll_timeout_s
+        )
+        # librdkafka admin request timeouts accept 1 ms to 1 hour.
+        admin_timeout_s = (
+            _parse_positive_ms(opts["adminTimeoutMs"], "adminTimeoutMs", max_value=3600000)
+            if "adminTimeoutMs" in opts
+            else 10.0
+        )
 
         return {
             "subscription": subscription,
@@ -1887,7 +1658,7 @@ class KafkaDataSource(DataSource):
             "ending_offsets": ending_offsets,
             "starting_timestamps": starting_ts,
             "ending_timestamps": ending_ts,
-            "starting_ts_strategy": _parse_ts_strategy(opts),
+            "starting_ts_strategy": starting_ts_strategy,
             "client_config": client_config,
             "include_headers": include_headers,
             "poll_timeout_s": poll_timeout_s,
@@ -1905,22 +1676,8 @@ class KafkaDataSource(DataSource):
         return _build_schema(include_headers=self._resolved["include_headers"])
 
     def reader(self, schema: pa.Schema) -> KafkaDataSourceReader:
-        # Spark's Kafka source has a fixed schema and rejects a user-specified
-        # one outright. Sail hands whatever schema the caller supplied straight
-        # through to this method, so without a check here planning would
-        # advertise the user's columns while `read()` kept emitting Kafka's.
-        #
-        # Names, types *and* nullability are compared. Spark validates a
-        # user-supplied schema with `DataType.equalsIgnoreCompatibleNullability`,
-        # under which widening non-nullable to nullable is compatible and
-        # narrowing nullable to non-nullable is not. Every column here is
-        # nullable, so the only difference this can reject is a user declaring
-        # one of them non-nullable — `key` and `value` above all, which Kafka
-        # really does emit as null. Sail carries the flag faithfully in both
-        # directions (through Arrow's C data interface for a PyArrow schema, and
-        # through `StructField.nullable` for a DDL one), so this cannot reject
-        # the source's own schema. Metadata is not compared: it round-trips
-        # through Sail and cannot change what `read()` produces.
+        # Kafka's schema is fixed and every field is nullable; reject any user-supplied
+        # schema that changes names, types, or nullability (ignoring metadata).
         expected = _build_schema(include_headers=self._resolved["include_headers"])
         if schema is not None and not schema.equals(expected, check_metadata=False):
             msg = (

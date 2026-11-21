@@ -27,14 +27,10 @@ from pysail.spark.datasource.kafka import (
     _build_admin_config,
     _build_consumer_config,
     _divide_range,
-    _parse_global_timestamp,
-    _parse_offset_spec,
     _parse_subscription,
-    _parse_timestamp_json,
     _planning_isolation_level,
     _resolve_range_option,
     _split_offset_ranges,
-    _validate_kafka_config,
     _validate_offset_spec,
 )
 
@@ -42,18 +38,23 @@ _TS_MS = 1700000000000
 _POLL_TIMEOUT_MS = 250
 
 
-@pytest.mark.parametrize("parser", [_parse_offset_spec, _parse_timestamp_json])
+def _resolved(**extra):
+    opts = {"kafka.bootstrap.servers": "localhost:9092", "subscribe": "t", **extra}
+    return KafkaDataSource(options=opts)._resolved  # noqa: SLF001
+
+
+@pytest.mark.parametrize("option", ["startingOffsets", "startingOffsetsByTimestamp"])
 @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
-def test_partition_limit_value_width(parser, value):
+def test_partition_limit_value_width(option, value):
     with pytest.raises(ValueError, match="signed 64-bit"):
-        parser(json.dumps({"t": {"0": value}}), option_name="limit")
+        _resolved(**{option: json.dumps({"t": {"0": value}})})
 
 
-@pytest.mark.parametrize("parser", [_parse_offset_spec, _parse_timestamp_json])
+@pytest.mark.parametrize("option", ["startingOffsets", "startingOffsetsByTimestamp"])
 @pytest.mark.parametrize("partition", [-(2**31) - 1, 2**31])
-def test_partition_limit_id_width(parser, partition):
+def test_partition_limit_id_width(option, partition):
     with pytest.raises(ValueError, match="signed 32-bit"):
-        parser(json.dumps({"t": {str(partition): 0}}), option_name="limit")
+        _resolved(**{option: json.dumps({"t": {str(partition): 0}})})
 
 
 @pytest.mark.parametrize("partition", [-(2**31) - 1, 2**31])
@@ -63,70 +64,68 @@ def test_assignment_partition_id_width(partition):
 
 
 # ---------------------------------------------------------------------------
-# _parse_offset_spec
+# Offset options (startingOffsets / endingOffsets)
 # ---------------------------------------------------------------------------
 
 
 class TestParseOffsetSpec:
     def test_earliest_sentinel(self):
-        assert _parse_offset_spec("earliest", option_name="startingOffsets") == "earliest"
+        assert _resolved(startingOffsets="earliest")["starting_offsets"] == "earliest"
 
     def test_latest_sentinel(self):
-        assert _parse_offset_spec("latest", option_name="endingOffsets") == "latest"
+        assert _resolved(endingOffsets="latest")["ending_offsets"] == "latest"
 
     def test_stripped_sentinel(self):
-        assert _parse_offset_spec("  earliest  ", option_name="startingOffsets") == "earliest"
+        assert _resolved(startingOffsets="  earliest  ")["starting_offsets"] == "earliest"
 
     @pytest.mark.parametrize("raw", ["EARLIEST", "Earliest", "eArLiEsT"])
     def test_sentinel_is_case_insensitive(self, raw):
         # Spark lowercases before matching, so `EARLIEST` is a valid value.
-        assert _parse_offset_spec(raw, option_name="startingOffsets") == "earliest"
+        assert _resolved(startingOffsets=raw)["starting_offsets"] == "earliest"
 
     def test_blank_is_a_parse_error(self):
         # Spark distinguishes absent from present-but-blank: a present blank
         # value is parsed as JSON and fails. Only absence means "use default".
-        with pytest.raises(ValueError, match="Invalid 'startingOffsets' value"):
-            _parse_offset_spec("", option_name="startingOffsets")
+        with pytest.raises(json.JSONDecodeError):
+            _resolved(startingOffsets="")
 
     def test_json_object(self):
-        assert _parse_offset_spec('{"t": {"0": 5}}', option_name="startingOffsets") == {"t": {"0": 5}}
+        assert _resolved(startingOffsets='{"t": {"0": 5}}')["starting_offsets"] == {"t": {"0": 5}}
 
     def test_invalid_json_raises(self):
-        with pytest.raises(ValueError, match="Invalid 'startingOffsets' value"):
-            _parse_offset_spec("not-json", option_name="startingOffsets")
+        with pytest.raises(json.JSONDecodeError):
+            _resolved(startingOffsets="not-json")
 
     def test_non_object_json_raises(self):
         with pytest.raises(ValueError, match="must be an object"):
-            _parse_offset_spec("[1, 2, 3]", option_name="startingOffsets")
+            _resolved(startingOffsets="[1, 2, 3]")
 
     def test_non_object_topic_value_raises(self):
         with pytest.raises(ValueError, match="topic 't' must be an object"):
-            _parse_offset_spec('{"t": 5}', option_name="startingOffsets")
+            _resolved(startingOffsets='{"t": 5}')
 
     def test_non_int_partition_value_raises(self):
         with pytest.raises(ValueError, match="partition '0' must be an integer"):
-            _parse_offset_spec('{"t": {"0": "x"}}', option_name="startingOffsets")
+            _resolved(startingOffsets='{"t": {"0": "x"}}')
 
     def test_bool_partition_value_raises(self):
         with pytest.raises(ValueError, match="must be an integer"):
-            _parse_offset_spec('{"t": {"0": true}}', option_name="startingOffsets")
+            _resolved(startingOffsets='{"t": {"0": true}}')
 
     def test_non_numeric_partition_key_raises(self):
-        with pytest.raises(ValueError, match="partition id for topic 't' must be an integer"):
-            _parse_offset_spec('{"t": {"zero": 1}}', option_name="startingOffsets")
+        with pytest.raises(ValueError, match="invalid literal for int"):
+            _resolved(startingOffsets='{"t": {"zero": 1}}')
 
     @pytest.mark.parametrize("key", ["00", " 0", "+0"])
     def test_partition_key_is_canonicalized(self, key):
         # Spark reads these keys as `Map[Int, Long]`, so every spelling of 0 is
-        # partition 0. Keeping the user's spelling passes the partition-set
-        # check (which compares `int(key)`) and then misses the `str(partition)`
-        # lookup during resolution, raising a bare `KeyError`.
-        spec = _parse_offset_spec('{"t": {"%s": 5}}' % key, option_name="startingOffsets")  # noqa: UP031
+        # partition 0.
+        spec = _resolved(startingOffsets='{"t": {"%s": 5}}' % key)["starting_offsets"]  # noqa: UP031
         assert spec == {"t": {"0": 5}}
 
     def test_duplicate_partition_keys_collapse(self):
         # Two spellings of one id are one entry in the Scala `Map` too.
-        assert _parse_offset_spec('{"t": {"0": 5, "00": 9}}', option_name="startingOffsets") == {"t": {"0": 9}}
+        assert _resolved(startingOffsets='{"t": {"0": 5, "00": 9}}')["starting_offsets"] == {"t": {"0": 9}}
 
 
 # ---------------------------------------------------------------------------
@@ -136,47 +135,47 @@ class TestParseOffsetSpec:
 
 class TestParseTimestamps:
     def test_global_int(self):
-        assert _parse_global_timestamp("1700000000000", option_name="startingTimestamp") == _TS_MS
+        assert _resolved(startingTimestamp="1700000000000")["starting_timestamps"] == _TS_MS
 
     @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
     def test_global_timestamp_width(self, value):
         with pytest.raises(ValueError, match="signed 64-bit"):
-            _parse_global_timestamp(str(value), option_name="startingTimestamp")
+            _resolved(startingTimestamp=str(value))
 
     @pytest.mark.parametrize("value", [-(2**63), 2**63 - 1])
     def test_global_timestamp_width_boundaries(self, value):
-        assert _parse_global_timestamp(str(value), option_name="startingTimestamp") == value
+        assert _resolved(startingTimestamp=str(value))["starting_timestamps"] == value
 
     def test_global_int_stripped(self):
-        assert _parse_global_timestamp("  1700000000000  ", option_name="endingTimestamp") == _TS_MS
+        assert _resolved(endingTimestamp="  1700000000000  ")["ending_timestamps"] == _TS_MS
 
     def test_invalid_global_raises(self):
-        with pytest.raises(ValueError, match="must be an integer"):
-            _parse_global_timestamp("not-a-number", option_name="startingTimestamp")
+        with pytest.raises(ValueError, match="invalid literal for int"):
+            _resolved(startingTimestamp="not-a-number")
 
     def test_partition_key_is_canonicalized(self):
-        result = _parse_timestamp_json('{"t": {"00": 1700000000000}}', option_name="startingOffsetsByTimestamp")
+        result = _resolved(startingOffsetsByTimestamp='{"t": {"00": 1700000000000}}')["starting_timestamps"]
         assert result == {"t": {"0": _TS_MS}}
 
     def test_per_tp_json(self):
-        result = _parse_timestamp_json('{"t": {"0": 1700000000000}}', option_name="startingOffsetsByTimestamp")
+        result = _resolved(startingOffsetsByTimestamp='{"t": {"0": 1700000000000}}')["starting_timestamps"]
         assert result == {"t": {"0": _TS_MS}}
 
     def test_invalid_json_raises(self):
-        with pytest.raises(ValueError, match="Invalid 'startingOffsetsByTimestamp' JSON"):
-            _parse_timestamp_json("not-json", option_name="startingOffsetsByTimestamp")
+        with pytest.raises(json.JSONDecodeError):
+            _resolved(startingOffsetsByTimestamp="not-json")
 
     def test_non_object_json_raises(self):
         with pytest.raises(ValueError, match="must be an object"):
-            _parse_timestamp_json("[1, 2, 3]", option_name="startingOffsetsByTimestamp")
+            _resolved(startingOffsetsByTimestamp="[1, 2, 3]")
 
     def test_non_object_topic_value_raises(self):
         with pytest.raises(ValueError, match="topic 't' must be an object"):
-            _parse_timestamp_json('{"t": 5}', option_name="startingOffsetsByTimestamp")
+            _resolved(startingOffsetsByTimestamp='{"t": 5}')
 
     def test_non_int_partition_value_raises(self):
         with pytest.raises(ValueError, match="partition '0' must be an integer"):
-            _parse_timestamp_json('{"t": {"0": "x"}}', option_name="endingOffsetsByTimestamp")
+            _resolved(endingOffsetsByTimestamp='{"t": {"0": "x"}}')
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +236,7 @@ class TestRangeOptionPrecedence:
         assert resolved["ending_timestamps"] == _TS_MS
 
     def test_blank_winning_option_raises(self):
-        with pytest.raises(ValueError, match="Invalid 'startingOffsets' value"):
+        with pytest.raises(json.JSONDecodeError):
             _resolved(startingOffsets="")
 
 
@@ -268,18 +267,14 @@ class TestProtectedKafkaConfigs:
     @pytest.mark.parametrize("name", ["auto.offset.reset", "enable.auto.commit", "enable.partition.eof"])
     def test_rejected(self, name):
         with pytest.raises(ValueError, match=f"kafka.{name}' is not supported".replace(".", r"\.")):
-            _validate_kafka_config({"bootstrap.servers": "localhost:9092", name: "whatever"})
+            _resolved(**{f"kafka.{name}": "whatever"})
 
     def test_auto_offset_reset_names_the_alternative(self):
         with pytest.raises(ValueError, match="startingOffsets"):
-            _validate_kafka_config({"auto.offset.reset": "earliest"})
+            _resolved(**{"kafka.auto.offset.reset": "earliest"})
 
     def test_group_id_still_allowed(self):
-        _validate_kafka_config({"bootstrap.servers": "localhost:9092", "group.id": "mine"})
-
-    def test_rejected_through_resolved(self):
-        with pytest.raises(ValueError, match="is not supported"):
-            _resolved(**{"kafka.enable.auto.commit": "true"})
+        assert _resolved(**{"kafka.group.id": "mine"})["client_config"]["group.id"] == "mine"
 
 
 # ---------------------------------------------------------------------------
@@ -391,17 +386,6 @@ class TestBuildAdminConfig:
 
 
 # ---------------------------------------------------------------------------
-# KafkaDataSource._resolved — `_resolved` only parses options (no broker I/O),
-# so it is unit-testable.
-# ---------------------------------------------------------------------------
-
-
-def _resolved(**extra):
-    opts = {"kafka.bootstrap.servers": "localhost:9092", "subscribe": "t", **extra}
-    return KafkaDataSource(options=opts)._resolved  # noqa: SLF001
-
-
-# ---------------------------------------------------------------------------
 # Subscription strategies — assign / subscribe / subscribePattern
 # ---------------------------------------------------------------------------
 
@@ -438,7 +422,7 @@ class TestSubscription:
         assert value == {"t": [0, 2]}
 
     def test_assign_invalid_json_raises(self):
-        with pytest.raises(ValueError, match="Invalid 'assign' JSON"):
+        with pytest.raises(json.JSONDecodeError):
             _parse_subscription(CaseInsensitiveDict({"assign": "not-json"}))
 
     def test_assign_empty_object(self):
@@ -522,6 +506,24 @@ class TestOptionCaseInsensitivity:
 # ---------------------------------------------------------------------------
 
 
+class TestBooleanOptions:
+    def test_defaults(self):
+        resolved = _resolved()
+        assert resolved["include_headers"] is False
+        assert resolved["fail_on_data_loss"] is True
+
+    @pytest.mark.parametrize(("raw", "expected"), [("true", True), ("TRUE", True), (" False ", False)])
+    def test_case_insensitive_values(self, raw, expected):
+        assert _resolved(includeHeaders=raw)["include_headers"] is expected
+        assert _resolved(failOnDataLoss=raw)["fail_on_data_loss"] is expected
+
+    @pytest.mark.parametrize("option", ["includeHeaders", "failOnDataLoss"])
+    @pytest.mark.parametrize("raw", ["", "yes", "0", "1", "maybe"])
+    def test_invalid_values_rejected(self, option, raw):
+        with pytest.raises(ValueError, match=rf"{option}.*must be 'true' or 'false'"):
+            _resolved(**{option: raw})
+
+
 class TestNumericOptions:
     def test_idle_deadline_defaults_to_the_effective_poll_budget(self):
         assert _resolved(pollTimeoutMs="80")["stall_timeout_s"] == pytest.approx(0.08)
@@ -530,7 +532,7 @@ class TestNumericOptions:
     @pytest.mark.parametrize("option", ["maxBatchBytes", "maxBatchWaitMs"])
     @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf"])
     def test_batch_resource_limits_reject_invalid_values(self, option, value):
-        with pytest.raises(ValueError, match=option):
+        with pytest.raises(ValueError, match=rf"invalid literal|could not convert|{option}"):
             _resolved(**{option: value})
 
     def test_poll_timeout_default_matches_spark(self):
@@ -545,19 +547,19 @@ class TestNumericOptions:
         assert _resolved(pollTimeoutMs=str(_POLL_TIMEOUT_MS))["poll_timeout_s"] == 0.25  # noqa: PLR2004
 
     def test_spark_name_wins_over_alias(self):
-        resolved = _resolved(**{"kafkaConsumer.pollTimeoutMs": "500", "pollTimeoutMs": "250"})
+        resolved = _resolved(**{"kafkaConsumer.pollTimeoutMs": "500", "pollTimeoutMs": "invalid"})
         assert resolved["poll_timeout_s"] == 0.5  # noqa: PLR2004
 
     @pytest.mark.parametrize("raw", ["Infinity", "inf", "-inf", "nan", "NaN"])
     def test_non_finite_poll_timeout_rejected(self, raw):
         # `float()` accepts these and a `<= 0` check does not catch them:
         # `poll(inf)` blocks forever, defeating the stallTimeoutMs guard.
-        with pytest.raises(ValueError, match=r"finite|must be positive"):
+        with pytest.raises(ValueError, match=r"pollTimeoutMs.*finite"):
             _resolved(pollTimeoutMs=raw)
 
     @pytest.mark.parametrize("raw", ["0", "-1"])
     def test_non_positive_poll_timeout_rejected(self, raw):
-        with pytest.raises(ValueError, match="must be positive"):
+        with pytest.raises(ValueError, match=r"pollTimeoutMs.*positive"):
             _resolved(pollTimeoutMs=raw)
 
     def test_min_partitions_absent(self):
