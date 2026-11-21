@@ -43,7 +43,7 @@ enum CharacterClass {
 impl PatternSegment {
     /// Create a parser for glob patterns that follow the glob syntax of Hadoop file systems.
     /// Note that the syntax is different from the `glob` crate.
-    /// 1. We use `^` for negated character classes.
+    /// 1. Character classes accept `^` for negation. Hadoop globs also accept `!`.
     /// 2. We support alternation (e.g. `{a,b}`).
     fn sequence_parser<'a>(syntax: ReadPathSyntax) -> impl Parser<'a, &'a str, Vec<Self>> {
         let character_class = choice((
@@ -76,7 +76,10 @@ impl PatternSegment {
                     .map(PatternSegment::Quoted),
                 just('*').map(|_| PatternSegment::Asterisk),
                 just('?').map(|_| PatternSegment::QuestionMark),
-                just('^')
+                any()
+                    .filter(move |c: &char| {
+                        *c == '^' || (syntax == ReadPathSyntax::HadoopGlob && *c == '!')
+                    })
                     .or_not()
                     .then(character_class)
                     .delimited_by(just('['), just(']'))

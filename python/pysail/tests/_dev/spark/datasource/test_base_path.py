@@ -858,3 +858,18 @@ def test_base_path_single_footer_field_case(spark, tmp_path, explicit_false):
     assert df.columns == ["id"]
     assert df.orderBy("id").collect() == [Row(id=1), Row(id=2)]
     assert df.where("id = 2").collect() == [Row(id=2)]
+
+
+@pytest.mark.parametrize("filename_filter", [False, True])
+@pytest.mark.parametrize("negation", ["!", "^"])
+def test_base_path_negated_character_class(spark, tmp_path, filename_filter, negation):
+    write_json_partition(tmp_path, "p=1")
+    part = tmp_path / "p=1"
+    (part / "raw.json").write_text('{"id":2}')
+    pattern = f"r[{negation}a]w.json"
+    reader = spark.read.option("basePath", str(tmp_path))
+    if filename_filter:
+        df = reader.option("pathGlobFilter", pattern).json(str(part))
+    else:
+        df = reader.json(str(part / pattern))
+    assert df.collect() == [Row(id=1, p=1)]
