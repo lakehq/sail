@@ -36,6 +36,7 @@ impl FormatFactory for ParquetFormatFactory {
         Ok(ParquetReadFormat {
             options,
             matching: StructFieldMatching::Name,
+            duration_hints: read::DurationHints::All,
         })
     }
 

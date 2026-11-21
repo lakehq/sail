@@ -19,6 +19,7 @@ use datafusion::parquet::basic::{
 use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, SchemaDescriptor};
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -28,6 +29,8 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+use sail_common_datafusion::metadata::type_metadata;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::parquet_schema::{
     INTEGER_STORAGE_META_KEY, is_parquet_integer_target, normalize_parquet_field,
@@ -49,6 +52,7 @@ use crate::options::r#gen::ParquetReadOptions;
 pub struct ParquetReadFormat {
     pub(super) options: ParquetReadOptions,
     pub(super) matching: StructFieldMatching,
+    pub(super) duration_hints: DurationHints,
 }
 
 fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
@@ -68,16 +72,36 @@ fn dictionary_value_type(data_type: &DataType) -> &DataType {
     }
 }
 
+/// Spark day-time intervals use Arrow duration[us] over unannotated Parquet INT64.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DurationHints {
+    /// Ordinary Sail reads also recognize unqualified Arrow intervals.
+    All,
+    /// Spark-style schema inference recognizes intervals written with a Sail qualifier.
+    Qualified,
+    /// Physical scans use integer storage for both BIGINT and interval projections.
+    Storage,
+}
+
 /// Arrow can carry temporal types only as embedded hints on ordinary integer leaves.
-fn hinted_integer_type(ty: &DataType) -> bool {
-    matches!(
-        dictionary_value_type(ty),
-        DataType::Timestamp(_, _)
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Duration(_)
-    )
+fn hinted_integer_type(field: &Field, durations: DurationHints) -> bool {
+    match dictionary_value_type(field.data_type()) {
+        DataType::Duration(TimeUnit::Microsecond) => match durations {
+            DurationHints::All => false,
+            DurationHints::Qualified => !field
+                .metadata()
+                .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY),
+            DurationHints::Storage => true,
+        },
+        ty => matches!(
+            ty,
+            DataType::Timestamp(_, _)
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+        ),
+    }
 }
 
 fn unannotated_integer(column: &ColumnDescriptor) -> Option<DataType> {
@@ -101,27 +125,34 @@ fn reconcile_parquet_field<'a>(
     field: &Arc<Field>,
     columns: &mut impl Iterator<Item = &'a ColumnDescPtr>,
     for_integer_read: bool,
+    durations: DurationHints,
 ) -> Result<Arc<Field>> {
     let data_type = dictionary_value_type(field.data_type());
     let ty = match data_type {
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|f| reconcile_parquet_field(f, columns, for_integer_read))
+                .map(|f| reconcile_parquet_field(f, columns, for_integer_read, durations))
                 .collect::<Result<Fields>>()?,
         ),
-        DataType::List(child) => {
-            DataType::List(reconcile_parquet_field(child, columns, for_integer_read)?)
-        }
-        DataType::LargeList(child) => {
-            DataType::LargeList(reconcile_parquet_field(child, columns, for_integer_read)?)
-        }
+        DataType::List(child) => DataType::List(reconcile_parquet_field(
+            child,
+            columns,
+            for_integer_read,
+            durations,
+        )?),
+        DataType::LargeList(child) => DataType::LargeList(reconcile_parquet_field(
+            child,
+            columns,
+            for_integer_read,
+            durations,
+        )?),
         DataType::FixedSizeList(child, size) => DataType::FixedSizeList(
-            reconcile_parquet_field(child, columns, for_integer_read)?,
+            reconcile_parquet_field(child, columns, for_integer_read, durations)?,
             *size,
         ),
         DataType::Map(entries, sorted) => DataType::Map(
-            reconcile_parquet_field(entries, columns, for_integer_read)?,
+            reconcile_parquet_field(entries, columns, for_integer_read, durations)?,
             *sorted,
         ),
         _ => {
@@ -145,7 +176,7 @@ fn reconcile_parquet_field<'a>(
                     .insert(INTEGER_STORAGE_META_KEY.to_owned(), "INT64".to_owned());
                 return Ok(Arc::new(field));
             }
-            if hinted_integer_type(data_type)
+            if hinted_integer_type(field, durations)
                 && let Some(storage) = unannotated_integer(column)
             {
                 return Ok(Arc::new(field.as_ref().clone().with_data_type(storage)));
@@ -215,6 +246,7 @@ fn parquet_file_schema(
     file_metadata: &FileMetaData,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<&Arc<str>>,
+    durations: DurationHints,
 ) -> Result<Schema> {
     // Arrow-hinted schema: mirror `DFParquetMetadata::fetch_schema` exactly, which
     // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
@@ -241,10 +273,14 @@ fn parquet_file_schema(
         ),
         None => schema,
     };
-    Ok(
-        reconciled_read_schema(file_metadata, &schema, &[], StructFieldMatching::Name)?
-            .unwrap_or(schema),
-    )
+    Ok(reconciled_read_schema(
+        file_metadata,
+        &schema,
+        &[],
+        StructFieldMatching::Name,
+        durations,
+    )?
+    .unwrap_or(schema))
 }
 
 /// Return the logical type represented by the footer statistics and its integer storage.
@@ -280,10 +316,11 @@ fn reconciled_read_schema(
     schema: &Schema,
     integer_fields: &[Arc<Field>],
     matching: StructFieldMatching,
+    durations: DurationHints,
 ) -> Result<Option<Schema>> {
     let descriptor = metadata.schema_descr();
     let leaves = schema.flattened_fields();
-    let has_hints = leaves.iter().any(|f| hinted_integer_type(f.data_type()))
+    let has_hints = leaves.iter().any(|f| hinted_integer_type(f, durations))
         && descriptor
             .columns()
             .iter()
@@ -314,7 +351,9 @@ fn reconciled_read_schema(
         .fields()
         .iter()
         .zip(integer_roots)
-        .map(|(field, integer_read)| reconcile_parquet_field(field, &mut columns, integer_read))
+        .map(|(field, integer_read)| {
+            reconcile_parquet_field(field, &mut columns, integer_read, durations)
+        })
         .collect::<Result<Fields>>()?;
     Ok((fields != schema.fields)
         .then(|| Schema::new_with_metadata(fields, schema.metadata.clone())))
@@ -332,6 +371,11 @@ impl ReadFormat for ParquetReadFormat {
             StructFieldMatching::CaseInsensitiveName
         } else {
             StructFieldMatching::Name
+        };
+        self.duration_hints = if hadoop_paths || self.options.merge_schema.is_some() {
+            DurationHints::Qualified
+        } else {
+            DurationHints::All
         };
         match self.options.merge_schema {
             None if hadoop_paths => return Ok(SchemaSampling::SingleParquet),
@@ -415,6 +459,7 @@ impl ReadFormat for ParquetReadFormat {
                     metadata.file_metadata(),
                     coerce_int96,
                     coerce_int96_tz.as_ref(),
+                    self.duration_hints,
                 )?;
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
@@ -505,7 +550,7 @@ impl ReadFormat for ParquetReadFormat {
         // Read integer statistics with their physical signedness before converting
         // bounds to the scan type. UINT32 and UINT64 can exceed the signed range.
         let file_metadata = metadata.file_metadata();
-        let physical = parquet_file_schema(file_metadata, None, None)?;
+        let physical = parquet_file_schema(file_metadata, None, None, DurationHints::Storage)?;
         let mut ambiguous_indices = Vec::new();
         let fields = file_schema
             .fields()
@@ -686,9 +731,13 @@ impl ReadFormat for ParquetReadFormat {
                     metadata.schema_descr(),
                     metadata.key_value_metadata(),
                 )?;
-                if let Some(schema) =
-                    reconciled_read_schema(metadata, &physical, &integer_fields, self.matching)?
-                {
+                if let Some(schema) = reconciled_read_schema(
+                    metadata,
+                    &physical,
+                    &integer_fields,
+                    self.matching,
+                    DurationHints::Storage,
+                )? {
                     physical = schema;
                     file.arrow_schema = Some(Arc::new(physical.clone()));
                 }
@@ -870,7 +919,15 @@ fn clear_metadata(schema: Schema) -> Schema {
         .fields()
         .iter()
         .map(|field| {
-            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
+            let metadata = if field
+                .metadata()
+                .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY)
+            {
+                type_metadata(&FieldMetadata::from(field.as_ref())).to_hashmap()
+            } else {
+                Default::default()
+            };
+            Arc::new(field.as_ref().clone().with_metadata(metadata))
         })
         .collect::<Fields>();
     Schema::new(fields)

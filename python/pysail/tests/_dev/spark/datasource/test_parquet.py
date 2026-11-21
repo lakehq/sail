@@ -433,6 +433,26 @@ def test_parquet_explicit_year_month_interval_reads_int32_months(spark, tmp_path
     ]
 
 
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks interval qualifiers in Sail-written Arrow schema metadata")
+@pytest.mark.parametrize("skip_metadata", [False, True])
+def test_parquet_sail_interval_round_trip(spark, tmp_path, skip_metadata):
+    path = str(tmp_path / "intervals")
+    spark.sql("SELECT INTERVAL '2' HOUR AS v, named_struct('x', INTERVAL '-3' MINUTE) AS s").write.parquet(path)
+    reader = spark.read.option("skipMetadata", skip_metadata)
+
+    inferred = reader.parquet(path)
+    assert inferred.schema.simpleString() == "struct<v:interval hour,s:struct<x:interval day to second>>"
+    assert inferred.collect() == [Row(v=timedelta(hours=2), s=Row(x=timedelta(minutes=-3)))]
+
+    for option, value in [("basePath", path), ("mergeSchema", True)]:
+        inferred = spark.read.option("skipMetadata", skip_metadata).option(option, value).parquet(path)
+        assert inferred.schema.simpleString() == "struct<v:interval hour,s:struct<x:bigint>>"
+        assert inferred.collect() == [Row(v=timedelta(hours=2), s=Row(x=-180_000_000))]
+
+    raw = reader.schema("v BIGINT, s STRUCT<x: BIGINT>").parquet(path)
+    assert raw.collect() == [Row(v=7_200_000_000, s=Row(x=-180_000_000))]
+
+
 def test_parquet_explicit_interval_reads_int64_ticks(spark, tmp_path):
     for i, ty in enumerate([pa.duration("us"), pa.int64()]):
         ticks = pa.array([-1, None, 42], ty)
