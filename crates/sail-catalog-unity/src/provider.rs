@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arrow::datatypes::DataType;
 use sail_catalog::credentials::CatalogCredentials;
@@ -38,6 +38,15 @@ pub struct UnityCatalogProvider {
     name: String,
     options: UnityCatalogOptions,
     http_client: reqwest::Client,
+    /// Staging table IDs by staging location, for staging tables allocated while planning.
+    /// Unity Catalog 0.6 and later require the ID when the managed table is created later.
+    staging_table_ids: Mutex<HashMap<String, String>>,
+}
+
+/// A staging table that reserves the storage location of a new managed table.
+struct StagingTable {
+    location: String,
+    id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +63,7 @@ impl UnityCatalogProvider {
             name,
             options,
             http_client,
+            staging_table_ids: Mutex::new(HashMap::new()),
         })
     }
 
@@ -97,13 +107,13 @@ impl UnityCatalogProvider {
         }
     }
 
-    async fn create_managed_staging_location(
+    async fn create_managed_staging_table(
         &self,
         client: &ApiClient,
         catalog_name: &str,
         schema_name: &str,
         table: &str,
-    ) -> CatalogResult<String> {
+    ) -> CatalogResult<StagingTable> {
         let request = r#gen::CreateStagingTable {
             name: table.to_string(),
             catalog_name: catalog_name.to_string(),
@@ -113,15 +123,26 @@ impl UnityCatalogProvider {
             Ok(response) => response,
             Err(e) => {
                 return Err(CatalogError::External(format!(
-                    "Failed to create staging table: {e}"
+                    "Failed to create staging table: {}",
+                    describe_error(&e)
                 )));
             }
         };
-        response.inner.staging_location.ok_or_else(|| {
+        let location = response.inner.staging_location.ok_or_else(|| {
             CatalogError::External(
                 "Unity Catalog staging table response is missing a staging location".to_string(),
             )
+        })?;
+        Ok(StagingTable {
+            location,
+            id: response.inner.id,
         })
+    }
+
+    fn staging_table_ids(&self) -> MutexGuard<'_, HashMap<String, String>> {
+        self.staging_table_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Returns full name of an object for the REST API (`catalog.schema.table`).
@@ -394,11 +415,10 @@ impl CatalogProvider for UnityCatalogProvider {
                     Some(&schema_name),
                 ))
             }
-            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) && if_not_exists => {
-                self.get_database(database).await
-            }
+            Err(e) if if_not_exists && is_already_exists(&e) => self.get_database(database).await,
             Err(e) => Err(CatalogError::External(format!(
-                "Failed to create schema: {e}"
+                "Failed to create schema: {}",
+                describe_error(&e)
             ))),
         }
     }
@@ -605,27 +625,36 @@ impl CatalogProvider for UnityCatalogProvider {
         } else {
             r#gen::TableType::Managed
         };
-        let storage_location = if is_external {
-            location.ok_or_else(|| {
+        let (storage_location, staging_table_id) = if is_external {
+            let location = location.ok_or_else(|| {
                 CatalogError::External(
                     "Storage location is required for external Unity Catalog tables".to_string(),
                 )
-            })?
+            })?;
+            (location, None)
         } else if is_write_precondition {
             // CTAS/data-write preconditions run before the writer, so they must use
             // the staging location already returned by plan_lakehouse_create.
-            location.ok_or_else(|| {
+            let location = location.ok_or_else(|| {
                 CatalogError::External(
                     "Unity Catalog managed table write precondition is missing a planned staging location"
                         .to_string(),
                 )
-            })?
+            })?;
+            let staging_table_id = self.staging_table_ids().remove(&location);
+            (location, staging_table_id)
         } else {
             // The SQL planner supplies generated default locations for managed tables. Unity
             // managed table creation must use a staging location allocated by the catalog.
-            self.create_managed_staging_location(&client, &catalog_name, &schema_name, table)
-                .await?
+            let staging = self
+                .create_managed_staging_table(&client, &catalog_name, &schema_name, table)
+                .await?;
+            (staging.location, staging.id)
         };
+        // Unity Catalog 0.6 and later reject a managed table that does not name its staging table.
+        if let Some(staging_table_id) = staging_table_id {
+            props.insert(DELTA_UNITY_TABLE_ID_KEY.to_string(), staging_table_id);
+        }
 
         let request = r#gen::CreateTable {
             name: table.to_string(),
@@ -652,22 +681,13 @@ impl CatalogProvider for UnityCatalogProvider {
                 let table_info = response.inner;
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
-            Err(e)
-                if e.status() == Some(reqwest::StatusCode::CONFLICT) && mode.ignore_if_exists() =>
-            {
+            Err(e) if mode.ignore_if_exists() && is_already_exists(&e) => {
                 self.get_table(database, table).await
             }
-            Err(e) => {
-                if let Some(status) = e.status() {
-                    Err(CatalogError::External(format!(
-                        "Failed to create table: HTTP {status}: {e}"
-                    )))
-                } else {
-                    Err(CatalogError::External(format!(
-                        "Failed to create table: {e}"
-                    )))
-                }
-            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to create table: {}",
+                describe_error(&e)
+            ))),
         }
     }
 
@@ -848,14 +868,36 @@ impl CatalogProvider for UnityCatalogProvider {
                 mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             };
             if request.options.is_write_precondition {
-                let client = self
-                    .get_client()
-                    .await
-                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-                let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-                let location = self
-                    .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
-                    .await?;
+                // The CREATE TABLE precondition plans again with the staging location from the
+                // first plan, which must not allocate another staging table.
+                let planned_location = request
+                    .options
+                    .location
+                    .clone()
+                    .filter(|location| self.staging_table_ids().contains_key(location));
+                let location = match planned_location {
+                    Some(location) => location,
+                    None => {
+                        let client = self.get_client().await.map_err(|e| {
+                            CatalogError::External(format!("Failed to load client: {e}"))
+                        })?;
+                        let (catalog_name, schema_name) =
+                            self.get_catalog_and_schema_name(database)?;
+                        let staging = self
+                            .create_managed_staging_table(
+                                &client,
+                                &catalog_name,
+                                &schema_name,
+                                table,
+                            )
+                            .await?;
+                        if let Some(id) = staging.id {
+                            self.staging_table_ids()
+                                .insert(staging.location.clone(), id);
+                        }
+                        staging.location
+                    }
+                };
                 plan.table.status.location = Some(location.clone());
                 plan.table.execution.table_identity.table_uri = Some(location);
             }
@@ -1086,10 +1128,69 @@ fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceForm
     }
 }
 
+/// The error body of a failed request, for operations whose responses declare one.
+trait UnityErrorBody {
+    fn error_body(&self) -> Option<&r#gen::ErrorResponse>;
+}
+
+impl UnityErrorBody for r#gen::CreateSchemaError {
+    fn error_body(&self) -> Option<&r#gen::ErrorResponse> {
+        match self {
+            Self::ClientError(body) => Some(body),
+        }
+    }
+}
+
+impl UnityErrorBody for r#gen::CreateStagingTableError {
+    fn error_body(&self) -> Option<&r#gen::ErrorResponse> {
+        match self {
+            Self::ClientError(body) => Some(body),
+        }
+    }
+}
+
+impl UnityErrorBody for r#gen::CreateTableError {
+    fn error_body(&self) -> Option<&r#gen::ErrorResponse> {
+        match self {
+            Self::ClientError(body) => Some(body),
+        }
+    }
+}
+
+fn error_body<E: UnityErrorBody>(error: &r#gen::ApiError<E>) -> Option<&r#gen::ErrorResponse> {
+    match error {
+        r#gen::ApiError::Response(response) => response.inner.error_body(),
+        _ => None,
+    }
+}
+
+/// Returns whether a create request failed because the object already exists.
+/// Unity Catalog 0.4 answers 409 Conflict, while 0.6 and later answer 400 with an
+/// error code such as `SCHEMA_ALREADY_EXISTS` or `TABLE_ALREADY_EXISTS`.
+fn is_already_exists<E: UnityErrorBody>(error: &r#gen::ApiError<E>) -> bool {
+    error.status() == Some(reqwest::StatusCode::CONFLICT)
+        || error_body(error)
+            .and_then(|body| body.error_code.as_deref())
+            .is_some_and(|code| code.ends_with("ALREADY_EXISTS"))
+}
+
+/// Describes a failed request, including the error code and message from Unity Catalog.
+fn describe_error<E: UnityErrorBody>(error: &r#gen::ApiError<E>) -> String {
+    let mut description = error.to_string();
+    if let Some(body) = error_body(error) {
+        for detail in [&body.error_code, &body.message].into_iter().flatten() {
+            description.push_str(": ");
+            description.push_str(detail);
+        }
+    }
+    description
+}
+
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
+    use sail_catalog::provider::{CreateTableColumnOptions, CreateTableMode};
     use secrecy::ExposeSecret;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1556,5 +1657,276 @@ mod tests {
         assert_eq!(partition_by[0].column, "value");
         assert!(!columns[0].is_partition);
         assert!(columns[1].is_partition);
+    }
+
+    fn unity_error(status: u16, error_code: &str, message: &str) -> ResponseTemplate {
+        ResponseTemplate::new(status).set_body_json(serde_json::json!({
+            "error_code": error_code,
+            "details": [{"reason": error_code, "@type": "google.rpc.ErrorInfo"}],
+            "message": message
+        }))
+    }
+
+    fn create_options(
+        mode: CreateTableMode,
+        location: Option<&str>,
+        is_external: bool,
+        is_write_precondition: bool,
+    ) -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![CreateTableColumnOptions {
+                metadata: Default::default(),
+                name: "id".to_string(),
+                data_type: DataType::Int32,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location: location.map(str::to_string),
+            format: "delta".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode,
+            properties: vec![],
+            is_external,
+            is_write_precondition,
+        }
+    }
+
+    async fn mount_table_responses(server: &MockServer) {
+        let table = serde_json::json!({
+            "catalog_name": "main",
+            "schema_name": "s",
+            "name": "t",
+            "columns": []
+        });
+        Mock::given(method("POST"))
+            .and(path("/staging-tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "staging-id",
+                "staging_location": "file:///storage/tables/staging-id"
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&table))
+            .mount(server)
+            .await;
+    }
+
+    /// Returns the bodies of the received requests for the given method and path.
+    async fn received_bodies(
+        server: &MockServer,
+        method: &str,
+        path: &str,
+    ) -> Vec<serde_json::Value> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == method && request.url.path() == path)
+            .map(|request| request.body_json().unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_create_schema_if_not_exists_accepts_existing_schema() {
+        // Unity Catalog 0.4 answers 409, while 0.6 and later answer 400 with an error code.
+        for (status, error_code) in [(409, "ALREADY_EXISTS"), (400, "SCHEMA_ALREADY_EXISTS")] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/schemas"))
+                .respond_with(unity_error(status, error_code, "Schema already exists: s"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/schemas/"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"catalog_name": "main", "name": "s"})),
+                )
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["s"]).unwrap();
+            let options = |if_not_exists| CreateDatabaseOptions {
+                comment: None,
+                location: None,
+                if_not_exists,
+                properties: vec![],
+            };
+            let status = provider
+                .create_database(&database, options(true))
+                .await
+                .unwrap();
+            assert_eq!(status.database, vec!["main", "s"], "{error_code}");
+
+            let error = provider
+                .create_database(&database, options(false))
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .ends_with(&format!("{error_code}: Schema already exists: s")),
+                "{error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_schema_if_not_exists_reports_other_bad_requests() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/schemas"))
+            .respond_with(unity_error(400, "INVALID_ARGUMENT", "Invalid schema name"))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["s"]).unwrap();
+        let error = provider
+            .create_database(
+                &database,
+                CreateDatabaseOptions {
+                    comment: None,
+                    location: None,
+                    if_not_exists: true,
+                    properties: vec![],
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "external error: Failed to create schema: response error: status code 400 Bad Request: INVALID_ARGUMENT: Invalid schema name"
+        );
+        assert_eq!(received_targets(&server).await, vec!["POST /schemas"]);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_if_not_exists_accepts_table_created_concurrently() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/tables"))
+            .respond_with(unity_error(
+                400,
+                "TABLE_ALREADY_EXISTS",
+                "Table already exists: main.s.t",
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "catalog_name": "main",
+                "schema_name": "s",
+                "name": "t",
+                "columns": []
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["s"]).unwrap();
+        let options = create_options(
+            CreateTableMode::CreateIfNotExists,
+            Some("file:///external/t"),
+            true,
+            false,
+        );
+        let status = provider
+            .create_table(&database, "t", options)
+            .await
+            .unwrap();
+
+        assert_eq!(status.name, "t");
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["POST /tables", "GET /tables/main.s.t"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_managed_table_names_staging_table() {
+        let server = MockServer::start().await;
+        mount_table_responses(&server).await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["s"]).unwrap();
+        let options = create_options(
+            CreateTableMode::Create,
+            Some("file:///warehouse/s/t"),
+            false,
+            false,
+        );
+        provider
+            .create_table(&database, "t", options)
+            .await
+            .unwrap();
+
+        let tables = received_bodies(&server, "POST", "/tables").await;
+        assert_eq!(tables.len(), 1);
+        assert_eq!(
+            tables[0]["storage_location"],
+            "file:///storage/tables/staging-id"
+        );
+        assert_eq!(
+            tables[0]["properties"][DELTA_UNITY_TABLE_ID_KEY],
+            "staging-id"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_managed_ctas_names_staging_table_allocated_while_planning() {
+        let server = MockServer::start().await;
+        mount_table_responses(&server).await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["s"]).unwrap();
+        let request = |location: Option<&str>| LakehouseCreateRequest {
+            catalog_table: vec!["test".to_string(), "s".to_string(), "t".to_string()],
+            options: create_options(CreateTableMode::Create, location, false, true),
+        };
+        let plan = provider
+            .plan_lakehouse_create(&database, "t", request(Some("file:///warehouse/s/t")))
+            .await
+            .unwrap();
+        let location = plan.table.status.location.unwrap();
+        assert_eq!(location, "file:///storage/tables/staging-id");
+
+        // The CREATE TABLE precondition plans again with the planned location.
+        let replan = provider
+            .plan_lakehouse_create(&database, "t", request(Some(&location)))
+            .await
+            .unwrap();
+        assert_eq!(
+            replan.table.status.location.as_deref(),
+            Some(location.as_str())
+        );
+        provider
+            .create_table(&database, "t", request(Some(&location)).options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["POST /staging-tables", "POST /tables"]
+        );
+        let tables = received_bodies(&server, "POST", "/tables").await;
+        assert_eq!(tables[0]["storage_location"], location);
+        assert_eq!(
+            tables[0]["properties"][DELTA_UNITY_TABLE_ID_KEY],
+            "staging-id"
+        );
     }
 }
