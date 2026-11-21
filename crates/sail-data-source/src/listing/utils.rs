@@ -158,6 +158,8 @@ pub fn infer_listing_compression(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaSampling {
     Sample,
+    /// Multiline CSV infers types from whole files, including loose files in a partitioned table.
+    MultilineCsv,
     /// Ordinary Parquet reads use the existing bounded sample when mergeSchema is unset.
     SampleParquet,
     /// Prefer a summary footer, falling back to the lexicographically first data file.
@@ -179,6 +181,7 @@ pub(super) async fn sample_listing_files<'a>(
 ) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
     const SAMPLE_SIZE: usize = 10;
     let merge = matches!(sampling, SchemaSampling::MergeParquet { .. });
+    let all_files = merge || sampling == SchemaSampling::MultilineCsv;
     let mut discovery = PartitionDiscovery::default();
     let mut samples = Vec::new();
     let mut direct_samples = Vec::new();
@@ -219,7 +222,11 @@ pub(super) async fn sample_listing_files<'a>(
                 // Spark excludes metadata prefixes from row scans and partition discovery.
                 // Only the two exact filenames receive special treatment when choosing footers.
                 let parquet_summary = matches!(name, "_common_metadata" | "_metadata");
-                if (metadata_file && sampling == SchemaSampling::Sample)
+                if (metadata_file
+                    && matches!(
+                        sampling,
+                        SchemaSampling::Sample | SchemaSampling::MultilineCsv
+                    ))
                     || (!parquet_summary && file.size == 0)
                 {
                     continue;
@@ -243,13 +250,13 @@ pub(super) async fn sample_listing_files<'a>(
                 {
                     continue;
                 }
-                if direct_input && (merge || direct.len() < SAMPLE_SIZE) {
+                if direct_input && (all_files || direct.len() < SAMPLE_SIZE) {
                     direct.push(file.clone());
                 }
-                if (partitioned || merge) && (merge || objects.len() < SAMPLE_SIZE) {
+                if (partitioned || all_files) && (all_files || objects.len() < SAMPLE_SIZE) {
                     objects.push(file);
                 }
-                if base_path.is_none() && !merge && objects.len() == SAMPLE_SIZE {
+                if base_path.is_none() && !all_files && objects.len() == SAMPLE_SIZE {
                     break 'roots;
                 }
             }

@@ -247,6 +247,18 @@ def test_base_path_explicit_csv_positions(spark, tmp_path):
     assert df.collect() == [Row(data="ignored", p=1)]
 
 
+@pytest.mark.parametrize("multiline", [False, True])
+def test_base_path_csv_schema_sample_with_loose_file(spark, tmp_path, multiline):
+    partition = tmp_path / "p=1"
+    partition.mkdir()
+    (partition / "part.csv").write_text("v\n1\n")
+    (tmp_path / "loose.csv").write_text("v\nword\n")
+    df = spark.read.options(basePath=str(tmp_path), header=True, inferSchema=True, multiLine=multiline).csv(
+        str(tmp_path)
+    )
+    assert df.collect() == [Row(v="1" if multiline else 1, p=1)]
+
+
 def test_base_path_schema_sample_excludes_loose_files(spark, tmp_path):
     for i in range(11):
         (tmp_path / f"{i}.json").write_text('{"loose":42}')
