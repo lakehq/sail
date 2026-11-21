@@ -16,6 +16,7 @@ workspace = true
 sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-function = { path = "../sail-function" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
@@ -43,6 +44,7 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 lexical-core = { workspace = true, features = ["format", "power-of-two"] }
+icu_properties = { workspace = true }
 bigdecimal = { workspace = true }
 chrono = { workspace = true }
 pyo3 = { workspace = true }

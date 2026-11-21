@@ -182,6 +182,9 @@ pub(super) async fn sample_listing_files<'a>(
             let selected =
                 file.size > 0 && matches_path_glob_filter(path_glob_filter, &file.location);
             if let Some(base) = base_path {
+                if file.location.filename().is_some_and(is_summary_file) {
+                    continue;
+                }
                 let partitioned = discovery.observe(&base.root, &file.location, Some(base))?;
                 if selected && partitioned && objects.len() < SAMPLE_SIZE {
                     objects.push(file);
@@ -277,14 +280,17 @@ pub fn matches_path_glob_filter(
     })
 }
 
+pub(super) fn is_summary_file(name: &str) -> bool {
+    name.starts_with("_common_metadata") || name.starts_with("_metadata")
+}
+
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
     let is_hidden = |name: &str| {
         let exclude = (name.starts_with('_') && !name.contains('='))
             || name.starts_with('.')
             || name.ends_with("._COPYING_");
-        let keep = name.starts_with("_common_metadata") || name.starts_with("_metadata");
-        exclude && !keep
+        exclude && !is_summary_file(name)
     };
     url.strip_prefix(location)
         .is_some_and(|mut segments| segments.any(is_hidden))

@@ -6,7 +6,7 @@ use std::fmt::Write;
 use std::num::NonZeroU8;
 use std::sync::{Arc, LazyLock};
 
-use arrow::array::timezone::Tz;
+use arrow::datatypes::Date32Type;
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use bigdecimal::{BigDecimal, ToPrimitive};
 use chrono::{NaiveDate, NaiveDateTime};
@@ -15,25 +15,29 @@ use datafusion_common::{
     Result, ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
 };
 use datafusion_datasource::ListingTableUrl;
+use icu_properties::CodePointMapData;
+use icu_properties::props::GeneralCategory;
 use object_store::path::Path;
 use regex::Regex;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
-use sail_common_datafusion::utils::datetime::{arrow_timezone_label, localize_with_fallback};
-use sail_sql_analyzer::parser::parse_timestamp;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_function::scalar::datetime::timestamp::TimestampParser;
+use sail_sql_analyzer::parser::parse_date;
 
 use crate::url::resolve_table_url;
 
 const HIVE_NULL: &str = "__HIVE_DEFAULT_PARTITION__";
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct BasePathOptions {
     pub(super) root: ListingTableUrl,
     case_sensitive: bool,
     timestamp_type: Option<DataType>,
+    supports_time: bool,
     validate: bool,
     ignore_invalid_paths: bool,
-    timezone: Arc<str>,
+    local_timestamp_parser: TimestampParser,
 }
 
 pub(super) fn read_option<'a>(options: &'a [OptionLayer], name: &str) -> Option<&'a str> {
@@ -115,18 +119,19 @@ pub(super) fn resolve_base_path(
         root: base,
         case_sensitive,
         timestamp_type: infer.then_some(timestamp_type),
+        // Spark 4.1 introduced TIME partition discovery. It infers TIME even when
+        // the SQL syntax for declaring a TIME column is disabled.
+        supports_time: service.is_none() || option("spark.sql.timeType.enabled")?.is_some(),
         validate: boolean("spark.sql.sources.validatePartitionColumns")?,
-        timezone: Arc::from(arrow_timezone_label(timezone).as_ref()),
+        local_timestamp_parser: TimestampParser::Ltz {
+            default_timezone: timezone.to_owned(),
+        },
         ignore_invalid_paths,
     })
 }
 
-fn names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
-    if case_sensitive {
-        a == b
-    } else {
-        a.eq_ignore_ascii_case(b)
-    }
+pub(super) fn names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
+    a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
 }
 
 struct PartitionPath<'a> {
@@ -257,6 +262,43 @@ static PARTITION_DATETIME: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid partition datetime pattern")
 });
 
+// Spark infers TIME using HH:mm:ss[.SSSSSS].
+#[expect(clippy::expect_used)]
+static PARTITION_TIME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?$")
+        .expect("valid partition time pattern")
+});
+
+// Java integer and BigDecimal parsers read UTF-16 code units. Each BMP decimal
+// digit range consists of ten consecutive characters starting with zero.
+static DECIMAL_DIGIT_RANGES: LazyLock<Vec<std::ops::RangeInclusive<u32>>> = LazyLock::new(|| {
+    CodePointMapData::<GeneralCategory>::new()
+        .iter_ranges_for_value(GeneralCategory::DecimalNumber)
+        .take_while(|range| *range.start() <= u32::from(u16::MAX))
+        .collect()
+});
+
+fn normalize_decimal_digits(value: &str) -> Cow<'_, str> {
+    if value.is_ascii() {
+        return Cow::Borrowed(value);
+    }
+    Cow::Owned(
+        value
+            .chars()
+            .map(|c| {
+                let code = u32::from(c);
+                let index = DECIMAL_DIGIT_RANGES.partition_point(|range| *range.end() < code);
+                match DECIMAL_DIGIT_RANGES.get(index) {
+                    Some(range) if range.contains(&code) => {
+                        char::from(b'0' + (code - range.start()) as u8)
+                    }
+                    _ => c,
+                }
+            })
+            .collect(),
+    )
+}
+
 fn integer_decimal(value: &str) -> Option<ScalarValue> {
     // BigDecimal accepts underscores in numeric literals. Spark uses Java decimal syntax.
     if value.contains('_') {
@@ -278,14 +320,20 @@ fn integer_decimal(value: &str) -> Option<ScalarValue> {
     ))
 }
 
-fn infer_partition_type(current: &DataType, value: &str, timestamp_type: &DataType) -> DataType {
+fn infer_partition_type(
+    current: &DataType,
+    value: &str,
+    timestamp_type: &DataType,
+    supports_time: bool,
+) -> DataType {
+    let normalized = normalize_decimal_digits(value);
     let inferred = if value == HIVE_NULL {
         DataType::Null
-    } else if value.parse::<i32>().is_ok() {
+    } else if normalized.parse::<i32>().is_ok() {
         DataType::Int32
-    } else if value.parse::<i64>().is_ok() {
+    } else if normalized.parse::<i64>().is_ok() {
         DataType::Int64
-    } else if let Some(decimal) = integer_decimal(value) {
+    } else if let Some(decimal) = integer_decimal(&normalized) {
         decimal.data_type()
     } else if java_double(value).is_some() {
         DataType::Float64
@@ -297,6 +345,8 @@ fn infer_partition_type(current: &DataType, value: &str, timestamp_type: &DataTy
             && NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f").is_ok()
         {
             timestamp_type.clone()
+        } else if supports_time && PARTITION_TIME.is_match(&value) {
+            DataType::Time64(TimeUnit::Microsecond)
         } else {
             DataType::Utf8
         }
@@ -351,7 +401,7 @@ impl PartitionDiscovery {
                 && self
                     .base
                     .as_ref()
-                    .is_some_and(|b| !b.eq_ignore_ascii_case(&path.base));
+                    .is_some_and(|b| !names_match(b, &path.base, false));
             self.base.get_or_insert(path.base);
             if let Some(directory) = directory {
                 self.directories.insert(
@@ -382,11 +432,13 @@ impl PartitionDiscovery {
             if *ty == DataType::Utf8 || (options.is_some() && value == HIVE_NULL) {
                 continue;
             }
-            let Some(timestamp_type) = options.and_then(|o| o.timestamp_type.as_ref()) else {
-                *ty = DataType::Utf8;
-                continue;
+            *ty = if let Some(options) = options
+                && let Some(timestamp_type) = &options.timestamp_type
+            {
+                infer_partition_type(ty, value, timestamp_type, options.supports_time)
+            } else {
+                DataType::Utf8
             };
-            *ty = infer_partition_type(ty, value, timestamp_type);
         }
         Ok(true)
     }
@@ -456,28 +508,35 @@ fn parse_partition_value(
             })?;
             ScalarValue::Float64(Some(number)).cast_to(ty)
         }
-        DataType::Timestamp(unit, Some(_)) => {
-            let value = decoded(value);
-            let timezone: Tz = options.timezone.parse()?;
-            let local = if let Ok((datetime, "")) =
-                parse_timestamp(&value).and_then(|ts| ts.into_naive())
-            {
-                let instant = localize_with_fallback(&timezone, &datetime)?;
-                ScalarValue::TimestampMicrosecond(
-                    Some(instant.timestamp_micros()),
-                    Some(options.timezone.clone()),
-                )
+        DataType::Timestamp(_, zone) => {
+            let parser = if zone.is_some() {
+                &options.local_timestamp_parser
             } else {
-                let local_type = DataType::Timestamp(*unit, Some(options.timezone.clone()));
-                ScalarValue::try_from_string(value.into_owned(), &local_type)?
+                &TimestampParser::Ntz
             };
-            local.cast_to(ty)
+            let micros = parser.parse_unformatted(&decoded(value))?;
+            ScalarValue::TimestampMicrosecond(Some(micros), zone.clone()).cast_to(ty)
         }
-        DataType::Timestamp(_, None) | DataType::Utf8 => {
+        DataType::Date32 => {
+            let date = parse_date(value)
+                .and_then(NaiveDate::try_from)
+                .map_err(|_| plan_datafusion_err!("invalid date partition value: {value}"))?;
+            Ok(ScalarValue::Date32(Some(Date32Type::from_naive_date(date))))
+        }
+        DataType::Boolean => boolean_option("boolean partition value", Some(value), false)
+            .map(|v| ScalarValue::Boolean(Some(v))),
+        DataType::Utf8 | DataType::Time32(_) | DataType::Time64(_) => {
             ScalarValue::try_from_string(decoded(value).into_owned(), ty)
         }
-        DataType::Decimal128(_, _) if let Some(decimal) = integer_decimal(value) => {
-            decimal.cast_to(ty)
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+            ScalarValue::try_from_string(normalize_decimal_digits(value).into_owned(), ty)
+        }
+        DataType::Decimal128(_, _) => {
+            let value = normalize_decimal_digits(value);
+            match integer_decimal(&value) {
+                Some(decimal) => decimal.cast_to(ty),
+                None => ScalarValue::try_from_string(value.into_owned(), ty),
+            }
         }
         _ => ScalarValue::try_from_string(value.to_owned(), ty),
     }

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 
 import pytest
@@ -265,6 +265,11 @@ def test_base_path_overlapping_text_value(spark, tmp_path):
         ("9007199254740993E2", "decimal(18,0)", Decimal(900719925474099300)),
         ("__HIVE_DEFAULT_PARTITION__", "void", None),
         ("%31", "string", "1"),
+        ("\uff11\uff12", "int", 12),
+        ("-\u0661\u0662", "int", -12),
+        ("\uff13000000000", "bigint", 3000000000),
+        ("\uff112345678901234567890", "decimal(20,0)", Decimal(12345678901234567890)),
+        ("\U0001d7d9\U0001d7da", "string", "\U0001d7d9\U0001d7da"),
         ("2025-1-2", "string", "2025-1-2"),
         ("2025-01-01 10%3A10%3A10.123456", "string", "2025-01-01 10:10:10.123456"),
         ("inf", "string", "inf"),
@@ -328,16 +333,18 @@ def test_base_path_overlapping_inputs(spark, tmp_path, overlap):
     assert len(df.inputFiles()) == 2
 
 
-def test_base_path_unmatched_input_glob(spark, tmp_path):
+@pytest.mark.parametrize("missing", ["missing*", "missing"])
+def test_base_path_missing_input(spark, tmp_path, missing):
     write_json_partition(tmp_path, "p=1")
-    paths = [str(tmp_path / "p=1"), str(tmp_path / "missing*")]
+    paths = [str(tmp_path / "p=1"), str(tmp_path / missing)]
     with pytest.raises(Exception, match=r"Path does not exist.*missing"):
         spark.read.option("basePath", str(tmp_path)).schema("id INT").json(paths).collect()
 
 
-def test_base_path_glob_matches_empty_directory(spark, tmp_path):
+@pytest.mark.parametrize("path", ["empty", "emp*/"])
+def test_base_path_empty_directory(spark, tmp_path, path):
     (tmp_path / "empty").mkdir()
-    df = spark.read.option("basePath", str(tmp_path)).schema("id INT").json(f"{tmp_path}/emp*/")
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT").json(f"{tmp_path}/{path}")
     assert df.collect() == []
 
 
@@ -374,3 +381,98 @@ def test_base_path_hive_escaped_partition_name(spark, tmp_path):
     write_json_partition(tmp_path, "caf%E9=1")
     df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
     assert df.select("café").collect() == [Row(1)]
+
+
+@pytest.mark.parametrize(("pattern", "expected"), [(".snap*/p=*/row.json", [13]), ("*/p=*/row.json", [1, 13])])
+@pytest.mark.spark(version=">=4.0", reason="Uses ignoreInvalidPartitionPaths")
+def test_base_path_glob_through_hidden_directory(spark, tmp_path, pattern, expected):
+    write_json_partition(tmp_path, ".snapshot/p=13")
+    write_json_partition(tmp_path, "visible/p=1")
+    reader = spark.read.options(basePath=str(tmp_path), ignoreInvalidPartitionPaths=True)
+    assert [r.p for r in reader.json(str(tmp_path / pattern)).orderBy("p").collect()] == expected
+
+
+def test_base_path_glob_matching_only_hidden_file(spark, tmp_path):
+    (tmp_path / ".row.json").write_text('{"id":1}')
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT").json(str(tmp_path / ".row*"))
+    assert df.collect() == []
+
+
+@pytest.mark.parametrize("summary", ["_metadata", "_common_metadata"])
+def test_base_path_summary_files(spark, tmp_path, summary):
+    write_json_partition(tmp_path, "p=1/data")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / summary).touch()
+    (tmp_path / "p=1" / "data" / summary).write_text('{"id":99}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+def test_base_path_ntz_partition_with_offset(spark, tmp_path):
+    write_json_partition(tmp_path, "p=2026-03-01 00%3A30%3A00+02%3A00")
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT, p TIMESTAMP_NTZ").json(str(tmp_path))
+    rows = df.where("CAST(p AS DATE) = DATE '2026-03-01'").selectExpr("CAST(p AS STRING) AS wall_clock").collect()
+    assert rows == [Row(wall_clock="2026-03-01 00:30:00")]
+
+
+@pytest.mark.parametrize("invalid", ["yes", "1"])
+def test_base_path_boolean_partition_validation(spark, tmp_path, invalid):
+    for value in ["TrUe", "false", invalid]:
+        write_json_partition(tmp_path, f"p={value}")
+    reader = spark.read.option("basePath", str(tmp_path)).schema("id INT, p BOOLEAN")
+    key = "spark.sql.sources.validatePartitionColumns"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        with pytest.raises(Exception, match=invalid):
+            reader.json(str(tmp_path)).collect()
+        spark.conf.set(key, "false")
+        assert [r.p for r in reader.json(str(tmp_path)).orderBy("p").collect()] == [None, False, True]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_partial_date_partitions(spark, tmp_path):
+    for token in ["2025", "2025-2"]:
+        write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT, p DATE").json(str(tmp_path))
+    assert [r.p for r in df.orderBy("p").collect()] == [date(2025, 1, 1), date(2025, 2, 1)]
+
+
+@pytest.mark.spark(version=">=4.1", reason="TIME partition inference requires Spark 4.1")
+def test_base_path_time_partitions(spark, tmp_path):
+    for token in ["12%3A30%3A00", "12%3A30%3A00.123456"]:
+        write_json_partition(tmp_path, f"p={token}")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.schema["p"].dataType.simpleString() == "time(6)"
+    # Spark Connect requires TIME to be enabled to return it in an Arrow batch.
+    key = "spark.sql.timeType.enabled"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        assert [r.p for r in df.orderBy("p").collect()] == [time(12, 30), time(12, 30, 0, 123456)]
+        assert df.where("p > TIME '12:30:00'").count() == 1
+    finally:
+        spark.conf.set(key, previous)
+
+
+@pytest.mark.spark(version="<4.1", reason="Older Spark clients read time-of-day partitions as strings")
+def test_base_path_time_partition_before_spark_41(spark, tmp_path):
+    write_json_partition(tmp_path, "p=12%3A30%3A00")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p="12:30:00")]
+
+
+@pytest.mark.parametrize("schema", [None, "id INT, `Café` STRING"])
+def test_base_path_unicode_case_insensitive_keys(spark, tmp_path, schema):
+    for name, value in [("CAFÉ", 1), ("café", 2)]:
+        write_json_partition(tmp_path, f"{name}={value}")
+    reader = spark.read.option("basePath", str(tmp_path))
+    if schema:
+        reader = reader.schema(schema)
+    df = reader.json(str(tmp_path))
+    assert len(df.columns) == 2
+    if schema:
+        assert df.columns == ["id", "Café"]
+    assert [row[1] for row in df.orderBy(df.columns[1]).collect()] == (["1", "2"] if schema else [1, 2])

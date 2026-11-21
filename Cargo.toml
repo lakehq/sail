@@ -44,6 +44,7 @@ async-stream = "0.3.6"
 lazy_static = "1.5.1"
 once_cell = "1.21.4"
 icu_casemap = "2.2.0"
+icu_properties = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_bytes = "0.11.19"
 serde_json = { version = "1.0.150", features = ["preserve_order", "raw_value"] }

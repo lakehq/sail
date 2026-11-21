@@ -548,7 +548,6 @@ pub(crate) async fn resolve_read_urls(
     let mut seen = HashSet::new();
     for path in paths {
         let alternatives = GlobUrl::parse(&path)?;
-        let expanded = expand_input_globs && alternatives.len() > 1;
         let mut matches = vec![];
         for url in alternatives {
             let url = rewrite_directory_url(url, ctx).await?;
@@ -556,17 +555,10 @@ pub(crate) async fn resolve_read_urls(
                 matches.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
             } else {
                 let url: ListingTableUrl = attach_default_glob(url)?.try_into()?;
-                // Brace expansion can produce literal alternatives with no wildcard left.
-                if expanded && url.is_collection() {
-                    let exists = if url.get_url().scheme() == "file" {
-                        url.get_url().to_file_path().is_ok_and(|p| p.is_dir())
-                    } else {
-                        let store = ctx.runtime_env().object_store(&url)?;
-                        store.list(Some(url.prefix())).try_next().await?.is_some()
-                    };
-                    if !exists {
-                        continue;
-                    }
+                // Missing brace alternatives can be skipped as long as the input has a match.
+                if expand_input_globs && url.is_collection() && !directory_exists(ctx, &url).await?
+                {
+                    continue;
                 }
                 matches.push(url);
             }
@@ -581,6 +573,23 @@ pub(crate) async fn resolve_read_urls(
         );
     }
     Ok(urls)
+}
+
+async fn directory_exists(ctx: &dyn Session, url: &ListingTableUrl) -> Result<bool> {
+    if url.scheme() == "file" {
+        return Ok(url.get_url().to_file_path().is_ok_and(|path| path.is_dir()));
+    }
+    let prefix = url.prefix();
+    if prefix.is_root() {
+        return Ok(true);
+    }
+    let store = ctx.runtime_env().object_store(url)?;
+    if store.list(Some(prefix)).try_next().await?.is_some() {
+        return Ok(true);
+    }
+    // Stores with directory entries can expose an empty directory in its parent listing.
+    let entries = store.list_with_delimiter(prefix.parent().as_ref()).await?;
+    Ok(entries.common_prefixes.contains(prefix))
 }
 
 /// Expand one path component at a time so directories (including empty ones) can be roots.
@@ -608,7 +617,6 @@ async fn expand_listing_roots(
             let entries = store.list_with_delimiter(Some(&parent)).await?;
             let selected = |path: &object_store::path::Path| {
                 path.filename().is_some_and(|name| component.matches(name))
-                    && !crate::listing::utils::has_hidden_path_component(&root, path)
             };
             children.extend(entries.common_prefixes.into_iter().filter(&selected));
             if last && !directory_only {

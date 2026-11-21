@@ -20,6 +20,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::{
     DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
@@ -27,7 +28,7 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::listing::partition::{
-    boolean_option, read_option, resolve_base_path, split_discovered_partitions,
+    boolean_option, names_match, read_option, resolve_base_path, split_discovered_partitions,
 };
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{rewrite_unsupported_fields, sample_listing_files};
@@ -312,11 +313,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             let names: Vec<_> = partition_fields.iter().map(|f| f.name()).collect();
             if names.len() > inferred_names.len()
                 || names.iter().zip(&inferred_names).any(|(actual, expected)| {
-                    if base_path.is_some() && !read_case_sensitive {
-                        !actual.eq_ignore_ascii_case(expected)
-                    } else {
-                        *actual != expected
-                    }
+                    !names_match(actual, expected, base_path.is_none() || read_case_sensitive)
                 })
             {
                 return plan_err!(
@@ -442,14 +439,14 @@ fn reconcile_schema_names_case_insensitive(
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let name = field.name();
-        if partitions.iter().any(|p| p.eq_ignore_ascii_case(name)) {
+        if partitions.iter().any(|p| names_match(p, name, false)) {
             fields.push(Arc::clone(field));
             continue;
         }
         let mut matches = physical
             .fields()
             .iter()
-            .filter(|f| f.name().eq_ignore_ascii_case(name));
+            .filter(|f| spark_case_insensitive_name_eq(f.name(), name));
         let reconciled = match matches.next() {
             None => Arc::clone(field),
             Some(first) => {
