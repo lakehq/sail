@@ -5,7 +5,6 @@ use std::mem;
 use std::path::PathBuf;
 
 use chumsky::prelude::{any, choice, end, just, none_of, recursive};
-use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
@@ -46,7 +45,7 @@ impl PatternSegment {
     /// Note that the syntax is different from the `glob` crate.
     /// 1. We use `^` for negated character classes.
     /// 2. We support alternation (e.g. `{a,b}`).
-    fn sequence_parser<'a>(backslash_quotes: bool) -> impl Parser<'a, &'a str, Vec<Self>> {
+    fn sequence_parser<'a>(syntax: ReadPathSyntax) -> impl Parser<'a, &'a str, Vec<Self>> {
         let character_class = choice((
             any()
                 .then_ignore(just('-'))
@@ -64,13 +63,15 @@ impl PatternSegment {
             )),
         );
         let pattern = recursive(move |pattern| {
+            let padding = any()
+                .filter(move |c: &char| syntax == ReadPathSyntax::UrlGlob && c.is_whitespace());
             let alternation = pattern
                 .and_is(just(',').not())
                 .and_is(just('}').not())
-                .and_is(whitespace().at_least(1).not());
+                .and_is(padding.not());
             choice((
                 just('\\')
-                    .filter(move |_| backslash_quotes)
+                    .filter(move |_| syntax == ReadPathSyntax::HadoopGlob && !cfg!(windows))
                     .ignore_then(any())
                     .map(PatternSegment::Quoted),
                 just('*').map(|_| PatternSegment::Asterisk),
@@ -87,7 +88,7 @@ impl PatternSegment {
                     .repeated()
                     .at_least(1)
                     .collect()
-                    .padded()
+                    .delimited_by(padding.repeated(), padding.repeated())
                     .separated_by(just(','))
                     .at_least(1)
                     .collect()
@@ -107,13 +108,25 @@ impl PatternSegment {
     /// supported by the `glob` crate.
     /// The number of possible expansions is the product of
     /// the number of expansions of each pattern.
-    fn expand_sequence(patterns: Vec<PatternSegment>) -> Vec<String> {
+    fn expand_sequence(patterns: Vec<PatternSegment>, syntax: ReadPathSyntax) -> Vec<String> {
         patterns
             .into_iter()
-            .map(|x| x.expand())
+            .map(|x| x.expand(syntax))
             .fold(vec!["".to_string()], |acc, x| {
                 acc.into_iter()
-                    .flat_map(|y| x.iter().map(move |z| format!("{y}{z}")))
+                    .flat_map(|y| {
+                        x.iter().map(move |z| {
+                            // Hadoop treats adjacent unquoted stars as one wildcard,
+                            // including stars brought together by brace expansion.
+                            let suffix = if syntax == ReadPathSyntax::HadoopGlob && y.ends_with('*')
+                            {
+                                z.trim_start_matches('*')
+                            } else {
+                                z
+                            };
+                            format!("{y}{suffix}")
+                        })
+                    })
                     .collect()
             })
     }
@@ -215,7 +228,7 @@ impl PatternSegment {
         pattern
     }
 
-    fn expand(self) -> Vec<String> {
+    fn expand(self, syntax: ReadPathSyntax) -> Vec<String> {
         match self {
             // Special characters such as `*` and `?` do not appear as a character in the segment.
             // They must be part of a character class if they need to be matched literally.
@@ -228,18 +241,18 @@ impl PatternSegment {
             }
             PatternSegment::Alternation { patterns } => patterns
                 .into_iter()
-                .flat_map(PatternSegment::expand_sequence)
+                .flat_map(|p| PatternSegment::expand_sequence(p, syntax))
                 .collect(),
         }
     }
 }
 
-fn expand_glob_pattern(pattern: &str, backslash_quotes: bool) -> Result<Vec<String>> {
-    let patterns = PatternSegment::sequence_parser(backslash_quotes)
+fn expand_glob_pattern(pattern: &str, syntax: ReadPathSyntax) -> Result<Vec<String>> {
+    let patterns = PatternSegment::sequence_parser(syntax)
         .parse(pattern)
         .into_result()
         .map_err(|_| plan_datafusion_err!("glob pattern: {pattern}"))?;
-    Ok(PatternSegment::expand_sequence(patterns))
+    Ok(PatternSegment::expand_sequence(patterns, syntax))
 }
 
 /// A parsed URL that may contain glob patterns.
@@ -408,6 +421,11 @@ impl GlobUrl {
                 // HTTP URLs continue to use URL escapes, queries, and fragments.
                 let uri_escapes =
                     syntax == ReadPathSyntax::UrlGlob || matches!(url.scheme(), "http" | "https");
+                let path = if syntax == ReadPathSyntax::HadoopGlob {
+                    path.trim_end_matches('/')
+                } else {
+                    path
+                };
                 Self::parse_glob_path(
                     if path.is_empty() { "/" } else { path },
                     syntax,
@@ -430,6 +448,25 @@ impl GlobUrl {
     }
 
     fn parse_file_path(path: &str, syntax: ReadPathSyntax) -> Result<Vec<Self>> {
+        #[cfg(windows)]
+        let normalized;
+        #[cfg(windows)]
+        let path = if syntax == ReadPathSyntax::HadoopGlob {
+            normalized = path.replace('\\', "/");
+            normalized.as_str()
+        } else {
+            path
+        };
+        // Hadoop normalizes trailing separators before checking the file type.
+        let path = if syntax == ReadPathSyntax::HadoopGlob {
+            std::path::Path::new(path)
+                .components()
+                .as_path()
+                .to_str()
+                .unwrap_or(path)
+        } else {
+            path
+        };
         Self::parse_glob_path(path, syntax, false)?
             .into_iter()
             .map(|(prefix, suffix)| {
@@ -447,24 +484,20 @@ impl GlobUrl {
         if syntax == ReadPathSyntax::HadoopLiteral {
             return Ok(vec![(path.to_owned(), None)]);
         }
-        let paths =
-            expand_glob_pattern(path, syntax == ReadPathSyntax::HadoopGlob && !cfg!(windows))?
-                .into_iter()
-                .map(|x| {
-                    let (prefix, suffix) = Self::split_glob_path(&x, syntax)?;
-                    let suffix = if uri {
-                        Self::create_percent_decoded_pattern(&suffix)?
-                    } else if suffix.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            Pattern::new(&suffix)
-                                .map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?,
-                        )
-                    };
-                    Ok((prefix, suffix))
-                })
-                .collect::<Result<Vec<_>>>()?;
+        let paths = expand_glob_pattern(path, syntax)?
+            .into_iter()
+            .map(|x| {
+                let (prefix, suffix) = Self::split_glob_path(&x, syntax)?;
+                let suffix = if uri {
+                    Self::create_percent_decoded_pattern(&suffix)?
+                } else if suffix.is_empty() {
+                    None
+                } else {
+                    Some(Pattern::new(&suffix).map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?)
+                };
+                Ok((prefix, suffix))
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(paths)
     }
 
@@ -532,6 +565,9 @@ impl GlobUrl {
             }
         }
         prefix.push_str(&part);
+        if prefix.is_empty() && syntax == ReadPathSyntax::HadoopGlob && !suffix.is_empty() {
+            prefix.push('.');
+        }
         if prefix.is_empty() {
             return plan_err!("empty path in URL: {s}");
         }
@@ -548,7 +584,7 @@ pub struct PathGlobFilter {
 impl PathGlobFilter {
     pub fn parse(pattern: &str) -> Result<Self> {
         let parse = || -> Result<Self> {
-            let patterns = expand_glob_pattern(pattern, !cfg!(windows))?
+            let patterns = expand_glob_pattern(pattern, ReadPathSyntax::HadoopGlob)?
                 .into_iter()
                 .map(|pattern| {
                     Pattern::new(&pattern).map_err(|e| plan_datafusion_err!("{e}: {pattern}"))
@@ -674,7 +710,6 @@ async fn expand_listing_roots(
 ) -> Result<Vec<ListingTableUrl>> {
     let root = ListingTableUrl::try_new(base.clone(), None)?;
     let store = ctx.runtime_env().object_store(&root)?;
-    let directory_only = pattern.as_str().ends_with('/');
     let mut parents = vec![root.prefix().clone()];
     let mut matches = vec![];
     let components = pattern
@@ -693,7 +728,7 @@ async fn expand_listing_roots(
                 path.filename().is_some_and(|name| component.matches(name))
             };
             children.extend(entries.common_prefixes.into_iter().filter(&selected));
-            if last && !directory_only {
+            if last {
                 matches.extend(
                     entries
                         .objects
@@ -893,7 +928,7 @@ mod tests {
 
     #[test]
     fn test_pattern_segment_parser() {
-        let parser = PatternSegment::sequence_parser(false);
+        let parser = PatternSegment::sequence_parser(ReadPathSyntax::UrlGlob);
         let test = |input: &'static str, expected: Vec<PatternSegment>| {
             let result = parser.parse(input).into_result().unwrap();
             assert_eq!(result, expected);
@@ -1028,10 +1063,10 @@ mod tests {
 
     #[test]
     fn test_pattern_segment_expansion() {
-        let parser = PatternSegment::sequence_parser(false);
+        let parser = PatternSegment::sequence_parser(ReadPathSyntax::UrlGlob);
         let test = |input: &'static str, expected: &[&str]| {
             let patterns = parser.parse(input).into_result().unwrap();
-            let result = PatternSegment::expand_sequence(patterns);
+            let result = PatternSegment::expand_sequence(patterns, ReadPathSyntax::UrlGlob);
             for x in result.iter() {
                 Pattern::new(x).expect("valid pattern");
             }

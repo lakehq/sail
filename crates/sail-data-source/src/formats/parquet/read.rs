@@ -26,9 +26,10 @@ use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
+use crate::listing::utils::{NanosecondTimestamps, SchemaSampling, try_merge_normalized};
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,21 @@ fn coerce_hinted_int96_timestamps(
 
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
+    fn schema_sampling(&self, ctx: &dyn Session) -> Result<SchemaSampling> {
+        if !self.options.merge_schema {
+            return Ok(SchemaSampling::PreferParquetSummary);
+        }
+        let key = "spark.sql.parquet.respectSummaryFiles";
+        let summaries_only = ctx
+            .config()
+            .get_extension::<SessionConfigService>()
+            .map(|service| service.get_option(key))
+            .transpose()?
+            .flatten()
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        Ok(SchemaSampling::MergeParquet { summaries_only })
+    }
+
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
@@ -204,7 +220,13 @@ impl ReadFormat for ParquetReadFormat {
             .await?;
 
         // Ensure deterministic ordering for stable schema inference.
-        schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        // Spark merges data schemas first, followed by metadata and common metadata.
+        let order = |path: &object_store::path::Path| match path.filename() {
+            Some("_common_metadata") => 2,
+            Some("_metadata") => 1,
+            _ => 0,
+        };
+        schemas.sort_unstable_by(|(a, _), (b, _)| (order(a), a).cmp(&(order(b), b)));
 
         // A directory can carry the same timestamp column with different producer timezone labels
         // (e.g. `timestamp[ms, UTC]` and `timestamp[us, America/New_York]`). Spark maps every

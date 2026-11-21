@@ -31,7 +31,7 @@ use crate::listing::partition::{
     boolean_option, names_match, read_option, resolve_base_path, split_discovered_partitions,
 };
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
-use crate::listing::utils::{rewrite_unsupported_fields, sample_listing_files};
+use crate::listing::utils::{SchemaSampling, rewrite_unsupported_fields, sample_listing_files};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::url::{PathGlobFilter, resolve_listing_writer_url, resolve_read_urls};
 
@@ -53,6 +53,10 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
+    fn schema_sampling(&self, _ctx: &dyn Session) -> Result<SchemaSampling> {
+        Ok(SchemaSampling::Sample)
+    }
+
     async fn infer_compression(
         &self,
         ctx: &dyn Session,
@@ -187,12 +191,18 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             return plan_err!("recursiveFileLookup is not supported for a partitioned table");
         }
         let path = read_option(&options, "basePath");
-        let urls = resolve_read_urls(ctx, paths, path.is_some() || recursive).await?;
+        let read_format = T::read(ctx, options.clone())?;
+        let sampling = read_format.schema_sampling(ctx)?;
+        let urls = resolve_read_urls(
+            ctx,
+            paths,
+            path.is_some() || recursive || matches!(sampling, SchemaSampling::MergeParquet { .. }),
+        )
+        .await?;
         let base_path = path
             .filter(|_| !recursive)
             .map(|path| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
             .transpose()?;
-        let read_format = T::read(ctx, options)?;
         let path_glob_filter = read_format
             .path_glob_filter()
             .map(PathGlobFilter::parse)
@@ -203,7 +213,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             path_glob_filter.as_ref(),
             base_path.as_ref(),
             recursive,
-            T::name() == "parquet",
+            sampling,
         )
         .await?;
         let inferred = discovery.fields(base_path.is_some())?;
@@ -253,7 +263,9 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
             None => {
                 let format = T::name();
-                if (base_path.is_some() || recursive)
+                if (base_path.is_some()
+                    || recursive
+                    || matches!(sampling, SchemaSampling::MergeParquet { .. }))
                     && matches!(format, "csv" | "json" | "parquet")
                     && !sampled_files.iter().any(|sample| {
                         !sample.objects.is_empty()

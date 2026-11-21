@@ -155,6 +155,13 @@ pub fn infer_listing_compression(
     Ok(inferred)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaSampling {
+    Sample,
+    PreferParquetSummary,
+    MergeParquet { summaries_only: bool },
+}
+
 /// Bound schema and compression sampling per original input, even when one glob expands
 /// to many files. Partition discovery still examines every leaf directory below basePath.
 pub(super) async fn sample_listing_files<'a>(
@@ -163,9 +170,10 @@ pub(super) async fn sample_listing_files<'a>(
     path_glob_filter: Option<&PathGlobFilter>,
     base_path: Option<&BasePathOptions>,
     recursive: bool,
-    parquet: bool,
+    sampling: SchemaSampling,
 ) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
     const SAMPLE_SIZE: usize = 10;
+    let merge = matches!(sampling, SchemaSampling::MergeParquet { .. });
     let mut discovery = PartitionDiscovery::default();
     let mut samples = Vec::new();
     let mut direct_samples = Vec::new();
@@ -184,49 +192,58 @@ pub(super) async fn sample_listing_files<'a>(
             let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
-                if let Some(name) = file.location.filename()
-                    && is_summary_file(name)
-                {
-                    if !selected {
-                        continue;
-                    }
-                    // JSON and CSV can infer an empty schema when the listing contains
-                    // only summary files. The summary contents are only read for Parquet.
-                    has_listed_file = true;
-                    let direct_input = is_direct_input(url, &file.location);
-                    has_direct_file |= direct_input;
-                    if parquet && matches!(name, "_common_metadata" | "_metadata") {
-                        if base_path.is_some() && direct_input {
-                            keep_parquet_summary(&mut direct_summary, url, &store, &file);
-                        }
-                        keep_parquet_summary(&mut summary, url, &store, &file);
-                    }
-                    continue;
-                }
-                // Partition discovery sees even empty files and files excluded by pathGlobFilter.
-                let (sample, listed) = if let Some(base) = base_path {
-                    if discovery.observe(&base.root, &file.location, Some(base))? {
-                        (&mut objects, &mut has_listed_file)
-                    } else if is_direct_input(url, &file.location) {
-                        (&mut direct, &mut has_direct_file)
-                    } else {
-                        continue;
-                    }
+                let name = file.location.filename().unwrap_or_default();
+                let summary_file = is_summary_file(name);
+                let partitioned = if summary_file {
+                    true
+                } else if let Some(base) = base_path {
+                    // Even empty and filtered files participate in partition discovery.
+                    discovery.observe(&base.root, &file.location, Some(base))?
                 } else {
                     if !recursive && selected && file.size > 0 {
                         discovery.observe(url, &file.location, None)?;
                     }
-                    (&mut objects, &mut has_listed_file)
+                    true
                 };
-                if selected {
-                    *listed = true;
-                    if file.size > 0 && sample.len() < SAMPLE_SIZE {
-                        sample.push(file);
+                if !selected {
+                    continue;
+                }
+                let direct_input = base_path.is_some() && is_direct_input(url, &file.location);
+                has_listed_file |= partitioned;
+                has_direct_file |= direct_input;
+                if summary_file {
+                    if !matches!(name, "_common_metadata" | "_metadata") {
+                        continue;
                     }
-                    if base_path.is_none() && sample.len() == SAMPLE_SIZE && !(parquet && recursive)
-                    {
-                        break 'roots;
+                    if sampling == SchemaSampling::PreferParquetSummary {
+                        if direct_input {
+                            keep_parquet_summary(&mut direct_summary, url, &store, &file);
+                        }
+                        keep_parquet_summary(&mut summary, url, &store, &file);
                     }
+                    if !merge {
+                        continue;
+                    }
+                } else if file.size == 0
+                    || sampling
+                        == (SchemaSampling::MergeParquet {
+                            summaries_only: true,
+                        })
+                {
+                    continue;
+                }
+                if direct_input && (merge || direct.len() < SAMPLE_SIZE) {
+                    direct.push(file.clone());
+                }
+                if (partitioned || merge) && (merge || objects.len() < SAMPLE_SIZE) {
+                    objects.push(file);
+                }
+                if base_path.is_none()
+                    && !merge
+                    && objects.len() == SAMPLE_SIZE
+                    && !(sampling == SchemaSampling::PreferParquetSummary && recursive)
+                {
+                    break 'roots;
                 }
             }
         }

@@ -3,6 +3,8 @@
 import os
 from datetime import date, time
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -750,3 +752,63 @@ def test_base_path_literal_percent_in_filename_filter(spark, tmp_path):
     df = spark.read.options(basePath=str(tmp_path), pathGlobFilter="row%20*.json").json(str(tmp_path))
     assert df.collect() == [Row(id=1, p=1)]
     assert len(df.inputFiles()) == 1
+
+
+@pytest.mark.parametrize("per_read", [True, False])
+def test_base_path_merge_schema_with_summary(spark, tmp_path, per_read):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    for i in range(10):
+        pq.write_table(pa.table({"a": [i]}), part / f"{i}.parquet")
+    pq.write_table(pa.table({"a": [10], "b": [42]}), part / "last.parquet")
+    pq.write_metadata(pa.schema([("a", pa.int64()), ("c", pa.string())]), tmp_path / "_common_metadata")
+    key = "spark.sql.parquet.mergeSchema"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(not per_read).lower())
+        reader = spark.read.option("basePath", str(tmp_path))
+        if per_read:
+            reader = reader.option("mergeSchema", True)
+        df = reader.parquet(str(tmp_path))
+        assert df.columns == ["a", "b", "c", "p"]
+        assert df.where("a = 10").collect() == [Row(a=10, b=42, c=None, p=1)]
+        assert reader.option("mergeSchema", False).parquet(str(tmp_path)).columns == ["a", "c", "p"]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_native_multicomponent_glob(spark, tmp_path):
+    write_json_partition(tmp_path, "p=1")
+    write_json_partition(tmp_path, "p=2")
+    # pathlib supplies the native separator between the wildcard and the filename.
+    pattern = tmp_path / "p=*" / "row.json"
+    df = spark.read.option("basePath", str(tmp_path)).json(str(pattern))
+    assert df.orderBy("p").collect() == [Row(id=1, p=1), Row(id=1, p=2)]
+
+
+def test_base_path_relative_first_component_glob(spark):
+    with TemporaryDirectory(prefix="basepath-", dir=".") as directory:
+        root = Path(directory).resolve()
+        write_json_partition(root, "p=1")
+        name = root.name
+        pattern = f"{name[:-1]}[{name[-1]}]/p=1"
+        df = spark.read.option("basePath", str(root)).json(pattern)
+        assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("pattern", ["p={New York,New Jersey}", "p=**w*"])
+def test_base_path_hadoop_partition_glob(spark, tmp_path, pattern):
+    for name in ["New York", "New Jersey", "California"]:
+        write_json_partition(tmp_path, f"p={name}")
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / pattern))
+    assert [r.p for r in df.orderBy("p").collect()] == ["New Jersey", "New York"]
+
+
+@pytest.mark.parametrize("name", ["row.json", "*.json"])
+@pytest.mark.parametrize("uri", [False, True])
+def test_base_path_file_with_trailing_slash(spark, tmp_path, name, uri):
+    write_json_partition(tmp_path, "p=1")
+    root = tmp_path.as_uri() if uri else tmp_path
+    path = f"{root}/p=1/{name}/"
+    df = spark.read.option("basePath", str(tmp_path)).json(path)
+    assert df.collect() == [Row(id=1, p=1)]
