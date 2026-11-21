@@ -36,7 +36,9 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWrit
 #[derive(Debug, Clone)]
 pub(crate) enum ShufflePartitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    Range(RangePartitioning),
+    /// Range partitioning into the given number of channels, which can be more than
+    /// the number of range partitions. The extra channels receive no rows.
+    Range(RangePartitioning, usize),
     RoundRobinBatch(usize),
     RoundRobinRow(usize),
 }
@@ -66,7 +68,7 @@ impl ShufflePartitioning {
     fn partition_count(&self) -> usize {
         match self {
             Self::Hash(_, partitions) => *partitions,
-            Self::Range(partitioning) => partitioning.partition_count(),
+            Self::Range(_, channels) => *channels,
             Self::RoundRobinBatch(partitions) | Self::RoundRobinRow(partitions) => *partitions,
         }
     }
@@ -82,7 +84,7 @@ impl Display for ShufflePartitioning {
                     Partitioning::Hash(expressions.clone(), *partitions)
                 )
             }
-            Self::Range(partitioning) => write!(f, "{partitioning}"),
+            Self::Range(partitioning, channels) => write!(f, "{partitioning}, channels={channels}"),
             Self::RoundRobinBatch(partitions) => {
                 write!(f, "{}", Partitioning::RoundRobinBatch(*partitions))
             }
@@ -206,12 +208,14 @@ impl Router {
                 partition_reducer: StrengthReducedU64::new(*channels as u64),
                 hash_buffer: vec![],
             },
-            ShufflePartitioning::Range(range) if range.split_points().is_empty() => Self::Batch {
-                channels: 1,
-                next: 0,
-                expressions: vec![],
-            },
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) if range.split_points().is_empty() => {
+                Self::Batch {
+                    channels: 1,
+                    next: 0,
+                    expressions: vec![],
+                }
+            }
+            ShufflePartitioning::Range(range, _) => {
                 let keys = range
                     .ordering()
                     .iter()
@@ -405,7 +409,7 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<TreeNodeRecursion> {
         match &self.partitioning {
             ShufflePartitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) => {
                 apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
             }
             ShufflePartitioning::RoundRobinBatch(_) | ShufflePartitioning::RoundRobinRow(_) => {
@@ -571,7 +575,7 @@ mod tests {
     use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion::prelude::SessionConfig;
     use futures::FutureExt;
-    use sail_function::aggregate::array_agg::compact_payload;
+    use sail_common_datafusion::array::compact::compact_array;
     use tokio::sync::Mutex;
 
     use super::*;
@@ -993,7 +997,7 @@ mod tests {
                 assert_uses_values(field.name(), &column.to_data());
                 let retained = column.get_array_memory_size();
                 // `take` still shares view payloads, so they are compacted separately.
-                let compact = compact_payload(Arc::clone(copy))?.get_array_memory_size();
+                let compact = compact_array(Arc::clone(copy))?.get_array_memory_size();
                 assert!(
                     retained <= 2 * compact,
                     "column {} of batch {i} of channel {channel} retains {retained} bytes for {compact} bytes of rows",
@@ -1863,10 +1867,13 @@ mod tests {
                         ))])
                     })
                     .collect();
-                ShufflePartitioning::Range(RangePartitioning::try_new(
-                    [PhysicalSortExpr::new_default(key)].into(),
-                    points,
-                )?)
+                ShufflePartitioning::Range(
+                    RangePartitioning::try_new(
+                        [PhysicalSortExpr::new_default(key)].into(),
+                        points,
+                    )?,
+                    channels,
+                )
             }
             "round_robin_batch" => ShufflePartitioning::RoundRobinBatch(channels),
             _ => ShufflePartitioning::RoundRobinRow(channels),

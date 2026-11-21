@@ -1078,8 +1078,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
-            OutputDistribution::Range { partitioning } => {
-                let channels = partitioning.partition_count();
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let channels = *channels;
                 let partitioning = encode_remote_partitioning(
                     self.codec,
                     &Partitioning::Range(partitioning.clone()),
@@ -1088,6 +1091,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     partitioning: Arc::from(partitioning),
                     channels,
                 }
+            }
+            OutputDistribution::UnsampledRange { .. } => {
+                return Err(ExecutionError::InternalError(
+                    "range repartitioning must be sampled before the job runs".to_string(),
+                ));
             }
             OutputDistribution::RoundRobinBatch { channels } => {
                 TaskOutputDistribution::RoundRobinBatch {

@@ -10,6 +10,8 @@ pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
 pub mod range;
+pub mod range_repartition;
+pub mod range_sample;
 pub mod remote_checkpoint;
 pub mod repartition;
 pub mod scalar_subquery;

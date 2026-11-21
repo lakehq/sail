@@ -86,6 +86,8 @@ message ExtendedPhysicalPlanNode {
     TailExecNode tail = 69;
     IcebergImportedExecNode iceberg_imported = 70;
     bytes unsupported_iceberg_row_scan_schema = 71;
+    RangePartitionSampleExecNode range_partition_sample = 72;
+    RangePartitionResampleExecNode range_partition_resample = 73;
   }
 }
 
@@ -1102,6 +1104,17 @@ message SeededRandomColumn {
 enum PartitionSeed {
   PARTITION_SEED_OFFSET = 0;
   PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
+message RangePartitionSampleExecNode {
+  bytes input = 1;
+  uint64 sample_size = 2;
+}
+
+message RangePartitionResampleExecNode {
+  bytes input = 1;
+  double fraction = 2;
+  repeated uint64 partitions = 3;
 }
 
 message CoalesceExecNode {
