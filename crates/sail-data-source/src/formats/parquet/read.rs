@@ -303,7 +303,7 @@ fn temporal_statistics_types(
     descriptor: &SchemaDescriptor,
 ) -> Option<(DataType, DataType)> {
     let ty = dictionary_value_type(source.data_type());
-    if ty == &DataType::Date64 && requested.is_numeric() {
+    if ty == &DataType::Date64 {
         let column = descriptor
             .columns()
             .iter()
@@ -313,7 +313,12 @@ fn temporal_statistics_types(
         return match column.physical_type() {
             PhysicalType::INT32 => parquet_temporal_storage_cast(&DataType::Date32, requested)
                 .map(|storage| (DataType::Date32, storage)),
-            PhysicalType::INT64 if requested == &DataType::Int64 => {
+            PhysicalType::INT64
+                if matches!(
+                    requested,
+                    DataType::Int64 | DataType::Duration(TimeUnit::Microsecond)
+                ) =>
+            {
                 Some((DataType::Int64, DataType::Int64))
             }
             _ => None,

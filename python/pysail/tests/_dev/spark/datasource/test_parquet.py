@@ -499,6 +499,72 @@ def test_parquet_explicit_interval_reads_int64_ticks(spark, tmp_path):
     ]
 
 
+def test_parquet_intervals_read_annotated_integer_storage(spark, tmp_path):
+    month_count = 14
+    micros = 43
+    columns = {
+        "d": pa.array([month_count], pa.date32()),
+        "t": pa.array([micros], pa.timestamp("ms")),
+        "small": pa.array([month_count], pa.int8()),
+        "u32": pa.array([2**32 - 1], pa.uint32()),
+        "u64": pa.array([2**64 - 1], pa.uint64()),
+        "d32": pa.array([Decimal("0.14")], pa.decimal128(8, 2)),
+        "d64": pa.array([Decimal("0.43")], pa.decimal128(16, 2)),
+    }
+    pq.write_table(
+        pa.table(columns), tmp_path / "annotated.parquet", store_decimal_as_integer=True, use_dictionary=False
+    )
+    year_month = ["d", "small", "u32", "d32"]
+    day_time = ["t", "u64", "d64"]
+    schema = [f"{col} INTERVAL YEAR TO MONTH" for col in year_month] + [
+        f"{col} INTERVAL DAY TO SECOND" for col in day_time
+    ]
+    df = spark.read.schema(", ".join(schema)).parquet(str(tmp_path))
+    expressions = [f"CAST({col} AS STRING)" for col in year_month] + day_time
+    positive = "INTERVAL '1-2' YEAR TO MONTH"
+    negative = "INTERVAL '-0-1' YEAR TO MONTH"
+    assert df.selectExpr(*expressions).collect() == [
+        (
+            positive,
+            positive,
+            negative,
+            positive,
+            timedelta(microseconds=micros),
+            timedelta(microseconds=-1),
+            timedelta(microseconds=micros),
+        )
+    ]
+    assert df.selectExpr("CAST(min(u32) AS STRING)", "max(u64)", "min(d64)").collect() == [
+        (negative, timedelta(microseconds=-1), timedelta(microseconds=micros))
+    ]
+
+
+def test_parquet_single_footer_interval_reads_annotated_ticks(spark, tmp_path):
+    written = tmp_path / "written"
+    spark.sql("SELECT INTERVAL '1' SECOND AS v").coalesce(1).write.parquet(str(written))
+    next(written.glob("*.parquet")).rename(tmp_path / "a.parquet")
+    pq.write_table(pa.table({"v": pa.array([42], pa.timestamp("ms"))}), tmp_path / "b.parquet")
+    pq.write_table(pa.table({"v": pa.array([3], pa.uint64())}), tmp_path / "c.parquet", use_dictionary=False)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path / "*.parquet"))
+    assert df.orderBy("v").collect() == [(timedelta(microseconds=n),) for n in [3, 42, 1_000_000]]
+
+
+@pytest.mark.parametrize(
+    ("physical", "requested", "int96"),
+    [
+        (pa.date32(), "DAY TO SECOND", False),
+        (pa.timestamp("us"), "YEAR TO MONTH", False),
+        (pa.timestamp("us"), "DAY TO SECOND", True),
+    ],
+)
+def test_parquet_interval_rejects_other_storage_widths(spark, tmp_path, physical, requested, int96):
+    path = tmp_path / "wrong.parquet"
+    pq.write_table(pa.table({"v": pa.array([1], physical)}), path, use_deprecated_int96_timestamps=int96)
+    df = spark.read.schema(f"v INTERVAL {requested}").parquet(str(path))
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.selectExpr("CAST(v AS STRING)").collect()
+
+
 def test_parquet_explicit_schema_uses_unannotated_integer_storage(spark, tmp_path):
     path = tmp_path / "data.parquet"
     values = pa.array([-1, 42], pa.int64())

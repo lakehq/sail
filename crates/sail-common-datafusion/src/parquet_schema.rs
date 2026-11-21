@@ -167,8 +167,8 @@ pub fn validate_parquet_field(
                     .get(INTEGER_STORAGE_META_KEY)
                     .map(String::as_str)
                 {
-                    Some("INT32") => is_parquet_integer_target(expected),
-                    Some("INT64") => *expected == DataType::Int64,
+                    Some("INT32") => is_parquet_int32_target(expected),
+                    Some("INT64") => is_parquet_int64_target(expected),
                     _ => false,
                 } => {}
         (_, expected) if fixed_decimal_byte_width(physical, expected).is_some() => {}
@@ -238,7 +238,7 @@ pub(crate) fn fixed_decimal_bytes(
     Ok(cast(&builder.finish(), requested)?)
 }
 
-pub fn is_parquet_integer_target(ty: &DataType) -> bool {
+fn is_parquet_int32_target(ty: &DataType) -> bool {
     matches!(
         ty,
         DataType::Int8
@@ -247,7 +247,19 @@ pub fn is_parquet_integer_target(ty: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float64
             | DataType::Date32
+            | DataType::Interval(IntervalUnit::YearMonth)
     )
+}
+
+fn is_parquet_int64_target(ty: &DataType) -> bool {
+    matches!(
+        ty,
+        DataType::Int64 | DataType::Duration(TimeUnit::Microsecond)
+    )
+}
+
+pub fn is_parquet_integer_target(ty: &DataType) -> bool {
+    is_parquet_int32_target(ty) || is_parquet_int64_target(ty)
 }
 
 /// Read an integer-backed decimal without applying its logical scale. The footer
@@ -269,7 +281,7 @@ pub(crate) fn parquet_unscaled_integer(
         .data_type(unscaled)
         .build()?;
     let values = datafusion::arrow::array::make_array(data);
-    let storage = if *requested == DataType::Int64 {
+    let storage = if is_parquet_int64_target(requested) {
         DataType::Int64
     } else {
         DataType::Int32
@@ -284,9 +296,13 @@ pub fn parquet_temporal_storage_cast(source: &DataType, requested: &DataType) ->
     match (source, requested) {
         (Dictionary(_, values), _) => parquet_temporal_storage_cast(values, requested),
         (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32 | Time32(_), Date32)
-        | (Int32, Interval(IntervalUnit::YearMonth))
+        | (
+            Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32 | Date32 | Time32(_),
+            Interval(IntervalUnit::YearMonth),
+        )
         | (Date32 | Time32(_), Int8 | Int16 | Int32 | Int64 | Float64) => Some(Int32),
-        (Timestamp(_, _) | Time64(_), Int64) | (Int64, Duration(TimeUnit::Microsecond)) => {
+        (Timestamp(_, _) | Time64(_), Int64)
+        | (Int64 | UInt64 | Timestamp(_, _) | Time64(_), Duration(TimeUnit::Microsecond)) => {
             Some(Int64)
         }
         _ => None,
