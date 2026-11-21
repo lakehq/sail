@@ -198,12 +198,12 @@ pub(super) async fn sample_listing_files<'a>(
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
                 let name = file.location.filename().unwrap_or_default();
-                let summary_file = is_summary_file(name);
-                let partitioned = if summary_file {
+                let metadata_file = has_metadata_prefix(name);
+                let partitioned = if metadata_file {
                     true
                 } else if let Some(base) = base_path {
                     // Even empty and filtered files participate in partition discovery.
-                    discovery.observe(&base.root, &file.location, Some(base))?
+                    discovery.observe(url, &file.location, Some(base))?
                 } else {
                     if !recursive && selected && file.size > 0 {
                         discovery.observe(url, &file.location, None)?;
@@ -216,15 +216,16 @@ pub(super) async fn sample_listing_files<'a>(
                 let direct_input = base_path.is_some() && is_direct_input(url, &file.location);
                 has_listed_file |= partitioned;
                 has_direct_file |= direct_input;
-                if summary_file {
-                    if !matches!(name, "_common_metadata" | "_metadata") {
-                        continue;
-                    }
-                } else if file.size == 0 {
+                // Spark excludes metadata prefixes from row scans and partition discovery.
+                // Only the two exact filenames receive special treatment when choosing footers.
+                let parquet_summary = matches!(name, "_common_metadata" | "_metadata");
+                if (metadata_file && sampling == SchemaSampling::Sample)
+                    || (!parquet_summary && file.size == 0)
+                {
                     continue;
                 }
                 if sampling == SchemaSampling::SingleParquet
-                    || (sampling == SchemaSampling::SampleParquet && summary_file)
+                    || (sampling == SchemaSampling::SampleParquet && parquet_summary)
                 {
                     if direct_input {
                         keep_parquet_footer(&mut direct_footer, url, &store, &file);
@@ -232,14 +233,13 @@ pub(super) async fn sample_listing_files<'a>(
                     keep_parquet_footer(&mut footer, url, &store, &file);
                     continue;
                 }
-                if (summary_file && !merge)
-                    || (!summary_file
-                        && matches!(
-                            sampling,
-                            SchemaSampling::MergeParquet {
-                                summaries_only: true
-                            }
-                        ))
+                if !parquet_summary
+                    && matches!(
+                        sampling,
+                        SchemaSampling::MergeParquet {
+                            summaries_only: true
+                        }
+                    )
                 {
                     continue;
                 }
@@ -358,7 +358,7 @@ pub fn matches_path_glob_filter(
     })
 }
 
-pub(super) fn is_summary_file(name: &str) -> bool {
+pub(super) fn has_metadata_prefix(name: &str) -> bool {
     !name.contains('=') && (name.starts_with("_common_metadata") || name.starts_with("_metadata"))
 }
 
@@ -368,7 +368,7 @@ pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool
         let exclude = (name.starts_with('_') && !name.contains('='))
             || name.starts_with('.')
             || name.ends_with("._COPYING_");
-        exclude && !is_summary_file(name)
+        exclude && !has_metadata_prefix(name)
     };
     url.strip_prefix(location)
         .is_some_and(|mut segments| segments.any(is_hidden))

@@ -44,8 +44,8 @@ use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, is_direct_input,
-    is_summary_file, matches_path_glob_filter,
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, has_metadata_prefix,
+    is_direct_input, matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -411,7 +411,7 @@ async fn list_files_for_scan<'a>(
             let location = &file.object_meta.location;
             futures::future::ready(
                 (!direct_only || is_direct_input(table_path, location))
-                    && !location.filename().is_some_and(is_summary_file)
+                    && !location.filename().is_some_and(has_metadata_prefix)
                     && !has_hidden_path_component(table_path, location)
                     && matches_path_glob_filter(path_glob_filter, location),
             )

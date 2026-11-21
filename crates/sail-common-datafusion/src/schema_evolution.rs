@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
@@ -24,6 +24,7 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
+use crate::parquet_schema::validate_parquet_field;
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 pub const FIELD_DEFAULT_METADATA_KEY: &str = "sail.schema_evolution.default";
@@ -198,10 +199,13 @@ pub enum StructFieldMatching {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum SchemaEvolutionTimezoneMode {
+pub enum SchemaEvolutionCastMode {
     #[default]
     Strict,
-    Relaxed,
+    RelaxedTimezone,
+    Parquet {
+        binary_as_string: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -217,7 +221,7 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
             StructFieldMatching::Name,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )
     }
 }
@@ -225,21 +229,31 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     matching: StructFieldMatching,
-    timezone_mode: SchemaEvolutionTimezoneMode,
+    cast_mode: SchemaEvolutionCastMode,
 }
 
 impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
+    pub fn with_cast_mode(
+        matching: StructFieldMatching,
+        cast_mode: SchemaEvolutionCastMode,
+    ) -> Self {
+        Self {
+            matching,
+            cast_mode,
+        }
+    }
+
     pub fn new(matching: StructFieldMatching) -> Self {
         Self {
             matching,
-            timezone_mode: SchemaEvolutionTimezoneMode::Strict,
+            cast_mode: SchemaEvolutionCastMode::Strict,
         }
     }
 
     pub fn new_relaxed_timezone(matching: StructFieldMatching) -> Self {
         Self {
             matching,
-            timezone_mode: SchemaEvolutionTimezoneMode::Relaxed,
+            cast_mode: SchemaEvolutionCastMode::RelaxedTimezone,
         }
     }
 }
@@ -254,7 +268,7 @@ impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactoryWit
             logical_file_schema,
             physical_file_schema,
             self.matching,
-            self.timezone_mode,
+            self.cast_mode,
         )
     }
 }
@@ -263,7 +277,7 @@ fn create_schema_evolution_adapter(
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     matching: StructFieldMatching,
-    timezone_mode: SchemaEvolutionTimezoneMode,
+    cast_mode: SchemaEvolutionCastMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
         create_column_mapping(&logical_file_schema, &physical_file_schema, matching)?;
@@ -274,7 +288,7 @@ fn create_schema_evolution_adapter(
         column_mapping,
         default_values,
         matching,
-        timezone_mode,
+        cast_mode,
     }))
 }
 
@@ -340,7 +354,7 @@ struct SchemaEvolutionPhysicalExprAdapter {
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
     matching: StructFieldMatching,
-    timezone_mode: SchemaEvolutionTimezoneMode,
+    cast_mode: SchemaEvolutionCastMode,
 }
 
 impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
@@ -351,8 +365,25 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             column_mapping: &self.column_mapping,
             default_values: &self.default_values,
             matching: self.matching,
-            timezone_mode: self.timezone_mode,
+            cast_mode: self.cast_mode,
         };
+        if let SchemaEvolutionCastMode::Parquet { binary_as_string } = self.cast_mode {
+            return expr
+                .transform_down(|expr| {
+                    if let Some(rewritten) =
+                        rewriter.rewrite_parquet_struct_access(&expr, binary_as_string)?
+                    {
+                        return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
+                    }
+                    if let Some(column) = expr.downcast_ref::<Column>() {
+                        let mut rewritten = rewriter.rewrite_column(Arc::clone(&expr), column)?;
+                        rewritten.tnr = TreeNodeRecursion::Jump;
+                        return Ok(rewritten);
+                    }
+                    Ok(Transformed::no(expr))
+                })
+                .data();
+        }
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
     }
@@ -364,10 +395,78 @@ struct SchemaEvolutionPhysicalExprRewriter<'a> {
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
     matching: StructFieldMatching,
-    timezone_mode: SchemaEvolutionTimezoneMode,
+    cast_mode: SchemaEvolutionCastMode,
 }
 
 impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
+    /// Resolve a projected struct path directly against the decoder schema. Casting the
+    /// parent before accessing its child would also read and validate its unused siblings.
+    fn rewrite_parquet_struct_access(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        binary_as_string: bool,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let Some(function) = ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+        else {
+            return Ok(None);
+        };
+        let mut path = Vec::new();
+        let Some(column) = parquet_struct_access(expr, &mut path) else {
+            return Ok(None);
+        };
+        let Ok(index) = self.logical_file_schema.index_of(column.name()) else {
+            return Ok(None);
+        };
+        let Some(Some(physical_index)) = self.column_mapping.get(index) else {
+            return Ok(None);
+        };
+        let mut logical = &self.logical_file_schema.fields()[index];
+        let mut physical = &self.physical_file_schema.fields()[*physical_index];
+        let mut arguments =
+            vec![Arc::new(Column::new(physical.name(), *physical_index)) as Arc<dyn PhysicalExpr>];
+        for name in path {
+            let (DataType::Struct(fields), DataType::Struct(actual)) =
+                (logical.data_type(), physical.data_type())
+            else {
+                return Ok(None);
+            };
+            let Some((_, field)) = fields.find(name) else {
+                return Ok(None);
+            };
+            let Some((_, source)) = find_matching_struct_field(actual, field, self.matching)?
+            else {
+                if field_default(field)?.is_some() {
+                    return Ok(None);
+                }
+                return Ok(Some(Arc::new(Literal::new(ScalarValue::try_from(
+                    function.return_type(),
+                )?))));
+            };
+            arguments.push(Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                source.name().clone(),
+            )))));
+            logical = field;
+            physical = source;
+        }
+        validate_parquet_field(
+            logical.name(),
+            logical,
+            physical,
+            self.matching,
+            binary_as_string,
+        )?;
+        let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(function.fun().clone()),
+            arguments,
+            self.physical_file_schema,
+            Arc::new(function.config_options().clone()),
+        )?);
+        if logical.data_type() == physical.data_type() {
+            return Ok(Some(leaf));
+        }
+        Ok(Some(self.apply_type_cast(leaf, logical, physical)?.data))
+    }
+
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -560,6 +659,17 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        if let SchemaEvolutionCastMode::Parquet { binary_as_string } = self.cast_mode
+            && matches!(logical_field.data_type(), DataType::Struct(_))
+        {
+            validate_parquet_field(
+                logical_field.name(),
+                logical_field,
+                &Arc::new(physical_field.clone()),
+                self.matching,
+                binary_as_string,
+            )?;
+        }
         if !can_cast_field_with_schema_evolution(physical_field, logical_field, self.matching)? {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
@@ -571,8 +681,10 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
 
         // TODO: Expose a pruning target for PhysicalName and FieldId casts so Delta and Iceberg
         // can prune nested Parquet leaves without weakening their field-identity semantics.
-        if self.matching == StructFieldMatching::Name
-            && is_pure_name_structural_narrowing(physical_field, logical_field)
+        if matches!(
+            self.matching,
+            StructFieldMatching::Name | StructFieldMatching::CaseInsensitiveName
+        ) && is_pure_name_structural_narrowing(physical_field, logical_field)
         {
             return Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
                 column_expr,
@@ -583,28 +695,39 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
 
         let input_field = Arc::new(physical_field.clone());
         let target_field = Arc::new(logical_field.clone());
-        let cast = match self.timezone_mode {
-            SchemaEvolutionTimezoneMode::Strict => {
-                SchemaEvolutionCastColumnExpr::new_with_matching(
-                    column_expr,
-                    input_field,
-                    target_field,
-                    None,
-                    self.matching,
-                )
-            }
-            SchemaEvolutionTimezoneMode::Relaxed => {
-                SchemaEvolutionCastColumnExpr::new_relaxed_timezone(
-                    column_expr,
-                    input_field,
-                    target_field,
-                    None,
-                    self.matching,
-                )
-            }
-        };
+        let cast = SchemaEvolutionCastColumnExpr::from_parts(
+            column_expr,
+            input_field,
+            target_field,
+            None,
+            self.matching,
+            self.cast_mode,
+        );
         Ok(Transformed::yes(Arc::new(cast)))
     }
+}
+
+/// Collect paths from both variadic get_field and chained get_field expressions.
+fn parquet_struct_access<'a>(
+    expr: &'a Arc<dyn PhysicalExpr>,
+    path: &mut Vec<&'a str>,
+) -> Option<&'a Column> {
+    if let Some(column) = expr.downcast_ref::<Column>() {
+        return Some(column);
+    }
+    let function = ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())?;
+    let (root, fields) = function.args().split_first()?;
+    let column = parquet_struct_access(root, path)?;
+    for field in fields {
+        path.push(
+            field
+                .downcast_ref::<Literal>()?
+                .value()
+                .try_as_str()
+                .flatten()?,
+        );
+    }
+    Some(column)
 }
 
 /// Returns whether DataFusion's name-based nested cast is equivalent to Sail's cast.
@@ -872,7 +995,7 @@ pub struct SchemaEvolutionCastColumnExpr {
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
     matching: StructFieldMatching,
-    timezone_mode: SchemaEvolutionTimezoneMode,
+    cast_mode: SchemaEvolutionCastMode,
 }
 
 impl PartialEq for SchemaEvolutionCastColumnExpr {
@@ -882,7 +1005,7 @@ impl PartialEq for SchemaEvolutionCastColumnExpr {
             && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
             && self.matching.eq(&other.matching)
-            && self.timezone_mode.eq(&other.timezone_mode)
+            && self.cast_mode.eq(&other.cast_mode)
     }
 }
 
@@ -893,7 +1016,7 @@ impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
         self.target_field.hash(state);
         self.cast_options.hash(state);
         self.matching.hash(state);
-        self.timezone_mode.hash(state);
+        self.cast_mode.hash(state);
     }
 }
 
@@ -937,7 +1060,7 @@ impl SchemaEvolutionCastColumnExpr {
             target_field,
             cast_options,
             matching,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )
     }
 
@@ -954,17 +1077,17 @@ impl SchemaEvolutionCastColumnExpr {
             target_field,
             cast_options,
             matching,
-            SchemaEvolutionTimezoneMode::Relaxed,
+            SchemaEvolutionCastMode::RelaxedTimezone,
         )
     }
 
-    fn from_parts(
+    pub fn from_parts(
         expr: Arc<dyn PhysicalExpr>,
         input_field: Arc<Field>,
         target_field: Arc<Field>,
         cast_options: Option<CastOptions<'static>>,
         matching: StructFieldMatching,
-        timezone_mode: SchemaEvolutionTimezoneMode,
+        cast_mode: SchemaEvolutionCastMode,
     ) -> Self {
         Self {
             expr,
@@ -972,7 +1095,7 @@ impl SchemaEvolutionCastColumnExpr {
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
             matching,
-            timezone_mode,
+            cast_mode,
         }
     }
 
@@ -988,24 +1111,28 @@ impl SchemaEvolutionCastColumnExpr {
         self.matching
     }
 
-    pub const fn timezone_mode(&self) -> SchemaEvolutionTimezoneMode {
-        self.timezone_mode
+    pub const fn cast_mode(&self) -> SchemaEvolutionCastMode {
+        self.cast_mode
     }
 
     fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
-        match self.timezone_mode {
-            SchemaEvolutionTimezoneMode::Strict => cast_array_with_schema_evolution(
-                array,
-                self.target_field.as_ref(),
-                &self.cast_options,
-                self.matching,
-            ),
-            SchemaEvolutionTimezoneMode::Relaxed => cast_array_with_schema_evolution_relaxed_tz(
-                array,
-                self.target_field.as_ref(),
-                &self.cast_options,
-                self.matching,
-            ),
+        match self.cast_mode {
+            SchemaEvolutionCastMode::Strict | SchemaEvolutionCastMode::Parquet { .. } => {
+                cast_array_with_schema_evolution(
+                    array,
+                    self.target_field.as_ref(),
+                    &self.cast_options,
+                    self.matching,
+                )
+            }
+            SchemaEvolutionCastMode::RelaxedTimezone => {
+                cast_array_with_schema_evolution_relaxed_tz(
+                    array,
+                    self.target_field.as_ref(),
+                    &self.cast_options,
+                    self.matching,
+                )
+            }
         }
     }
 }
@@ -1061,7 +1188,7 @@ impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
             self.matching,
-            self.timezone_mode,
+            self.cast_mode,
         )))
     }
 
@@ -1433,7 +1560,7 @@ mod tests {
             logical.clone(),
             legacy,
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         assert!(
             adapter
@@ -1449,7 +1576,7 @@ mod tests {
             logical.clone(),
             identified,
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         assert_eq!(
             adapter
@@ -1468,7 +1595,7 @@ mod tests {
             logical,
             reused,
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         assert_eq!(
             adapter
@@ -1486,7 +1613,7 @@ mod tests {
             required,
             Arc::new(Schema::empty()),
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         assert!(
             adapter
@@ -1522,7 +1649,7 @@ mod tests {
             logical,
             physical.clone(),
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         let batch = RecordBatch::try_new(physical, vec![Arc::new(Int64Array::from(vec![1, 2]))])?;
         let expression = adapter.rewrite(Arc::new(Column::new("values", 0)))?;
@@ -1571,7 +1698,7 @@ mod tests {
                 Arc::clone(&logical),
                 Arc::clone(&physical),
                 matching,
-                SchemaEvolutionTimezoneMode::Strict,
+                SchemaEvolutionCastMode::Strict,
             )?;
             let expr = adapter.rewrite(Arc::new(Column::new("position", 0)))?;
             assert!(
@@ -1622,7 +1749,7 @@ mod tests {
             logical_schema,
             Arc::clone(&physical_schema),
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
 
         let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_b", 0)))?;
@@ -1640,7 +1767,7 @@ mod tests {
             renamed_in_place,
             physical_schema,
             StructFieldMatching::FieldId,
-            SchemaEvolutionTimezoneMode::Strict,
+            SchemaEvolutionCastMode::Strict,
         )?;
         let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_a", 0)))?;
         let column = rewritten

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::num::NonZeroU8;
 use std::sync::{Arc, LazyLock};
@@ -33,7 +33,7 @@ const HIVE_NULL: &str = "__HIVE_DEFAULT_PARTITION__";
 
 #[derive(Debug)]
 pub(super) struct BasePathOptions {
-    pub(super) root: ListingTableUrl,
+    roots: HashSet<String>,
     case_sensitive: bool,
     timestamp_type: Option<DataType>,
     supports_time: bool,
@@ -82,22 +82,39 @@ pub(super) fn resolve_base_path(
     case_sensitive: bool,
     options: &[OptionLayer],
     urls: &[Vec<ListingTableUrl>],
-    path: &str,
+    path: Option<&str>,
 ) -> Result<BasePathOptions> {
-    let url = resolve_base_directory_url(path)?;
-    if url.scheme() == "file" && !url.to_file_path().is_ok_and(|p| p.is_dir()) {
-        return plan_err!("Option 'basePath' must be an existing directory: {path}");
-    }
-    let base = ListingTableUrl::try_new(url, None)?;
-    for url in urls.iter().flatten() {
-        if base.object_store() != url.object_store() || !url.prefix().prefix_matches(base.prefix())
-        {
-            return plan_err!("Wrong basePath {path} for the root path: {url}");
+    let roots = if let Some(path) = path {
+        let url = resolve_base_directory_url(path)?;
+        if url.scheme() == "file" && !url.to_file_path().is_ok_and(|p| p.is_dir()) {
+            return plan_err!("Option 'basePath' must be an existing directory: {path}");
         }
-        if base.prefix() == url.prefix() && !url.is_collection() {
-            return plan_err!("Option 'basePath' must be a directory: {path}");
+        let base = ListingTableUrl::try_new(url, None)?;
+        for url in urls.iter().flatten() {
+            if base.object_store() != url.object_store()
+                || !url.prefix().prefix_matches(base.prefix())
+            {
+                return plan_err!("Wrong basePath {path} for the root path: {url}");
+            }
+            if base.prefix() == url.prefix() && !url.is_collection() {
+                return plan_err!("Option 'basePath' must be a directory: {path}");
+            }
         }
-    }
+        HashSet::from([base.prefix().to_string()])
+    } else {
+        // Spark stops partition discovery at any input directory or parent of an input file.
+        urls.iter()
+            .flatten()
+            .map(|url| {
+                let path = url.prefix().as_ref();
+                if url.is_collection() {
+                    path.to_owned()
+                } else {
+                    parent_and_name(path).0.to_owned()
+                }
+            })
+            .collect()
+    };
     let service = ctx.config().get_extension::<SessionConfigService>();
     let option = |key| {
         service
@@ -130,7 +147,7 @@ pub(super) fn resolve_base_path(
         (!ntz).then(|| Arc::from(arrow_timezone_label(session_zone).as_ref())),
     );
     Ok(BasePathOptions {
-        root: base,
+        roots,
         case_sensitive,
         timestamp_type: infer.then_some(timestamp_type),
         // Spark 4.1 introduced TIME partition discovery. It infers TIME even when
@@ -149,53 +166,59 @@ pub(super) fn names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
     a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
 }
 
+fn parent_and_name(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
 struct PartitionPath<'a> {
-    base: String,
+    base: &'a str,
     columns: Vec<(Cow<'a, str>, &'a str)>,
 }
 
 fn partition_path<'a>(
     root: &ListingTableUrl,
     file: &'a Path,
-    with_base_path: bool,
+    options: Option<&BasePathOptions>,
 ) -> Result<Option<PartitionPath<'a>>> {
-    let parts = root.strip_prefix(file).ok_or_else(|| {
-        internal_datafusion_err!("file {file} is outside the partition discovery root {root}")
-    })?;
-    let mut directories = parts.collect::<Vec<_>>();
-    directories.pop();
+    let Some(options) = options else {
+        let parts = root.strip_prefix(file).ok_or_else(|| {
+            internal_datafusion_err!("file {file} is outside the partition discovery root {root}")
+        })?;
+        let mut directories = parts.collect::<Vec<_>>();
+        directories.pop();
+        let columns = directories
+            .into_iter()
+            .filter_map(|part| part.split_once('='))
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(name, value)| (Cow::Borrowed(name), value))
+            .collect();
+        return Ok(Some(PartitionPath { base: "", columns }));
+    };
+
+    let directory = parent_and_name(file.as_ref()).0;
+    let mut base = directory;
     let mut columns = Vec::new();
-    let mut base_len = directories.len();
-    for (i, part) in directories.iter().enumerate().rev() {
-        if with_base_path && part.eq_ignore_ascii_case("_temporary") {
+    while !base.is_empty() {
+        let (parent, part) = parent_and_name(base);
+        if part.eq_ignore_ascii_case("_temporary") {
             return Ok(None);
         }
-        if let Some((name, value)) = part.split_once('=') {
-            if with_base_path {
-                if name.is_empty() || value.is_empty() {
-                    return plan_err!("Empty partition column name or value in {file}: {part}");
-                }
-                columns.push((decoded(name), value));
-            } else if !name.is_empty() {
-                columns.push((Cow::Borrowed(name), value));
-            }
-            base_len = i;
-        } else if with_base_path && !columns.is_empty() {
+        if options.roots.contains(base) {
             break;
         }
-    }
-    if with_base_path
-        && (base_len == 0 || columns.is_empty())
-        && root
-            .prefix()
-            .filename()
-            .is_some_and(|n| n.eq_ignore_ascii_case("_temporary"))
-    {
-        return Ok(None);
+        if let Some((name, value)) = part.split_once('=') {
+            if name.is_empty() || value.is_empty() {
+                return plan_err!("Empty partition column name or value in {file}: {part}");
+            }
+            columns.push((decoded(name), value));
+        } else if !columns.is_empty() {
+            break;
+        }
+        base = parent;
     }
     columns.reverse();
     Ok(Some(PartitionPath {
-        base: directories[..base_len].join("/"),
+        base: if columns.is_empty() { directory } else { base },
         columns,
     }))
 }
@@ -428,7 +451,7 @@ impl PartitionDiscovery {
         if let Some(values) = directory.as_ref().and_then(|dir| self.directories.get(dir)) {
             return Ok(!values.is_empty());
         }
-        let Some(path) = partition_path(root, file, options.is_some())? else {
+        let Some(path) = partition_path(root, file, options)? else {
             return Ok(false);
         };
         let parts = path.columns;
@@ -437,8 +460,8 @@ impl PartitionDiscovery {
                 && self
                     .base
                     .as_ref()
-                    .is_some_and(|b| !names_match(b, &path.base, false));
-            self.base.get_or_insert(path.base);
+                    .is_some_and(|b| !names_match(b, path.base, false));
+            self.base.get_or_insert_with(|| path.base.to_owned());
             if let Some(directory) = directory {
                 self.directories.insert(
                     directory,

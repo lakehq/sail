@@ -46,20 +46,25 @@ impl PatternSegment {
     /// 1. Character classes accept `^` for negation. Hadoop globs also accept `!`.
     /// 2. We support alternation (e.g. `{a,b}`).
     fn sequence_parser<'a>(syntax: ReadPathSyntax) -> impl Parser<'a, &'a str, Vec<Self>> {
+        let quoted = just('\\')
+            .filter(move |_| syntax == ReadPathSyntax::HadoopGlob)
+            .ignore_then(any());
+        let class_char = quoted.or(any());
+        let class_body = quoted.or(none_of("]"));
         let character_class = choice((
-            any()
+            class_char
                 .then_ignore(just('-'))
-                .then(any())
+                .then(class_char)
                 .map(|(first, last)| CharacterClass::Range(first, last)),
-            any().map(CharacterClass::Single),
+            class_char.map(CharacterClass::Single),
         ))
         .repeated()
         .collect()
         .nested_in(
-            // `]` must only appear as the first character inside `[...]`.
+            // An unquoted `]` is literal only at the beginning of the class.
             choice((
-                just(']').then(none_of("]").repeated()).to_slice(),
-                none_of("]").repeated().at_least(1).to_slice(),
+                just(']').then(class_body.repeated()).to_slice(),
+                class_body.repeated().at_least(1).to_slice(),
             )),
         );
         let pattern = recursive(move |pattern| {
@@ -70,10 +75,7 @@ impl PatternSegment {
                 .and_is(just('}').not())
                 .and_is(padding.not());
             choice((
-                just('\\')
-                    .filter(move |_| syntax == ReadPathSyntax::HadoopGlob && !cfg!(windows))
-                    .ignore_then(any())
-                    .map(PatternSegment::Quoted),
+                quoted.map(PatternSegment::Quoted),
                 just('*').map(|_| PatternSegment::Asterisk),
                 just('?').map(|_| PatternSegment::QuestionMark),
                 any()

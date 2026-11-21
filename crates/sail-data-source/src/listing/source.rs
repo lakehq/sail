@@ -103,16 +103,6 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
-    /// Whether validating an explicit schema requires the physical file schema.
-    fn requires_explicit_schema_validation(&self) -> bool {
-        false
-    }
-
-    /// Validate a user-provided file schema against the physical file schema.
-    fn validate_explicit_schema(&self, _schema: &Schema, _physical: &Schema) -> Result<()> {
-        Ok(())
-    }
-
     /// File-name glob restricting which listed files compose the dataset.
     fn path_glob_filter(&self) -> Option<&str> {
         None
@@ -212,9 +202,8 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 SchemaSampling::SingleParquet | SchemaSampling::MergeParquet { .. }
             );
         let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
-        let base_path = path
-            .filter(|_| !recursive)
-            .map(|path| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
+        let base_path = (hadoop_paths && !recursive)
+            .then(|| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
             .transpose()?;
         let path_glob_filter = read_format
             .path_glob_filter()
@@ -239,20 +228,16 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         let has_explicit_schema = explicit_schema.is_some();
         let (schema, physical) = match explicit_schema {
             Some(schema) => {
-                let physical = if read_format.requires_explicit_schema_validation() {
-                    Some(
+                // Parquet resolves requested fields per file, including case-insensitive matches.
+                let physical =
+                    if T::name() == "parquet" || (read_case_sensitive && !positional_partitions) {
+                        None
+                    } else {
                         read_format
                             .infer_schema(ctx, &sampled_files, compression)
-                            .await?,
-                    )
-                } else if read_case_sensitive && !positional_partitions {
-                    None
-                } else {
-                    read_format
-                        .infer_schema(ctx, &sampled_files, compression)
-                        .await
-                        .ok()
-                };
+                            .await
+                            .ok()
+                    };
                 // Spark matches a user-specified schema against the physical file
                 // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
                 // Reconcile the user column names to the physical names up front so that both
@@ -337,9 +322,6 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 None,
             )
         };
-        if let Some(physical) = physical {
-            read_format.validate_explicit_schema(&schema, &physical)?;
-        }
         if !inferred_names.is_empty() && !partition_fields.is_empty() {
             if base_path.is_none() && urls.iter().flatten().any(|url| !url.is_collection()) {
                 return plan_err!(

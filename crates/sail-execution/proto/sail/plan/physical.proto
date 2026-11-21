@@ -162,16 +162,18 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_CASE_INSENSITIVE_NAME = 3;
 }
 
-enum SchemaEvolutionTimezoneMode {
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+enum SchemaEvolutionCastMode {
+  SCHEMA_EVOLUTION_CAST_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_CAST_MODE_RELAXED_TIMEZONE = 1;
+  SCHEMA_EVOLUTION_CAST_MODE_PARQUET = 2;
+  SCHEMA_EVOLUTION_CAST_MODE_PARQUET_BINARY_AS_STRING = 3;
 }
 
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
-  SchemaEvolutionTimezoneMode timezone_mode = 4;
+  SchemaEvolutionCastMode cast_mode = 4;
 }
 
 message LambdaExprNode {
@@ -825,7 +827,7 @@ message ParquetExecNode {
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
-  SchemaEvolutionTimezoneMode timezone_mode = 6;
+  SchemaEvolutionCastMode cast_mode = 6;
   repeated bytes virtual_columns = 7;
 }
 

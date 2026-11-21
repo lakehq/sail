@@ -1242,3 +1242,104 @@ def test_parquet_merge_schema_nested_timestamp_timezones(spark, tmp_path):
         Row(value="2024-01-01 19:04:00"),
         Row(value="2024-01-01 19:04:01"),
     ]
+
+
+def test_parquet_single_footer_missing_required_fields(spark, tmp_path):
+    required = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("q", pa.int64(), nullable=False)])
+    pq.write_table(pa.table({"id": [1], "q": [42]}, schema=required), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path))
+    assert df.schema["q"].nullable
+    assert df.orderBy("id").collect() == [Row(id=1, q=42), Row(id=2, q=None)]
+
+
+def test_parquet_scan_validates_projected_fields_per_file(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1], "q": [42]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2], "q": ["7"]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path))
+    assert df.select("id").orderBy("id").collect() == [Row(id=1), Row(id=2)]
+    assert df.count() == 2
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.select("q").collect()
+
+
+def test_parquet_explicit_schema_skips_unrequested_merge_conflicts(spark, tmp_path):
+    for i, value in enumerate([2, "two"]):
+        pq.write_table(pa.table({"id": [i], "other": [value]}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).schema("id BIGINT").parquet(str(tmp_path))
+    assert df.orderBy("id").collect() == [Row(id=0), Row(id=1)]
+
+
+def test_parquet_validates_case_insensitive_nested_field(spark, tmp_path):
+    pq.write_table(pa.table({"item": [{"x": 42, "value": 7}]}), tmp_path / "data.parquet")
+
+    df = spark.read.option("basePath", str(tmp_path)).schema("item STRUCT<x:BIGINT,VALUE:STRING>").parquet(str(tmp_path))
+    assert df.select("item.x").collect() == [Row(x=42)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.select("item.VALUE").collect()
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.collect()
+
+
+def test_parquet_merge_dictionary_with_plain_string(spark, tmp_path):
+    pq.write_table(pa.table({"color": pa.array(["red"]).dictionary_encode()}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"color": ["blue"]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<color:string>"
+    assert df.orderBy("color").collect() == [Row(color="blue"), Row(color="red")]
+
+
+def test_parquet_reads_nested_unannotated_int64_with_seconds_hint(spark, tmp_path):
+    path = tmp_path / "data.parquet"
+
+    def schema(leaf):
+        return pa.schema(
+            [("item", pa.struct([("x", leaf), ("arr", pa.list_(leaf)), ("m", pa.map_(pa.string(), leaf))]))]
+        )
+
+    table = pa.Table.from_pylist([{"item": {"x": 7, "arr": [-1], "m": {"k": 42}}}], schema=schema(pa.int64()))
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata(
+            {"ARROW:schema": base64.b64encode(schema(pa.timestamp("s")).serialize()).decode()}
+        )
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+    assert df.schema.simpleString() == "struct<item:struct<x:bigint,arr:array<bigint>,m:map<string,bigint>>>"
+    assert df.collect() == [Row(item=Row(x=7, arr=[-1], m={"k": 42}))]
+
+
+def test_parquet_merge_schema_decimal_widths(spark, tmp_path):
+    for index, make_type in enumerate([pa.decimal32, pa.decimal64, pa.decimal128, pa.decimal256]):
+        amount = pa.array([Decimal(f"{index}.12")], type=make_type(8, 2))
+        pq.write_table(pa.table({"amount": amount}), tmp_path / f"{index}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<amount:decimal(8,2)>"
+    assert [row.amount for row in df.orderBy("amount").collect()] == [Decimal(f"{i}.12") for i in range(4)]
+
+
+def test_parquet_merge_schema_binary_as_string(spark, tmp_path):
+    for index, value in enumerate([b"first", "second"]):
+        pq.write_table(
+            pa.table({"value": [value], "nested": [{"value": value}]}),
+            tmp_path / f"{index}.parquet",
+            store_schema=False,
+        )
+
+    key = "spark.sql.parquet.binaryAsString"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+        assert df.schema.simpleString() == "struct<value:string,nested:struct<value:string>>"
+        assert df.selectExpr("value", "nested.value AS nested_value").orderBy("value").collect() == [
+            ("first", "first"),
+            ("second", "second"),
+        ]
+    finally:
+        spark.conf.set(key, previous)

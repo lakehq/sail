@@ -520,6 +520,18 @@ def test_base_path_parquet_summary_schema(spark, tmp_path, read_file):
     assert df.collect() == []
 
 
+def test_base_path_parquet_metadata_prefix_schema(spark, tmp_path):
+    pq.write_table(pa.table({"old": [1]}), tmp_path / "_metadata.old")
+    reader = spark.read.option("basePath", str(tmp_path))
+    df = reader.parquet(str(tmp_path))
+    assert df.columns == ["old"]
+    assert df.collect() == []
+
+    pq.write_table(pa.table({"new": [2]}), tmp_path / "part.parquet")
+    df = reader.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.select("new", "old").collect() == [Row(new=2, old=None)]
+
+
 def test_base_path_local_glob_percent_escape(spark, tmp_path):
     part = tmp_path / "p=1"
     part.mkdir()
@@ -725,6 +737,14 @@ def test_base_path_quoted_glob(spark, tmp_path, name, pattern):
     assert df.collect() == [Row(id=1, p=1)]
 
 
+@pytest.mark.parametrize(("pattern", "expected"), [(r"a[a\-z].json", "-"), (r"a[a\]z].json", "]")])
+def test_base_path_quoted_character_class(spark, tmp_path, pattern, expected):
+    for char in ["-", "]", "b"]:
+        (tmp_path / f"a{char}.json").write_text(f'{{"value":"{char}"}}')
+    df = spark.read.options(basePath=str(tmp_path), pathGlobFilter=pattern).json(str(tmp_path))
+    assert df.collect() == [Row(value=expected)]
+
+
 def test_base_path_reader_timezone_validation(spark, tmp_path):
     write_json_partition(tmp_path, "p=1")
     reader = spark.read.options(basePath=str(tmp_path), timeZone="Mars/X")
@@ -873,3 +893,29 @@ def test_base_path_negated_character_class(spark, tmp_path, filename_filter, neg
     else:
         df = reader.json(str(part / pattern))
     assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("merge_schema", [False, True])
+def test_parquet_merge_schema_unpartitioned_directory(spark, tmp_path, merge_schema):
+    nested = tmp_path / "archive"
+    nested.mkdir()
+    pq.write_table(pa.table({"archived": [2]}), nested / "old.parquet")
+    current = tmp_path / "current.parquet"
+    pq.write_table(pa.table({"id": [1]}), current)
+
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.columns == ["id"]
+    assert df.collect() == [Row(id=1)]
+    assert df.inputFiles() == [current.as_uri()]
+
+
+def test_parquet_merge_schema_partition_boundaries(spark, tmp_path):
+    selected = tmp_path / "p=1"
+    partition = selected / "day=2"
+    partition.mkdir(parents=True)
+    pq.write_table(pa.table({"id": [1]}), selected / "loose.parquet")
+    pq.write_table(pa.table({"id": [2]}), partition / "data.parquet")
+
+    reader = spark.read.option("mergeSchema", True)
+    assert reader.parquet(str(selected)).collect() == [Row(id=2, day=2)]
+    assert reader.parquet(str(partition / "data.parquet")).collect() == [Row(id=2)]
