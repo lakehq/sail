@@ -218,6 +218,17 @@ def test_base_path_glob_matches_partition_directories(spark, tmp_path, pattern):
     assert len(df.inputFiles()) == 2
 
 
+@pytest.mark.parametrize(
+    ("uri", "pattern"),
+    [(False, "missing=*/../p=1/row.json"), (True, "p=*/./row.json"), (True, "p=1/row.json/missing=[/..")],
+)
+def test_base_path_glob_dot_components(spark, tmp_path, uri, pattern):
+    write_json_partition(tmp_path, "p=1")
+    root = tmp_path.as_uri() if uri else tmp_path
+    df = spark.read.option("basePath", str(tmp_path)).json(f"{root}/{pattern}")
+    assert df.collect() == [Row(id=1, p=1)]
+
+
 @pytest.mark.parametrize("schema", [None, "id INT, p TIMESTAMP"])
 def test_base_path_reader_timezone(spark, tmp_path, schema):
     write_json_partition(tmp_path, "p=2025-01-01 12%3A01%3A02")

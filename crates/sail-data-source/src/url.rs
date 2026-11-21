@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::mem;
 use std::path::PathBuf;
@@ -426,8 +427,10 @@ impl GlobUrl {
                 // HTTP URLs continue to use URL escapes, queries, and fragments.
                 let uri_escapes =
                     syntax == ReadPathSyntax::UrlGlob || matches!(url.scheme(), "http" | "https");
+                let normalized;
                 let path = if syntax == ReadPathSyntax::HadoopGlob {
-                    path.trim_end_matches('/')
+                    normalized = Self::normalize_hadoop_glob_path(path);
+                    normalized.trim_end_matches('/')
                 } else {
                     path
                 };
@@ -463,12 +466,14 @@ impl GlobUrl {
             path
         };
         // Hadoop normalizes trailing separators before checking the file type.
+        let glob_path;
         let path = if syntax == ReadPathSyntax::HadoopGlob {
-            std::path::Path::new(path)
+            glob_path = Self::normalize_hadoop_glob_path(path);
+            std::path::Path::new(glob_path.as_ref())
                 .components()
                 .as_path()
                 .to_str()
-                .unwrap_or(path)
+                .unwrap_or(&glob_path)
         } else {
             path
         };
@@ -504,6 +509,35 @@ impl GlobUrl {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(paths)
+    }
+
+    fn normalize_hadoop_glob_path(path: &str) -> Cow<'_, str> {
+        // The URL parser already resolves dots in the literal prefix, including at
+        // drive and filesystem roots. Hadoop also resolves them in the pattern
+        // before interpreting wildcards and brace alternatives.
+        let Some(glob) = path.find(['*', '?', '[', '{']) else {
+            return Cow::Borrowed(path);
+        };
+        let start = path[..glob].rfind('/').map_or(0, |i| i + 1);
+        let (prefix, pattern) = path.split_at(start);
+        if !pattern.split('/').any(|part| matches!(part, "." | "..")) {
+            return Cow::Borrowed(path);
+        }
+
+        let mut parts = Vec::new();
+        for part in pattern.split('/') {
+            match part {
+                "" | "." => {}
+                ".." if parts.last().is_some_and(|&part| part != "..") => {
+                    parts.pop();
+                }
+                _ => parts.push(part),
+            }
+        }
+        if prefix.is_empty() && parts.is_empty() {
+            return Cow::Borrowed(".");
+        }
+        Cow::Owned(format!("{prefix}{}", parts.join("/")))
     }
 
     fn create_percent_decoded_pattern(s: &str) -> Result<Option<Pattern>> {
