@@ -115,7 +115,7 @@ def test_range_sample_size_rejects_a_value_that_is_not_an_int(spark):
             spark.conf.set(key, "abc")
         # The rejected value is not stored, so it cannot fail other queries.
         assert spark.conf.get(key) == "7"
-        assert spark.range(3).count() == 3  # noqa: PLR2004
+        assert spark.range(3).count() == 3
     finally:
         spark.conf.unset(key)
 
@@ -144,9 +144,9 @@ def test_range_repartition_samples_imbalanced_input_again(spark):
     source = spark.range(0, 100_000, 1, 1).union(spark.range(0, 0, 1, 200))
     rows = source.repartitionByRange(2, "id").groupBy(F.spark_partition_id().alias("pid")).count().collect()
     counts = {row.pid: row["count"] for row in rows}
-    assert sum(counts.values()) == 100_000  # noqa: PLR2004
-    assert len(counts) == 2, counts  # noqa: PLR2004
-    assert all(count > 30_000 for count in counts.values()), counts  # noqa: PLR2004
+    assert sum(counts.values()) == 100_000
+    assert len(counts) == 2, counts
+    assert all(count > 30_000 for count in counts.values()), counts
 
 
 def assert_range_repartition_plan(df, sorts):

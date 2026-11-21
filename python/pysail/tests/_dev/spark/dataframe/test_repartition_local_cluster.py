@@ -32,7 +32,7 @@ def test_range_repartition_assigns_key_ranges(local_cluster_spark, descending):
     for row in rows:
         expected = (11 - row.key) // 4 if descending else row.key // 4
         assert row.pid == expected, row
-    assert len(rows) == 36  # noqa: PLR2004
+    assert len(rows) == 36
 
 
 def failing_key(_value):
@@ -56,7 +56,7 @@ def test_nested_range_repartitions_assign_key_ranges(local_cluster_spark):
     for row in rows:
         assert row.inner_pid == row.key // 4, row
         assert row.pid == (11 - row.key) // 6, row
-    assert len(rows) == 36  # noqa: PLR2004
+    assert len(rows) == 36
 
 
 def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spark):
@@ -90,9 +90,9 @@ def test_range_repartition_samples_imbalanced_input_again(local_cluster_spark):
     source = local_cluster_spark.range(0, 100_000, 1, 1).union(local_cluster_spark.range(0, 0, 1, 200))
     rows = source.repartitionByRange(2, "id").groupBy(F.spark_partition_id().alias("pid")).count().collect()
     counts = {row.pid: row["count"] for row in rows}
-    assert sum(counts.values()) == 100_000  # noqa: PLR2004
-    assert len(counts) == 2, counts  # noqa: PLR2004
-    assert all(count > 30_000 for count in counts.values()), counts  # noqa: PLR2004
+    assert sum(counts.values()) == 100_000
+    assert len(counts) == 2, counts
+    assert all(count > 30_000 for count in counts.values()), counts
 
 
 def test_range_repartition_keeps_each_key_in_one_partition(local_cluster_spark):
