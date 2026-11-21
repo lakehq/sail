@@ -1,14 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
+use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
+use sail_catalog::lakehouse::LakehouseResolvedTable;
 use sail_common::spec;
+use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+use crate::shared_cte::CteDefinition;
 
 /// Identifies what a catalog table read scans.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -21,6 +26,14 @@ pub(super) struct TableSourceKey {
     pub properties: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
+}
+
+/// Identifies a catalog table lookup by the table reference as written and the
+/// format required by the read, if any.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct CatalogTableLookupKey {
+    pub reference: Vec<String>,
+    pub required_format: Option<String>,
 }
 
 struct SharedTableSource(Arc<dyn TableSource>);
@@ -125,6 +138,10 @@ pub(super) struct PlanResolverState {
     ctes: HashMap<TableReference, Arc<CteInfo>>,
     /// Output attributes of the CTE definitions referenced so far; later references renew them.
     cte_reference_origins: HashSet<usize>,
+    /// The number of CTE definitions resolved so far.
+    next_cte_definition_index: usize,
+    /// The CTE definitions with references that are scans.
+    shared_cte_definitions: Vec<Arc<CteDefinition>>,
     /// Output attributes of the parameter views referenced so far, including renewed ones.
     parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
@@ -145,7 +162,13 @@ pub(super) struct PlanResolverState {
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    /// The successful catalog table lookups so far, shared by repeated references to
+    /// the same table within the query.
+    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
 }
+
+/// A catalog table or view, with the lakehouse resolution of a catalog table.
+pub(super) type CatalogTableLookup = (TableStatus, Option<LakehouseResolvedTable>);
 
 impl Default for PlanResolverState {
     fn default() -> Self {
@@ -168,6 +191,8 @@ impl PlanResolverState {
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             cte_reference_origins: HashSet::new(),
+            next_cte_definition_index: 0,
+            shared_cte_definitions: Vec::new(),
             parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
@@ -176,6 +201,7 @@ impl PlanResolverState {
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
+            catalog_table_lookups: HashMap::new(),
         }
     }
 
@@ -456,6 +482,24 @@ impl PlanResolverState {
         Ok(())
     }
 
+    pub fn insert_cte_info(&mut self, table_ref: TableReference, cte: CteInfo) {
+        self.ctes.insert(table_ref, Arc::new(cte));
+    }
+
+    pub fn next_cte_definition_index(&mut self) -> usize {
+        let index = self.next_cte_definition_index;
+        self.next_cte_definition_index += 1;
+        index
+    }
+
+    pub fn register_shared_cte_definition(&mut self, definition: Arc<CteDefinition>) {
+        self.shared_cte_definitions.push(definition);
+    }
+
+    pub fn shared_cte_definitions(&self) -> &[Arc<CteDefinition>] {
+        &self.shared_cte_definitions
+    }
+
     pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
         self.ctes.values()
     }
@@ -468,6 +512,21 @@ impl PlanResolverState {
 
     pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
         self.table_sources.insert(key, SharedTableSource(source));
+    }
+
+    pub fn get_catalog_table_lookup(
+        &self,
+        key: &CatalogTableLookupKey,
+    ) -> Option<CatalogTableLookup> {
+        self.catalog_table_lookups.get(key).cloned()
+    }
+
+    pub fn insert_catalog_table_lookup(
+        &mut self,
+        key: CatalogTableLookupKey,
+        lookup: CatalogTableLookup,
+    ) {
+        self.catalog_table_lookups.insert(key, lookup);
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.
@@ -571,6 +630,20 @@ impl PlanResolverState {
 
     pub fn in_lambda_scope(&self) -> bool {
         !self.lambda_param_scopes.is_empty()
+    }
+
+    /// Replaces the parameters in the plan by the parameter values in scope.
+    pub fn bind_param_values(&self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+        let plan = if self.positional_param_values.is_empty() {
+            plan
+        } else {
+            plan.with_param_values(ParamValues::from(self.positional_param_values.clone()))?
+        };
+        if self.param_values.is_empty() {
+            Ok(plan)
+        } else {
+            Ok(plan.with_param_values(ParamValues::from(self.param_values.clone()))?)
+        }
     }
 
     /// Enters a scope where named and positional parameter values are set.

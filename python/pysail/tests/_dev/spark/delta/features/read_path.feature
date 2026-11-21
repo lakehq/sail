@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake read path (driver vs metadata-as-data)
 
   Rule: Exact partition filters preserve logical types and three-valued logic

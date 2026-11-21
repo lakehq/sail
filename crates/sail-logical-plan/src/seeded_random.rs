@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -7,11 +9,11 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_shuffle::SparkShuffle;
-use sail_function::scalar::math::partition_random::{
+use sail_function::scalar::array::shuffle::Shuffle;
+use sail_function::scalar::math::utils::partition_random::{
     PartitionSeed, is_row_argument, seed_argument_position,
 };
-use sail_function::scalar::misc::spark_uuid::SparkUuid;
+use sail_function::scalar::misc::uuid::Uuid;
 
 /// Whether a random call has reproducible arguments, rather than a fresh entropy seed.
 /// Callers must also inspect its children: a shuffle's row argument can itself be volatile.
@@ -22,8 +24,7 @@ pub fn is_reproducible_seeded_random_call(expr: &Expr) -> bool {
     let Some(seed_index) = seed_argument_position(&call.func, call.args.len()) else {
         return false;
     };
-    let null_uses_entropy =
-        call.func.inner().is::<SparkUuid>() || call.func.inner().is::<SparkShuffle>();
+    let null_uses_entropy = call.func.inner().is::<Uuid>() || call.func.inner().is::<Shuffle>();
     if !call.args.iter().enumerate().all(|(i, arg)| {
         is_row_argument(&call.func, i)
             || (arg.column_refs().is_empty()
@@ -226,7 +227,7 @@ mod tests {
         use datafusion_common::ScalarValue;
         use datafusion_expr::ExprSchemable;
         let random = ScalarUDF::from(Random::new());
-        let uuid = ScalarUDF::from(SparkUuid::new());
+        let uuid = ScalarUDF::from(Uuid::new());
         let null = lit(ScalarValue::Int64(None));
         assert!(is_reproducible_seeded_random_call(
             &random.call(vec![null.clone()])

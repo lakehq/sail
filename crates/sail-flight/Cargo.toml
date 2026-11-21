@@ -1,7 +1,12 @@
 [package]
 name = "sail-flight"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -31,6 +36,3 @@ thiserror = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 uuid = { workspace = true }
-
-[build-dependencies]
-tonic-build = { workspace = true }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 use std::sync::Arc;
 
@@ -13,9 +15,9 @@ use datafusion_expr::{ident, lit};
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
+use sail_function::scalar::array::array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::explode::{Explode, ExplodeKind, MapExplodeEntry};
-use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_entries::MapEntries;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
@@ -96,7 +98,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = match data_type {
             ExplodeDataType::List => arg,
-            ExplodeDataType::Map => ScalarUDF::from(SparkMapEntries::new()).call(vec![arg]),
+            ExplodeDataType::Map => ScalarUDF::from(MapEntries::new()).call(vec![arg]),
         };
         let arg = match with_position {
             true => ScalarUDF::from(ArrayItemWithPosition::new()).call(vec![arg]),

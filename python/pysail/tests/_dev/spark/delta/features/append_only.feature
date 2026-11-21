@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake append-only tables
 
   Rule: delta.appendOnly controls protocol metadata and row removal

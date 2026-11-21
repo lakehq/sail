@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 from datetime import datetime, timezone
@@ -59,7 +61,7 @@ def test_iceberg_named_overwrite_schema_drops_partition_column(spark, sql_catalo
         )
         after = _find_latest_metadata(path)
         _assert_replacement_history(before, after)
-        assert _current_spec(before)["fields"][0]["source-id"] == 2  # noqa: PLR2004
+        assert _current_spec(before)["fields"][0]["source-id"] == 2
         assert _current_spec(after)["fields"] == []
         assert after["default-spec-id"] != before["default-spec-id"]
         assert after["current-schema-id"] != before["current-schema-id"]
@@ -260,7 +262,7 @@ def test_iceberg_replacement_partition_and_property_definition(spark, replacemen
     assert after["properties"]["change"] == "new"
     assert after["properties"]["added"] == "new"
     entries = _current_manifest_entries(path, ManifestContent.DATA)
-    assert sum(entry.data_file.record_count for entry in entries) == 2  # noqa: PLR2004
+    assert sum(entry.data_file.record_count for entry in entries) == 2
     assert all(len(entry.data_file.partition) == 1 for entry in entries)
     source.writeTo(name).append()
     _assert_rows(spark.table(name), [("x", 10), ("y", 20)] * 2, ["b", "c"])
@@ -477,3 +479,21 @@ def test_iceberg_replacement_retains_bindable_historical_sort_order(spark, repla
     assert _current_spec(after)["fields"] == []
     source.writeTo(name).append()
     _assert_rows(spark.table(name), [("new", 10)] * 2, ["b", "c"])
+
+
+@pytest.mark.parametrize("api", APIS)
+def test_iceberg_replacement_resets_main_retention(spark, replacement_target, api):
+    # Spark 4.1 / Iceberg 1.12 replacement creates a new main reference, not a retained branch.
+    _create(spark, replacement_target)
+    name, path = replacement_target
+    spark.sql(f"ALTER TABLE {name} REPLACE BRANCH main WITH SNAPSHOT RETENTION 3 SNAPSHOTS 2 DAYS")
+    before = _find_latest_metadata(path)
+    min_snapshots = 3
+    max_snapshot_age_ms = 2 * 24 * 60 * 60 * 1000
+    assert before["refs"]["main"]["min-snapshots-to-keep"] == min_snapshots
+    assert before["refs"]["main"]["max-snapshot-age-ms"] == max_snapshot_age_ms
+    source = spark.createDataFrame([(10,)], "c BIGINT")
+    _replace(spark, replacement_target, source, api)
+    after = _find_latest_metadata(path)
+    assert after["refs"]["main"] == {"snapshot-id": after["current-snapshot-id"], "type": "branch"}
+    _assert_replacement_history(before, after)

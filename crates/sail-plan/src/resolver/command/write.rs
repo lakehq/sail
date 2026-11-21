@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -42,6 +44,7 @@ use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::shared_cte::exists_in_plan_or_cte_definitions;
 
 /// The write modes for all targets.
 ///
@@ -145,6 +148,7 @@ pub(super) struct WritePlanBuilder {
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
+    table_comment: Option<String>,
     table_is_external: bool,
     sql_insert: bool,
     identity_columns_to_track: Vec<String>,
@@ -164,6 +168,7 @@ impl WritePlanBuilder {
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
+            table_comment: None,
             table_is_external: false,
             sql_insert: false,
             identity_columns_to_track: Vec::new(),
@@ -237,6 +242,11 @@ impl WritePlanBuilder {
         self
     }
 
+    pub fn with_table_comment(mut self, comment: Option<String>) -> Self {
+        self.table_comment = comment;
+        self
+    }
+
     pub fn with_table_is_external(mut self, is_external: bool) -> Self {
         self.table_is_external = is_external;
         self
@@ -262,6 +272,7 @@ impl PlanResolver<'_> {
             cluster_by,
             options,
             table_properties,
+            table_comment,
             table_is_external,
             sql_insert,
             identity_columns_to_track,
@@ -566,11 +577,19 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
+                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     let columns = input
                         .schema()
                         .inner()
                         .fields()
                         .iter()
+                        .map(|f| {
+                            if is_iceberg {
+                                sail_common_datafusion::schema::nullable_query_field(f)
+                            } else {
+                                f.as_ref().clone()
+                            }
+                        })
                         .map(|f| CreateTableColumnOptions {
                             metadata: f
                                 .metadata()
@@ -586,7 +605,6 @@ impl PlanResolver<'_> {
                             identity: None,
                         })
                         .collect();
-                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
                         .options
@@ -619,9 +637,16 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|part| part.as_ref().to_string())
                         .collect::<Vec<_>>();
+                    if let Some(comment) = &table_comment
+                        && (is_iceberg || write_format.eq_ignore_ascii_case("delta"))
+                    {
+                        sink_info.options.push(OptionLayer::TablePropertyList {
+                            items: vec![("comment".to_string(), comment.clone())],
+                        });
+                    }
                     let mut create_options = CreateTableOptions {
                         columns,
-                        comment: None,
+                        comment: table_comment,
                         constraints: vec![],
                         location: table_location,
                         format: write_format.clone(),
@@ -633,16 +658,6 @@ impl PlanResolver<'_> {
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
                     };
-                    if write_format.eq_ignore_ascii_case("iceberg")
-                        && matches!(mode, WriteMode::Replace { .. })
-                    {
-                        table_replacement = Some(
-                            self.ctx
-                                .extension::<CatalogManager>()?
-                                .stage_table_replacement(&catalog_table, create_options.clone())
-                                .await?,
-                        );
-                    }
                     let create_plan = self
                         .ctx
                         .extension::<CatalogManager>()?
@@ -668,6 +683,27 @@ impl PlanResolver<'_> {
                             .execution
                             .for_operation(LakehouseOperation::Write),
                     );
+                    if write_format.eq_ignore_ascii_case("iceberg")
+                        && matches!(mode, WriteMode::Replace { .. })
+                    {
+                        if info.is_none() && !write_options_had_location
+                            && sink_info.lakehouse_table.as_ref().is_some_and(|binding| matches!(binding.commit, sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit))
+                        {
+                            create_options.location = None;
+                        }
+                        let replacement = self
+                            .ctx
+                            .extension::<CatalogManager>()?
+                            .stage_table_replacement(&catalog_table, create_options.clone())
+                            .await?;
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), replacement.location.clone())],
+                        });
+                        if let Some(execution) = replacement.authority.execution() {
+                            sink_info.lakehouse_table = Some(execution.clone());
+                        }
+                        table_replacement = Some(replacement);
+                    }
                     if table_replacement.is_none() {
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),
@@ -1785,8 +1821,8 @@ impl PlanResolver<'_> {
     }
 
     pub(super) fn plan_has_default_column_value(plan: &LogicalPlan) -> PlanResult<bool> {
-        let mut found = false;
-        plan.apply(|node| {
+        Ok(exists_in_plan_or_cte_definitions(plan, &mut |node| {
+            let mut found = false;
             node.apply_expressions(|expr| {
                 if Self::expr_contains_default_column_value(expr)? {
                     found = true;
@@ -1795,13 +1831,8 @@ impl PlanResolver<'_> {
                     Ok(TreeNodeRecursion::Continue)
                 }
             })?;
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        Ok(found)
+            Ok(found)
+        })?)
     }
 
     fn make_nullable_if_needed(expr: Expr, field: &Field, schema: &DFSchema) -> PlanResult<Expr> {

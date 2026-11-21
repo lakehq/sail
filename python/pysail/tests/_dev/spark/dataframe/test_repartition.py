@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 
 import pandas as pd
@@ -34,12 +36,10 @@ def normalized_plan(df):
 
 @pytest.mark.spark(cross_version=True)
 def test_explicit_repartition(spark):
-    assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
-    assert (
-        partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
-    )
-    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5  # noqa: PLR2004
-    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6  # noqa: PLR2004
+    assert partition_count(spark.range(0, 10, 1, 2)) == 2
+    assert partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3
+    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5
+    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
 
 
@@ -51,7 +51,7 @@ def test_range_repartition_preserves_rows_and_partition_count(spark, descending)
     source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
     key = F.col("key").desc() if descending else F.col("key").asc()
     result = source.repartitionByRange(3, key)
-    assert partition_count(result) == 3  # noqa: PLR2004
+    assert partition_count(result) == 3
     assert result.schema == source.schema
     assert result.orderBy("id").collect() == source.orderBy("id").collect()
 
@@ -356,9 +356,9 @@ def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
 @pytest.mark.spark(cross_version=True)
 def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
-    assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004
-    assert partition_count(spark.range(0, 10, 1, 2).coalesce(3)) == 2  # noqa: PLR2004
-    assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2  # noqa: PLR2004
+    assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2
+    assert partition_count(spark.range(0, 10, 1, 2).coalesce(3)) == 2
+    assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2
 
 
 @pytest.mark.spark(cross_version=True)
@@ -368,8 +368,8 @@ def test_coalesce_hint(spark):
     actual = df.hint("COALESCE", 2).orderBy("id").toPandas()
     expected = df.orderBy("id").toPandas()
 
-    assert partition_count(df.hint("COALESCE", 2)) == 2  # noqa: PLR2004
-    assert partition_count(df.hint("COALESCE", 6)) == 4  # noqa: PLR2004
+    assert partition_count(df.hint("COALESCE", 2)) == 2
+    assert partition_count(df.hint("COALESCE", 6)) == 4
     assert_frame_equal(actual, expected)
 
 
@@ -393,7 +393,7 @@ def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
 @pytest.mark.spark(cross_version=True)
 def test_sql_hint_accepts_int64_partition_count(spark, hint):
     result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(0, 12, 1, 4)")  # noqa: S608
-    assert partition_count(result) == 2  # noqa: PLR2004
+    assert partition_count(result) == 2
     assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
 
 
@@ -462,8 +462,8 @@ def test_repartition_hint(spark):
     actual = df.hint("REPARTITION", 6).orderBy("id").toPandas()
     expected = df.orderBy("id").toPandas()
 
-    assert partition_count(df.hint("REPARTITION", 2)) == 2  # noqa: PLR2004
-    assert partition_count(df.hint("REPARTITION", 6)) == 6  # noqa: PLR2004
+    assert partition_count(df.hint("REPARTITION", 2)) == 2
+    assert partition_count(df.hint("REPARTITION", 6)) == 6
     assert_frame_equal(actual, expected)
 
 
@@ -510,7 +510,7 @@ def test_repartition_hint_by_columns(spark, with_count, columns):
 def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
     result = spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id + 1 AS value FROM range(12) r")  # noqa: S608
     assert result.columns == ["value"]
-    assert partition_count(result) == 3  # noqa: PLR2004
+    assert partition_count(result) == 3
     assert sorted(result.collect()) == [Row(value=i) for i in range(1, 13)]
 
 
@@ -526,7 +526,7 @@ def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
 @pytest.mark.spark(cross_version=True)
 def test_repartition_sql_hint_precedence(spark, query):
     result = spark.sql(query)
-    assert partition_count(result) == 3  # noqa: PLR2004
+    assert partition_count(result) == 3
     assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
 
 
@@ -539,7 +539,7 @@ def test_repartition_sql_hint_default_partition_count(spark, hint):
         spark.conf.set("spark.sql.shuffle.partitions", "3")
         spark.conf.set("spark.sql.adaptive.enabled", "false")
         result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(12)")  # noqa: S608
-        assert partition_count(result) == 3  # noqa: PLR2004
+        assert partition_count(result) == 3
         assert sorted(result.collect()) == [Row(id=i) for i in range(12)]
     finally:
         spark.conf.set("spark.sql.shuffle.partitions", old_partitions)

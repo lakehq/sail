@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Iceberg REST DDL and cross-client metadata evolution."""
 
@@ -32,7 +34,7 @@ def test_rest_identifier_fields(spark, reference_catalog):
             update.set_identifier_fields("key")
         spark.sql(f"ALTER TABLE {table} DROP IDENTIFIER FIELDS key")
         assert reference_catalog.load_table(table).schema().identifier_field_ids == []
-        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2  # noqa: PLR2004
+        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -73,13 +75,13 @@ def test_rest_lakehouse_ddl(spark, reference_catalog):
         location = reference.location()
         spark.sql(f"DROP TABLE {table}")
         spark.sql(f"CREATE TABLE {table} USING iceberg LOCATION '{location}'")
-        assert spark.table(table).count() == 3  # noqa: PLR2004
+        assert spark.table(table).count() == 3
         assert reference_catalog.load_table(table).schema() == reference.schema()
         spark.sql(f"DROP TABLE {table}")
         table = f"{namespace}.ctas"
         spark.sql(f"CREATE TABLE {table} USING iceberg AS SELECT 4 AS id")
         spark.sql(f"CREATE TABLE IF NOT EXISTS {table} (other INT) USING iceberg")
-        assert spark.table(table).first().id == 4  # noqa: PLR2004
+        assert spark.table(table).first().id == 4
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -146,9 +148,9 @@ def test_rest_invalid_ddl_preserves_metadata(spark, reference_catalog):
             assert reference_catalog.load_table(table).metadata_location == before
         spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('format-version'='3')")
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT 7")
-        assert reference_catalog.load_table(table).schema().find_field("id").write_default == 7  # noqa: PLR2004
+        assert reference_catalog.load_table(table).schema().find_field("id").write_default == 7
         spark.sql(f"INSERT INTO {table} VALUES (DEFAULT)")
-        assert spark.table(table).first().id == 7  # noqa: PLR2004
+        assert spark.table(table).first().id == 7
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -174,23 +176,32 @@ def test_rest_column_changes_preserve_ids_and_catalog_schema(spark, reference_ca
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
 
-def test_rest_table_rename_across_namespaces(spark, reference_catalog):
+@pytest.mark.parametrize("same_namespace", [True, False], ids=["same-namespace", "cross-namespace"])
+def test_rest_table_rename_then_read(spark, reference_catalog, same_namespace):
     source = "rest_rename_source"
-    destination = "rest_rename_destination"
+    destination = source if same_namespace else "rest_rename_destination"
     spark.sql(f"CREATE NAMESPACE {source}")
-    spark.sql(f"CREATE NAMESPACE {destination}")
+    if not same_namespace:
+        spark.sql(f"CREATE NAMESPACE {destination}")
     try:
         spark.sql(f"CREATE TABLE {source}.t (id INT) USING iceberg")
         spark.sql(f"INSERT INTO {source}.t VALUES (1)")
-        before = reference_catalog.load_table(f"{source}.t").metadata_location
+        assert [r.id for r in spark.table(f"{source}.t").collect()] == [1]
+        before = reference_catalog.load_table(f"{source}.t")
         spark.sql(f"ALTER TABLE {source}.t RENAME TO {destination}.renamed")
         assert not reference_catalog.table_exists(f"{source}.t")
-        assert reference_catalog.load_table(f"{destination}.renamed").metadata_location == before
+        after = reference_catalog.load_table(f"{destination}.renamed")
+        assert after.metadata_location == before.metadata_location
+        assert after.metadata.table_uuid == before.metadata.table_uuid
+        assert [r.id for r in spark.table(f"{destination}.renamed").collect()] == [1]
+        with pytest.raises(Exception, match=r"(?i)(not found|does not exist)"):
+            spark.table(f"{source}.t").collect()
         spark.sql(f"INSERT INTO {destination}.renamed VALUES (2)")
         assert [r.id for r in spark.sql(f"SELECT * FROM {destination}.renamed ORDER BY id").collect()] == [1, 2]
     finally:
         spark.sql(f"DROP NAMESPACE {source} CASCADE")
-        spark.sql(f"DROP NAMESPACE {destination} CASCADE")
+        if not same_namespace:
+            spark.sql(f"DROP NAMESPACE {destination} CASCADE")
 
 
 def test_rest_replace_columns(spark, reference_catalog):
@@ -233,7 +244,7 @@ def test_rest_write_order(spark, reference_catalog):
         spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg")
         exercise_iceberg_write_order(spark, table)
         loaded = reference_catalog.load_table(table)
-        assert len(loaded.sort_order().fields) == 2  # noqa: PLR2004
+        assert len(loaded.sort_order().fields) == 2
         assert loaded.sort_order().fields[0].direction.value == "desc"
         assert loaded.properties["write.distribution-mode"] == "range"
         spark.sql(f"ALTER TABLE {table} WRITE UNORDERED")

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::error::CommonErrorCause;
 use tonic::Request;
 

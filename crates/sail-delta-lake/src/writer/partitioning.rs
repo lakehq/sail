@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::scalar::ScalarValue;
@@ -98,6 +100,9 @@ pub(crate) fn partition_ranges(
     Ok(partitions)
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs
 fn push_partition_range(
     out: &mut Vec<PartitionRange>,
     values: &RecordBatch,
@@ -135,6 +140,7 @@ fn push_partition_range(
 
     Ok(())
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

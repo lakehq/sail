@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition-dependent functions next to generators, map generators,
 and non-deterministic expressions and subqueries in aggregate queries.
 
@@ -39,8 +41,8 @@ def test_seeded_random_in_aggregate_result(spark):
     ).collect()
     assert [row.k for row in rows] == [0, 1]
     assert 0.0 <= rows[0].v < 1.0
-    assert rows[1].v == 25.0  # noqa: PLR2004
-    assert spark.sql("SELECT sum(id) + rand(7) v FROM range(0, 30, 1, 1)").collect()[0].v == 435.28188121484885  # noqa: PLR2004
+    assert rows[1].v == 25.0
+    assert spark.sql("SELECT sum(id) + rand(7) v FROM range(0, 30, 1, 1)").collect()[0].v == 435.28188121484885
     assert [
         tuple(row)
         for row in spark.sql(

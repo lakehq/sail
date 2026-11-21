@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use sail_celeborn::error::CelebornError;
@@ -5,6 +7,7 @@ use sail_celeborn::error::CelebornError;
 mod endpoint;
 mod lifecycle;
 mod shuffle;
+mod transport;
 
 pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = PyModule::new(parent.py(), "_celeborn")?;
@@ -12,6 +15,7 @@ pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<shuffle::PyShuffleClient>()?;
     module.add_class::<shuffle::PyShufflePartitionStream>()?;
     module.add_class::<endpoint::PyStaticEndpointResolver>()?;
+    module.add_class::<transport::PyRpcConnection>()?;
     parent.add_submodule(&module)?;
     Ok(())
 }

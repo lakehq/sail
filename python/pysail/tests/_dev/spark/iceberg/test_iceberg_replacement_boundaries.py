@@ -1,10 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Replacement boundary contracts verified with Spark 4.1.3 / Iceberg 1.11.0."""
 
 # ruff: noqa: S608
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from pyiceberg.manifest import ManifestContent
-from pyspark.errors import PySparkException
+from pyspark.errors import AnalysisException, PySparkException
+from pyspark.sql import functions as sf
 
 from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -63,7 +69,7 @@ def test_replacement_drops_v1_partition_source(spark, target, version, api):
     spark.sql(f"INSERT INTO {name} VALUES (30)")
     assert sorted(spark.table(name).collect()) == [(20,), (30,)]
     entries = _current_manifest_entries(path, ManifestContent.DATA)
-    assert sum(entry.data_file.record_count for entry in entries) == 2  # noqa: PLR2004
+    assert sum(entry.data_file.record_count for entry in entries) == 2
     assert all(tuple(entry.data_file.partition) == (None,) for entry in entries)
     assert all(p.read_bytes() == contents for p, contents in old_files.items())
 
@@ -108,3 +114,59 @@ def test_replacement_compares_location_identity(spark, target, spelling, api):
         next(row.data_type for row in spark.sql(f"DESCRIBE EXTENDED {name}").collect() if row.col_name == "Location")
         == registered_location
     )
+
+
+@pytest.mark.parametrize("mutation", ["append", "recreate"])
+def test_path_replacement_conflict_requires_replanning(spark, target, tmp_path, mutation):
+    name, path = target
+    spark.sql(f"CREATE TABLE {name} (old INT) USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+    spark.sql(f"INSERT INTO {name} VALUES (1)")
+    ready = str(tmp_path / "writer-ready")
+    release = str(tmp_path / "writer-release")
+
+    @sf.udf("int")
+    def blocked_source(value):
+        import time
+        from pathlib import Path
+
+        Path(ready).touch()
+        deadline = time.monotonic() + 30
+        while not Path(release).exists():
+            if time.monotonic() >= deadline:
+                message = "replacement source barrier timed out"
+                raise RuntimeError(message)
+            time.sleep(0.01)
+        return value
+
+    source = spark.range(1, numPartitions=1).select(blocked_source(sf.lit(7)).alias("replacement"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(lambda: source.writeTo(name).using("iceberg").replace())
+        try:
+            deadline = time.monotonic() + 30
+            while not (tmp_path / "writer-ready").exists() and time.monotonic() < deadline:
+                if future.done():
+                    future.result()
+                time.sleep(0.01)
+            assert (tmp_path / "writer-ready").exists()
+            winner_path = path
+            if mutation == "append":
+                spark.sql(f"INSERT INTO {name} VALUES (2)")
+            else:
+                spark.sql(f"DROP TABLE {name}")
+                winner_path = tmp_path / "recreated"
+                spark.sql(
+                    f"CREATE TABLE {name} (old INT) USING iceberg "
+                    f"LOCATION '{escape_sql_string_literal(str(winner_path))}'"
+                )
+                spark.sql(f"INSERT INTO {name} VALUES (9)")
+            winner = _find_latest_metadata(winner_path)
+            original_location = _find_latest_metadata(path)
+            expected = sorted(spark.table(name).collect())
+        finally:
+            (tmp_path / "writer-release").touch()
+        with pytest.raises(AnalysisException, match="commit requires replanning"):
+            future.result(timeout=30)
+    assert _find_latest_metadata(winner_path) == winner
+    assert _find_latest_metadata(path) == original_location
+    assert sorted(spark.table(name).collect()) == expected
+    assert spark.table(name).columns == ["old"]

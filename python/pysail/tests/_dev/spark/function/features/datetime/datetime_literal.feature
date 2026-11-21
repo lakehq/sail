@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Moved from features/datetime_literal.feature by the datetime/ layout reorganisation.
 Feature: Datetime literal syntax from Spark SQL documentation
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::str::ParseBoolError;
@@ -470,6 +472,7 @@ impl From<CommonErrorCause> for SparkThrowable {
             }
             CommonErrorCause::ArrowCast(x) => cast_error_to_throwable(x),
             CommonErrorCause::Schema(x)
+            | CommonErrorCause::CommitRequiresReplanning(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {

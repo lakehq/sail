@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: get_json_object extracts values via a Spark JSONPath
 
   # Spark `get_json_object(json, path)` walks a JSONPath subset: a leading `$`,

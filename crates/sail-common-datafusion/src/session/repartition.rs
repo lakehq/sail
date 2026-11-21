@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::extension::SessionExtension;
 
 pub const DEFAULT_REPARTITION_BUFFER_SIZE: usize = 16;

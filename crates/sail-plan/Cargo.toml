@@ -1,7 +1,12 @@
 [package]
 name = "sail-plan"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -13,7 +18,6 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-catalog = { path = "../sail-catalog" }
-sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-function = { path = "../sail-function" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-logical-plan = { path = "../sail-logical-plan" }
@@ -53,6 +57,9 @@ fancy-regex = { workspace = true }
 regex-syntax = { workspace = true }
 url = { workspace = true }
 parquet-variant-compute = { workspace = true }
+
+[dev-dependencies]
+sail-catalog-memory = { path = "../sail-catalog-memory" }
 
 [build-dependencies]
 serde = { workspace = true }

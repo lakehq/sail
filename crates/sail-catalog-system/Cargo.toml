@@ -1,7 +1,12 @@
 [package]
 name = "sail-catalog-system"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -17,7 +22,6 @@ serde = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
 async-trait = { workspace = true }
-educe = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 parquet-variant-compute = { workspace = true }

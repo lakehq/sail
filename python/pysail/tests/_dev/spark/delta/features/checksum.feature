@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Version Checksum
 
   Rule: Delta log writes version checksum files after successful commits

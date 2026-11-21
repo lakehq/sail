@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -49,13 +51,14 @@ impl PyIcebergRestCatalogProvider {
 
         let catalog = RuntimeAwareCatalogProvider::try_new(
             || {
-                Ok(IcebergRestCatalogProvider::new(
+                IcebergRestCatalogProvider::new(
                     name,
                     IcebergRestCatalogOptions {
                         credentials: Arc::new(EmptyCatalogCredentials),
                         properties,
+                        sigv4: None,
                     },
-                ))
+                )
             },
             runtime.io().clone(),
         )

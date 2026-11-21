@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Iceberg REST catalog container fixtures."""
 
 from __future__ import annotations
@@ -9,6 +11,8 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy, LogMessageWaitStrategy
+
+from pysail.testing.resources import resource
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -39,6 +43,7 @@ def _published_host(container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="session")
+@resource(name="iceberg-native", weight=10)
 def iceberg_rest_service() -> Generator[IcebergRestService, None, None]:
     """Start Silo and the Apache Iceberg REST catalog fixture."""
     network = Network()

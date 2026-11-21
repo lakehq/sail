@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg Partitioning
 
   Rule: Identity partitioning creates partition directories
@@ -30,11 +32,11 @@ Feature: Iceberg Partitioning
         SELECT * FROM part_identity ORDER BY id
         """
       Then query result ordered
-        | id | value     | category |
-        | 1  | cat1_val1 | 1        |
-        | 2  | cat1_val2 | 1        |
-        | 3  | cat2_val1 | 2        |
-        | 4  | cat2_val2 | 2        |
+        | id | category | value     |
+        | 1  | 1        | cat1_val1 |
+        | 2  | 1        | cat1_val2 |
+        | 3  | 2        | cat2_val1 |
+        | 4  | 2        | cat2_val2 |
       Then file tree in location matches
         """
         📂 data
@@ -77,11 +79,11 @@ Feature: Iceberg Partitioning
         SELECT * FROM part_multi ORDER BY id
         """
       Then query result ordered
-        | id | value | region | category |
-        | 1  | 100   | 1      | 1        |
-        | 2  | 200   | 1      | 2        |
-        | 3  | 300   | 2      | 1        |
-        | 4  | 400   | 2      | 2        |
+        | id | region | category | value |
+        | 1  | 1      | 1        | 100   |
+        | 2  | 1      | 2        | 200   |
+        | 3  | 2      | 1        | 300   |
+        | 4  | 2      | 2        | 400   |
       Then file tree in location matches
         """
         📂 data

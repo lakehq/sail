@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import gzip
 import json
 
@@ -165,7 +167,7 @@ def test_json_format_path(spark, tmp_path):
     json_file = tmp_path / "data.json"
     json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
     df = spark.sql(f"SELECT * FROM json.`{escape_sql_identifier(str(json_file))}`")  # noqa: S608
-    assert df.count() == 2  # noqa: PLR2004
+    assert df.count() == 2
     assert "id" in df.columns
     assert "value" in df.columns
 
@@ -176,7 +178,7 @@ def test_json_read_uppercase_extension(spark, tmp_path):
     data_path = tmp_path / "data.JSON"
     data_path.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
     df = spark.read.format("json").load(str(data_path))
-    assert df.count() == 2  # noqa: PLR2004
+    assert df.count() == 2
 
 
 # -----------------------------------------------------------------------------

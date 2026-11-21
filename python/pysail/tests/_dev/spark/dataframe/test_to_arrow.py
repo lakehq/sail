@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Arrow conversion parity for `DataFrame.toArrow()`.
 
 These assertions cannot live in a `.feature` file: `Then query schema` compares Spark's

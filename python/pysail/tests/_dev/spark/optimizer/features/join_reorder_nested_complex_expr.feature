@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder projection rewrite supports nested derived expressions
 
   Scenario: Derived alias from subquery participates in outer expression

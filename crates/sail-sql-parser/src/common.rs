@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// A sequence of item type `T` and separator type `S`.
 #[derive(Debug, Clone)]
 pub struct Sequence<T, S> {

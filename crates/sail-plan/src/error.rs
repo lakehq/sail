@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_catalog::error::CatalogError;

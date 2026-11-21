@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException

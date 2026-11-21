@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: input_file_name
 
   Rule: Inputs not backed by files

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1529,7 +1531,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
         Expr::Cast {
             expr,
             cast_to_type,
-            rename,
+            naming,
             is_try,
         } => Expr::Cast {
             expr: Box::new(merge_disambiguate_unqualified_plan_ids(
@@ -1540,7 +1542,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 case_sensitive,
             )),
             cast_to_type,
-            rename,
+            naming,
             is_try,
         },
         Expr::UnresolvedRegex {

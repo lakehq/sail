@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -96,7 +98,7 @@ mod tests {
         let change = ColumnChange::Add {
             path: vec!["u".into()],
             data_type: 16_u8,
-            metadata: BTreeMap::from([("iceberg.type".into(), "uuid".into())]),
+            metadata: BTreeMap::from([("ARROW:extension:name".into(), "arrow.uuid".into())]),
             nullable: true,
             comment: Some("UUID column".into()),
             default: None,

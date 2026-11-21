@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Literal function references
 
   Scenario Outline: an unresolved attribute resolves to its literal function

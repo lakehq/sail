@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -30,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::spec::statistics::Stats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult, IsolationLevel, Metadata, Protocol};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     #[serde(rename = "u")]
@@ -104,6 +93,7 @@ impl DeletionVectorDescriptor {
         }
     }
 }
+// SPDX-SnippetEnd
 
 /// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
 ///
@@ -112,17 +102,24 @@ impl DeletionVectorDescriptor {
 pub(crate) type LogicalFileKey = (String, Option<String>);
 
 /// Compute the logical file key for an `Add` or `Remove` action.
+///
+/// Do not decode the URI: literal Unicode and its percent-encoded spelling can
+/// identify distinct logical files even when they resolve to the same object.
+/// Percent-escape hex case, however, does not distinguish URI identities.
 #[inline]
 pub(crate) fn logical_file_key(
     path: &str,
     deletion_vector: Option<&DeletionVectorDescriptor>,
 ) -> LogicalFileKey {
     (
-        path.to_string(),
+        crate::spec::utils::path_comparison_key(path),
         deletion_vector.map(DeletionVectorDescriptor::unique_id),
     )
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +136,7 @@ pub enum Action {
     CheckpointMetadata(CheckpointMetadata),
     Sidecar(Sidecar),
 }
+// SPDX-SnippetEnd
 
 impl From<Add> for Action {
     fn from(value: Add) -> Self {
@@ -262,11 +260,15 @@ impl Borrow<str> for Remove {
         self.path.as_ref()
     }
 }
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065
 /// File addition action.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Add {
-    #[serde(with = "crate::spec::utils::serde_path")]
+    /// URI as stored in the log; decode only when accessing the physical file.
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -292,7 +294,7 @@ pub struct Add {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
-    #[serde(with = "crate::spec::utils::serde_path")]
+    /// Original Add URI, including its escaping, for logical-file identity.
     pub path: String,
     pub data_change: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,7 +336,7 @@ impl Default for RemoveOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddCDCFile {
-    #[serde(with = "crate::spec::utils::serde_path")]
+    /// URI as stored in the log; decode only when accessing the physical file.
     pub path: String,
     pub partition_values: HashMap<String, Option<String>>,
     pub size: i64,
@@ -412,6 +414,7 @@ pub struct Sidecar {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 }
+// SPDX-SnippetEnd
 
 /// Actions that are valid in JSON commit entries only.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
@@ -533,11 +536,45 @@ impl TryFrom<&Add> for ObjectMeta {
             })?;
 
         Ok(Self {
-            location: Path::parse(&value.path)?,
+            location: Path::parse(
+                crate::spec::utils::decode_path(&value.path)
+                    .map_err(DeltaTableError::generic_err)?,
+            )?,
             last_modified,
             size: value.size as u64,
             e_tag: None,
             version: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logical_uri_keys_preserve_deletion_vector_identity() {
+        let vector = DeletionVectorDescriptor {
+            storage_type: StorageType::AbsolutePath,
+            path_or_inline_dv: "file:///dv%2f.bin".to_string(),
+            offset: Some(1),
+            ..Default::default()
+        };
+        let other = DeletionVectorDescriptor {
+            offset: Some(2),
+            ..vector.clone()
+        };
+        assert_eq!(
+            logical_file_key("caf%c3%a9.parquet", Some(&vector)),
+            logical_file_key("caf%C3%A9.parquet", Some(&vector)),
+        );
+        assert_ne!(
+            logical_file_key("caf%c3%a9.parquet", Some(&vector)),
+            logical_file_key("caf%C3%A9.parquet", Some(&other)),
+        );
+        assert_ne!(
+            logical_file_key("caf%c3%a9.parquet", Some(&vector)),
+            logical_file_key("caf%C3%A9.parquet", None),
+        );
     }
 }

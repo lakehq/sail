@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::DataFusionError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::{PyErr, PyResult, Python, intern};

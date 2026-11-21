@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -70,11 +72,12 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         object: &ObjectMeta,
         file_schema: SchemaRef,
         compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, object, compression);
+        let _ = (ctx, store, object_store_url, object, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,

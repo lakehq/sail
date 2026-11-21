@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 
 import pyarrow as pa
@@ -29,7 +31,7 @@ def _float_array(bits, width):
     for index, value in enumerate(bits):
         if value is not None:
             validity[index // 8] |= 1 << (index % 8)
-    data_type = pa.float32() if width == 4 else pa.float64()  # noqa: PLR2004
+    data_type = pa.float32() if width == 4 else pa.float64()
     return pa.Array.from_buffers(data_type, len(bits), [pa.py_buffer(validity), pa.py_buffer(raw)])
 
 

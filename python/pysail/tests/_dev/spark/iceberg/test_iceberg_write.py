@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -648,7 +650,7 @@ def test_iceberg_write_allows_int_to_long_without_merge_schema(spark, sql_catalo
         rows = result_df.collect()
         assert len(rows) == 1
         assert rows[0].id == 1
-        assert rows[0].value == 100  # noqa: PLR2004
+        assert rows[0].value == 100
     finally:
         sql_catalog.drop_table(identifier)
 

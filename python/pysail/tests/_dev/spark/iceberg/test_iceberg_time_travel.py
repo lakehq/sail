@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 import json
 from datetime import datetime, timedelta, timezone
@@ -180,8 +182,8 @@ def test_iceberg_time_travel_across_merge_schema(spark, tmp_path):
     latest_rows = latest_df.collect()
     assert latest_rows[0].id == 1
     assert latest_rows[0].extra is None
-    assert latest_rows[1].id == 2  # noqa: PLR2004
-    assert latest_rows[1].extra == 10  # noqa: PLR2004
+    assert latest_rows[1].id == 2
+    assert latest_rows[1].extra == 10
 
     tt_df = spark.read.format("iceberg").option("snapshotId", str(snapshot_id)).load(table_location).orderBy("id")
     tt_rows = tt_df.collect()
@@ -349,6 +351,7 @@ def test_snapshot_selectors_on_empty_table(spark, tmp_path, entry):
             assert actual.schema.simpleString() == "struct<id:int>"
             assert actual.collect() == []
         for options, error in [
+            ({"versionAsOf": "main"}, r"Snapshot for ref main \(id=-1\) not found"),
             ({"versionAsOf": "-10"}, "Snapshot with id -10 not found"),
             ({"versionAsOf": "missing"}, "Unknown Iceberg ref"),
             ({"branch": "missing"}, "Unknown Iceberg ref"),

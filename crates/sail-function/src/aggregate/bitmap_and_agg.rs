@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
@@ -19,25 +21,25 @@ use super::utils::BITMAP_NUM_BYTES;
 /// The result is always a binary value of `BITMAP_NUM_BYTES` bytes.
 /// If no rows are observed, the result is the all-ones buffer.
 #[derive(PartialEq, Eq, Hash)]
-pub struct BitmapAndAggFunction {
+pub struct BitmapAndAgg {
     signature: Signature,
 }
 
-impl Debug for BitmapAndAggFunction {
+impl Debug for BitmapAndAgg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BitmapAndAggFunction")
+        f.debug_struct("BitmapAndAgg")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for BitmapAndAggFunction {
+impl Default for BitmapAndAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BitmapAndAggFunction {
+impl BitmapAndAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(vec![DataType::Binary], Volatility::Immutable),
@@ -45,7 +47,7 @@ impl BitmapAndAggFunction {
     }
 }
 
-impl AggregateUDFImpl for BitmapAndAggFunction {
+impl AggregateUDFImpl for BitmapAndAgg {
     fn name(&self) -> &str {
         "bitmap_and_agg"
     }

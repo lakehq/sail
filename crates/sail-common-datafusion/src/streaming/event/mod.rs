@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod encoding;
 pub mod marker;
 pub mod schema;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Repeated scalar subqueries over catalog tables
 
   Background:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Deletion Vectors (Merge-on-Read)
 
   Rule: MoR DELETE with deletion vectors

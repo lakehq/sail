@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Moved from features/datetime_parse.feature by the datetime/ layout reorganisation.
 Feature: datetime parsing with format strings
 

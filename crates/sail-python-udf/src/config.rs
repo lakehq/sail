@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use pyo3::pyclass;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]

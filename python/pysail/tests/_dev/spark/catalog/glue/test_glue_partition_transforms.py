@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition transforms using PySpark's DataFrameWriterV2 API with Glue catalog.
 
 NOTE: These tests are currently skipped because moto does not support the AWS Glue

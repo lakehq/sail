@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Unity Catalog schema (database) operations
 
   Background:
@@ -283,3 +285,36 @@ Feature: Unity Catalog schema (database) operations
     Then query result
       | name                                  | catalog | description | locationUri |
       | sail_test_catalog.minimal_schema_unity | sail    | NULL        | NULL        |
+
+  Scenario: Schema operations with dashes in the schema name
+    Given statement
+      """
+      CREATE SCHEMA `dash-schema-unity` COMMENT 'dashed'
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS `dash-schema-unity`
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE '*dash-schema-unity*'
+      """
+    Then query result
+      | name                                  | catalog | description | locationUri |
+      | sail_test_catalog.`dash-schema-unity` | sail    | dashed      | NULL        |
+    When query
+      """
+      DESCRIBE SCHEMA `dash-schema-unity`
+      """
+    Then query result row where "info_name" is "Namespace Name" has "info_value" containing "dash-schema-unity"
+    Then query result row where "info_name" is "Comment" has "info_value" equal to "dashed"
+    Given statement
+      """
+      DROP SCHEMA `dash-schema-unity`
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE '*dash-schema-unity*'
+      """
+    Then query result
+      | name | catalog | description | locationUri |

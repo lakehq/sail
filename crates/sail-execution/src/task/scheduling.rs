@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::id::{TaskKey, WorkerId};
 use crate::job_graph::TaskPlacement;
 

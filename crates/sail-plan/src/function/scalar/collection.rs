@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::collection::concat::Concat;
 use sail_function::scalar::collection::element::{array_element, map_element};
-use sail_function::scalar::collection::spark_concat::SparkConcat;
-use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::collection::reverse::Reverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
@@ -78,9 +80,9 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
         ("deep_size", F::unary(expr_fn::cardinality)),
         ("element_at", F::custom(|input| element_at(input, false))),
         ("size", F::custom(size)),
-        ("array_concat", F::udf(SparkConcat::new())),
-        ("concat", F::udf(SparkConcat::new())),
-        ("reverse", F::udf(SparkReverse::new())),
+        ("array_concat", F::udf(Concat::new())),
+        ("concat", F::udf(Concat::new())),
+        ("reverse", F::udf(Reverse::new())),
         ("try_element_at", F::custom(|input| element_at(input, true))),
     ]
 }

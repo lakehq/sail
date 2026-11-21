@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import copy
 import json
 
@@ -79,7 +81,7 @@ def test_list_offset_widths_preserve_values_and_spark_null_spelling(
             (4, "[null]"),
         ]
         assert [row.id for row in frame.filter("array_contains(tags, 'alpha')").collect()] == [1]
-        assert frame.selectExpr("get(items, 0).value AS value").filter("value = 10").collect()[0].value == 10  # noqa: PLR2004
+        assert frame.selectExpr("get(items, 0).value AS value").filter("value = 10").collect()[0].value == 10
     finally:
         sql_catalog.drop_table(identifier)
 
@@ -137,7 +139,7 @@ def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, t
         if delete_kind == "equality":
             _append_equality_delete_snapshot(table, pa.table({"id": [5]}), [1], partition=Record(None))
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
         if delete_kind == "position":
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('write.merge.mode'='merge-on-read')")
@@ -282,7 +284,7 @@ def test_missing_fields_use_initial_defaults_and_writes_use_only_write_defaults(
         )
 
     rows = read().orderBy("id").collect()
-    assert rows[0].payload.extra == 13  # noqa: PLR2004
+    assert rows[0].payload.extra == 13
     assert rows[1].payload is None
     assert [row.required_value for row in rows] == [7, 7]
     assert [row.read_only for row in rows] == [11, 11]
@@ -290,14 +292,14 @@ def test_missing_fields_use_initial_defaults_and_writes_use_only_write_defaults(
     assert [bytes(row.bytes) for row in rows] == [b"\x00\xff", b"\x00\xff"]
     assert [row.tags for row in rows] == [[1, 2], [1, 2]]
     assert [row.lookup for row in rows] == [{"a": 2}, {"a": 2}]
-    assert read().filter("required_value = 7").count() == 2  # noqa: PLR2004
+    assert read().filter("required_value = 7").count() == 2
     assert read().filter("required_value IS NULL").count() == 0
     assert read().filter("payload.extra = 13").select("id").collect()[0].id == 1
     spark.createDataFrame([(3, (30,)), (4, None)], "id LONG, payload STRUCT<x: LONG>").write.format("iceberg").mode(
         "append"
     ).save(path.as_uri())
     rows = read().orderBy("id").collect()
-    assert rows[2].payload.extra == 17  # noqa: PLR2004
+    assert rows[2].payload.extra == 17
     assert rows[3].payload is None
     assert [row.required_value for row in rows] == [7, 7, 9, 9]
     assert [row.read_only for row in rows] == [11, 11, None, None]
@@ -466,7 +468,7 @@ def test_equality_delete_nested_keys_preserve_parent_nulls_and_dropped_fields(sp
         if drop_key == "parent":
             assert result.columns == ["id"]
         else:
-            assert result.collect()[0].payload.kept == 2  # noqa: PLR2004
+            assert result.collect()[0].payload.kept == 2
         spark.sql(f"CREATE TABLE nested_eq_target USING iceberg LOCATION '{path.as_uri()}'")
         try:
             spark.sql("UPDATE nested_eq_target SET id = 20 WHERE id = 2").collect()

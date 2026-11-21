@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod barrier;
 pub mod check_constraints;
 pub mod identity_generate;
@@ -14,3 +16,4 @@ pub mod show_string;
 pub mod sort;
 pub mod spark_partition_id;
 pub mod streaming;
+pub mod tail;

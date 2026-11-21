@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared Unity Catalog container fixtures."""
 
 from __future__ import annotations
@@ -15,6 +17,13 @@ from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG, UNITY
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if "unity_container" in getattr(item, "fixturenames", ()) and item.get_closest_marker("timeout") is None:
+            # The pytest timeout includes pulling the image, creating the container and waiting for Unity.
+            item.add_marker(pytest.mark.timeout(300))
 
 
 @pytest.fixture(scope="module")

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for `uuid` and `shuffle` with a seed, and for the schema of random functions.
 
 The expected values were verified on JVM Spark 4.2.0. Spark seeds `uuid` and `shuffle` with the
@@ -223,6 +225,19 @@ def test_seeded_uuid_and_shuffle_many_rows(spark, query, expected):
     assert hashlib.md5(json.dumps(rows).encode()).hexdigest() == expected  # noqa: S324
 
 
+@pytest.mark.spark(version=">=4.1", reason="Uses pyspark.sql.functions.uuid")
+def test_uuid_seeded_example(spark):
+    df = spark.range(0, 5, 1, 1).select(F.uuid(seed=123))
+    assert df.columns == ["uuid()"]
+    assert [row[0] for row in df.collect()] == [
+        "4c99192d-23d6-4d88-b814-a634398120f0",
+        "af506873-3c53-41e3-8354-a24856b8de8a",
+        "7b4b370e-e867-47e2-93c0-f6990463a12d",
+        "1c4d1733-ff1a-4a6c-b144-0b0345adf0d0",
+        "7478f235-f8bc-4112-8e59-a28f50e46890",
+    ]
+
+
 @pytest.mark.spark(version=">=4.1", reason="Uses pyspark.sql.functions.uuid and seeded shuffle")
 def test_seeded_uuid_and_shuffle_dataframe(spark):
     df = spark.range(0, 6, 1, 2).select(
@@ -252,7 +267,7 @@ def test_null_seed_is_no_seed(spark):
     rows = spark.sql(
         "SELECT uuid(NULL) AS u, shuffle(array(1, 2, 3, 4, 5, 6, 7, 8), NULL) AS s FROM range(0, 20, 1, 1)"
     ).collect()
-    assert len({row.u for row in rows}) == 20  # noqa: PLR2004
+    assert len({row.u for row in rows}) == 20
     assert len({tuple(row.s) for row in rows}) > 1
 
 

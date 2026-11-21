@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`repartitionByRange` on cluster workers.
 
 The split points come from a sample job that runs on the workers, and the range

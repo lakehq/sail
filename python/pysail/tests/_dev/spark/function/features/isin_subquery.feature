@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: IN subquery support
 
   Rule: Single-column IN subquery

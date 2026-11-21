@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 struct ProtoBuilder<'a> {
     package: &'a str,
     files: &'a [&'a str],

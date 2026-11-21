@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StringArray};
@@ -6,22 +8,21 @@ use datafusion::common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
-
-use crate::functions_utils::make_scalar_function;
+use datafusion_functions::utils::make_scalar_function;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#version>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkVersion {
+pub struct Version {
     signature: Signature,
 }
 
-impl Default for SparkVersion {
+impl Default for Version {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkVersion {
+impl Version {
     const SAIL_VERSION: &'static str = env!("CARGO_PKG_VERSION");
     pub fn new() -> Self {
         Self {
@@ -30,7 +31,7 @@ impl SparkVersion {
     }
 }
 
-impl ScalarUDFImpl for SparkVersion {
+impl ScalarUDFImpl for Version {
     fn name(&self) -> &str {
         "version"
     }
@@ -50,5 +51,5 @@ impl ScalarUDFImpl for SparkVersion {
 }
 
 fn spark_version(_args: &[ArrayRef]) -> Result<ArrayRef> {
-    Ok(Arc::new(StringArray::from(vec![Some(SparkVersion::SAIL_VERSION)])) as ArrayRef)
+    Ok(Arc::new(StringArray::from(vec![Some(Version::SAIL_VERSION)])) as ArrayRef)
 }

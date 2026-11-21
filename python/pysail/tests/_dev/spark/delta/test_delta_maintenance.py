@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -5,7 +7,6 @@ import os
 import shutil
 import time
 from urllib.parse import quote, unquote, urlparse
-from urllib.request import url2pathname
 from uuid import uuid4
 
 import pyarrow as pa
@@ -18,36 +19,7 @@ from pysail.testing.spark.session import spark_connect_server, spark_session_fac
 from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
-
-def _commits(path):
-    return {
-        int(file.stem): [json.loads(line) for line in file.read_text().splitlines()]
-        for file in (path / "_delta_log").glob("*.json")
-        if file.stem.isdigit()
-    }
-
-
-def _active_files(path):
-    # These bounded fixtures retain every JSON commit, so file state can be checked directly.
-    def identity(action):
-        dv = action.get("deletionVector")
-        return action["path"], None if dv is None else (dv["storageType"], dv["pathOrInlineDv"], dv.get("offset"))
-
-    files = {}
-    for _, actions in sorted(_commits(path).items()):
-        for action in actions:
-            if "remove" in action:
-                files.pop(identity(action["remove"]), None)
-        for action in actions:
-            if "add" in action:
-                files[identity(action["add"])] = action["add"]
-    return [Row(**{"deletionVector": None, **add}) for add in files.values()]
-
-
-def _paths(rows):
-    # Hadoop Path strings may contain a literal '#'.
-    return {os.path.normpath(url2pathname(row.path.removeprefix("file:"))) for row in rows}
+from pysail.tests._dev.spark.delta.utils import _active_files, _commits, _paths
 
 
 @pytest.fixture
@@ -72,6 +44,8 @@ def maintenance_table(spark, tmp_path):
         ("optimize.maxFileSize", "1073741824", "2048"),
         ("optimize.maxDeletedRowsRatio", "0.05", "0.25"),
         ("retentionDurationCheck.enabled", "true", "false"),
+        ("vacuum.logging.enabled", None, "false"),
+        ("vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility", "true", "false"),
         ("vacuum.retentionWindowIgnore.enabled", "true", "false"),
     ],
 )
@@ -80,7 +54,9 @@ def test_maintenance_config_registry(spark, delta_jvm_spark, tmp_path, suffix, d
     key = f"spark.databricks.delta.{suffix}"
     sessions = [spark]
     # The Delta releases used with Spark 3.5/4.0 do not register this vacuum setting.
-    if suffix != "vacuum.retentionWindowIgnore.enabled" or pyspark_version() >= (4, 1):
+    if (suffix != "vacuum.retentionWindowIgnore.enabled" or pyspark_version() >= (4, 1)) and (
+        suffix != "vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility" or pyspark_version() >= (4, 2)
+    ):
         sessions.append(delta_jvm_spark)
     previous = [session.conf.get(key, None) for session in sessions]
     try:
@@ -167,7 +143,7 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
     assert max(_commits(path)) == max(commits)
     # All remaining partitions are compacted independently, including the null partition.
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert len(_active_files(path)) == 3  # noqa: PLR2004
+    assert len(_active_files(path)) == 3
     assert spark.table(name).orderBy("id", "part").collect() == rows
     with pytest.raises(Exception, match="only partition columns"):
         spark.sql(f"OPTIMIZE {name} WHERE id = 0").collect()
@@ -241,7 +217,7 @@ def test_optimize_constant_predicates_without_partitions(spark, tmp_path):
             assert metrics.totalConsideredFiles == metrics.numFilesRemoved == metrics.numFilesAdded == 0
             assert _commits(path) == before
         metrics = spark.sql(f"OPTIMIZE {name} WHERE TRUE").first().metrics
-        assert metrics.totalConsideredFiles == metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.totalConsideredFiles == metrics.numFilesRemoved == 2
         assert metrics.numFilesAdded == 1
         assert spark.table(name).orderBy("value").collect() == [Row(value=0), Row(value=1)]
     finally:
@@ -314,7 +290,7 @@ def test_optimize_multiple_bins_commit_atomically(spark, maintenance_table):
     expected = spark.table(name).orderBy("part", "id").collect()
     before = max(_commits(path))
     result = spark.sql(f"OPTIMIZE {name}").first().metrics
-    assert result.numBins == 4  # noqa: PLR2004
+    assert result.numBins == 4
     assert result.totalScheduledTasks == result.numBins
     assert result.totalClusterParallelism > 1
     assert result.numFilesAdded == result.numBins
@@ -390,7 +366,7 @@ def test_vacuum_preserves_read_mode_table_files(spark, read_mode_table, dry_run)
     spark.range(2).coalesce(1).write.format("delta").mode("append").save(str(path))
     spark.range(2, 4).coalesce(1).write.format("delta").mode("overwrite").save(str(path))
     retained = {file: file.read_bytes() for file in path.glob("*.parquet")}
-    assert len(retained) == 2  # noqa: PLR2004
+    assert len(retained) == 2
     orphan = path / "unreferenced.parquet"
     orphan.write_bytes(next(iter(retained.values())))
     old = time.time() - 8 * 24 * 3600
@@ -416,7 +392,7 @@ def test_optimize_compacts_read_mode_table_files(spark, read_mode_table):
     spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
     before = max(_commits(path))
     result = spark.sql(f"OPTIMIZE {name}").first()
-    assert result.metrics.numFilesRemoved == 2  # noqa: PLR2004
+    assert result.metrics.numFilesRemoved == 2
     assert result.metrics.numFilesAdded == 1
     assert max(_commits(path)) == before + 1
     assert len(_active_files(path)) == 1
@@ -559,18 +535,17 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
     ignore_window = "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled"
     spark.conf.set(ignore_window, "false")
     try:
-        assert spark.sql(f"VACUUM {name} RETAIN 24 HOURS DRY RUN").collect() == []
+        # Sail currently lists file candidates only; Spark also reports the directory below.
+        assert _paths(spark.sql(f"VACUUM {name} RETAIN 24 HOURS DRY RUN").collect()) == set()
     finally:
         spark.conf.unset(ignore_window)
-    parallelism = "spark.sql.sources.parallelPartitionDiscovery.parallelism"
-    previous = delta_jvm_spark.conf.get(parallelism)
-    delta_jvm_spark.conf.set(parallelism, "2")
-    try:
-        reference = delta_jvm_spark.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 1 HOURS")
-        assert dry.schema == reference.schema
-        assert _paths(dry.collect()) == _paths(reference.collect()) == {str(orphan), str(cdf)}
-    finally:
-        delta_jvm_spark.conf.set(parallelism, previous)
+    jvm = delta_jvm_spark.newSession()
+    jvm.conf.set(ignore_window, "false")
+    jvm.conf.set("spark.sql.sources.parallelPartitionDiscovery.parallelism", "2")
+    assert _paths(jvm.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 24 HOURS").collect()) == {str(cdf.parent)}
+    reference = jvm.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 1 HOURS")
+    assert dry.schema == reference.schema
+    assert _paths(dry.collect()) == _paths(reference.collect()) == {str(orphan), str(cdf)}
     assert orphan.exists()
     assert max(_commits(path)) == before
     with pytest.raises(Exception, match=r"retention.*shorter"):
@@ -596,7 +571,7 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
     assert not removed.exists()
     assert active.exists()
     assert hidden.exists()
-    assert spark.table(name).first().id == 2  # noqa: PLR2004
+    assert spark.table(name).first().id == 2
 
 
 def test_maintenance_errors_and_explain_do_not_mutate(spark, maintenance_table):

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::pin::Pin;
 
@@ -15,7 +17,7 @@ use tokio::sync::oneshot;
 use tonic::{Request, Response, Status, Streaming, async_trait};
 
 use crate::error::ExecutionResult;
-use crate::id::TaskStreamKey;
+use crate::id::{TaskStreamKey, TaskStreamKeySet};
 use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
@@ -26,30 +28,62 @@ pub trait TaskStreamKeyDecoder: Debug + Send + 'static {
         Self: Sized;
 }
 
-impl From<TaskStreamTicket> for TaskStreamKey {
-    fn from(ticket: TaskStreamTicket) -> Self {
+impl TryFrom<TaskStreamTicket> for TaskStreamKeySet {
+    type Error = Status;
+
+    fn try_from(ticket: TaskStreamTicket) -> Result<Self, Status> {
         let TaskStreamTicket {
             job_id,
             stage,
             partition,
             attempt,
             channel,
+            release,
         } = ticket;
-        Self {
+        if partition.is_empty() || partition.len() != attempt.len() || channel.is_empty() {
+            return Err(Status::invalid_argument(
+                "task stream ticket must have channels, and tasks with a partition and an attempt each",
+            ));
+        }
+        Ok(Self {
             job_id: job_id.into(),
             stage: stage as usize,
-            partition: partition as usize,
-            attempt: attempt as usize,
-            channel: channel as usize,
+            tasks: partition
+                .into_iter()
+                .zip(attempt)
+                .map(|(partition, attempt)| (partition as usize, attempt as usize))
+                .collect(),
+            channels: channel.into_iter().map(|x| x as usize).collect(),
+            release,
+        })
+    }
+}
+
+impl TryFrom<TaskStreamTicket> for TaskStreamKey {
+    type Error = Status;
+
+    fn try_from(ticket: TaskStreamTicket) -> Result<Self, Status> {
+        let keys = TaskStreamKeySet::try_from(ticket)?;
+        match (keys.tasks.as_slice(), keys.channels.as_slice()) {
+            (&[(partition, attempt)], &[channel]) => Ok(Self {
+                job_id: keys.job_id,
+                stage: keys.stage,
+                partition,
+                attempt,
+                channel,
+            }),
+            _ => Err(Status::invalid_argument(
+                "task stream ticket must have a single stream",
+            )),
         }
     }
 }
 
-impl TaskStreamKeyDecoder for TaskStreamKey {
+impl TaskStreamKeyDecoder for TaskStreamKeySet {
     fn decode(bytes: &[u8]) -> Result<Self, Status> {
         TaskStreamTicket::decode(bytes)
-            .map(Into::into)
-            .map_err(|e| Status::invalid_argument(e.to_string()))
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+            .try_into()
     }
 }
 
@@ -77,6 +111,24 @@ impl<K> TaskStreamFlightServer<K> {
 }
 
 type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
+
+/// Encodes a task stream as Flight data. The stream can have the data of several
+/// tasks in arbitrary order, since the encoder keeps no state from one batch to the
+/// next other than the schema of the first batch, and the sink of a task gives the
+/// batches of all tasks of a stage the schema of the stage.
+pub(super) fn encode_task_stream(
+    stream: TaskStreamSource,
+    compression: ShuffleCompression,
+) -> Result<impl Stream<Item = Result<FlightData, Status>> + Send + 'static, Status> {
+    let stream = stream.map_err(|e| FlightError::Tonic(Box::new(e.into())));
+    let options = compression
+        .ipc_write_options()
+        .map_err(|e| Status::internal(e.to_string()))?;
+    Ok(FlightDataEncoderBuilder::new()
+        .with_options(options)
+        .build(stream)
+        .map_err(Status::from))
+}
 
 #[async_trait]
 impl<K> FlightService for TaskStreamFlightServer<K>
@@ -136,15 +188,7 @@ where
         let stream = rx
             .await
             .map_err(|_| Status::internal("failed to receive task stream"))??;
-        let stream = stream.map_err(|e| FlightError::Tonic(Box::new(e.into())));
-        let options = self
-            .compression
-            .ipc_write_options()
-            .map_err(|e| Status::internal(e.to_string()))?;
-        let stream = FlightDataEncoderBuilder::new()
-            .with_options(options)
-            .build(stream)
-            .map_err(Status::from);
+        let stream = encode_task_stream(stream, self.compression)?;
         Ok(Response::new(Box::pin(stream) as Self::DoGetStream))
     }
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 
 import adbc_driver_manager
@@ -40,8 +42,7 @@ def test_flight_execute_simple_query(flight_connection):
     cur.execute("SELECT * FROM (VALUES (1), (2)) AS t(one)")
     rows = cur.fetchall()
 
-    expected_row_count = 2
-    assert len(rows) == expected_row_count
+    assert len(rows) == 2
     assert rows[0] == (1,)
     assert rows[1] == (2,)
     cur.close()
@@ -171,25 +172,20 @@ def test_flight_cursor_reuse(flight_connection):
     """Test that we can reuse a cursor for multiple queries."""
     cur = flight_connection.cursor()
 
-    # Expected values
-    expected_first = 1
-    expected_second = 2
-    expected_third = 3
-
     # First query
     cur.execute("SELECT 1 AS first")
     rows1 = cur.fetchall()
-    assert rows1[0][0] == expected_first
+    assert rows1[0][0] == 1
 
     # Second query with same cursor
     cur.execute("SELECT 2 AS second")
     rows2 = cur.fetchall()
-    assert rows2[0][0] == expected_second
+    assert rows2[0][0] == 2
 
     # Third query
     cur.execute("SELECT 3 AS third")
     rows3 = cur.fetchall()
-    assert rows3[0][0] == expected_third
+    assert rows3[0][0] == 3
 
     cur.close()
 
@@ -199,9 +195,6 @@ def test_flight_multiple_cursors(flight_connection):
     cur1 = flight_connection.cursor()
     cur2 = flight_connection.cursor()
 
-    expected_val1 = 1
-    expected_val2 = 2
-
     # Execute different queries on different cursors
     cur1.execute("SELECT 1 AS result")
     cur2.execute("SELECT 2 AS result")
@@ -209,8 +202,8 @@ def test_flight_multiple_cursors(flight_connection):
     rows1 = cur1.fetchall()
     rows2 = cur2.fetchall()
 
-    assert rows1[0][0] == expected_val1
-    assert rows2[0][0] == expected_val2
+    assert rows1[0][0] == 1
+    assert rows2[0][0] == 2
 
     cur1.close()
     cur2.close()

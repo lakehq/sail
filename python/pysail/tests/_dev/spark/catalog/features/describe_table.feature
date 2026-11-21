@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Describe tables without the TABLE keyword
 
   Background:

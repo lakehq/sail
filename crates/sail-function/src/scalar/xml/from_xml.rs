@@ -1,45 +1,47 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use datafusion::arrow::compute::kernels::cast_utils::parse_decimal;
 use datafusion::arrow::datatypes::*;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{
-    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
-    SAIL_MAP_VALUE_FIELD_NAME,
-};
+use datafusion_functions::utils::make_scalar_function;
+use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser as sail_parser;
-use xee_xpath::Documents;
 
-use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
+use super::reader;
+use crate::scalar::datetime::timestamp::TimestampParser;
+use crate::scalar::datetime::utils::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::datetime::utils::parser::parse_timestamp_string;
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
-/// UDF implementation of `from_xml`, similar to Spark's `XmlToStructs`
+/// UDF implementation of `from_xml`, similar to `XmlToStructs` in Spark
 /// Parses an XML string column into a struct column using a user-provided schema
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromXml {
+pub struct FromXml {
     session_timezone: Arc<str>,
     signature: Signature,
 }
 
-impl SparkFromXml {
+impl FromXml {
     pub const FROM_XML_NAME: &'static str = "from_xml";
 
     pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             session_timezone,
-            signature: Signature::user_defined(Volatility::Immutable),
+            // Time-only timestamps use the current date in the effective time zone.
+            signature: Signature::user_defined(Volatility::Stable),
         }
     }
 
@@ -55,18 +57,22 @@ enum ParseMode {
 }
 
 #[derive(Debug)]
-struct SparkFromXmlOptions {
+struct FromXmlOptions {
     null_value: Option<String>,
+    ignore_surrounding_spaces: bool,
+    ignore_namespace: bool,
+    exclude_attribute: bool,
     attribute_prefix: String,
     value_tag: String,
-    timestamp_ltz_format: DateTimeFormat,
-    timestamp_ntz_format: DateTimeFormat,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: Option<DateTimeFormat>,
     date_format: DateTimeFormat,
     mode: ParseMode,
 }
 
-impl SparkFromXmlOptions {
+impl FromXmlOptions {
     const NULL_VALUE_OPTION: &'static str = "nullValue";
+    const IGNORE_SURROUNDING_SPACES_OPTION: &'static str = "ignoreSurroundingSpaces";
     const ATTRIBUTE_PREFIX_OPTION: &'static str = "attributePrefix";
     const ATTRIBUTE_PREFIX_DEFAULT: &'static str = "_";
     const VALUE_TAG_OPTION: &'static str = "valueTag";
@@ -75,12 +81,20 @@ impl SparkFromXmlOptions {
     const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     const MODE_OPTION: &'static str = "mode";
-    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
-    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let ignore_surrounding_spaces =
+            match find_key_value(map, Self::IGNORE_SURROUNDING_SPACES_OPTION)
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return plan_err!("`ignoreSurroundingSpaces` must be true or false"),
+            };
         let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
             .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
         let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
@@ -94,21 +108,11 @@ impl SparkFromXmlOptions {
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            });
+            .transpose()?;
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            });
+            .transpose()?;
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
@@ -131,6 +135,9 @@ impl SparkFromXmlOptions {
         };
         Ok(Self {
             null_value,
+            ignore_surrounding_spaces,
+            ignore_namespace: boolean_option(map, "ignoreNamespace", false)?,
+            exclude_attribute: boolean_option(map, "excludeAttribute", false)?,
             attribute_prefix,
             value_tag,
             timestamp_ltz_format,
@@ -139,24 +146,47 @@ impl SparkFromXmlOptions {
             mode,
         })
     }
+
+    fn parse_timestamp(
+        &self,
+        value: &str,
+        has_timezone: bool,
+        session_timezone: &str,
+    ) -> Result<i64> {
+        let format = if has_timezone {
+            &self.timestamp_ltz_format
+        } else {
+            &self.timestamp_ntz_format
+        };
+        if let Some(format) = format {
+            let parsed = format.parse_datetime_value(value)?;
+            return parsed_timestamp_to_micros(parsed, has_timezone, session_timezone);
+        }
+        let parser = if has_timezone {
+            TimestampParser::Ltz {
+                default_timezone: session_timezone.to_string(),
+            }
+        } else {
+            if parse_timestamp_string(value).is_some_and(|p| p.timezone.is_some()) {
+                return exec_err!("TIMESTAMP_NTZ XML values must not contain a time zone");
+            }
+            TimestampParser::Ntz
+        };
+        parser.parse_unformatted(value)
+    }
 }
 
-impl Default for SparkFromXmlOptions {
+impl Default for FromXmlOptions {
     fn default() -> Self {
         Self {
             null_value: None,
+            ignore_surrounding_spaces: true,
+            ignore_namespace: false,
+            exclude_attribute: false,
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
-            timestamp_ltz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            },
-            timestamp_ntz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            },
+            timestamp_ltz_format: None,
+            timestamp_ntz_format: None,
             date_format: {
                 #[expect(clippy::expect_used)]
                 DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
@@ -167,7 +197,7 @@ impl Default for SparkFromXmlOptions {
     }
 }
 
-impl ScalarUDFImpl for SparkFromXml {
+impl ScalarUDFImpl for FromXml {
     fn name(&self) -> &str {
         Self::FROM_XML_NAME
     }
@@ -235,7 +265,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
             "`{}` requires 2 or 3 arguments, got {}",
-            SparkFromXml::FROM_XML_NAME,
+            FromXml::FROM_XML_NAME,
             args.len()
         );
     }
@@ -257,7 +287,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     if schema_array.is_empty() || schema_array.is_null(0) {
         return exec_err!(
             "`{}` requires a non-empty schema string",
-            SparkFromXml::FROM_XML_NAME
+            FromXml::FROM_XML_NAME
         );
     }
     let schema_str = schema_array.value(0);
@@ -266,16 +296,16 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         let map = opts.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Internal("from_xml: expected MapArray for arg 2".to_string())
         })?;
-        SparkFromXmlOptions::from_map(map)?
+        FromXmlOptions::from_map(map)?
     } else {
-        SparkFromXmlOptions::default()
+        FromXmlOptions::default()
     };
 
     let schema_dt = parse_xml_schema(schema_str, session_timezone)?;
     let DataType::Struct(fields) = &schema_dt else {
         return exec_err!(
             "`{}` schema must resolve to a STRUCT type, got {:?}",
-            SparkFromXml::FROM_XML_NAME,
+            FromXml::FROM_XML_NAME,
             schema_dt
         );
     };
@@ -305,150 +335,24 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
 
 fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
-    let ast_result = sail_parser::parse_data_type(schema)
-        .or_else(|_| sail_parser::parse_data_type(&format!("STRUCT<{schema}>")));
-    let ast = ast_result
+    let data_type = sail_sql_analyzer::data_type::parse_schema(schema)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
+    resolve_arrow_data_type(&data_type, session_timezone)
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    use spec::DataType as SDT;
-
-    fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
-        match unit {
-            spec::TimeUnit::Second => TimeUnit::Second,
-            spec::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            spec::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            spec::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
-    }
-
-    match dt {
-        SDT::Null => Ok(DataType::Null),
-        SDT::Boolean => Ok(DataType::Boolean),
-        SDT::Int8 => Ok(DataType::Int8),
-        SDT::Int16 => Ok(DataType::Int16),
-        SDT::Int32 => Ok(DataType::Int32),
-        SDT::Int64 => Ok(DataType::Int64),
-        SDT::UInt8 => Ok(DataType::UInt8),
-        SDT::UInt16 => Ok(DataType::UInt16),
-        SDT::UInt32 => Ok(DataType::UInt32),
-        SDT::UInt64 => Ok(DataType::UInt64),
-        SDT::Float16 => Ok(DataType::Float16),
-        SDT::Float32 => Ok(DataType::Float32),
-        SDT::Float64 => Ok(DataType::Float64),
-        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
-        SDT::FixedSizeBinary { size } => Ok(DataType::FixedSizeBinary(*size)),
-        SDT::LargeBinary => Ok(DataType::LargeBinary),
-        SDT::BinaryView => Ok(DataType::BinaryView),
-        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        SDT::LargeUtf8 => Ok(DataType::LargeUtf8),
-        SDT::Utf8View => Ok(DataType::Utf8View),
-        SDT::Date32 => Ok(DataType::Date32),
-        SDT::Date64 => Ok(DataType::Date64),
-        SDT::Timestamp {
-            time_unit,
-            timestamp_type,
-        } => Ok(DataType::Timestamp(
-            to_time_unit(time_unit),
-            match timestamp_type {
-                spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
-                }
-                spec::TimestampType::WithoutTimeZone => None,
-            },
-        )),
-        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
-        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
-        SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
-        SDT::Interval { interval_unit, .. } => match interval_unit {
-            spec::IntervalUnit::YearMonth => Ok(DataType::Interval(IntervalUnit::YearMonth)),
-            spec::IntervalUnit::DayTime => Ok(DataType::Duration(TimeUnit::Microsecond)),
-            spec::IntervalUnit::MonthDayNano => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
-        },
-        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
-        SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
-        SDT::List {
-            data_type,
-            nullable,
-        } => Ok(DataType::List(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::FixedSizeList {
-            data_type,
-            nullable,
-            length,
-        } => Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-                *nullable,
-            )),
-            *length,
-        )),
-        SDT::LargeList {
-            data_type,
-            nullable,
-        } => Ok(DataType::LargeList(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::Struct { fields } => {
-            let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
-            for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
-            }
-            Ok(DataType::Struct(Fields::from(out)))
-        }
-        SDT::Map {
-            key_type,
-            value_type,
-            value_type_nullable,
-            keys_sorted,
-        } => {
-            let fields = Fields::from(vec![
-                Arc::new(Field::new(
-                    SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
-                    *value_type_nullable,
-                )),
-            ]);
-            Ok(DataType::Map(
-                Arc::new(Field::new(
-                    SAIL_MAP_FIELD_NAME,
-                    DataType::Struct(fields),
-                    false,
-                )),
-                *keys_sorted,
-            ))
-        }
-        SDT::Geometry { .. } | SDT::Geography { .. } => Ok(DataType::Binary),
-        SDT::Variant => Ok(DataType::Struct(Fields::from(vec![
-            Arc::new(Field::new("metadata", DataType::Binary, false)),
-            Arc::new(Field::new("value", DataType::Binary, false)),
-        ]))),
-        SDT::UserDefined { sql_type, .. } => {
-            spec_to_arrow_data_type(sql_type.as_ref(), session_timezone)
-        }
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported data type in from_xml schema: {other:?}"
-        ))),
-    }
+fn resolve_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    let resolver = sail_common_datafusion::data_type::DataTypeResolver {
+        session_timezone: Arc::from(session_timezone),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
+    };
+    let dt = match dt {
+        spec::DataType::UserDefined { sql_type, .. } => sql_type,
+        dt => dt,
+    };
+    resolver
+        .resolve_data_type(dt)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
 enum XmlFieldBuilder {
@@ -495,6 +399,13 @@ struct TopLevelStructBuilder {
     fields: Fields,
     children: Vec<XmlFieldBuilder>,
     nulls: Vec<bool>,
+}
+
+enum XmlFieldValue<'a> {
+    Null,
+    Text(Cow<'a, str>),
+    List(Vec<Self>),
+    Struct(Vec<Self>),
 }
 
 #[expect(clippy::only_used_in_recursion)]
@@ -648,137 +559,154 @@ fn append_null_to_field(builder: &mut XmlFieldBuilder) -> Result<()> {
 fn parse_xml_into_builder(
     xml: &str,
     builder: &mut TopLevelStructBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
-    let mut documents = Documents::new();
-    let handle = documents
-        .add_string_without_uri(xml)
+    let mut arena = xot::Xot::new();
+    let doc_node = reader::parse(&mut arena, xml, reader::ParseMode::Struct)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML: {e}")))?;
-
-    let doc_node = documents
-        .document_node(handle)
-        .ok_or_else(|| DataFusionError::Execution("XML document has no root node".to_string()))?;
-
-    let xot = documents.xot();
+    let xot = &arena;
     let root = xot
-        .document_element(doc_node)
+        .document_element(doc_node.node)
         .map_err(|e| DataFusionError::Execution(format!("No root element: {e}")))?;
 
+    // Validate the entire row before appending values so permissive mode can
+    // append a row of null fields even if an error occurs inside a nested field.
+    let values = read_xml_fields(xot, root, &builder.fields, &builder.children, options)?;
     builder.nulls.push(true);
-
-    for (field, child_builder) in builder.fields.iter().zip(builder.children.iter_mut()) {
-        append_xml_field(
-            xot,
-            root,
-            field.name(),
-            child_builder,
-            options,
-            session_timezone,
-        )?;
+    for (child, value) in builder.children.iter_mut().zip(values) {
+        append_xml_value(value, child, options, session_timezone)?;
     }
 
     Ok(())
 }
 
-fn append_xml_field(
-    xot: &xot::Xot,
+fn read_xml_fields<'a>(
+    xot: &'a xot::Xot,
+    parent: xot::Node,
+    fields: &Fields,
+    builders: &[XmlFieldBuilder],
+    options: &FromXmlOptions,
+) -> Result<Vec<XmlFieldValue<'a>>> {
+    fields
+        .iter()
+        .zip(builders)
+        .map(|(field, builder)| read_xml_field(xot, parent, field.name(), builder, options))
+        .collect()
+}
+
+fn read_xml_field<'a>(
+    xot: &'a xot::Xot,
     parent: xot::Node,
     field_name: &str,
-    builder: &mut XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
-    session_timezone: &str,
-) -> Result<()> {
+    builder: &XmlFieldBuilder,
+    options: &FromXmlOptions,
+) -> Result<XmlFieldValue<'a>> {
     if field_name == options.value_tag {
-        let text = element_text_content(xot, parent);
-        return append_text(text.as_deref(), builder, options, session_timezone);
+        let text = xot
+            .children(parent)
+            .filter_map(|child| match xot.value(child) {
+                xot::Value::Text(text) if !is_xml_whitespace(text.get()) => Some(text.get()),
+                _ => None,
+            });
+        if matches!(builder, XmlFieldBuilder::List { .. }) {
+            let values: Vec<_> = text
+                .map(|text| XmlFieldValue::Text(Cow::Borrowed(text)))
+                .collect();
+            return Ok(if values.is_empty() {
+                XmlFieldValue::Null
+            } else {
+                XmlFieldValue::List(values)
+            });
+        }
+
+        return Ok(text.last().map_or(XmlFieldValue::Null, |text| {
+            XmlFieldValue::Text(Cow::Borrowed(text))
+        }));
     }
 
-    let attr_name = field_name.strip_prefix(options.attribute_prefix.as_str());
-    if let Some(attr_name) = attr_name {
-        if let Some(val) = find_attribute(xot, parent, attr_name) {
-            return append_text(Some(val.as_str()), builder, options, session_timezone);
+    if let Some(attr_name) = field_name.strip_prefix(options.attribute_prefix.as_str()) {
+        if let Some(val) = find_attribute(xot, parent, attr_name, options) {
+            return Ok(XmlFieldValue::Text(Cow::Borrowed(val)));
         } else if !options.attribute_prefix.is_empty() {
-            return append_text(None, builder, options, session_timezone);
+            return Ok(XmlFieldValue::Null);
         }
     }
 
-    let matches: Vec<xot::Node> = child_elements_named(xot, parent, field_name);
+    let matches = child_elements_named(xot, parent, field_name, options);
+    if matches.is_empty() {
+        return Ok(XmlFieldValue::Null);
+    }
 
     match builder {
-        XmlFieldBuilder::List {
-            field,
-            offsets,
-            values,
-            nulls,
-        } => {
-            if matches.is_empty() {
-                nulls.push(false);
-                let curr = offsets.last().copied().unwrap_or(0);
-                offsets.push(curr);
-            } else {
-                nulls.push(true);
-                let start = offsets.last().copied().unwrap_or(0);
-                for &node in &matches {
-                    append_element_to_field(xot, node, values, options, session_timezone)?;
-                }
-                offsets.push(start + matches.len() as i32);
-                let _ = field;
-            }
-        }
-        XmlFieldBuilder::Struct {
-            fields,
-            children,
-            nulls,
-        } => {
-            if matches.is_empty() {
-                nulls.push(false);
-                for child in children.iter_mut() {
-                    append_null_to_field(child)?;
-                }
-            } else {
-                nulls.push(true);
-                let node = matches[0];
-                for (f, child) in fields.iter().zip(children.iter_mut()) {
-                    append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
-                }
-            }
-        }
-        _ => {
-            if matches.is_empty() {
-                append_null_to_field(builder)?;
-            } else {
-                let text = element_text_content(xot, matches[0]);
-                append_text(text.as_deref(), builder, options, session_timezone)?;
-            }
-        }
+        XmlFieldBuilder::List { values, .. } => matches
+            .into_iter()
+            .map(|node| read_xml_element(xot, node, values, options))
+            .collect::<Result<Vec<_>>>()
+            .map(XmlFieldValue::List),
+        _ => read_xml_element(xot, matches[matches.len() - 1], builder, options),
     }
-
-    Ok(())
 }
 
-fn append_element_to_field(
-    xot: &xot::Xot,
+fn read_xml_element<'a>(
+    xot: &'a xot::Xot,
     node: xot::Node,
-    builder: &mut XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
-    session_timezone: &str,
-) -> Result<()> {
+    builder: &XmlFieldBuilder,
+    options: &FromXmlOptions,
+) -> Result<XmlFieldValue<'a>> {
     match builder {
         XmlFieldBuilder::Struct {
-            fields,
-            children,
-            nulls,
-        } => {
+            fields, children, ..
+        } => read_xml_fields(xot, node, fields, children, options).map(XmlFieldValue::Struct),
+        XmlFieldBuilder::String(_) => {
+            element_markup(xot, node).map(|text| XmlFieldValue::Text(Cow::Owned(text)))
+        }
+        XmlFieldBuilder::List { .. } | XmlFieldBuilder::Unsupported { .. } => {
+            Ok(XmlFieldValue::Null)
+        }
+        _ => scalar_element_text(xot, node).map(|text| XmlFieldValue::Text(Cow::Borrowed(text))),
+    }
+}
+
+fn append_xml_value(
+    value: XmlFieldValue<'_>,
+    builder: &mut XmlFieldBuilder,
+    options: &FromXmlOptions,
+    session_timezone: &str,
+) -> Result<()> {
+    match (value, builder) {
+        (XmlFieldValue::Null, builder) => append_null_to_field(builder)?,
+        (XmlFieldValue::Text(text), builder) => {
+            append_text(Some(&text), builder, options, session_timezone)?;
+        }
+        (
+            XmlFieldValue::List(items),
+            XmlFieldBuilder::List {
+                offsets,
+                values,
+                nulls,
+                ..
+            },
+        ) => {
+            let end = offsets.last().copied().unwrap_or(0) + items.len() as i32;
+            for item in items {
+                append_xml_value(item, values, options, session_timezone)?;
+            }
+            offsets.push(end);
             nulls.push(true);
-            for (f, child) in fields.iter().zip(children.iter_mut()) {
-                append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
+        }
+        (
+            XmlFieldValue::Struct(fields),
+            XmlFieldBuilder::Struct {
+                children, nulls, ..
+            },
+        ) => {
+            nulls.push(true);
+            for (child, field) in children.iter_mut().zip(fields) {
+                append_xml_value(field, child, options, session_timezone)?;
             }
         }
-        _ => {
-            let text = element_text_content(xot, node);
-            append_text(text.as_deref(), builder, options, session_timezone)?;
-        }
+        _ => return internal_err!("from_xml: field value does not match its builder"),
     }
     Ok(())
 }
@@ -786,11 +714,12 @@ fn append_element_to_field(
 fn append_text(
     text: Option<&str>,
     builder: &mut XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
     let raw = match text {
         None => return append_null_to_field(builder),
+        Some(s) if options.ignore_surrounding_spaces => s.trim_matches(|c| c <= '\u{20}'),
         Some(s) => s,
     };
 
@@ -845,30 +774,14 @@ fn append_text(
             Err(_) => b.append_null(),
         },
         XmlFieldBuilder::TimestampMicrosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros),
                 Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::TimestampNanosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros * 1_000);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros * 1_000),
                 Err(_) => b.append_null(),
             }
         }
@@ -906,45 +819,19 @@ fn parsed_timestamp_to_micros(
 }
 
 fn parse_decimal128(raw: &str, precision: u8, scale: i8) -> Option<i128> {
-    let raw = raw.trim();
-    let is_negative = raw.starts_with('-');
-    let raw = if is_negative { &raw[1..] } else { raw };
-
-    let (int_part, frac_part) = if let Some(pos) = raw.find('.') {
-        (&raw[..pos], &raw[pos + 1..])
-    } else {
-        (raw, "")
-    };
-
-    let int_val: i128 = int_part.parse().ok()?;
-
-    let scale = scale as usize;
-    let frac_val: i128 = if frac_part.len() >= scale {
-        frac_part[..scale].parse().ok()?
-    } else {
-        let padded = format!("{:0<width$}", frac_part, width = scale);
-        padded.parse().ok()?
-    };
-
-    let scale_factor: i128 = 10_i128.checked_pow(scale as u32)?;
-    let value = int_val.checked_mul(scale_factor)?.checked_add(frac_val)?;
-    let value = if is_negative {
-        value.checked_neg()?
-    } else {
-        value
-    };
-    let max_value = 10_i128.checked_pow(precision as u32)?;
-    if value.abs() >= max_value {
-        return None; // overflow
-    }
-    Some(value)
+    parse_decimal::<Decimal128Type>(&raw.replace(',', ""), precision, scale).ok()
 }
 
-fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xot::Node> {
+fn child_elements_named(
+    xot: &xot::Xot,
+    parent: xot::Node,
+    name: &str,
+    options: &FromXmlOptions,
+) -> Vec<xot::Node> {
     xot.children(parent)
         .filter(|&child| {
             if let xot::Value::Element(el) = xot.value(child) {
-                xot.local_name_str(el.name()) == name
+                field_name(xot.local_name_str(el.name()), options) == name
             } else {
                 false
             }
@@ -952,27 +839,100 @@ fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xo
         .collect()
 }
 
-fn element_text_content(xot: &xot::Xot, node: xot::Node) -> Option<String> {
-    let text: String = xot
-        .children(node)
-        .filter_map(|child| {
-            if let xot::Value::Text(t) = xot.value(child) {
-                Some(t.get().to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-    Some(text)
+fn is_xml_whitespace(text: &str) -> bool {
+    text.trim_matches([' ', '\t', '\n', '\r']).is_empty()
 }
 
-fn find_attribute(xot: &xot::Xot, node: xot::Node, attr_name: &str) -> Option<String> {
-    for (name_id, value) in xot.attributes(node).iter() {
-        if xot.local_name_str(name_id) == attr_name {
-            return Some(value.clone());
+fn scalar_element_text(xot: &xot::Xot, node: xot::Node) -> Result<&str> {
+    let mut value = None;
+    for child in xot.children(node) {
+        match xot.value(child) {
+            xot::Value::Text(text) if !is_xml_whitespace(text.get()) && value.is_none() => {
+                value = Some(text.get());
+            }
+            xot::Value::Element(_) => {
+                return exec_err!("Invalid XML: nested element in a scalar field");
+            }
+            xot::Value::Text(text) if !is_xml_whitespace(text.get()) => {
+                return exec_err!("Invalid XML: unexpected text after scalar field value");
+            }
+            _ => {}
         }
     }
-    None
+    Ok(value.unwrap_or_default())
+}
+
+fn find_attribute<'a>(
+    xot: &'a xot::Xot,
+    node: xot::Node,
+    attr_name: &str,
+    options: &FromXmlOptions,
+) -> Option<&'a str> {
+    if options.exclude_attribute {
+        return None;
+    }
+    xot.attributes(node)
+        .iter()
+        .filter(|(name, _)| field_name(xot.local_name_str(*name), options) == attr_name)
+        .map(|(_, value)| value.as_str())
+        .last()
+}
+
+fn field_name<'a>(name: &'a str, options: &FromXmlOptions) -> &'a str {
+    if options.ignore_namespace {
+        reader::local_name(name)
+    } else {
+        name
+    }
+}
+
+fn boolean_option(map: &MapArray, key: &str, default: bool) -> Result<bool> {
+    match find_key_value(map, key)
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None => Ok(default),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        _ => plan_err!("`{key}` must be true or false"),
+    }
+}
+
+// StAX returns the inner markup for STRING fields, with expanded empty tags and
+// decoded text and attributes. Keep lexical names even with ignoreNamespace.
+fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
+    use quick_xml::events::attributes::Attribute;
+    use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use quick_xml::name::QName;
+    use xot::NodeEdge;
+
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    for edge in xot.traverse(node).filter(|edge| edge.node() != node) {
+        match (edge, xot.value(edge.node())) {
+            (NodeEdge::Start(child), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                let mut start = BytesStart::new(name);
+                for (key, value) in xot.attributes(child).iter() {
+                    start.push_attribute(Attribute {
+                        key: QName(xot.local_name_str(key)),
+                        value: Cow::Borrowed(value),
+                    });
+                }
+                writer.write_event(Event::Start(start))?;
+            }
+            (NodeEdge::End(_), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                writer.write_event(Event::End(BytesEnd::new(name)))?;
+            }
+            (NodeEdge::Start(_), xot::Value::Text(text)) => {
+                writer.write_event(Event::Text(BytesText::from_escaped(text.get())))?;
+            }
+            _ => {}
+        }
+    }
+
+    String::from_utf8(writer.into_inner()).map_err(|e| DataFusionError::Execution(e.to_string()))
 }
 
 fn find_key_value(map: &MapArray, key: &str) -> Option<String> {

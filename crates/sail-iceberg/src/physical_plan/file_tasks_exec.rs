@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
-use datafusion::arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Result, exec_err, plan_err};
@@ -168,6 +172,7 @@ impl ExecutionPlan for IcebergFileTasksExec {
                     Arc::new(Int32Array::from(files.iter().map(|file| file.spec_id).collect::<Vec<_>>())),
                     Arc::new(StringArray::from(vec![DataContentType::Data.as_action_str(); files.len()])),
                     Arc::new(BooleanArray::from(vec![false; files.len()])),
+                    Arc::new(Int64Array::from(vec![None; files.len()])),
                     Arc::new(StringArray::from(defaults)),
                     Arc::new(StringArray::from(files.iter().map(|file| file.rewrite_scan_context.as_deref()).collect::<Vec<_>>())),
                 ])?;

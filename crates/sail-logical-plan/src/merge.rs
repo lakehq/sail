@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -27,6 +29,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::monotonic_id::MonotonicIdNode;
@@ -903,11 +906,9 @@ fn build_default_merge_expansion(
                 .map(|expr| expr.schema_name().to_string())
                 .collect();
             projection_exprs.push(
-                ScalarUDF::from(
-                    sail_function::scalar::r#struct::struct_function::StructFunction::new(names),
-                )
-                .call(values)
-                .alias(&name),
+                ScalarUDF::from(StructFromFields::new(names))
+                    .call(values)
+                    .alias(&name),
             );
             Some(name)
         } else {

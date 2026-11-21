@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder respects HashJoinExec projection
 
   Scenario: Join reorder preserves correct column mapping when a join has projection

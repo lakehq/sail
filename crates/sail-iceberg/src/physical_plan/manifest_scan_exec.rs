@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{BooleanArray, Int32Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
@@ -38,6 +42,7 @@ pub const COL_FILE_SIZE_IN_BYTES: &str = "file_size_in_bytes";
 pub const COL_PARTITION_SPEC_ID: &str = "partition_spec_id";
 pub const COL_CONTENT_TYPE: &str = "content_type";
 pub const COL_NAN_FREE: &str = "nan_free";
+pub const COL_ADDED_SNAPSHOT_ID: &str = "added_snapshot_id";
 
 /// Returns the Arrow schema used by the manifest scan metadata batch.
 pub fn manifest_scan_schema() -> SchemaRef {
@@ -49,6 +54,7 @@ pub fn manifest_scan_schema() -> SchemaRef {
         Field::new(COL_PARTITION_SPEC_ID, DataType::Int32, false),
         Field::new(COL_CONTENT_TYPE, DataType::Utf8, false),
         Field::new(COL_NAN_FREE, DataType::Boolean, false),
+        Field::new(COL_ADDED_SNAPSHOT_ID, DataType::Int64, true),
     ]))
 }
 
@@ -224,6 +230,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                             }
                             let manifest_path = manifests[idx].manifest_path.clone();
                             let partition_spec_id = manifests[idx].partition_spec_id;
+                            let manifest_snapshot_id = manifests[idx].added_snapshot_id;
                             idx += 1;
 
                             let manifest =
@@ -236,6 +243,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                             let mut partition_spec_ids = Vec::new();
                             let mut content_types = Vec::new();
                             let mut nan_free = Vec::new();
+                            let mut added_snapshot_ids = Vec::new();
 
                             for entry_ref in manifest.entries() {
                                 if pruning.limit == Some(0) {
@@ -273,6 +281,8 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                         ids.iter().all(|id| df.nan_value_counts.get(id) == Some(&0))
                                     },
                                 ));
+                                added_snapshot_ids
+                                    .push(entry.snapshot_id.unwrap_or(manifest_snapshot_id));
                             }
 
                             if file_paths.is_empty() {
@@ -289,6 +299,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                     Arc::new(Int32Array::from(partition_spec_ids)),
                                     Arc::new(StringArray::from(content_types)),
                                     Arc::new(BooleanArray::from(nan_free)),
+                                    Arc::new(Int64Array::from(added_snapshot_ids)),
                                 ],
                             )?;
                             return Ok(Some((batch, (store_ctx, manifests, idx, schema, pruning))));
@@ -313,7 +324,7 @@ mod tests {
     #[test]
     fn manifest_scan_schema_has_expected_columns() {
         let schema = manifest_scan_schema();
-        assert_eq!(schema.fields().len(), 7);
+        assert_eq!(schema.fields().len(), 8);
         assert!(schema.field_with_name(COL_FILE_PATH).is_ok());
         assert!(schema.field_with_name(COL_FILE_FORMAT).is_ok());
         assert!(schema.field_with_name(COL_RECORD_COUNT).is_ok());
@@ -321,5 +332,6 @@ mod tests {
         assert!(schema.field_with_name(COL_PARTITION_SPEC_ID).is_ok());
         assert!(schema.field_with_name(COL_CONTENT_TYPE).is_ok());
         assert!(schema.field_with_name(COL_NAN_FREE).is_ok());
+        assert!(schema.field_with_name(COL_ADDED_SNAPSHOT_ID).is_ok());
     }
 }

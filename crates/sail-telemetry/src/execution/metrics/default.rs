@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::physical_plan::Metric;
 use datafusion::physical_plan::metrics::{Label, MetricValue};
 use sail_common::telemetry::KeyValue;

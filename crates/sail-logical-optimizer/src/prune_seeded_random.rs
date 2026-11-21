@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -192,8 +194,8 @@ mod tests {
     use datafusion::optimizer::push_down_filter::PushDownFilter;
     use datafusion::optimizer::{Optimizer, OptimizerContext};
     use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, col, lit};
-    use sail_function::scalar::math::partition_random::PartitionSeed;
     use sail_function::scalar::math::random::Random;
+    use sail_function::scalar::math::utils::partition_random::PartitionSeed;
     use sail_logical_plan::seeded_random::SeededRandomColumn;
 
     use super::*;

@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
@@ -325,8 +327,8 @@ impl CardinalityEstimator {
             return 1.0;
         }
 
-        // Gather all equivalence sets referenced by this edge's equi-join pairs.
-        let mut used_equiv_sets: HashSet<usize> = HashSet::new();
+        // Gather the referenced equivalence sets in a stable order for floating-point multiplication.
+        let mut used_equiv_sets = BTreeSet::new();
         for (left_col, right_col) in &edge.equi_pairs {
             if let Some(idx) = self.column_to_equiv_set.get(left_col) {
                 used_equiv_sets.insert(*idx);

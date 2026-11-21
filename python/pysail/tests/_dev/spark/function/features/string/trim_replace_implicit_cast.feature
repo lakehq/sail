@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: trim and replace implicitly cast atomic arguments to strings
 
   Rule: Atomic arguments are cast to strings in both ANSI modes

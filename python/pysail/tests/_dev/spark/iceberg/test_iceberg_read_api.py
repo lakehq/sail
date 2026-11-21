@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 
 import pytest
@@ -224,6 +226,21 @@ def test_iceberg_load_option_only_path(spark, read_table, key, target):
     expected = spark.read.format("iceberg").load(location)
     assert actual.schema == expected.schema
     assert sorted(actual.collect()) == sorted(expected.collect())
+
+
+@pytest.mark.parametrize("target", ["identifier", "path"])
+@pytest.mark.parametrize("keys", [("path", "PATH"), ("PATH", "path")])
+@pytest.mark.parametrize("conflicting", [False, True], ids=["identical", "conflicting"])
+def test_iceberg_load_case_insensitive_path_options(spark, read_table, target, keys, conflicting):
+    name, path, _ = read_table
+    location = f"sail.default.{name}" if target == "identifier" else str(path)
+    options = {keys[0]: location, keys[1]: location + "_other" if conflicting else location}
+    reader = spark.read.format("iceberg").options(**options)
+    if conflicting:
+        with pytest.raises(PySparkException, match="Conflicting case-insensitive path options"):
+            reader.load().collect()
+    else:
+        _assert_table(reader.load(), [(1, "one"), (2, "two")])
 
 
 @pytest.mark.parametrize("target", ["identifier", "path"])

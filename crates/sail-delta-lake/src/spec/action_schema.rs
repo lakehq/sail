@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::spec::schema::{ArrayType, DataType, MapType, StructField, StructType};
 
 fn string_map_type(value_contains_null: bool) -> DataType {

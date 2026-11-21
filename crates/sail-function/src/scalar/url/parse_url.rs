@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -9,9 +11,8 @@ use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use url::Url;
-
-use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {

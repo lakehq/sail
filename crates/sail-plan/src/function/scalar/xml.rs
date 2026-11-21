@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::xml::from_xml::SparkFromXml;
-use sail_function::scalar::xml::to_xml::SparkToXml;
+use sail_function::scalar::xml::from_xml::FromXml;
+use sail_function::scalar::xml::schema_of_xml::SchemaOfXml;
+use sail_function::scalar::xml::to_xml::ToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, XpathTypedKind};
 
@@ -31,7 +34,7 @@ fn xpath_typed(kind: XpathTypedKind) -> impl Fn(ScalarFunctionInput) -> PlanResu
 
 fn to_xml(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let tz = input.function_context.plan_config.session_timezone.clone();
-    let udf = ScalarUDF::from(SparkToXml::new(tz));
+    let udf = ScalarUDF::from(ToXml::new(tz));
     Ok(udf.call(input.arguments))
 }
 
@@ -55,7 +58,7 @@ fn from_xml(
             arguments[1] = expr::Expr::Literal(scalar, None);
         }
     }
-    let udf = ScalarUDF::from(SparkFromXml::new(tz));
+    let udf = ScalarUDF::from(FromXml::new(tz));
     Ok(udf.call(arguments))
 }
 
@@ -64,7 +67,20 @@ pub(super) fn list_built_in_xml_functions() -> Vec<(&'static str, ScalarFunction
 
     vec![
         ("from_xml", F::custom(from_xml)),
-        ("schema_of_xml", F::unknown("schema_of_xml")),
+        (
+            "schema_of_xml",
+            F::custom(|input| {
+                let config = &input.function_context.plan_config;
+                let udf = ScalarUDF::from(SchemaOfXml::new(
+                    config.case_sensitive,
+                    matches!(
+                        config.default_timestamp_type,
+                        crate::config::DefaultTimestampType::TimestampNtz
+                    ),
+                ));
+                Ok(udf.call(input.arguments))
+            }),
+        ),
         ("to_xml", F::custom(to_xml)),
         ("xpath", F::custom(xpath)),
         (

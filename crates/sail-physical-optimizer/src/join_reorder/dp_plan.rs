@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::error::Result;
 
 use crate::join_reorder::join_set::JoinSet;

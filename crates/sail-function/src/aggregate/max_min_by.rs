@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs
+
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
@@ -85,11 +87,11 @@ impl Accumulator for MaxMinByAccumulator {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct MaxByFunction {
+pub struct MaxBy {
     signature: Signature,
 }
 
-impl Debug for MaxByFunction {
+impl Debug for MaxBy {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("MaxBy")
             .field("name", &self.name())
@@ -98,13 +100,13 @@ impl Debug for MaxByFunction {
             .finish()
     }
 }
-impl Default for MaxByFunction {
+impl Default for MaxBy {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MaxByFunction {
+impl MaxBy {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -122,7 +124,7 @@ fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>,
     }
 }
 
-impl AggregateUDFImpl for MaxByFunction {
+impl AggregateUDFImpl for MaxBy {
     fn name(&self) -> &str {
         "max_by"
     }
@@ -196,11 +198,11 @@ impl AggregateUDFImpl for MaxByFunction {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct MinByFunction {
+pub struct MinBy {
     signature: Signature,
 }
 
-impl Debug for MinByFunction {
+impl Debug for MinBy {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("MinBy")
             .field("name", &self.name())
@@ -210,13 +212,13 @@ impl Debug for MinByFunction {
     }
 }
 
-impl Default for MinByFunction {
+impl Default for MinBy {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MinByFunction {
+impl MinBy {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -224,7 +226,7 @@ impl MinByFunction {
     }
 }
 
-impl AggregateUDFImpl for MinByFunction {
+impl AggregateUDFImpl for MinBy {
     fn name(&self) -> &str {
         "min_by"
     }

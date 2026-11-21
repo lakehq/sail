@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -314,4 +316,116 @@ async fn connect_rejects_invalid_window_sizes_before_opening_connection()
         );
     }
     Ok(())
+}
+
+type DataServer = (
+    ClientOptions,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    AbortOnDropHandle<Result<(), TransportError>>,
+);
+
+/// A byte-level HTTP/2 peer that responds to /data/N with N bytes, as far as the client
+/// accepts them. It reports the number of connections and the number of bytes sent.
+async fn data_server() -> Result<DataServer, TransportError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address: SocketAddr = listener.local_addr()?;
+    let connections = Arc::new(AtomicUsize::new(0));
+    let sent = Arc::new(AtomicUsize::new(0));
+    let (count, total) = (connections.clone(), sent.clone());
+    let server = tokio::spawn(async move {
+        let mut tasks = JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (socket, _) = accepted?;
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let total = total.clone();
+                    tasks.spawn(async move {
+                        let mut connection = h2::server::handshake(socket).await?;
+                        let mut streams = JoinSet::new();
+                        while let Some(request) = connection.accept().await {
+                            let (request, mut respond) = request?;
+                            let size = request.uri().path().trim_start_matches("/data/");
+                            let mut remaining: usize = size.parse()?;
+                            let mut stream = respond.send_response(Response::new(()), false)?;
+                            let total = total.clone();
+                            // The stream ends early if the client resets it.
+                            streams.spawn(async move {
+                                while remaining > 0 {
+                                    stream.reserve_capacity(remaining);
+                                    let capacity =
+                                        std::future::poll_fn(|cx| stream.poll_capacity(cx)).await;
+                                    let Some(Ok(capacity)) = capacity else {
+                                        return;
+                                    };
+                                    let size = capacity.min(remaining);
+                                    if stream.send_data(vec![0; size].into(), false).is_err() {
+                                        return;
+                                    }
+                                    remaining -= size;
+                                    total.fetch_add(size, Ordering::SeqCst);
+                                }
+                                let _ = stream.send_data(bytes::Bytes::new(), true);
+                            });
+                        }
+                        Ok::<_, TransportError>(())
+                    });
+                }
+                Some(result) = tasks.join_next() => { result??; }
+            }
+        }
+    });
+    Ok((
+        ClientOptions {
+            enable_tls: false,
+            host: address.ip().to_string(),
+            port: address.port(),
+            flight_connection_count: NonZeroUsize::MIN,
+            flight_initial_stream_window_size: None,
+            flight_initial_connection_window_size: None,
+        },
+        connections,
+        sent,
+        AbortOnDropHandle::new(server),
+    ))
+}
+
+#[tokio::test]
+async fn unread_streams_do_not_stall_other_streams_on_connection() -> Result<(), TransportError> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let (mut options, connections, sent, _server) = data_server().await?;
+        let window: usize = 2 * 1024 * 1024;
+        options.flight_initial_stream_window_size = Some(window as u32);
+        // The connection window has its default size, which is the largest.
+        options.flight_initial_connection_window_size = Some(crate::rpc::MAX_WINDOW_SIZE);
+        let transport = FlightTransport::connect(&options).await?;
+        // Each of these responses has more data than its stream window and is not read,
+        // so the server sends as much of it as the stream window allows.
+        let path = format!("/data/{}", window + 1024);
+        let mut unread = vec![];
+        for _ in 0..4 {
+            let response = transport
+                .clone()
+                .oneshot(request(&transport, &path)?)
+                .await?;
+            unread.push(response);
+        }
+        while sent.load(Ordering::SeqCst) < unread.len() * window {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        // One of them can be read to its end while the others remain unread.
+        let response = unread.remove(0);
+        let size = response.into_body().collect().await?.to_bytes().len();
+        assert_eq!(size, window + 1024);
+        // Another response on the same connection can be read to the end as well.
+        let response = transport
+            .clone()
+            .oneshot(request(&transport, "/data/1024")?)
+            .await?;
+        assert_eq!(response.into_body().collect().await?.to_bytes().len(), 1024);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        Ok::<_, TransportError>(())
+    })
+    .await?
 }

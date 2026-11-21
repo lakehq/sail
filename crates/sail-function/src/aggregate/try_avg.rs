@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{
@@ -16,17 +18,17 @@ use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct TryAvgFunction {
+pub struct TryAvg {
     signature: Signature,
 }
 
-impl Default for TryAvgFunction {
+impl Default for TryAvg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TryAvgFunction {
+impl TryAvg {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -34,9 +36,9 @@ impl TryAvgFunction {
     }
 }
 
-impl Debug for TryAvgFunction {
+impl Debug for TryAvg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TryAvgFunction")
+        f.debug_struct("TryAvg")
             .field("signature", &self.signature)
             .finish()
     }
@@ -449,7 +451,7 @@ fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
     }
 }
 
-impl AggregateUDFImpl for TryAvgFunction {
+impl AggregateUDFImpl for TryAvg {
     fn name(&self) -> &str {
         "try_avg"
     }
@@ -764,7 +766,7 @@ mod tests {
 
     #[test]
     fn try_avg_return_type_matches_input() -> datafusion::common::Result<()> {
-        let f = TryAvgFunction::new();
+        let f = TryAvg::new();
         assert_eq!(f.return_type(&[DataType::Int64])?, DataType::Float64);
         assert_eq!(f.return_type(&[DataType::Float64])?, DataType::Float64);
         assert_eq!(
@@ -796,7 +798,7 @@ mod tests {
 
     #[test]
     fn try_avg_interval_yearmonth_return_type() -> datafusion::common::Result<()> {
-        let f = TryAvgFunction::new();
+        let f = TryAvg::new();
         assert_eq!(
             f.return_type(&[DataType::Interval(IntervalUnit::YearMonth)])?,
             DataType::Interval(IntervalUnit::YearMonth)
@@ -811,7 +813,7 @@ mod tests {
     #[test]
     fn decimal_10_2_sum_and_schema_widened() -> datafusion::common::Result<()> {
         // input: DECIMAL(10,2)  -> return DECIMAL(20,2)
-        let f = TryAvgFunction::new();
+        let f = TryAvg::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(10, 2)])?,
             DataType::Decimal128(20, 2),
@@ -829,7 +831,7 @@ mod tests {
     fn decimal_5_0_widened_avg() -> datafusion::common::Result<()> {
         // input: DECIMAL(5,0) -> return DECIMAL(15,0)
         // vals [90000,20000] => sum=110000,count=2 => avg=55000
-        let f = TryAvgFunction::new();
+        let f = TryAvg::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(5, 0)])?,
             DataType::Decimal128(15, 0)
@@ -846,7 +848,7 @@ mod tests {
 
     #[test]
     fn decimal_38_0_max_precision_overflows_to_null() -> datafusion::common::Result<()> {
-        let f = TryAvgFunction::new();
+        let f = TryAvg::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(38, 0)])?,
             DataType::Decimal128(38, 0)

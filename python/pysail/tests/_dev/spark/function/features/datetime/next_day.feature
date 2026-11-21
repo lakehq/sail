@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: next_day comprehensive tests
 
   Rule: Argument count validation

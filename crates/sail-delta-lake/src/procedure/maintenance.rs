@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -279,6 +281,7 @@ async fn execute(
         return plan_err!("Delta maintenance requires a table");
     };
     let session = SessionStateBuilder::new()
+        .with_session_id(context.session_id())
         .with_default_features()
         .with_config(context.session_config().clone())
         .with_runtime_env(context.runtime_env())

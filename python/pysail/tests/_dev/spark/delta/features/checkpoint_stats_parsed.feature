@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
 
   Rule: Checkpoint parquet emits parsed stats fields by default

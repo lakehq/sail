@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Importable Python UDTs used by doctests.
 
 Spark resolves Python UDTs by importing their declared module and no longer

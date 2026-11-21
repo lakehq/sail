@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Projected CSV decoding for all-`Utf8` file schemas.
 //!
 //! Before projection, arrow-csv's `RecordDecoder` copies every field through `csv_core` and stores

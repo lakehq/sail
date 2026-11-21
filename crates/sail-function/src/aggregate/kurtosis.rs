@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, Float64Array};
@@ -17,25 +19,25 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use crate::aggregate::skewness::SkewnessAccumulator;
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct KurtosisFunction {
+pub struct Kurtosis {
     signature: Signature,
 }
 
-impl Debug for KurtosisFunction {
+impl Debug for Kurtosis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KurtosisFunction")
+        f.debug_struct("Kurtosis")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for KurtosisFunction {
+impl Default for Kurtosis {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl KurtosisFunction {
+impl Kurtosis {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
@@ -62,7 +64,7 @@ impl KurtosisFunction {
     }
 }
 
-impl AggregateUDFImpl for KurtosisFunction {
+impl AggregateUDFImpl for Kurtosis {
     fn name(&self) -> &str {
         "kurtosis"
     }

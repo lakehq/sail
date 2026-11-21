@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 use crate::error::SqlError;
@@ -7,7 +9,9 @@ pub struct BinaryValue(pub Vec<u8>);
 impl FromStr for BinaryValue {
     type Err = SqlError;
 
-    /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let hex_bytes = value.as_bytes();
         let mut decoded_bytes = Vec::with_capacity(hex_bytes.len().div_ceil(2));
@@ -33,9 +37,12 @@ impl FromStr for BinaryValue {
 
         Ok(Self(decoded_bytes))
     }
+    // SPDX-SnippetEnd
 }
 
-/// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318
 /// Try to decode a byte from a hex char.
 ///
 /// None will be returned if the input char is hex-invalid.
@@ -47,3 +54,4 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
         _ => None,
     }
 }
+// SPDX-SnippetEnd

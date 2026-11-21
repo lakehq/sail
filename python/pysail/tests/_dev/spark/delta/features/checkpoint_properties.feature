@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake checkpoint properties
 
   Rule: Delta checkpoint interval properties materialize into first-commit metadata

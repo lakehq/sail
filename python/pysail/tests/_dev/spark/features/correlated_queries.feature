@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Correlated query results
   Background:
     Given config spark.sql.caseSensitive = false

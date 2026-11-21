@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod cache;
 mod namespace;
 mod options;
@@ -81,7 +83,7 @@ pub trait CatalogProvider: Send + Sync {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let _ = (database, table, options);
         Err(CatalogError::UnsupportedCapability(
@@ -119,20 +121,24 @@ pub trait CatalogProvider: Send + Sync {
         Vec::new()
     }
 
-    async fn resolve_lakehouse_table(
+    /// Returns the table status together with its lakehouse resolution.
+    /// Providers whose resolution needs more than the table status should load both
+    /// from one catalog response.
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
-        Ok(resolve_lakehouse_table_status(
+        let resolved = resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
             &status,
             request.operation,
             &self.lakehouse_capabilities(),
-        ))
+        );
+        Ok((status, resolved))
     }
 
     async fn plan_lakehouse_create(
@@ -202,6 +208,18 @@ pub trait CatalogProvider: Send + Sync {
 
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
+
+    /// Returns registered file locations, including a single root for an unpartitioned table,
+    /// or `None` to discover files at the location in the table status. Values are in source
+    /// partition column order; `None` means unrestricted. Callers check returned values.
+    async fn list_file_partitions(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        Ok(None)
+    }
 
     /// Lists all tables in a database in the catalog.
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>>;

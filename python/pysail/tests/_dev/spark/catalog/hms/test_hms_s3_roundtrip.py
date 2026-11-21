@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608, TC002
 """HMS interop tests for tables under S3 database locations."""
 

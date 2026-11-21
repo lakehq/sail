@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 import hashlib
@@ -147,8 +149,7 @@ def test_manifest_rewrite_fixed_identity_preserves_metrics_and_data(spark, sql_c
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
         before = spark.table(f"{name}.files").orderBy("file_path").collect()
         payloads = _payloads(row.file_path for row in before)
-        expected_manifest_count = 2
-        assert len(_manifests(path)) == expected_manifest_count
+        assert len(_manifests(path)) == 2
         # First write two manifests in Iceberg's length-prefixed fixed encoding, then
         # compact those manifests. The second rewrite must use the normalized reader.
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='1')")
@@ -185,8 +186,7 @@ def test_manifest_rewrite_selects_current_or_explicit_spec(spark, tmp_path):
         files = _file_state(path)
         assert _rewrite(spark, name, ", spec_id => 0") == (2, 1)
         after = _manifests(path)
-        expected_manifest_count = 2
-        assert len(after) == expected_manifest_count
+        assert len(after) == 2
         assert all(m in after for m in retained)
         assert _file_state(path) == files
         assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 2, 3]
@@ -286,8 +286,7 @@ def test_manifest_rewrite_preserves_delete_files_and_visibility(spark, tmp_path,
         manifests = _manifests(path)
         files = _file_state(path)
         deletes = _delete_files(path)
-        minimum_delete_file_count = 2
-        assert len(deletes) >= minimum_delete_file_count
+        assert len(deletes) >= 2
         payloads = _payloads(files)
         lineage = _current_row_lineage(path) if version == ROW_LINEAGE_VERSION else None
         rewritten = sum(
@@ -413,10 +412,8 @@ def test_manifest_rewrite_preserves_historical_schema_metrics(spark, tmp_path):
         retained_payloads = _payloads(manifest["manifest-path"] for manifest in retained)
         before = _file_state(path)
         data_payloads = _payloads(before)
-        old_field_id = 2
         assert any(
-            old_field_id in (entry.data_file.lower_bounds or {})
-            for entry in _current_manifest_entries(path, ManifestContent.DATA)
+            2 in (entry.data_file.lower_bounds or {}) for entry in _current_manifest_entries(path, ManifestContent.DATA)
         )
         assert _rewrite(spark, name) == (2, 1)
         assert all(manifest in _manifests(path) for manifest in retained)

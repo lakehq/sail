@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -51,12 +53,12 @@ pub(crate) enum SnapshotOperation {
     },
 }
 
-pub(super) struct PreparedSnapshotOperation {
-    pub(super) requirements: Vec<TableRequirement>,
-    pub(super) updates: Vec<TableUpdate>,
-    pub(super) manifests: Vec<(String, Vec<u8>)>,
-    pub(super) output: RecordBatch,
-    pub(super) changed: bool,
+pub(crate) struct PreparedSnapshotOperation {
+    pub(crate) requirements: Vec<TableRequirement>,
+    pub(crate) updates: Vec<TableUpdate>,
+    pub(crate) manifests: Vec<(String, Vec<u8>)>,
+    pub(crate) output: RecordBatch,
+    pub(crate) changed: bool,
 }
 
 impl SnapshotOperation {

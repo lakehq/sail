@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -514,11 +516,10 @@ impl JobScheduler {
     }
 
     fn extend_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
-        let JobState::Running { output, .. } = &mut job.state else {
+        if !matches!(job.state, JobState::Running { .. }) {
             return vec![];
-        };
-        let mut actions = vec![];
-        let schema = job.graph.schema().clone();
+        }
+        let mut keys = vec![];
         for (s, stage) in job.graph.stages().iter().enumerate() {
             if !job.topology.stages[s].consumers.is_empty() {
                 // The stage is not a final stage.
@@ -526,8 +527,8 @@ impl JobScheduler {
             }
             let partitions = stage.plan.output_partitioning().partition_count();
             let channels = stage.distribution.channels();
-            for p in 0..partitions {
-                let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() else {
+            for (p, task) in job.stages[s].tasks[..partitions].iter_mut().enumerate() {
+                let Some((attempt, head)) = task.attempts.split_last_mut() else {
                     continue;
                 };
                 if !matches!(attempt.state, TaskState::Running | TaskState::Succeeded)
@@ -537,35 +538,63 @@ impl JobScheduler {
                 }
                 attempt.job_output_fetched = true;
                 for c in 0..channels {
-                    let key = TaskStreamKey {
+                    keys.push(TaskStreamKey {
                         job_id,
                         stage: s,
                         partition: p,
                         attempt: head.len(),
                         channel: c,
-                    };
-                    actions.push(JobAction::ExtendJobOutput {
-                        handle: output.handle(),
-                        key,
-                        schema: schema.clone(),
                     });
                 }
             }
         }
 
-        actions
+        // The output of a new attempt cannot replace the output that an earlier attempt
+        // has already produced for the job. The job fails in this case, with the cause
+        // of its task failures so far, as it is inferred for a job that fails.
+        let retry_cause = if keys.iter().any(|key| key.attempt > 0) {
+            Self::find_job_failure_cause(job)
+        } else {
+            None
+        };
+        let JobState::Running { output, .. } = &job.state else {
+            return vec![];
+        };
+        let schema = job.graph.schema().clone();
+        keys.into_iter()
+            .map(|key| JobAction::ExtendJobOutput {
+                handle: output.handle(),
+                retry_cause: retry_cause.clone().filter(|_| key.attempt > 0),
+                key,
+                schema: schema.clone(),
+            })
+            .collect()
     }
 
     fn infer_job_failure_cause(job: &JobDescriptor) -> CommonErrorCause {
+        Self::find_job_failure_cause(job).unwrap_or_else(|| {
+            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
+                "job failed for unknown reason".to_string(),
+            ))
+        })
+    }
+
+    /// Returns the cause of the task failures of the job, if any task attempt has
+    /// failed with a known cause.
+    fn find_job_failure_cause(job: &JobDescriptor) -> Option<CommonErrorCause> {
         // a map from (stage, partition) to a list of causes
         let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
+        let mut terminal_cause = None;
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
-                    if let Some(cause) = &attempt.cause
-                        && !cause.is_retryable()
-                    {
-                        return cause.clone();
+                    if let Some(cause) = &attempt.cause {
+                        if matches!(cause, CommonErrorCause::CommitStateUnknown(_)) {
+                            return Some(cause.clone());
+                        }
+                        if !cause.is_retryable() {
+                            terminal_cause.get_or_insert(cause);
+                        }
                     }
                     if matches!(attempt.state, TaskState::Failed)
                         && let Some(cause) = &attempt.cause
@@ -574,6 +603,9 @@ impl JobScheduler {
                     }
                 }
             }
+        }
+        if let Some(cause) = terminal_cause {
+            return Some(cause.clone());
         }
         // Get the most recent cause from the most likely failed task.
         if let Some((_, &[.., cause])) = causes.iter().map(|(k, v)| (k, v.as_slice())).min_by(
@@ -584,11 +616,9 @@ impl JobScheduler {
                 v2.len().cmp(&v1.len()).then(s1.cmp(s2)).then(p1.cmp(p2))
             },
         ) {
-            cause.clone()
+            Some(cause.clone())
         } else {
-            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
-                "job failed for unknown reason".to_string(),
-            ))
+            None
         }
     }
 
@@ -813,6 +843,7 @@ impl<'a> TaskInputBuilder<'a> {
         Ok(TaskInput {
             stage: self.input.stage,
             locator: Arc::new(locator),
+            replicated: matches!(self.input.mode, InputMode::Merge | InputMode::Broadcast),
         })
     }
 
@@ -1080,6 +1111,7 @@ impl<'a> TaskOutputBuilder<'a> {
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
+                bounded: self.job.graph.bounded_output(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
@@ -1131,15 +1163,63 @@ impl StageGroup {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::HashSet;
 
     use super::StageGroup;
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
 
+    /// Returns the event reporter for a scheduler. Telemetry can only be initialized
+    /// once in a process, so the tests that need a scheduler share the initialization.
+    pub(crate) fn event_reporter(
+        config: &sail_common::config::AppConfig,
+    ) -> Result<sail_telemetry::events::SystemEventReporter, Box<dyn std::error::Error>> {
+        use std::sync::OnceLock;
+
+        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
+        use sail_telemetry::{ResourceKind, ResourceOptions};
+
+        static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
+        INITIALIZED
+            .get_or_init(|| {
+                init_telemetry(
+                    &config.telemetry,
+                    &config.catalog.system,
+                    ResourceOptions {
+                        kind: ResourceKind::Server,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            })
+            .clone()?;
+        Ok(global_system_event_reporter().ok_or("missing event reporter")?)
+    }
+
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
+        late_terminal_commit_cancels_queued_retry(
+            sail_common_datafusion::error::CommonErrorCause::CommitStateUnknown(
+                "response lost".into(),
+            ),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn late_replanning_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>>
+    {
+        late_terminal_commit_cancels_queued_retry(
+            sail_common_datafusion::error::CommonErrorCause::CommitRequiresReplanning(
+                "stale output".into(),
+            ),
+        )
+        .await
+    }
+
+    async fn late_terminal_commit_cancels_queued_retry(
+        cause: sail_common_datafusion::error::CommonErrorCause,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
 
         use datafusion::arrow::datatypes::Schema;
@@ -1152,8 +1232,6 @@ mod tests {
         use sail_common_datafusion::error::CommonErrorCause;
         use sail_iceberg::SnapshotUpdateKind;
         use sail_iceberg::physical_plan::IcebergCommitExec;
-        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
-        use sail_telemetry::{ResourceKind, ResourceOptions};
         use url::Url;
 
         use super::{JobAction, JobScheduler, JobState, TaskState};
@@ -1164,21 +1242,14 @@ mod tests {
         use crate::worker_manager::LocalWorkerManager;
 
         let mut config = AppConfig::load()?;
-        config.cluster.task_max_attempts = 4;
+        assert!(config.cluster.task_max_attempts > 1);
         config.cluster.worker_task_slots = 1;
         config.cluster.worker_max_count = 1;
         config.catalog.system.store = SystemCatalogStore::Memory;
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
-        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let reporter = event_reporter(&config)?;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(
@@ -1253,20 +1324,15 @@ mod tests {
             Some(TaskState::Created)
         ));
 
-        scheduler.update_task(
-            &original,
-            TaskState::Failed,
-            None,
-            Some(CommonErrorCause::CommitStateUnknown("response lost".into())),
-        );
+        scheduler.update_task(&original, TaskState::Failed, None, Some(cause.clone()));
         let actions = scheduler.refresh_job(job_id);
         assert!(matches!(scheduler.jobs[&job_id].state, JobState::Failed));
         assert!(actions.iter().any(|action| matches!(
             action,
             JobAction::FailJobOutput {
-                cause: CommonErrorCause::CommitStateUnknown(_),
+                cause: reported,
                 ..
-            }
+            } if std::mem::discriminant(reported) == std::mem::discriminant(&cause)
         )));
         for action in &actions {
             if let JobAction::CancelTask { key } = action {
@@ -1280,8 +1346,129 @@ mod tests {
             actions.iter().any(
                 |action| matches!(action, JobAction::CancelTask { key } if key == &replacement)
             ) && assignments.is_empty(),
-            "late unknown commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
+            "late terminal commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn job_output_of_retried_task_carries_failure_cause()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobAction, JobScheduler, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::DriverId;
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.task_max_attempts = 4;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "job-output-retry-cause".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 0 is read by stage 1 through a shuffle, so all tasks are in one region.
+        // Stage 1 produces the job output.
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = |stage, partition, attempt| TaskKey {
+            job_id,
+            stage,
+            partition,
+            attempt,
+        };
+        // The attempt and the retry cause of each stream that is added to the job output.
+        let job_output = |actions: Vec<JobAction>| {
+            actions
+                .into_iter()
+                .filter_map(|action| match action {
+                    JobAction::ExtendJobOutput {
+                        key, retry_cause, ..
+                    } => Some((key.stage, key.attempt, retry_cause)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The first attempts are not retries.
+        for stage in 0..2 {
+            for partition in 0..2 {
+                scheduler.update_task(&key(stage, partition, 0), TaskState::Running, None, None);
+            }
+        }
+        let output = job_output(scheduler.refresh_job(job_id));
+        assert_eq!(output.len(), 2);
+        assert!(
+            output
+                .iter()
+                .all(|(stage, attempt, cause)| *stage == 1 && *attempt == 0 && cause.is_none())
+        );
+
+        // A task that does not produce job output fails, and all tasks of the region get
+        // new attempts. The output of the new attempts carries the cause of the failure.
+        scheduler.update_task(
+            &key(0, 1, 0),
+            TaskState::Failed,
+            None,
+            Some(CommonErrorCause::Execution("forced task failure".into())),
+        );
+        assert!(job_output(scheduler.refresh_job(job_id)).is_empty());
+        for stage in 0..2 {
+            for partition in 0..2 {
+                scheduler.update_task(&key(stage, partition, 1), TaskState::Running, None, None);
+            }
+        }
+        let output = job_output(scheduler.refresh_job(job_id));
+        assert_eq!(output.len(), 2);
+        assert!(output.iter().all(|(stage, attempt, cause)| {
+            *stage == 1
+                && *attempt == 1
+                && matches!(
+                    cause,
+                    Some(CommonErrorCause::Execution(message)) if message == "forced task failure"
+                )
+        }));
         Ok(())
     }
 
@@ -1334,6 +1521,13 @@ mod tests {
                 .all(|r| matches!(r.state, TaskRegionState::Running))
         );
 
+        job.stages[0].tasks[0].attempts.push(attempt(
+            TaskState::Failed,
+            Some(CommonErrorCause::CommitRequiresReplanning(
+                "stale output".into(),
+            )),
+        ));
+        // An unknown outcome dominates even a definite rejection in another task.
         // A late error from a canceled attempt must still stop a replacement attempt.
         job.stages[0].tasks[1].attempts.push(attempt(
             TaskState::Canceled,
@@ -1354,6 +1548,61 @@ mod tests {
             JobScheduler::infer_job_failure_cause(&job),
             CommonErrorCause::CommitStateUnknown(message) if message == "ambiguous commit"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn only_stages_with_a_reading_stage_have_bounded_output() -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        use super::{JobDescriptor, JobState, TaskOutputBuilder};
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::proto::RemoteExecutionCodec;
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+        use crate::task::definition::TaskOutputLocator;
+
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let graph = JobGraph::try_new(
+            Arc::new(RepartitionExec::try_new(
+                input,
+                Partitioning::RoundRobinBatch(2),
+            )?),
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let stages = job.graph.stages();
+        assert_eq!(stages.len(), 2);
+        for (s, stage) in stages.iter().enumerate() {
+            let key = TaskKey {
+                job_id: JobId::from(1),
+                stage: s,
+                partition: 0,
+                attempt: 0,
+            };
+            let output =
+                TaskOutputBuilder::new(&job, &key, stage, &RemoteExecutionCodec).build()?;
+            // The first stage is read by the second stage, which is read by the driver.
+            // The tasks that produce the result of the job never wait for the client.
+            assert!(matches!(
+                output.locator,
+                TaskOutputLocator::Pipelined { bounded, .. } if bounded == (s == 0)
+            ));
+        }
         Ok(())
     }
 
@@ -1540,5 +1789,110 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[tokio::test]
+    async fn input_that_is_read_in_order_has_one_task_per_partition()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::expressions::col;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::sorts::sort::SortExec;
+        use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+
+        use super::JobScheduler;
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::{DriverId, WorkerId};
+        use crate::task::definition::TaskInputLocator;
+        use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
+        use crate::worker_manager::LocalWorkerManager;
+
+        /// Assigns the tasks to workers by their partition.
+        struct Workers(Vec<TaskAssignment>);
+
+        impl TaskAssignmentGetter for Workers {
+            fn get(&self, key: &TaskKey) -> Option<&TaskAssignment> {
+                self.0.get(key.partition % self.0.len())
+            }
+        }
+
+        let mut config = AppConfig::load()?;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "ordered-input".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 1 merges the sorted partitions of stage 0 in order.
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let input = MemorySourceConfig::try_new_exec(&vec![vec![]; 4], schema.clone(), None)?;
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col("x", &schema)?)])
+            .ok_or("missing ordering")?;
+        let sort = SortExec::new(ordering.clone(), input).with_preserve_partitioning(true);
+        let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = TaskKey {
+            job_id,
+            stage: 1,
+            partition: 0,
+            attempt: 0,
+        };
+        let workers = Workers(
+            (1..=2)
+                .map(|worker_id| TaskAssignment::Worker {
+                    worker_id: WorkerId::from(worker_id),
+                    slot: 0,
+                })
+                .collect(),
+        );
+        let (definition, _) = scheduler.get_task_definition(&key, &workers)?;
+        let [input] = definition.inputs.as_slice() else {
+            return Err("the task must have one input".into());
+        };
+        let TaskInputLocator::Worker { keys } = input.locator.as_ref() else {
+            return Err("the input must be read from workers".into());
+        };
+
+        // The reader opens each partition of the input on its own and reads the
+        // partitions in the order of their data. So the streams of two tasks are never
+        // in the same partition of the input, where they would be fetched together and
+        // read in arbitrary order, although the tasks are on the same worker.
+        assert_eq!(keys.len(), 4);
+        for (partition, keys) in keys.iter().enumerate() {
+            assert!(!keys.is_empty());
+            assert!(keys.iter().all(|(_, key)| key.partition == partition));
+        }
+        Ok(())
     }
 }

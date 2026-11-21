@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Pytest fixtures for Unity Catalog integration tests.
 
 Uses the Unity Catalog OSS Docker image with its embedded H2 backend.
@@ -57,9 +59,9 @@ def _configure_unity_catalog_spark(
 
 def _qualified_table_name(table_name: str) -> str:
     parts = table_name.split(".")
-    if len(parts) == 3:  # noqa: PLR2004
+    if len(parts) == 3:
         return table_name
-    if len(parts) == 2:  # noqa: PLR2004
+    if len(parts) == 2:
         return f"{DEFAULT_CATALOG}.{table_name}"
     pytest.fail(f"expected table name with schema.table or catalog.schema.table: {table_name}")
 

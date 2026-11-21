@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
@@ -86,9 +88,9 @@ def test_mixed_arithmetic_count_filter_and_sum_shapes(spark, ansi):
         _configuration(spark, **{"spark.sql.ansi.enabled": str(ansi).lower()}),
         _view(spark, "followup_fact_m", rows, "kf float,g int"),
     ):
-        assert spark.sql(count_query).first()[0] == 2  # noqa: PLR2004
+        assert spark.sql(count_query).first()[0] == 2
         frame = spark.sql(sum_query)
-        assert frame.first()[0] == 310.0  # noqa: PLR2004
+        assert frame.first()[0] == 310.0
         assert frame.schema[0].dataType.simpleString() == "double"
         if not is_jvm_spark():
             assert ("mixed_numeric_add(" in _physical_plan(spark, count_query)) is ansi

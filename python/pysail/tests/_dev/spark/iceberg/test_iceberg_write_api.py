@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 import pyarrow.parquet as pq
@@ -219,7 +221,7 @@ def test_iceberg_explicit_default_and_null_with_reordered_columns(spark, write_t
     name, path = write_target
     before = _find_latest_metadata(path)
     schema = next(s for s in before["schemas"] if s["schema-id"] == before["current-schema-id"])
-    assert schema["fields"][1]["write-default"] == 42  # noqa: PLR2004
+    assert schema["fields"][1]["write-default"] == 42
     spark.sql(f"INSERT INTO {name} (b, a) VALUES (DEFAULT, 10), (CAST(NULL AS INT), 11)")
     _assert_append(spark, write_target, before, [*SEED, (10, 42), (11, None)])
 

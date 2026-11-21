@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! System One's wire contract. See https://docs.typesafe.ai/api.
 
 use std::sync::Arc;

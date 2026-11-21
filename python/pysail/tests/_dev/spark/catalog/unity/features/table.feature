@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Unity Catalog table operations
 
   Background:
@@ -356,3 +358,48 @@ Feature: Unity Catalog table operations
     Then query result
       | database                           | tableName | isTemporary |
       | sail_test_catalog.unity_table_test | sib_b     | false       |
+
+  Scenario: Table operations with dashes in the schema and table names
+    Given statement
+      """
+      CREATE SCHEMA IF NOT EXISTS `dash-table-schema-unity`
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS `dash-table-schema-unity` CASCADE
+      """
+    Given statement template
+      """
+      CREATE TABLE `dash-table-schema-unity`.`dash-table` (id INT)
+      USING delta
+      LOCATION '{{ storage.file_uri }}/dash_table'
+      """
+    Given statement
+      """
+      INSERT INTO `dash-table-schema-unity`.`dash-table` VALUES (1), (2)
+      """
+    When query
+      """
+      SELECT id FROM `dash-table-schema-unity`.`dash-table` ORDER BY id
+      """
+    Then query result ordered
+      | id |
+      | 1  |
+      | 2  |
+    When query
+      """
+      SHOW TABLES IN `dash-table-schema-unity`
+      """
+    Then query result
+      | database                                    | tableName  | isTemporary |
+      | sail_test_catalog.`dash-table-schema-unity` | dash-table | false       |
+    Given statement
+      """
+      DROP TABLE `dash-table-schema-unity`.`dash-table`
+      """
+    When query
+      """
+      SHOW TABLES IN `dash-table-schema-unity`
+      """
+    Then query result
+      | database | tableName | isTemporary |

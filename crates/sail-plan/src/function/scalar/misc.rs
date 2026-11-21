@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -12,19 +14,16 @@ use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBloc
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
-use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::aes::{AESDecrypt, AESEncrypt, TryAESDecrypt, TryAESEncrypt};
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimate, HllUnion};
+use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
+use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_function::scalar::misc::raise_error::RaiseError;
-use sail_function::scalar::misc::spark_aes::{
-    SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
-};
-use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
-use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
-    ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
-    ThetaUnionFunction,
+    ThetaDifference, ThetaIntersection, ThetaSketchEstimate, ThetaUnion,
 };
-use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::scalar::misc::uuid::Uuid;
+use sail_function::scalar::misc::version::Version;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
@@ -165,7 +164,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(ThetaUnion::new()).call(arguments))
 }
 
 fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -189,15 +188,15 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(HllUnion::new()).call(arguments))
 }
 
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("aes_decrypt", F::udf(SparkAESDecrypt::new())),
-        ("aes_encrypt", F::udf(SparkAESEncrypt::new())),
+        ("aes_decrypt", F::udf(AESDecrypt::new())),
+        ("aes_encrypt", F::udf(AESEncrypt::new())),
         ("assert_true", F::custom(assert_true)),
         ("bitmap_bit_position", F::custom(bitmap_bit_position)),
         ("bitmap_bucket_number", F::custom(bitmap_bucket_number)),
@@ -210,20 +209,11 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        (
-            "hll_sketch_estimate",
-            F::udf(HllSketchEstimateFunction::new()),
-        ),
+        ("hll_sketch_estimate", F::udf(HllSketchEstimate::new())),
         ("hll_union", F::custom(hll_union)),
-        ("theta_difference", F::udf(ThetaDifferenceFunction::new())),
-        (
-            "theta_intersection",
-            F::udf(ThetaIntersectionFunction::new()),
-        ),
-        (
-            "theta_sketch_estimate",
-            F::udf(ThetaSketchEstimateFunction::new()),
-        ),
+        ("theta_difference", F::udf(ThetaDifference::new())),
+        ("theta_intersection", F::udf(ThetaIntersection::new())),
+        ("theta_sketch_estimate", F::udf(ThetaSketchEstimate::new())),
         ("theta_union", F::custom(theta_union)),
         (
             "tuple_difference_double",
@@ -300,21 +290,21 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",
-            F::udf(SparkMonotonicallyIncreasingId::new()),
+            F::udf(MonotonicallyIncreasingId::new()),
         ),
         ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),
         ("schema_of_avro", F::unknown("schema_of_avro")),
         ("session_user", F::custom(current_user)),
-        ("spark_partition_id", F::udf(SparkPartitionId::new())),
+        ("spark_partition_id", F::udf(PartitionId::new())),
         ("to_avro", F::unknown("to_avro")),
         ("to_protobuf", F::unknown("to_protobuf")),
-        ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
-        ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
+        ("try_aes_encrypt", F::udf(TryAESEncrypt::new())),
+        ("try_aes_decrypt", F::udf(TryAESDecrypt::new())),
         ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
         ("user", F::custom(current_user)),
-        ("uuid", F::udf(SparkUuid::new())),
-        ("version", F::udf(SparkVersion::new())),
+        ("uuid", F::udf(Uuid::new())),
+        ("version", F::udf(Version::new())),
     ]
 }

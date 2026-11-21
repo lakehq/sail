@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_schema::FieldRef;
@@ -16,6 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_cache::scope::listing_table_ref;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -279,8 +282,9 @@ pub async fn list_all_files<'a>(
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
+                // This key must match the one DataFusion uses when listing for a scan.
                 let key = TableScopedPath {
-                    table: None,
+                    table: Some(listing_table_ref(url, ctx.session_id())),
                     path: url.prefix().clone(),
                 };
                 if let Some(res) = cache.get(&key) {
@@ -383,6 +387,12 @@ pub fn can_be_evaluated_for_partition_pruning(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use datafusion::datasource::listing::helpers::pruned_partition_list;
+    use datafusion::prelude::SessionContext;
+    use object_store::PutPayload;
+    use object_store::memory::InMemory;
+    use sail_cache::scope::scoped_listing_url;
 
     use super::*;
 
@@ -601,5 +611,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(merged.field(0).data_type(), &us);
+    }
+
+    #[tokio::test]
+    async fn file_listing_cache_keeps_object_stores_apart() -> Result<()> {
+        let ctx = SessionContext::new();
+        let cache = ctx
+            .runtime_env()
+            .cache_manager
+            .get_list_files_cache()
+            .ok_or_else(|| internal_datafusion_err!("missing file listing cache"))?;
+        let state = ctx.state();
+        let mut listed = vec![];
+        for (bucket, file) in [("bucket-a", "a.parquet"), ("bucket-b", "b.parquet")] {
+            let store = InMemory::new();
+            store
+                .put(
+                    &Path::from(format!("data/{file}")),
+                    PutPayload::from_static(b"x"),
+                )
+                .await?;
+            let url = ListingTableUrl::parse(format!("s3://{bucket}/data/"))?;
+            let files = list_all_files(&url, &state, &store, None)
+                .await?
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect::<Vec<_>>()
+                .await?;
+            listed.push(files);
+            // The scan lists through DataFusion, which must reuse the same cache entry.
+            let scanned = pruned_partition_list(
+                &state,
+                &store,
+                &scoped_listing_url(&url, state.session_id()),
+                &[],
+                "",
+                &[],
+            )
+            .await?
+            .map_ok(|file| file.object_meta.location.to_string())
+            .try_collect::<Vec<_>>()
+            .await?;
+            listed.push(scanned);
+        }
+        assert_eq!(
+            listed,
+            vec![
+                vec!["data/a.parquet".to_string()],
+                vec!["data/a.parquet".to_string()],
+                vec!["data/b.parquet".to_string()],
+                vec!["data/b.parquet".to_string()]
+            ]
+        );
+        assert_eq!(cache.len(), 2);
+        Ok(())
     }
 }

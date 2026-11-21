@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """DataFrame tests for nested ``Column.withField`` replacements."""
 
 from pyspark.sql import Row

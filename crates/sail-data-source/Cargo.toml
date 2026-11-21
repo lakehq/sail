@@ -1,13 +1,19 @@
 [package]
 name = "sail-data-source"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-physical-plan = { path = "../sail-physical-plan" }

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP converts to TIMESTAMP_NTZ in the session time zone
   Spark casts TIMESTAMP to TIMESTAMP_NTZ, formats TIMESTAMP, and counts calendar units in the session time zone.
   The Parquet table is written in UTC, so its TIMESTAMP column is labeled with UTC rather than the session time zone.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Native async Thrift clients backed by Apache Thrift's in-memory binary codecs.
 
 mod client;

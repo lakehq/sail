@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};

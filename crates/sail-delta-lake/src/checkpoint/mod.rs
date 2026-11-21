@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
@@ -24,19 +11,24 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::datasource::physical_plan::parquet::Int96Coercer;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use log::debug;
 use object_store::buffered::BufWriter;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::{AsyncArrowWriter, ProjectionMask};
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use serde_json::Deserializer as JsonDeserializer;
 use uuid::Uuid;
 
@@ -62,11 +54,12 @@ use crate::spec::{
 };
 
 mod action_fields;
+mod legacy_int96;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
     deleted_file_retention_timestamp: i64,
-    transaction_expiration_timestamp: i64,
+    transaction_expiration_timestamp: Option<i64>,
 }
 
 impl CheckpointRetentionTimestamps {
@@ -78,11 +71,16 @@ impl CheckpointRetentionTimestamps {
                 table_properties.deleted_file_retention_duration(),
                 "delta.deletedFileRetentionDuration",
             )?,
-            transaction_expiration_timestamp: retention_cutoff_timestamp(
-                reference_timestamp,
-                table_properties.log_retention_duration(),
-                "delta.logRetentionDuration",
-            )?,
+            transaction_expiration_timestamp: table_properties
+                .set_transaction_retention_duration
+                .map(|duration| {
+                    retention_cutoff_timestamp(
+                        reference_timestamp,
+                        duration,
+                        "delta.setTransactionRetentionDuration",
+                    )
+                })
+                .transpose()?,
         })
     }
 }
@@ -187,11 +185,10 @@ impl ReconciledCheckpointState {
         let retention = CheckpointRetentionTimestamps::try_new(metadata, reference_timestamp)?;
 
         let txns_before = self.txns.len();
-        self.txns.retain(|_, txn| {
-            txn.last_updated
-                .map(|last_updated| last_updated > retention.transaction_expiration_timestamp)
-                .unwrap_or(true)
-        });
+        if let Some(cutoff) = retention.transaction_expiration_timestamp {
+            self.txns
+                .retain(|_, txn| txn.last_updated.is_some_and(|updated| updated > cutoff));
+        }
 
         let removes_before = self.removes.len();
         self.removes.retain(|_, remove| {
@@ -416,8 +413,12 @@ async fn write_checkpoint_batches(
         .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
     let object_store_writer = BufWriter::new(store.clone(), path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
-        .map_err(DeltaTableError::generic_err)?;
+    let properties = WriterProperties::builder()
+        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+        .build();
+    let mut writer =
+        AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), Some(properties))
+            .map_err(DeltaTableError::generic_err)?;
     writer
         .write(&first_batch)
         .await
@@ -1005,6 +1006,44 @@ pub(crate) async fn inspect_checkpoint_main_file(
     Ok(summary.sidecars)
 }
 
+/// Reads the batches of a checkpoint Parquet file, with INT96 timestamps as microseconds.
+///
+/// Spark writes timestamps, including the typed stats of a checkpoint, as INT96 by default.
+/// Arrow reads INT96 as nanoseconds, which overflows outside about 1677-09-21 to 2262-04-11,
+/// while microseconds cover every Spark timestamp. The values are read as timestamps without a
+/// time zone, as before, and are later parsed against the table's stats schema, so UTC instants
+/// keep their meaning. Typed stats that Spark would rebase from its legacy calendar are read as
+/// null, which means unknown.
+fn checkpoint_parquet_batches(
+    bytes: Bytes,
+) -> DeltaResult<impl Iterator<Item = DeltaResult<RecordBatch>>> {
+    let metadata = ArrowReaderMetadata::load(&bytes, ArrowReaderOptions::new())
+        .map_err(DeltaTableError::generic_err)?;
+    let metadata = match Int96Coercer::new(
+        metadata.parquet_schema(),
+        metadata.schema(),
+        &TimeUnit::Microsecond,
+    )
+    .coerce()
+    {
+        Some(schema) => ArrowReaderMetadata::try_new(
+            Arc::clone(metadata.metadata()),
+            ArrowReaderOptions::new().with_schema(Arc::new(schema)),
+        )
+        .map_err(DeltaTableError::generic_err)?,
+        None => metadata,
+    };
+    let legacy_int96_stats = legacy_int96::legacy_int96_stats_paths(metadata.metadata());
+    let batches = ParquetRecordBatchReaderBuilder::new_with_metadata(bytes, metadata)
+        .build()
+        .map_err(DeltaTableError::generic_err)?;
+    Ok(batches.map(move |batch| {
+        let batch = batch.map_err(DeltaTableError::generic_err)?;
+        legacy_int96::null_legacy_int96_stats(batch, &legacy_int96_stats)
+            .map_err(DeltaTableError::generic_err)
+    }))
+}
+
 /// Read only the main checkpoint file (without loading sidecars).
 /// Useful when callers only need non-file actions (protocol, metadata, sidecar
 /// descriptors, etc.) — for example during sidecar garbage collection.
@@ -1024,14 +1063,9 @@ pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
         decode_checkpoint_json_rows(version, &bytes)?
     } else {
         SpawnedTask::spawn_blocking(move || {
-            let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
-                .map_err(DeltaTableError::generic_err)?
-                .build()
-                .map_err(DeltaTableError::generic_err)?;
             let mut rows = Vec::new();
-            for batch in &mut batches {
-                let batch = batch.map_err(DeltaTableError::generic_err)?;
-                let mut decoded = decode_checkpoint_rows(&batch)?;
+            for batch in checkpoint_parquet_batches(bytes)? {
+                let mut decoded = decode_checkpoint_rows(&batch?)?;
                 rows.append(&mut decoded);
             }
             Ok::<_, DeltaTableError>(rows)
@@ -1089,14 +1123,9 @@ async fn read_checkpoint_rows_from_main_files(
             let sidecar_path = sidecar_file_path(&sidecar.path);
             let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
             let sidecar_rows = SpawnedTask::spawn_blocking(move || {
-                let mut batches = ParquetRecordBatchReaderBuilder::try_new(sidecar_bytes)
-                    .map_err(DeltaTableError::generic_err)?
-                    .build()
-                    .map_err(DeltaTableError::generic_err)?;
                 let mut sidecar_rows = Vec::new();
-                for batch in &mut batches {
-                    let batch = batch.map_err(DeltaTableError::generic_err)?;
-                    let mut decoded = decode_checkpoint_rows(&batch)?;
+                for batch in checkpoint_parquet_batches(sidecar_bytes)? {
+                    let mut decoded = decode_checkpoint_rows(&batch?)?;
                     sidecar_rows.append(&mut decoded);
                 }
                 Ok::<_, DeltaTableError>(sidecar_rows)
@@ -1751,34 +1780,29 @@ mod tests {
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
-        let rows = vec![CheckpointActionRow {
-            add: Some(Add {
-                path: "part-000.parquet".to_string(),
-                partition_values: HashMap::new(),
-                size: 10,
-                modification_time: 20,
-                data_change: true,
-                stats: None,
-                tags: None,
-                deletion_vector: None,
-                base_row_id: None,
-                default_row_commit_version: None,
-                clustering_provider: None,
-                commit_version: None,
-                commit_timestamp: None,
-            }),
-            ..Default::default()
-        }];
+        let paths = [
+            "part-000.parquet",
+            "./archive:/part",
+            "archive%3A/part",
+            "file:/absolute/part",
+        ];
+        let rows: Vec<_> = paths
+            .iter()
+            .map(|path| CheckpointActionRow {
+                add: Some(Add {
+                    path: (*path).into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect();
         let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(
-            decoded
-                .first()
-                .and_then(|row| row.add.as_ref())
-                .map(|add| add.path.as_str()),
-            Some("part-000.parquet")
-        );
+        let paths_after: Vec<_> = decoded
+            .iter()
+            .filter_map(|row| row.add.as_ref().map(|add| add.path.as_str()))
+            .collect();
+        assert_eq!(paths_after, paths);
         Ok(())
     }
 
@@ -2988,6 +3012,67 @@ mod tests {
     }
 
     #[test]
+    fn reconciled_state_uses_uri_keys_without_changing_checkpoint_payloads() -> DeltaResult<()> {
+        let vector = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "dv-identity".to_string(),
+            cardinality: 1,
+            size_in_bytes: 1,
+            offset: None,
+        };
+        for deletion_vector in [None, Some(vector)] {
+            let mut state = ReconciledCheckpointState::default();
+            let encoded = Add {
+                path: "caf%C3%A9.parquet".to_string(),
+                deletion_vector: deletion_vector.clone(),
+                ..Default::default()
+            };
+            let literal = Add {
+                path: "café.parquet".to_string(),
+                ..encoded.clone()
+            };
+            for add in [encoded.clone(), literal.clone()] {
+                state.apply_action(Action::Add(add));
+            }
+            let mut remove = encoded.into_remove(1);
+            remove.path = "caf%c3%a9.parquet".to_string();
+            state.apply_action(Action::Remove(remove.clone()));
+            assert_eq!(state.adds.len(), 1);
+            assert_eq!(state.adds.values().next(), Some(&literal));
+            assert_eq!(state.removes.values().next(), Some(&remove));
+            let rows = vec![
+                CheckpointActionRow {
+                    add: Some(literal.clone()),
+                    ..Default::default()
+                },
+                CheckpointActionRow {
+                    remove: Some(remove.clone()),
+                    ..Default::default()
+                },
+            ];
+            let decoded = decode_checkpoint_rows(&encode_rows_for_test(&rows)?)?;
+            assert_eq!(decoded[0].add.as_ref(), Some(&literal));
+            assert_eq!(decoded[1].remove.as_ref(), Some(&remove));
+            // A re-add with yet another hex spelling replaces the same tombstone.
+            let readded = Add {
+                path: "caf%c3%A9.parquet".to_string(),
+                ..literal.clone()
+            };
+            state.apply_action(Action::Add(readded.clone()));
+            assert!(state.removes.is_empty());
+            assert_eq!(state.adds.len(), 2);
+            assert_eq!(
+                state.adds.get(&crate::spec::logical_file_key(
+                    &readded.path,
+                    deletion_vector.as_ref()
+                )),
+                Some(&readded)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reconciled_state_remove_masks_old_add() {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Add(Add {
@@ -3030,7 +3115,7 @@ mod tests {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Metadata(test_metadata([
             ("delta.deletedFileRetentionDuration", "interval 7 days"),
-            ("delta.logRetentionDuration", "interval 30 days"),
+            ("delta.setTransactionRetentionDuration", "interval 30 days"),
         ])?));
         state.apply_action(Action::Remove(Remove {
             path: "expired.parquet".to_string(),
@@ -3106,7 +3191,7 @@ mod tests {
         );
         assert!(!state.txns.contains_key("expired-app"));
         assert!(state.txns.contains_key("fresh-app"));
-        assert!(state.txns.contains_key("legacy-app"));
+        assert!(!state.txns.contains_key("legacy-app"));
         Ok(())
     }
 

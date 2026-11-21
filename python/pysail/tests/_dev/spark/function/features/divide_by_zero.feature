@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Division by zero behavior
 
   Rule: All division by zero returns NULL when ANSI mode is disabled (Spark 4.x behavior)
