@@ -378,7 +378,7 @@ impl GlobUrl {
                 let Ok(url) = Url::parse(&base) else {
                     return plan_err!("base URL: {s}");
                 };
-                Self::parse_glob_path(if path.is_empty() { "/" } else { path })?
+                Self::parse_glob_path(if path.is_empty() { "/" } else { path }, true)?
                     .into_iter()
                     .map(|(prefix, suffix)| {
                         let mut url = url.clone();
@@ -392,7 +392,7 @@ impl GlobUrl {
     }
 
     fn parse_file_path(path: &str) -> Result<Vec<Self>> {
-        Self::parse_glob_path(path)?
+        Self::parse_glob_path(path, false)?
             .into_iter()
             .map(|(prefix, suffix)| {
                 let url = Self::url_from_file_path(&prefix)?;
@@ -401,12 +401,18 @@ impl GlobUrl {
             .collect()
     }
 
-    fn parse_glob_path(path: &str) -> Result<Vec<(String, Option<Pattern>)>> {
+    fn parse_glob_path(path: &str, uri: bool) -> Result<Vec<(String, Option<Pattern>)>> {
         let paths = expand_glob_pattern(path)?
             .into_iter()
             .map(|x| {
                 let (prefix, suffix) = Self::split_glob_path(&x)?;
-                let suffix = Self::create_percent_decoded_pattern(&suffix)?;
+                let suffix = if uri {
+                    Self::create_percent_decoded_pattern(&suffix)?
+                } else if suffix.is_empty() {
+                    None
+                } else {
+                    Some(Pattern::new(&suffix).map_err(|e| plan_datafusion_err!("{e}: {suffix}"))?)
+                };
                 Ok((prefix, suffix))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -536,14 +542,18 @@ pub async fn resolve_listing_urls(
     ctx: &dyn Session,
     paths: Vec<String>,
 ) -> Result<Vec<ListingTableUrl>> {
-    resolve_read_urls(ctx, paths, false).await
+    Ok(resolve_read_urls(ctx, paths, false)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 pub(crate) async fn resolve_read_urls(
     ctx: &dyn Session,
     paths: Vec<String>,
     expand_input_globs: bool,
-) -> Result<Vec<ListingTableUrl>> {
+) -> Result<Vec<Vec<ListingTableUrl>>> {
     let mut urls = vec![];
     let mut seen = HashSet::new();
     for path in paths {
@@ -554,7 +564,12 @@ pub(crate) async fn resolve_read_urls(
             if expand_input_globs && let Some(pattern) = url.glob {
                 matches.extend(expand_listing_roots(ctx, url.base, &pattern).await?);
             } else {
-                let url: ListingTableUrl = attach_default_glob(url)?.try_into()?;
+                let url: ListingTableUrl = if expand_input_globs {
+                    url
+                } else {
+                    attach_default_glob(url)?
+                }
+                .try_into()?;
                 // Missing brace alternatives can be skipped as long as the input has a match.
                 if expand_input_globs && url.is_collection() && !directory_exists(ctx, &url).await?
                 {
@@ -566,10 +581,11 @@ pub(crate) async fn resolve_read_urls(
         if expand_input_globs && matches.is_empty() {
             return plan_err!("[PATH_NOT_FOUND] Path does not exist: {path}");
         }
-        urls.extend(
+        urls.push(
             matches
                 .into_iter()
-                .filter(|url| !expand_input_globs || seen.insert(url.as_str().to_owned())),
+                .filter(|url| !expand_input_globs || seen.insert(url.as_str().to_owned()))
+                .collect(),
         );
     }
     Ok(urls)
@@ -650,7 +666,7 @@ async fn expand_listing_roots(
                     segments.push("");
                 }
             }
-            attach_default_glob(GlobUrl::new(url, None))?.try_into()
+            ListingTableUrl::try_new(url, None)
         })
         .collect()
 }
@@ -693,6 +709,17 @@ pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
         base.set_path(&format!("{}{}", base.path(), object_store::path::DELIMITER));
     }
     Ok(base)
+}
+
+/// Resolve a literal discovery boundary, including relative local directories.
+pub(crate) fn resolve_base_directory_url(path: &str) -> Result<Url> {
+    if path.is_empty() {
+        return plan_err!("Option 'basePath' cannot be empty");
+    }
+    if let Some(url) = parse_absolute_directory_url(path) {
+        return Ok(url);
+    }
+    GlobUrl::url_from_file_path(path)
 }
 
 /// Parse an absolute directory location without glob expansion or filesystem probes.

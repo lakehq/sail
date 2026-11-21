@@ -410,8 +410,7 @@ async fn list_files_for_scan<'a>(
             let location = &file.object_meta.location;
             futures::future::ready(
                 (!direct_only || is_direct_input(table_path, location))
-                    && !(source.config().base_path.is_some()
-                        && location.filename().is_some_and(is_summary_file))
+                    && !location.filename().is_some_and(is_summary_file)
                     && !has_hidden_path_component(table_path, location)
                     && matches_path_glob_filter(path_glob_filter, location),
             )

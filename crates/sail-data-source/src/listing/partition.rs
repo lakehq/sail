@@ -25,7 +25,7 @@ use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp::TimestampParser;
 use sail_sql_analyzer::parser::parse_date;
 
-use crate::url::resolve_table_url;
+use crate::url::resolve_base_directory_url;
 
 const HIVE_NULL: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -68,15 +68,15 @@ pub(super) fn resolve_base_path(
     ctx: &dyn Session,
     case_sensitive: bool,
     options: &[OptionLayer],
-    urls: &[ListingTableUrl],
+    urls: &[Vec<ListingTableUrl>],
     path: &str,
 ) -> Result<BasePathOptions> {
-    let url = resolve_table_url(path.to_owned())?;
+    let url = resolve_base_directory_url(path)?;
     if url.scheme() == "file" && !url.to_file_path().is_ok_and(|p| p.is_dir()) {
         return plan_err!("Option 'basePath' must be an existing directory: {path}");
     }
     let base = ListingTableUrl::try_new(url, None)?;
-    for url in urls {
+    for url in urls.iter().flatten() {
         if base.object_store() != url.object_store() || !url.prefix().prefix_matches(base.prefix())
         {
             return plan_err!("Wrong basePath {path} for the root path: {url}");
@@ -143,7 +143,7 @@ fn partition_path<'a>(
     root: &ListingTableUrl,
     file: &'a Path,
     with_base_path: bool,
-) -> Result<PartitionPath<'a>> {
+) -> Result<Option<PartitionPath<'a>>> {
     let parts = root.strip_prefix(file).ok_or_else(|| {
         internal_datafusion_err!("file {file} is outside the partition discovery root {root}")
     })?;
@@ -152,6 +152,9 @@ fn partition_path<'a>(
     let mut columns = Vec::new();
     let mut base_len = directories.len();
     for (i, part) in directories.iter().enumerate().rev() {
+        if with_base_path && part.eq_ignore_ascii_case("_temporary") {
+            return Ok(None);
+        }
         if let Some((name, value)) = part.split_once('=') {
             if with_base_path {
                 if name.is_empty() || value.is_empty() {
@@ -167,10 +170,10 @@ fn partition_path<'a>(
         }
     }
     columns.reverse();
-    Ok(PartitionPath {
+    Ok(Some(PartitionPath {
         base: directories[..base_len].join("/"),
         columns,
-    })
+    }))
 }
 
 fn decoded(value: &str) -> Cow<'_, str> {
@@ -394,7 +397,9 @@ impl PartitionDiscovery {
         if let Some(values) = directory.as_ref().and_then(|dir| self.directories.get(dir)) {
             return Ok(!values.is_empty());
         }
-        let path = partition_path(root, file, options.is_some())?;
+        let Some(path) = partition_path(root, file, options.is_some())? else {
+            return Ok(false);
+        };
         let parts = path.columns;
         if let Some(options) = options {
             self.conflicting_bases |= !options.ignore_invalid_paths
@@ -486,7 +491,7 @@ fn cast_partition_value(
     value: &str,
     ty: &DataType,
 ) -> Result<ScalarValue> {
-    if value == HIVE_NULL {
+    if value == HIVE_NULL || *ty == DataType::Null {
         return ScalarValue::try_from(ty);
     }
     let result = parse_partition_value(options, value, ty);
@@ -529,7 +534,10 @@ fn parse_partition_value(
             ScalarValue::try_from_string(decoded(value).into_owned(), ty)
         }
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            ScalarValue::try_from_string(normalize_decimal_digits(value).into_owned(), ty)
+            let integer = normalize_decimal_digits(value)
+                .parse::<i64>()
+                .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}"))?;
+            ScalarValue::Int64(Some(integer)).cast_to(ty)
         }
         DataType::Decimal128(_, _) => {
             let value = normalize_decimal_digits(value);

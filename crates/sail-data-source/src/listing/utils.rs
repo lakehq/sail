@@ -155,70 +155,106 @@ pub fn infer_listing_compression(
     Ok(inferred)
 }
 
-/// List up to 10 files per URL into in-memory groups, suitable for schema inference, compression
-/// inference, and partition inference.
-///
-/// File extensions are intentionally ignored since `ListingTableUrl` carries the filtering glob
-/// already, and Spark reads every non-hidden file regardless of extension.
+/// Bound schema and compression sampling per original input, even when one glob expands
+/// to many files. Partition discovery still examines every leaf directory below basePath.
 pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
-    urls: &'a [ListingTableUrl],
+    inputs: &'a [Vec<ListingTableUrl>],
     path_glob_filter: Option<&PathGlobFilter>,
     base_path: Option<&BasePathOptions>,
     recursive: bool,
+    parquet: bool,
 ) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
     const SAMPLE_SIZE: usize = 10;
     let mut discovery = PartitionDiscovery::default();
-    let mut samples = vec![];
-    // Keep a bounded sample of direct children in case no partitions are discovered
-    // across any of the input roots.
-    let mut unpartitioned = vec![];
-    for url in urls {
-        let store = ctx.runtime_env().object_store(url)?;
-        let mut objects = vec![];
-        let mut direct_files = vec![];
-        let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
-        while let Some(file) = files.try_next().await? {
-            let selected =
-                file.size > 0 && matches_path_glob_filter(path_glob_filter, &file.location);
-            if let Some(base) = base_path {
-                if file.location.filename().is_some_and(is_summary_file) {
+    let mut samples = Vec::new();
+    let mut direct_samples = Vec::new();
+    let mut summary = None;
+    let mut direct_summary = None;
+
+    for roots in inputs {
+        let Some(first) = roots.first() else { continue };
+        // Glob alternatives from one input use the same object store.
+        let store = ctx.runtime_env().object_store(first)?;
+        let mut objects = Vec::new();
+        let mut direct = Vec::new();
+        for url in roots {
+            if base_path.is_none() && objects.len() == SAMPLE_SIZE && !(parquet && recursive) {
+                break;
+            }
+            let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
+            while let Some(file) = files.try_next().await? {
+                let selected = matches_path_glob_filter(path_glob_filter, &file.location);
+                if let Some(name) = file.location.filename()
+                    && is_summary_file(name)
+                {
+                    if parquet && selected && matches!(name, "_common_metadata" | "_metadata") {
+                        if base_path.is_some() && is_direct_input(url, &file.location) {
+                            keep_parquet_summary(&mut direct_summary, url, &store, &file);
+                        }
+                        keep_parquet_summary(&mut summary, url, &store, &file);
+                    }
                     continue;
                 }
-                let partitioned = discovery.observe(&base.root, &file.location, Some(base))?;
-                if selected && partitioned && objects.len() < SAMPLE_SIZE {
+                let selected = selected && file.size > 0;
+                if let Some(base) = base_path {
+                    let partitioned = discovery.observe(&base.root, &file.location, Some(base))?;
+                    if selected && partitioned && objects.len() < SAMPLE_SIZE {
+                        objects.push(file);
+                    } else if selected
+                        && !partitioned
+                        && direct.len() < SAMPLE_SIZE
+                        && is_direct_input(url, &file.location)
+                    {
+                        direct.push(file);
+                    }
+                } else if selected && objects.len() < SAMPLE_SIZE {
+                    if !recursive {
+                        discovery.observe(url, &file.location, None)?;
+                    }
                     objects.push(file);
-                } else if selected
-                    && !partitioned
-                    && direct_files.len() < SAMPLE_SIZE
-                    && is_direct_input(url, &file.location)
-                {
-                    direct_files.push(file);
-                }
-            } else if selected {
-                if !recursive {
-                    discovery.observe(url, &file.location, None)?;
-                }
-                objects.push(file);
-                if objects.len() == SAMPLE_SIZE {
-                    break;
+                    if objects.len() == SAMPLE_SIZE && !(parquet && recursive) {
+                        break;
+                    }
                 }
             }
         }
-        drop(files);
         samples.push(ListingFileSample {
-            url,
+            url: first,
             store,
             objects,
         });
-        unpartitioned.push(direct_files);
+        direct_samples.push(direct);
     }
     if base_path.is_some() && !discovery.has_partitions() {
-        for (sample, files) in samples.iter_mut().zip(unpartitioned) {
-            sample.objects = files;
+        for (sample, direct) in samples.iter_mut().zip(direct_samples) {
+            sample.objects = direct;
         }
+        summary = direct_summary;
+    }
+    if let Some((url, store, object)) = summary {
+        samples = vec![ListingFileSample {
+            url,
+            store,
+            objects: vec![object],
+        }];
     }
     Ok((samples, discovery))
+}
+
+// Spark prefers _common_metadata over _metadata, then the lexicographically first path.
+fn keep_parquet_summary<'a>(
+    current: &mut Option<(&'a ListingTableUrl, Arc<dyn ObjectStore>, ObjectMeta)>,
+    url: &'a ListingTableUrl,
+    store: &Arc<dyn ObjectStore>,
+    file: &ObjectMeta,
+) {
+    let key = |file: &ObjectMeta| file.location.filename() == Some("_metadata");
+    if current.as_ref().is_none_or(|(_, _, previous)| {
+        (key(file), &file.location) < (key(previous), &previous.location)
+    }) {
+        *current = Some((url, Arc::clone(store), file.clone()));
+    }
 }
 
 pub(super) fn is_direct_input(url: &ListingTableUrl, path: &Path) -> bool {

@@ -3,6 +3,8 @@
 from datetime import date, time
 from decimal import Decimal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
 
@@ -476,3 +478,93 @@ def test_base_path_unicode_case_insensitive_keys(spark, tmp_path, schema):
     if schema:
         assert df.columns == ["id", "Café"]
     assert [row[1] for row in df.orderBy(df.columns[1]).collect()] == (["1", "2"] if schema else [1, 2])
+
+
+@pytest.mark.parametrize("pattern", ["*", "p=*/id=part.json"])
+def test_base_path_equals_in_filename(spark, tmp_path, pattern):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "id=part.json").write_text('{"id":7}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / pattern))
+    assert df.collect() == [Row(id=7, p=1)]
+    assert len(df.inputFiles()) == 1
+
+
+@pytest.mark.parametrize("ignore_invalid", [False, True])
+def test_base_path_staging_partition(spark, tmp_path, ignore_invalid):
+    for path in ["p=1", "_temporary/p=2"]:
+        write_json_partition(tmp_path, path)
+    reader = spark.read.options(basePath=str(tmp_path), ignoreInvalidPartitionPaths=ignore_invalid)
+    paths = [str(tmp_path / "p=1"), str(tmp_path / "_temporary/p=2")]
+    assert reader.json(paths).collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("summary", ["_metadata", "_common_metadata"])
+def test_base_path_recursive_summary(spark, tmp_path, summary):
+    write_json_partition(tmp_path, "nested")
+    (tmp_path / "nested" / summary).write_text('{"unexpected":2}')
+    df = spark.read.options(basePath=str(tmp_path), recursiveFileLookup=True).json(str(tmp_path))
+    assert df.columns == ["id"]
+    assert df.collect() == [Row(id=1)]
+
+
+@pytest.mark.parametrize("read_file", [False, True])
+def test_base_path_parquet_summary_schema(spark, tmp_path, read_file):
+    summary = tmp_path / "_common_metadata"
+    pq.write_metadata(pa.schema([("id", pa.int32())]), summary)
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(summary if read_file else tmp_path))
+    assert df.schema.simpleString() == "struct<id:int>"
+    assert df.collect() == []
+
+
+def test_base_path_local_glob_percent_escape(spark, tmp_path):
+    part = tmp_path / "p=1"
+    part.mkdir()
+    (part / "foo%3Abar.json").write_text('{"id":1}')
+    (part / "foo:bar.json").write_text('{"id":2}')
+    df = spark.read.option("basePath", str(tmp_path)).json(str(tmp_path / "p=*/foo%3Abar.json"))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+def test_base_path_literal_directory(spark, tmp_path):
+    root = tmp_path / "bracket[old]"
+    write_json_partition(root, "p=1")
+    df = spark.read.option("basePath", str(root)).json(str(tmp_path / "bracket*/p=1"))
+    assert df.collect() == [Row(id=1, p=1)]
+
+
+@pytest.mark.parametrize("ty", ["TINYINT", "SMALLINT", "INT", "BIGINT"])
+def test_base_path_integer_whitespace(spark, tmp_path, ty):
+    write_json_partition(tmp_path, "p= 123")
+    reader = spark.read.option("basePath", str(tmp_path)).schema(f"id INT, p {ty}")
+    key = "spark.sql.sources.validatePartitionColumns"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        with pytest.raises(Exception, match="123"):
+            reader.json(str(tmp_path)).collect()
+        spark.conf.set(key, "false")
+        assert reader.json(str(tmp_path)).collect() == [Row(id=1, p=None)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_base_path_void_partition(spark, tmp_path):
+    write_json_partition(tmp_path, "p=text")
+    df = spark.read.option("basePath", str(tmp_path)).schema("id INT, p VOID").json(str(tmp_path))
+    assert df.collect() == [Row(id=1, p=None)]
+
+
+def test_base_path_file_glob_schema_sample(spark, tmp_path):
+    for i in range(10):
+        part = tmp_path / f"p={i}"
+        part.mkdir()
+        pq.write_table(pa.table({"id": [i]}), part / "row.parquet")
+    # This partition contributes to type discovery but is outside the footer sample
+    # and is pruned before scanning.
+    last = tmp_path / "p=zzz"
+    last.mkdir()
+    (last / "row.parquet").write_bytes(b"invalid footer")
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path / "p=*/row.parquet"))
+    assert df.schema.simpleString() == "struct<id:bigint,p:string>"
+    assert df.where("p <> 'zzz'").count() == 10

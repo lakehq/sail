@@ -202,6 +202,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             path_glob_filter.as_ref(),
             base_path.as_ref(),
             recursive,
+            T::name() == "parquet",
         )
         .await?;
         let inferred = discovery.fields(base_path.is_some())?;
@@ -304,7 +305,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             read_format.validate_explicit_schema(&schema, &physical)?;
         }
         if !inferred_names.is_empty() && !partition_fields.is_empty() {
-            if base_path.is_none() && urls.iter().any(|url| !url.is_collection()) {
+            if base_path.is_none() && urls.iter().flatten().any(|url| !url.is_collection()) {
                 return plan_err!(
                     "Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash?"
                 );
@@ -342,7 +343,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .transpose()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             output_projection,
-            table_paths: urls,
+            table_paths: urls.into_iter().flatten().collect(),
             base_path,
             schema,
             constraints,
