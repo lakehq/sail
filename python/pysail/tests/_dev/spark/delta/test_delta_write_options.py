@@ -280,3 +280,49 @@ def test_idempotent_write_after_checkpoint(spark, tmp_path):
     _write_transaction(spark, path, "first", 6, 2)
     assert spark.read.format("delta").load(str(path)).count() == 2
     assert len(list((path / "_delta_log").glob("*.json"))) == 2
+
+
+def test_idempotent_save_as_table_overwrite_preserves_catalog_properties(spark, tmp_path):
+    path = tmp_path / "table"
+    table = "idempotent_overwrite"
+
+    def overwrite(version, value, size=1):
+        spark.range(value, value + size).write.format("delta").mode("overwrite").options(
+            path=str(path), txnAppId="job", txnVersion=version, label=str(value)
+        ).saveAsTable(table)
+
+    def catalog_label():
+        return spark.sql("SHOW TBLPROPERTIES idempotent_overwrite ('option.label')").first().value
+
+    def commits():
+        return sorted((path / "_delta_log").glob("*.json"))
+
+    try:
+        overwrite(1, 10)
+        original = commits()
+        assert len(original) == 1
+        for version in [1, 0]:
+            overwrite(version, 11)
+            assert commits() == original
+            assert [row.id for row in spark.table(table).collect()] == [10]
+            assert catalog_label() == "10"
+
+        # An empty input is still a real overwrite when the version advances.
+        overwrite(2, 12, size=0)
+        assert len(commits()) == 2
+        assert spark.table(table).count() == 0
+        assert catalog_label() == "12"
+    finally:
+        spark.sql("DROP TABLE IF EXISTS idempotent_overwrite")
+
+
+def test_save_as_table_registers_existing_path_on_idempotent_retry(spark, tmp_path):
+    path = tmp_path / "existing"
+    writer = spark.range(1).write.format("delta").mode("overwrite").options(txnAppId="job", txnVersion=1)
+    writer.save(str(path))
+    try:
+        writer.option("path", str(path)).saveAsTable("register_existing_delta")
+        assert [row.id for row in spark.table("register_existing_delta").collect()] == [0]
+        assert len(list((path / "_delta_log").glob("*.json"))) == 1
+    finally:
+        spark.sql("DROP TABLE IF EXISTS register_existing_delta")
