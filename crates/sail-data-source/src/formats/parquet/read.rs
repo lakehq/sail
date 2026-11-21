@@ -91,6 +91,14 @@ fn int96_read_type(options: &TableParquetOptions) -> Result<Option<DataType>> {
         .transpose()
 }
 
+// Wrapping integer casts and reading decimal storage as bytes or text can change value order.
+fn parquet_bounds_incompatible(source: &DataType, target: &DataType) -> bool {
+    let source = dictionary_value_type(source);
+    parquet_integer_cast_wraps(source, target)
+        || (source.is_decimal()
+            && (is_parquet_integer_target(target) || target.is_binary() || target.is_string()))
+}
+
 /// Spark day-time intervals use Arrow duration[us] over unannotated Parquet INT64.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DurationHints {
@@ -243,7 +251,11 @@ impl ParquetReadSchema<'_> {
                     )
                 })?;
                 let physical = column.physical_type();
+                let raw_decimal = physical == PhysicalType::BYTE_ARRAY
+                    && data_type.is_decimal()
+                    && target.is_some_and(|ty| ty.is_binary() || ty.is_string());
                 let ty = match data_type {
+                    _ if raw_decimal => Some(DataType::Binary),
                     DataType::Timestamp(_, None) if physical == PhysicalType::INT96 => {
                         self.int96_type.cloned()
                     }
@@ -259,7 +271,9 @@ impl ParquetReadSchema<'_> {
                     _ if hinted_integer_type(field, self.durations) => unannotated_integer(column),
                     _ => self.inferred_byte_array_type(column),
                 };
-                let storage = if target.is_some_and(|ty| {
+                let storage = if raw_decimal {
+                    Some("BYTE_ARRAY".to_owned())
+                } else if target.is_some_and(|ty| {
                     is_parquet_integer_target(ty)
                         || ty.is_binary()
                         || matches!(ty, DataType::Timestamp(..))
@@ -572,18 +586,15 @@ impl ReadFormat for ParquetReadFormat {
                     match find_matching_struct_field(physical.fields(), field, self.matching) {
                         Ok(Some((_, source)))
                             if source.data_type().is_unsigned_integer()
-                                || (dictionary_value_type(source.data_type()).is_decimal()
-                                    && (is_parquet_integer_target(field.data_type())
-                                        || field.data_type().is_binary()))
+                                || parquet_bounds_incompatible(
+                                    source.data_type(),
+                                    field.data_type(),
+                                )
                                 || parquet_temporal_storage_cast(
                                     source.data_type(),
                                     field.data_type(),
                                 )
-                                .is_some()
-                                || parquet_integer_cast_wraps(
-                                    source.data_type(),
-                                    field.data_type(),
-                                ) =>
+                                .is_some() =>
                         {
                             Arc::clone(source)
                         }
@@ -613,13 +624,7 @@ impl ReadFormat for ParquetReadFormat {
             .zip(stats_schema.fields())
             .zip(statistics.column_statistics.iter_mut())
         {
-            if dictionary_value_type(source.data_type()).is_decimal()
-                && (is_parquet_integer_target(field.data_type()) || field.data_type().is_binary())
-            {
-                // Footer bounds use signed decimal ordering. Raw bytes use unsigned lexicographic ordering.
-                *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
-            } else if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
-                // Wrapping can reorder values and map different source values to the same integer.
+            if parquet_bounds_incompatible(source.data_type(), field.data_type()) {
                 *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
             } else if let Some(storage) =
                 parquet_temporal_storage_cast(source.data_type(), field.data_type())
@@ -756,8 +761,9 @@ impl ReadFormat for ParquetReadFormat {
             },
         )
         .await?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let cached_parquet_read_factory = Arc::new(super::ListingParquetReaderFactory(
+            CachedParquetFileReaderFactory::new(store, metadata_cache),
+        ));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = options.global.metadata_size_hint {

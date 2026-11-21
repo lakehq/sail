@@ -117,3 +117,38 @@ def test_parquet_list_view_with_following_decimal(spark, tmp_path, large):
     assert inferred.selectExpr("items[0].b", "amount").collect() == [(2, Decimal("12.34"))]
     raw = spark.read.schema("amount INT").parquet(str(path))
     assert raw.collect() == [(1234,)]
+
+
+@pytest.fixture
+def variable_length_decimals(tmp_path):
+    # parquet-mr ExampleParquetWriter with two BYTE_ARRAY DECIMAL(6,2) columns.
+    # Both contain numerically equal pairs with different sign-extension lengths.
+    # The second column uses only UTF-8 bytes so it also supports a string projection.
+    path = tmp_path / "decimal.parquet"
+    path.write_bytes(
+        base64.b64decode(
+            "UEFSMRUAFTgVOBWUsbuuDBwVChUAFQYVCAAAAgAAAAMPAgAAAABBAQAAAEECAAAA//8BAAAA/xUAFTgVOBWAt7H0BRwVChUAFQYVCAAA"
+            "AgAAAAMPAQAAAEECAAAAAEECAAAAAEIBAAAAQhkRAhkYAv//GRgCAEEVAhkWAgAZEQIZGAFBGRgCAEIVAhkWAgAZHBYIFWYWAAAZFgwA"
+            "GRwWbhVmFgAAGRYMABUCGTxIBnNjaGVtYRUEABUMJQIYAXYlChUEFQwsXBUEFQwAAAAVDCUCGAFzJQoVBBUMLFwVBBUMAAAAFgoZHBks"
+            "JgAcFQwZNQgABhkYAXYVABYKFmYWZiYIPDYCKAIAQRgC//8AGRwVABUAFQIAPBYMAAAWngIVGhbUARUmACYAHBUMGTUIAAYZGAFzFQAW"
+            "ChZmFmYmbjw2AigCAEIYAUEAGRwVABUAFQIAPBYMAAAWuAIVGhb6ARUkABbMARYKJggWzAEUAAAZHBgRd3JpdGVyLm1vZGVsLm5hbWUY"
+            "B2V4YW1wbGUAGEpwYXJxdWV0LW1yIHZlcnNpb24gMS4xNy4wIChidWlsZCBmYWMwYzc0NjUzMmUxMzNiZWI5MjhhN2Y2YTdlNTdiNTEw"
+            "YjQ3N2ExKRksHAAAHAAAADsBAABQQVIx"
+        )
+    )
+    return path
+
+
+def test_parquet_binary_from_variable_length_decimal(spark, variable_length_decimals):
+    assert pq.ParquetFile(variable_length_decimals).schema.column(0).physical_type == "BYTE_ARRAY"
+    df = spark.read.schema("v BINARY").parquet(str(variable_length_decimals))
+    assert df.selectExpr("hex(v)").collect() == [("0041",), ("41",), ("FFFF",), ("FF",), (None,)]
+    assert df.selectExpr("hex(min(v))", "hex(max(v))", "count(v)").collect() == [("0041", "FFFF", 4)]
+    assert df.where("v > unhex('FF')").selectExpr("hex(v)").collect() == [("FFFF",)]
+
+
+def test_parquet_string_from_variable_length_decimal(spark, variable_length_decimals):
+    df = spark.read.schema("s STRING").parquet(str(variable_length_decimals))
+    assert df.collect() == [("A",), ("\x00A",), ("\x00B",), ("B",), (None,)]
+    assert df.selectExpr("min(s)", "max(s)", "count(s)").collect() == [("\x00A", "B", 4)]
+    assert df.where("s < 'A'").collect() == [("\x00A",), ("\x00B",)]

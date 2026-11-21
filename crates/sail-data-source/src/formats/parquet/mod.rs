@@ -13,9 +13,11 @@ use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
 
 mod options;
 mod read;
+mod reader;
 mod write;
 
 pub use read::{ParquetReadFormat, parse_coerce_int96_string};
+pub use reader::ListingParquetReaderFactory;
 pub use write::ParquetWriteFormat;
 
 pub type ParquetDataSource = ListingDataSource<ParquetFormatFactory>;

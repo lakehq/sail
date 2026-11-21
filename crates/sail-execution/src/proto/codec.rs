@@ -16,7 +16,9 @@ use datafusion::common::{
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, ParquetFileReaderFactory,
+};
 use datafusion::datasource::physical_plan::{
     ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
     FileSource, JsonSource, ParquetSource,
@@ -751,8 +753,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &object_store_url,
                     &ctx.session_id(),
                 );
-                let reader_factory =
-                    Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+                let cast_mode = Self::try_decode_schema_evolution_cast_mode(cast_mode)?;
+                let cached_reader = CachedParquetFileReaderFactory::new(store, metadata_cache);
+                let reader_factory: Arc<dyn ParquetFileReaderFactory> =
+                    if cast_mode == SchemaEvolutionCastMode::Parquet {
+                        Arc::new(
+                            sail_data_source::formats::parquet::ListingParquetReaderFactory(
+                                cached_reader,
+                            ),
+                        )
+                    } else {
+                        Arc::new(cached_reader)
+                    };
                 let mut source = ParquetSource::new(table_schema)
                     .with_parquet_file_reader_factory(reader_factory)
                     .with_table_parquet_options(options);
@@ -767,7 +779,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?;
                 let struct_field_matching =
                     Self::try_decode_struct_field_matching(struct_field_matching)?;
-                let cast_mode = Self::try_decode_schema_evolution_cast_mode(cast_mode)?;
                 let adapter_factory =
                     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::with_cast_mode(
                         struct_field_matching,
