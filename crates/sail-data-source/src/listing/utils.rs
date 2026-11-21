@@ -73,10 +73,7 @@ pub fn try_merge_normalized(
     }))?)
 }
 
-pub(crate) fn normalize_unsupported_fields(
-    schema: &Schema,
-    nanoseconds: NanosecondTimestamps,
-) -> Schema {
+fn normalize_unsupported_fields(schema: &Schema, nanoseconds: NanosecondTimestamps) -> Schema {
     // TODO: Apply Spark-compatible type normalization recursively inside structs, lists, and
     // maps. Only top-level fields are normalized today, so nested millisecond timestamps remain
     // unsupported even though Spark accepts them (SPARK recurses through nested timestamp leaves).

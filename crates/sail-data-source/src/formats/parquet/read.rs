@@ -32,9 +32,7 @@ use sail_common_datafusion::schema_evolution::{
 use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{
-    NanosecondTimestamps, SchemaSampling, normalize_unsupported_fields, try_merge_normalized,
-};
+use crate::listing::utils::SchemaSampling;
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -113,8 +111,20 @@ fn coerce_hinted_int96_timestamps(
 
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
-    fn schema_sampling(&self, ctx: &dyn Session) -> Result<SchemaSampling> {
+    fn configure_schema_inference(
+        &mut self,
+        ctx: &dyn Session,
+        hadoop_paths: bool,
+        case_sensitive: bool,
+    ) -> Result<SchemaSampling> {
+        self.matching = if !case_sensitive && (hadoop_paths || self.options.merge_schema.is_some())
+        {
+            StructFieldMatching::CaseInsensitiveName
+        } else {
+            StructFieldMatching::Name
+        };
         match self.options.merge_schema {
+            None if hadoop_paths => return Ok(SchemaSampling::SingleParquet),
             None => return Ok(SchemaSampling::SampleParquet),
             Some(false) => return Ok(SchemaSampling::SingleParquet),
             Some(true) => {}
@@ -240,33 +250,36 @@ impl ReadFormat for ParquetReadFormat {
         };
         schemas.sort_unstable_by(|(a, _), (b, _)| (order(a), a).cmp(&(order(b), b)));
 
-        // A directory can carry the same timestamp column with different producer timezone labels
-        // (e.g. `timestamp[ms, UTC]` and `timestamp[us, America/New_York]`). Spark maps every
-        // adjusted-to-UTC timestamp to a single session-zoned `TimestampType`, so retag the
-        // timezone-aware fields that participate in the millisecond widening to the session
-        // timezone; otherwise they reach `Schema::try_merge` as unequal Arrow types and fail.
         let session_timezone = ctx
             .config_options()
             .execution
             .time_zone
             .as_deref()
             .unwrap_or("UTC");
-        normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
-
-        // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
-        // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
-        // renders such a column in the session zone; Sail currently keeps the producer's label.
-        let schemas = schemas.into_iter().map(|(_, schema)| {
+        let merge_schema = self.options.merge_schema == Some(true);
+        // Spark merges adjusted-to-UTC timestamps in the session timezone regardless of the
+        // timezone labels in the embedded Arrow schema. Legacy sampling only retags fields
+        // that participate in millisecond widening.
+        let merge_timezone = merge_schema.then_some(session_timezone);
+        if !merge_schema {
+            normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
+        }
+        let schemas = schemas.into_iter().map(|(_, mut schema)| {
+            schema.fields = schema
+                .fields
+                .iter()
+                .map(|field| normalize_parquet_field(field, merge_timezone))
+                .collect();
             if options.global.skip_metadata {
                 clear_metadata(schema)
             } else {
                 schema
             }
         });
-        let merged = if self.options.merge_schema == Some(true) {
+        let merged = if merge_schema {
             merge_parquet_schemas(schemas, self.matching)?
         } else {
-            try_merge_normalized(schemas, NanosecondTimestamps::Report)?
+            Schema::try_merge(schemas)?
         };
 
         let merged = if options.global.binary_as_string {
@@ -432,14 +445,48 @@ impl ReadFormat for ParquetReadFormat {
     }
 }
 
+/// Canonical Arrow representations for Spark SQL values. Parquet stores lists and
+/// byte arrays independently of the offset widths in the embedded Arrow schema.
+fn normalize_parquet_field(field: &Arc<Field>, merge_timezone: Option<&str>) -> Arc<Field> {
+    let ty = match field.data_type() {
+        DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
+        DataType::LargeBinary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
+            DataType::Binary
+        }
+        DataType::Date64 => DataType::Date32,
+        DataType::Timestamp(
+            TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Microsecond,
+            tz,
+        ) => {
+            let tz = tz.as_ref().map(|label| match merge_timezone {
+                Some(timezone) => Arc::from(timezone),
+                None => Arc::clone(label),
+            });
+            DataType::Timestamp(TimeUnit::Microsecond, tz)
+        }
+        DataType::List(child) | DataType::LargeList(child) | DataType::FixedSizeList(child, _) => {
+            DataType::List(normalize_parquet_field(child, merge_timezone))
+        }
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| normalize_parquet_field(f, merge_timezone))
+                .collect(),
+        ),
+        DataType::Map(entries, sorted) => {
+            DataType::Map(normalize_parquet_field(entries, merge_timezone), *sorted)
+        }
+        _ => return Arc::clone(field),
+    };
+    Arc::new(field.as_ref().clone().with_data_type(ty))
+}
+
 /// Spark merges corresponding struct fields in first-file order and widens decimal
 /// precision when the scales agree. Lists and maps merge their child types recursively.
 fn merge_parquet_schemas(
-    schemas: impl Iterator<Item = Schema>,
+    mut schemas: impl Iterator<Item = Schema>,
     matching: StructFieldMatching,
 ) -> Result<Schema> {
-    let mut schemas =
-        schemas.map(|s| normalize_unsupported_fields(&s, NanosecondTimestamps::Report));
     let Some(first) = schemas.next() else {
         return Ok(Schema::empty());
     };
@@ -493,12 +540,6 @@ fn merge_parquet_field(
         }
         (DataType::List(a), DataType::List(b)) => {
             DataType::List(merge_parquet_field(a, b, matching)?)
-        }
-        (DataType::LargeList(a), DataType::LargeList(b)) => {
-            DataType::LargeList(merge_parquet_field(a, b, matching)?)
-        }
-        (DataType::FixedSizeList(a, n), DataType::FixedSizeList(b, m)) if n == m => {
-            DataType::FixedSizeList(merge_parquet_field(a, b, matching)?, *n)
         }
         (DataType::Map(a, sorted), DataType::Map(b, _)) => {
             DataType::Map(merge_parquet_field(a, b, matching)?, *sorted)
@@ -662,7 +703,7 @@ fn is_binary_type(data_type: &DataType) -> bool {
 /// metadata-only (the stored instants are identical), so the retag is lossless. A `None` timezone
 /// (`TIMESTAMP_NTZ`) is preserved untouched so it stays distinct from the aware type. Only fields
 /// that appear as timezone-aware milliseconds in at least one file are retagged; a
-/// microsecond-only field keeps its producer label (that pre-existing case is deferred above).
+/// microsecond-only field keeps its producer label in legacy sampling mode.
 fn normalize_widened_timestamp_timezones(
     schemas: &mut [(object_store::path::Path, Schema)],
     session_timezone: &str,

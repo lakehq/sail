@@ -4,7 +4,6 @@ use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::schema_evolution::StructFieldMatching;
-use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
@@ -34,19 +33,10 @@ impl FormatFactory for ParquetFormatFactory {
 
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
         let options = ParquetReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
-        let case_sensitive = ctx
-            .config()
-            .get_extension::<SessionConfigService>()
-            .map(|service| service.get_option("spark.sql.caseSensitive"))
-            .transpose()?
-            .flatten()
-            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
-        let matching = if options.merge_schema == Some(true) && !case_sensitive {
-            StructFieldMatching::CaseInsensitiveName
-        } else {
-            StructFieldMatching::Name
-        };
-        Ok(ParquetReadFormat { options, matching })
+        Ok(ParquetReadFormat {
+            options,
+            matching: StructFieldMatching::Name,
+        })
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {

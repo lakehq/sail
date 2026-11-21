@@ -54,7 +54,12 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
-    fn schema_sampling(&self, _ctx: &dyn Session) -> Result<SchemaSampling> {
+    fn configure_schema_inference(
+        &mut self,
+        _ctx: &dyn Session,
+        _hadoop_paths: bool,
+        _case_sensitive: bool,
+    ) -> Result<SchemaSampling> {
         Ok(SchemaSampling::Sample)
     }
 
@@ -197,19 +202,15 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             return plan_err!("recursiveFileLookup is not supported for a partitioned table");
         }
         let path = read_option(&options, "basePath");
-        let read_format = T::read(ctx, options.clone())?;
-        let sampling = read_format.schema_sampling(ctx)?;
-        let hadoop_paths = path.is_some()
-            || recursive
+        let mut read_format = T::read(ctx, options.clone())?;
+        let hadoop_paths = path.is_some() || recursive;
+        let sampling =
+            read_format.configure_schema_inference(ctx, hadoop_paths, read_case_sensitive)?;
+        let hadoop_paths = hadoop_paths
             || matches!(
                 sampling,
                 SchemaSampling::SingleParquet | SchemaSampling::MergeParquet { .. }
             );
-        let sampling = if hadoop_paths && sampling == SchemaSampling::SampleParquet {
-            SchemaSampling::SingleParquet
-        } else {
-            sampling
-        };
         let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
         let base_path = path
             .filter(|_| !recursive)

@@ -763,7 +763,7 @@ def test_base_path_merge_schema_with_summary(spark, tmp_path, per_read):
     pq.write_table(pa.table({"a": [10], "b": [42]}), part / "last.parquet")
     pq.write_metadata(pa.schema([("a", pa.int64()), ("c", pa.string())]), tmp_path / "_common_metadata")
     key = "spark.sql.parquet.mergeSchema"
-    previous = spark.conf.get(key)
+    previous = spark.conf.get(key, None)
     try:
         spark.conf.set(key, str(not per_read).lower())
         reader = spark.read.option("basePath", str(tmp_path))
@@ -774,7 +774,10 @@ def test_base_path_merge_schema_with_summary(spark, tmp_path, per_read):
         assert df.where("a = 10").collect() == [Row(a=10, b=42, c=None, p=1)]
         assert reader.option("mergeSchema", False).parquet(str(tmp_path)).columns == ["a", "c", "p"]
     finally:
-        spark.conf.set(key, previous)
+        if previous is None:
+            spark.conf.unset(key)
+        else:
+            spark.conf.set(key, previous)
 
 
 def test_base_path_native_multicomponent_glob(spark, tmp_path):
@@ -842,3 +845,16 @@ def test_base_path_empty_brace_alternative(spark, tmp_path, pattern, filename_fi
     else:
         df = reader.json(str(part / pattern))
     assert [row.id for row in df.orderBy("id").collect()] == ([1] if "{}" in pattern else [1, 2])
+
+
+@pytest.mark.parametrize("explicit_false", [False, True])
+def test_base_path_single_footer_field_case(spark, tmp_path, explicit_false):
+    for filename, name, value in [("a", "id", 1), ("b", "ID", 2)]:
+        pq.write_table(pa.table({name: [value]}), tmp_path / f"{filename}.parquet")
+    reader = spark.read.option("basePath", str(tmp_path))
+    if explicit_false:
+        reader = reader.option("mergeSchema", False)
+    df = reader.parquet(str(tmp_path))
+    assert df.columns == ["id"]
+    assert df.orderBy("id").collect() == [Row(id=1), Row(id=2)]
+    assert df.where("id = 2").collect() == [Row(id=2)]

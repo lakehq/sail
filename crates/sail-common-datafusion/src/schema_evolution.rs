@@ -668,7 +668,9 @@ fn can_cast_field_with_schema_evolution(
             Ok(true)
         }
         (
-            DataType::List(from_elem) | DataType::LargeList(from_elem),
+            DataType::List(from_elem)
+            | DataType::LargeList(from_elem)
+            | DataType::FixedSizeList(from_elem, _),
             DataType::List(to_elem) | DataType::LargeList(to_elem),
         ) => can_cast_field_with_schema_evolution(from_elem, to_elem, matching),
         (
@@ -1114,16 +1116,20 @@ fn cast_array_with_schema_evolution_inner(
 
     // Convert only offsets here so nested values retain schema-evolution field matching.
     let offset_cast = match (source.data_type(), target_field.data_type()) {
-        (DataType::LargeList(element), DataType::List(_)) => Some(cast_with_options(
-            source,
-            &DataType::List(Arc::clone(element)),
-            cast_options,
-        )?),
-        (DataType::List(element), DataType::LargeList(_)) => Some(cast_with_options(
-            source,
-            &DataType::LargeList(Arc::clone(element)),
-            cast_options,
-        )?),
+        (DataType::LargeList(element) | DataType::FixedSizeList(element, _), DataType::List(_)) => {
+            Some(cast_with_options(
+                source,
+                &DataType::List(Arc::clone(element)),
+                cast_options,
+            )?)
+        }
+        (DataType::List(element) | DataType::FixedSizeList(element, _), DataType::LargeList(_)) => {
+            Some(cast_with_options(
+                source,
+                &DataType::LargeList(Arc::clone(element)),
+                cast_options,
+            )?)
+        }
         _ => None,
     };
     let source = offset_cast.as_ref().unwrap_or(source);

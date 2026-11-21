@@ -1204,3 +1204,41 @@ def test_parquet_merge_schema_statistics_cache_field_case(spark, tmp_path):
             assert df.selectExpr("count(id)", "max(id)").collect() == [expected]
     finally:
         spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize("merge_schema", [True, False])
+def test_parquet_mixed_arrow_offset_widths(spark, tmp_path, merge_schema):
+    for i, (text, binary, list_type) in enumerate(
+        [
+            (pa.large_string(), pa.large_binary(), lambda item: pa.list_(item, 2)),
+            (pa.string(), pa.binary(), pa.list_),
+            (pa.large_string(), pa.binary(1), pa.large_list),
+        ]
+    ):
+        label = str(i)
+        nested_type = pa.struct([("labels", list_type(text)), ("payload", binary)])
+        nested = pa.array([{"labels": [label, None], "payload": label.encode()}], type=nested_type)
+        pq.write_table(pa.table({"label": pa.array([label], type=text), "nested": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<label:string,nested:struct<labels:array<string>,payload:binary>>"
+    assert df.orderBy("label").select("label", "nested.labels", "nested.payload").collect() == [
+        (str(i), [str(i), None], str(i).encode()) for i in range(3)
+    ]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_merge_schema_nested_timestamp_timezones(spark, tmp_path):
+    for i, timezone in enumerate(["UTC", "America/New_York"]):
+        ty = pa.struct([("ts", pa.timestamp("us", tz=timezone))])
+        instant = datetime(2024, 1, 2, 3, 4, i, tzinfo=UTC)
+        nested = pa.array([{"ts": instant}], type=ty)
+        pq.write_table(pa.table({"nested": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<nested:struct<ts:timestamp>>"
+    assert df.selectExpr("cast(nested.ts AS STRING) AS value").orderBy("value").collect() == [
+        Row(value="2024-01-01 19:04:00"),
+        Row(value="2024-01-01 19:04:01"),
+    ]
