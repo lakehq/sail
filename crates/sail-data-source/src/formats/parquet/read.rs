@@ -2,38 +2,57 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::parquet::metadata::{
     DFParquetMetadata, ordering_from_parquet_metadata,
 };
-use datafusion::datasource::physical_plan::parquet::{
-    CachedParquetFileReaderFactory, Int96Coercer,
-};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
-use datafusion::parquet::basic::Type as PhysicalType;
-use datafusion::parquet::schema::types::SchemaDescriptor;
+use datafusion::parquet::basic::{
+    ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
+};
+use datafusion::parquet::file::metadata::FileMetaData;
+use datafusion::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, internal_datafusion_err, plan_err,
+};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+use sail_common_datafusion::metadata::{type_metadata, widest_interval_metadata};
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::parquet_schema::{
+    SAIL_PARQUET_STORAGE_METADATA_KEY, is_parquet_integer_target, normalize_parquet_field,
+    parquet_integer_cast_wraps, parquet_temporal_storage_cast, validate_parquet_field,
+};
+use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
+use sail_common_datafusion::schema::nullable_query_field;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionCastMode, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching, find_matching_struct_field,
+};
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
+use crate::listing::utils::SchemaSampling;
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
     pub(super) options: ParquetReadOptions,
+    pub(super) matching: StructFieldMatching,
+    pub(super) duration_hints: DurationHints,
 }
 
 fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
@@ -46,66 +65,225 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     }
 }
 
-/// Reinterprets top-level `Timestamp(Second, _)` fields that are physically stored as `INT64`
-/// back to `Int64`. Parquet has no seconds timestamp logical type: an Arrow writer encodes an
-/// Arrow `timestamp[s]` as an unannotated physical `INT64` and preserves the Arrow type only in
-/// the `ARROW:schema` hint. Spark ignores that hint and exposes the column as a long, so we match
-/// it here rather than widening the hinted seconds to a microsecond timestamp (which would change
-/// both the reported type and the values). Genuine INT96 timestamps are unaffected because they
-/// are handled by the `coerce_int96` option and are not physically `INT64`.
-fn reinterpret_second_timestamps_as_int64(schema: Schema, physical: &Schema) -> Schema {
+fn dictionary_value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        other => other,
+    }
+}
+
+/// Spark day-time intervals use Arrow duration[us] over unannotated Parquet INT64.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DurationHints {
+    /// Ordinary Sail reads also recognize unqualified Arrow intervals.
+    All,
+    /// Spark-style schema inference recognizes intervals written with a Sail qualifier.
+    Qualified,
+    /// Physical scans use integer storage for both BIGINT and interval projections.
+    Storage,
+}
+
+/// Arrow can carry temporal types only as embedded hints on ordinary integer leaves.
+fn hinted_integer_type(field: &Field, durations: DurationHints) -> bool {
+    match dictionary_value_type(field.data_type()) {
+        DataType::Duration(TimeUnit::Microsecond) => match durations {
+            DurationHints::All => false,
+            DurationHints::Qualified => !field
+                .metadata()
+                .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY),
+            DurationHints::Storage => true,
+        },
+        ty => matches!(
+            ty,
+            DataType::Timestamp(_, _)
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+        ),
+    }
+}
+
+fn unannotated_integer(column: &ColumnDescriptor) -> Option<DataType> {
+    if column.logical_type_ref().is_some() || column.converted_type() != ConvertedType::NONE {
+        return None;
+    }
+    match column.physical_type() {
+        PhysicalType::INT32 => Some(DataType::Int32),
+        PhysicalType::INT64 => Some(DataType::Int64),
+        _ => None,
+    }
+}
+
+fn is_nanos_timestamp(column: &ColumnDescriptor) -> bool {
+    matches!(column.logical_type_ref(), Some(LogicalType::Timestamp(ts)) if ts.unit == ParquetTimeUnit::NANOS)
+}
+
+/// Arrow lists and maps may rename or elide Parquet group wrappers. Both schemas
+/// retain the same depth-first leaf order, so each leaf consumes one descriptor.
+fn reconcile_parquet_field<'a>(
+    field: &Arc<Field>,
+    columns: &mut impl Iterator<Item = &'a ColumnDescPtr>,
+    durations: DurationHints,
+    int96_type: Option<&DataType>,
+    record_storage: bool,
+) -> Result<Arc<Field>> {
+    let data_type = dictionary_value_type(field.data_type());
+    let mut child =
+        |f: &Arc<Field>| reconcile_parquet_field(f, columns, durations, int96_type, record_storage);
+    let ty = match data_type {
+        DataType::Struct(fields) => {
+            DataType::Struct(fields.iter().map(child).collect::<Result<Fields>>()?)
+        }
+        DataType::List(field) => DataType::List(child(field)?),
+        DataType::LargeList(field) => DataType::LargeList(child(field)?),
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(child(field)?, *size),
+        DataType::Map(entries, sorted) => DataType::Map(child(entries)?, *sorted),
+        _ => {
+            let column = columns.next().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Missing Parquet descriptor for Arrow field {}",
+                    field.name()
+                )
+            })?;
+            let physical = column.physical_type();
+            let ty = match data_type {
+                DataType::Timestamp(_, None) if physical == PhysicalType::INT96 => {
+                    int96_type.cloned()
+                }
+                DataType::Timestamp(_, zone) if is_nanos_timestamp(column) => {
+                    Some(DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()))
+                }
+                DataType::Date64
+                    if matches!(durations, DurationHints::Storage)
+                        && physical == PhysicalType::INT32 =>
+                {
+                    Some(DataType::Date32)
+                }
+                _ if hinted_integer_type(field, durations) => unannotated_integer(column),
+                _ => None,
+            };
+            let storage = if record_storage
+                && (data_type.is_decimal()
+                    || matches!(data_type, DataType::Timestamp(..) | DataType::Null))
+            {
+                match physical {
+                    PhysicalType::INT32 | PhysicalType::INT64 => Some(physical.to_string()),
+                    PhysicalType::FIXED_LEN_BYTE_ARRAY if data_type.is_decimal() => {
+                        Some(column.type_length().to_string())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if ty.is_none()
+                && storage.is_none()
+                && !field
+                    .metadata()
+                    .contains_key(SAIL_PARQUET_STORAGE_METADATA_KEY)
+            {
+                return Ok(Arc::clone(field));
+            }
+            let mut field = field
+                .as_ref()
+                .clone()
+                .with_data_type(ty.unwrap_or_else(|| data_type.clone()));
+            // Only the footer can supply a storage hint, including when the file embeds Arrow metadata.
+            match storage {
+                Some(storage) => {
+                    field
+                        .metadata_mut()
+                        .insert(SAIL_PARQUET_STORAGE_METADATA_KEY.to_owned(), storage);
+                }
+                None => {
+                    field
+                        .metadata_mut()
+                        .remove(SAIL_PARQUET_STORAGE_METADATA_KEY);
+                }
+            }
+            return Ok(Arc::new(field));
+        }
+    };
+    Ok(Arc::new(field.as_ref().clone().with_data_type(ty)))
+}
+
+fn reconciled_read_schema(
+    metadata: &FileMetaData,
+    schema: &Schema,
+    durations: DurationHints,
+    int96_type: Option<&DataType>,
+    record_storage: impl Fn(&Field) -> bool,
+) -> Result<Option<Schema>> {
+    let mut columns = metadata.schema_descr().columns().iter();
     let fields = schema
         .fields()
         .iter()
         .map(|field| {
-            let physical_type = physical
-                .field_with_name(field.name())
-                .ok()
-                .map(|physical_field| physical_field.data_type());
-            match (field.data_type(), physical_type) {
-                (DataType::Timestamp(TimeUnit::Second, _), Some(DataType::Int64)) => {
-                    field.as_ref().clone().with_data_type(DataType::Int64)
-                }
-                _ => field.as_ref().clone(),
-            }
+            reconcile_parquet_field(
+                field,
+                &mut columns,
+                durations,
+                int96_type,
+                record_storage(field),
+            )
         })
-        .collect::<Vec<_>>();
-    Schema::new_with_metadata(fields, schema.metadata().clone())
+        .collect::<Result<Fields>>()?;
+    Ok((fields != schema.fields)
+        .then(|| Schema::new_with_metadata(fields, schema.metadata.clone())))
 }
 
-/// Spark reads INT96 as TIMESTAMP whatever the `ARROW:schema` hint says, while `Int96Coercer`
-/// coerces an INT96 column to `data_type` only when the hint gives nanoseconds. pyarrow hints the
-/// unit of the written values, such as `timestamp[us]`, which would otherwise read as
-/// TIMESTAMP_NTZ.
-// TODO: Coerce nested INT96 values with such a hint.
-fn coerce_hinted_int96_timestamps(
-    schema: Schema,
-    parquet_schema: &SchemaDescriptor,
-    data_type: &DataType,
-) -> Schema {
-    let int96 = parquet_schema
-        .columns()
-        .iter()
-        .filter(|column| {
-            column.physical_type() == PhysicalType::INT96 && column.path().parts().len() == 1
-        })
-        .map(|column| column.name())
-        .collect::<Vec<_>>();
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| match field.data_type() {
-            DataType::Timestamp(_, None) if int96.contains(&field.name().as_str()) => {
-                field.as_ref().clone().with_data_type(data_type.clone())
-            }
-            _ => field.as_ref().clone(),
-        })
-        .collect::<Vec<_>>();
-    Schema::new_with_metadata(fields, schema.metadata().clone())
+fn parquet_file_schema(
+    metadata: &FileMetaData,
+    int96_type: Option<&DataType>,
+    durations: DurationHints,
+) -> Result<Schema> {
+    let schema = parquet_to_arrow_schema(metadata.schema_descr(), metadata.key_value_metadata())?;
+    Ok(
+        reconciled_read_schema(metadata, &schema, durations, int96_type, |_| false)?
+            .unwrap_or(schema),
+    )
 }
 
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
+    fn configure_schema_inference(
+        &mut self,
+        ctx: &dyn Session,
+        hadoop_paths: bool,
+        case_sensitive: bool,
+    ) -> Result<SchemaSampling> {
+        self.matching = if !case_sensitive {
+            StructFieldMatching::CaseInsensitiveName
+        } else {
+            StructFieldMatching::Name
+        };
+        self.duration_hints = if hadoop_paths || self.options.merge_schema.is_some() {
+            DurationHints::Qualified
+        } else {
+            DurationHints::All
+        };
+        match self.options.merge_schema {
+            None if hadoop_paths => return Ok(SchemaSampling::SingleParquet),
+            None => return Ok(SchemaSampling::SampleParquet),
+            Some(false) => return Ok(SchemaSampling::SingleParquet),
+            Some(true) => {}
+        }
+        let key = "spark.sql.parquet.respectSummaryFiles";
+        let summaries_only = ctx
+            .config()
+            .get_extension::<SessionConfigService>()
+            .map(|service| service.get_option(key))
+            .transpose()?
+            .flatten()
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        Ok(SchemaSampling::MergeParquet { summaries_only })
+    }
+
+    fn statistics_field_matching(&self) -> StructFieldMatching {
+        self.matching
+    }
+
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
@@ -132,7 +310,12 @@ impl ReadFormat for ParquetReadFormat {
             .as_deref()
             .map(parse_coerce_int96_string)
             .transpose()?;
-        let coerce_int96_tz = options.global.coerce_int96_tz.as_deref().map(Arc::from);
+        let int96_type = coerce_int96.map(|unit| {
+            DataType::Timestamp(
+                unit,
+                options.global.coerce_int96_tz.as_deref().map(Arc::from),
+            )
+        });
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
@@ -157,44 +340,12 @@ impl ReadFormat for ParquetReadFormat {
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(metadata_cache))
                     .with_coerce_int96(coerce_int96);
-                // Fetch the Parquet footer once and derive both schemas from it.
-                // `fetch_schema()` would read (and parse) the footer a second time; when the
-                // file-metadata cache is disabled (`file_metadata_cache.type=none`, a supported
-                // zero-capacity mode) that second read is not cached, doubling remote footer I/O
-                // during schema inference.
                 let metadata = reader.fetch_metadata().await?;
-                let file_metadata = metadata.file_metadata();
-                // Arrow-hinted schema: mirror `DFParquetMetadata::fetch_schema` exactly, which
-                // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
-                // INT96-derived columns. Reproduced here (rather than calling `fetch_schema()`)
-                // so the inferred types stay identical to today for hinted and INT96 columns.
-                // INT96 columns coerce to a UTC timestamp, matching the reader's `coerce_int96_tz`.
-                let schema = parquet_to_arrow_schema(
-                    file_metadata.schema_descr(),
-                    file_metadata.key_value_metadata(),
+                let schema = parquet_file_schema(
+                    metadata.file_metadata(),
+                    int96_type.as_ref(),
+                    self.duration_hints,
                 )?;
-                let schema = coerce_int96
-                    .as_ref()
-                    .and_then(|time_unit| {
-                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
-                            .with_timezone(coerce_int96_tz.clone())
-                            .coerce()
-                    })
-                    .unwrap_or(schema);
-                // Metadata-free physical schema: no `ARROW:schema` hint, so an Arrow-only
-                // `timestamp[s]` hint over a physical INT64 appears here as INT64. Comparing the
-                // two lets `reinterpret_second_timestamps_as_int64` read such a column as long,
-                // matching Spark.
-                let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
-                let schema = match &coerce_int96 {
-                    Some(time_unit) => coerce_hinted_int96_timestamps(
-                        schema,
-                        file_metadata.schema_descr(),
-                        &DataType::Timestamp(*time_unit, coerce_int96_tz.clone()),
-                    ),
-                    None => schema,
-                };
-                let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
@@ -204,36 +355,46 @@ impl ReadFormat for ParquetReadFormat {
             .await?;
 
         // Ensure deterministic ordering for stable schema inference.
-        schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+        // Spark merges data schemas first, followed by metadata and common metadata.
+        let order = |path: &object_store::path::Path| match path.filename() {
+            Some("_common_metadata") => 2,
+            Some("_metadata") => 1,
+            _ => 0,
+        };
+        schemas.sort_unstable_by(|(a, _), (b, _)| (order(a), a).cmp(&(order(b), b)));
 
-        // A directory can carry the same timestamp column with different producer timezone labels
-        // (e.g. `timestamp[ms, UTC]` and `timestamp[us, America/New_York]`). Spark maps every
-        // adjusted-to-UTC timestamp to a single session-zoned `TimestampType`, so retag the
-        // timezone-aware fields that participate in the millisecond widening to the session
-        // timezone; otherwise they reach `Schema::try_merge` as unequal Arrow types and fail.
         let session_timezone = ctx
             .config_options()
             .execution
             .time_zone
             .as_deref()
             .unwrap_or("UTC");
-        normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
-
-        // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
-        // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
-        // renders such a column in the session zone; Sail currently keeps the producer's label.
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
-
-        let merged = if options.global.skip_metadata {
-            try_merge_normalized(schemas.map(clear_metadata), NanosecondTimestamps::Report)
+        let merge_schema = self.options.merge_schema == Some(true);
+        // Spark merges adjusted-to-UTC timestamps in the session timezone regardless of the
+        // timezone labels in the embedded Arrow schema. Legacy sampling only retags fields
+        // that participate in millisecond widening.
+        let merge_timezone = merge_schema.then_some(session_timezone);
+        if !merge_schema {
+            normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
+        }
+        let schemas = schemas.into_iter().map(|(_, mut schema)| {
+            schema.fields = schema
+                .fields
+                .iter()
+                .map(|field| {
+                    normalize_parquet_field(field, merge_timezone, options.global.binary_as_string)
+                })
+                .collect();
+            if options.global.skip_metadata {
+                clear_metadata(schema)
+            } else {
+                schema
+            }
+        });
+        let merged = if merge_schema {
+            merge_parquet_schemas(schemas, self.matching)?
         } else {
-            try_merge_normalized(schemas, NanosecondTimestamps::Report)
-        }?;
-
-        let merged = if options.global.binary_as_string {
-            datafusion::datasource::file_format::parquet::transform_binary_to_string(&merged)
-        } else {
-            merged
+            Schema::try_merge(schemas)?
         };
 
         let merged = if options.global.schema_force_view_types {
@@ -242,7 +403,12 @@ impl ReadFormat for ParquetReadFormat {
             merged
         };
 
-        Ok(Arc::new(merged))
+        let fields = merged
+            .fields()
+            .iter()
+            .map(|field| nullable_query_field(field))
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Schema::new_with_metadata(fields, merged.metadata)))
     }
     // SPDX-SnippetEnd
 
@@ -266,17 +432,104 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
+        // Read integer statistics with their physical signedness before converting
+        // bounds to the scan type. UINT32 and UINT64 can exceed the signed range.
+        let file_metadata = metadata.file_metadata();
+        let physical = parquet_file_schema(file_metadata, None, DurationHints::Storage)?;
+        let mut ambiguous_indices = Vec::new();
+        let fields = file_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                Ok(
+                    match find_matching_struct_field(physical.fields(), field, self.matching) {
+                        Ok(Some((_, source)))
+                            if source.data_type().is_unsigned_integer()
+                                || (dictionary_value_type(source.data_type()).is_decimal()
+                                    && (is_parquet_integer_target(field.data_type())
+                                        || field.data_type().is_binary()))
+                                || parquet_temporal_storage_cast(
+                                    source.data_type(),
+                                    field.data_type(),
+                                )
+                                .is_some()
+                                || parquet_integer_cast_wraps(
+                                    source.data_type(),
+                                    field.data_type(),
+                                ) =>
+                        {
+                            Arc::clone(source)
+                        }
+                        Ok(Some((_, source))) if source.name() != field.name() => {
+                            Arc::new(field.as_ref().clone().with_name(source.name()))
+                        }
+                        Ok(_) => Arc::clone(field),
+                        Err(_) if self.matching == StructFieldMatching::CaseInsensitiveName => {
+                            ambiguous_indices.push(index);
+                            Arc::clone(field)
+                        }
+                        Err(error) => return Err(error),
+                    },
+                )
+            })
+            .collect::<Result<Fields>>()?;
+        let stats_schema = Arc::new(Schema::new(fields));
         let mut statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &stats_schema)?;
         let num_rows = match statistics.num_rows {
             Precision::Exact(num_rows) => Some(num_rows),
             _ => None,
         };
-        for (field, column) in file_schema
+        for ((field, source), column) in file_schema
             .fields()
             .iter()
+            .zip(stats_schema.fields())
             .zip(statistics.column_statistics.iter_mut())
         {
+            if dictionary_value_type(source.data_type()).is_decimal()
+                && (is_parquet_integer_target(field.data_type()) || field.data_type().is_binary())
+            {
+                // Footer bounds use signed decimal ordering. Raw bytes use unsigned lexicographic ordering.
+                *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+            } else if parquet_integer_cast_wraps(source.data_type(), field.data_type()) {
+                // Wrapping can reorder values and map different source values to the same integer.
+                *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+            } else if let Some(storage) =
+                parquet_temporal_storage_cast(source.data_type(), field.data_type())
+            {
+                let from = dictionary_value_type(source.data_type());
+                if parquet_integer_cast_wraps(from, &storage)
+                    || parquet_integer_cast_wraps(&storage, field.data_type())
+                {
+                    *column = ColumnStatistics::new_unknown().with_null_count(column.null_count);
+                } else {
+                    let convert = |bound: &Precision<datafusion_common::ScalarValue>| {
+                        bound
+                            .cast_to(from)?
+                            .cast_to(&storage)?
+                            .cast_to(field.data_type())
+                    };
+                    column.min_value = convert(&column.min_value).unwrap_or(Precision::Absent);
+                    column.max_value = convert(&column.max_value).unwrap_or(Precision::Absent);
+                }
+            } else if source.data_type().is_unsigned_integer()
+                && source.data_type() != field.data_type()
+            {
+                let mut converted =
+                    ColumnStatistics::new_unknown().with_null_count(column.null_count);
+                if field.data_type().is_numeric() {
+                    converted.min_value = column
+                        .min_value
+                        .cast_to(field.data_type())
+                        .unwrap_or(Precision::Absent);
+                    converted.max_value = column
+                        .max_value
+                        .cast_to(field.data_type())
+                        .unwrap_or(Precision::Absent);
+                }
+                *column = converted;
+            }
             // TODO: Row-group and page pruning still use the float maximum, which leaves out NaN.
             if field.data_type().is_floating() {
                 let non_null_count = match (num_rows, &column.null_count) {
@@ -292,7 +545,16 @@ impl ReadFormat for ParquetReadFormat {
                 );
             }
         }
-        let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
+        // Exact-name footer statistics cannot describe an ambiguous case-insensitive match.
+        let ordering =
+            if ambiguous_indices.is_empty() && file_schema.fields() == stats_schema.fields() {
+                ordering_from_parquet_metadata(&metadata, &file_schema)?
+            } else {
+                None
+            };
+        for index in ambiguous_indices {
+            statistics.column_statistics[index] = ColumnStatistics::new_unknown();
+        }
         Ok(ListingFileMeta {
             statistics,
             ordering,
@@ -306,6 +568,19 @@ impl ReadFormat for ParquetReadFormat {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
 
+        if let Some(unit) = &options.global.coerce_int96 {
+            parse_coerce_int96_string(unit)?;
+        }
+
+        // Partition columns have no physical field. Validate only projected file columns.
+        let file_schema = input.schema.file_schema();
+        let projected: Fields = match &input.projection {
+            Some(indices) => indices
+                .iter()
+                .filter_map(|&i| file_schema.fields().get(i).cloned())
+                .collect(),
+            None => file_schema.fields().clone(),
+        };
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
@@ -316,12 +591,62 @@ impl ReadFormat for ParquetReadFormat {
         );
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 
-        input.file_groups = load_parquet_scan_metadata(
+        let field_name = |f: &Field| match self.matching {
+            StructFieldMatching::CaseInsensitiveName => f.name().to_lowercase(),
+            _ => f.name().clone(),
+        };
+        let storage_fields: std::collections::HashSet<_> = projected
+            .iter()
+            .filter(|field| {
+                Schema::new([Arc::clone(field)])
+                    .flattened_fields()
+                    .iter()
+                    .any(|leaf| {
+                        is_parquet_integer_target(leaf.data_type())
+                            || leaf.data_type().is_binary()
+                            || matches!(leaf.data_type(), DataType::Timestamp(..))
+                    })
+            })
+            .map(|f| field_name(f))
+            .collect();
+        input.file_groups = load_parquet_scan_metadata_with_validation(
             input.file_groups,
             &store,
             &metadata_cache,
             options.global.metadata_size_hint,
             ctx.config_options().execution.meta_fetch_concurrency.into(),
+            |file, metadata| {
+                // Physical projection pushdown selects nested leaves after this pass.
+                // The expression adapter validates them once it has the final projection.
+                if projected.is_empty() {
+                    return Ok(());
+                }
+                let mut physical = parquet_to_arrow_schema(
+                    metadata.schema_descr(),
+                    metadata.key_value_metadata(),
+                )?;
+                if let Some(schema) = reconciled_read_schema(
+                    metadata,
+                    &physical,
+                    DurationHints::Storage,
+                    None,
+                    |f| storage_fields.contains(&field_name(f)),
+                )? {
+                    physical = schema;
+                    file.arrow_schema = Some(Arc::new(physical.clone()));
+                }
+                for field in projected
+                    .iter()
+                    .filter(|field| !field.data_type().is_nested())
+                {
+                    if let Some((_, actual)) =
+                        find_matching_struct_field(physical.fields(), field, self.matching)?
+                    {
+                        validate_parquet_field(field.name(), field, actual, self.matching)?;
+                    }
+                }
+                Ok(())
+            },
         )
         .await?;
         let cached_parquet_read_factory =
@@ -336,7 +661,12 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+            .with_expr_adapter(Some(Arc::new(
+                SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::with_cast_mode(
+                    self.matching,
+                    SchemaEvolutionCastMode::Parquet,
+                ),
+            )))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
@@ -348,152 +678,104 @@ impl ReadFormat for ParquetReadFormat {
     }
     // SPDX-SnippetEnd
 
-    fn requires_explicit_schema_validation(&self) -> bool {
-        true
-    }
-
-    fn validate_explicit_schema(&self, schema: &Schema, physical: &Schema) -> Result<()> {
-        validate_parquet_schema(schema, physical)
-    }
-
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
 }
 
-fn validate_parquet_schema(schema: &Schema, physical: &Schema) -> Result<()> {
-    for field in schema.fields() {
-        if let Ok(physical_field) = physical.field_with_name(field.name()) {
-            validate_parquet_field(field.name(), field, physical_field)?;
+/// Spark merges corresponding struct fields in first-file order and widens decimal
+/// precision when the scales agree. Lists and maps merge their child types recursively.
+fn merge_parquet_schemas(
+    mut schemas: impl Iterator<Item = Schema>,
+    matching: StructFieldMatching,
+) -> Result<Schema> {
+    let Some(first) = schemas.next() else {
+        return Ok(Schema::empty());
+    };
+    let mut merged = first.fields.clone();
+    for schema in schemas {
+        if merged != schema.fields {
+            merged = merge_parquet_fields(&merged, &schema.fields, matching)?;
         }
     }
-    Ok(())
+    Ok(Schema::new_with_metadata(merged, first.metadata))
 }
 
-fn validate_parquet_field(path: &str, requested: &Field, physical: &Field) -> Result<()> {
-    match (physical.data_type(), requested.data_type()) {
-        (DataType::Struct(physical_fields), DataType::Struct(requested_fields)) => {
-            for requested_field in requested_fields {
-                if let Some(physical_field) = physical_fields
-                    .iter()
-                    .find(|field| field.name() == requested_field.name())
-                {
-                    validate_parquet_field(
-                        &format!("{path}.{}", requested_field.name()),
-                        requested_field,
-                        physical_field,
-                    )?;
-                }
+fn merge_parquet_fields(
+    left: &Fields,
+    right: &Fields,
+    matching: StructFieldMatching,
+) -> Result<Fields> {
+    let mut fields = Vec::new();
+    let mut used = vec![false; right.len()];
+    for field in left {
+        fields.push(match find_matching_struct_field(right, field, matching)? {
+            Some((i, other)) => {
+                used[i] = true;
+                merge_parquet_field(field, other, matching)?
             }
-            Ok(())
-        }
-        (DataType::List(physical_element), DataType::List(requested_element))
-        | (DataType::LargeList(physical_element), DataType::LargeList(requested_element)) => {
-            validate_parquet_field(&format!("{path}[]"), requested_element, physical_element)
-        }
-        (
-            DataType::FixedSizeList(physical_element, physical_length),
-            DataType::FixedSizeList(requested_element, requested_length),
-        ) if physical_length == requested_length => {
-            validate_parquet_field(&format!("{path}[]"), requested_element, physical_element)
-        }
-        (DataType::Map(physical_entries, _), DataType::Map(requested_entries, _)) => {
-            validate_parquet_field(path, requested_entries, physical_entries)
-        }
-        (physical_type, requested_type)
-            if parquet_primitive_type_compatible(physical_type, requested_type) =>
-        {
-            Ok(())
-        }
-        (physical_type, requested_type) => plan_err!(
-            "[FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Data type mismatches when reading \
-             Parquet column `{path}`. Expected {requested_type}, actual Parquet type {physical_type}."
-        ),
+            None => Arc::new(field.as_ref().clone().with_nullable(true)),
+        });
     }
+    fields.extend(
+        right
+            .iter()
+            .zip(used)
+            .filter(|(_, used)| !used)
+            .map(|(field, _)| Arc::new(field.as_ref().clone().with_nullable(true))),
+    );
+    Ok(fields.into())
 }
 
-fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) -> bool {
-    if physical == requested {
-        return true;
-    }
-
-    match (physical, requested) {
-        // Spark's Parquet readers support these lossless numeric widenings.
-        (DataType::Int32, DataType::Int64 | DataType::Float64)
-        | (DataType::Float32, DataType::Float64)
-        | (DataType::UInt8, DataType::Int16)
-        | (DataType::UInt16, DataType::Int32)
-        | (DataType::UInt32, DataType::Int64) => true,
-        (DataType::UInt64, DataType::Decimal128(20, 0)) => true,
-        (
-            DataType::Int8 | DataType::Int16 | DataType::Int32,
-            DataType::Decimal128(precision, scale),
-        ) => decimal_integer_digits(*precision, *scale) >= 10,
-        (DataType::Int64, DataType::Decimal128(precision, scale)) => {
-            decimal_integer_digits(*precision, *scale) >= 20
+fn merge_parquet_field(
+    left: &Field,
+    right: &Field,
+    matching: StructFieldMatching,
+) -> Result<Arc<Field>> {
+    let ty = match (left.data_type(), right.data_type()) {
+        (a, b) if a == b => a.clone(),
+        (DataType::Decimal128(a, s), DataType::Decimal128(b, t)) if s == t => {
+            DataType::Decimal128(*a.max(b), *s)
         }
-        (
-            DataType::Decimal128(physical_precision, physical_scale),
-            DataType::Decimal128(requested_precision, requested_scale),
-        )
-        | (
-            DataType::Decimal256(physical_precision, physical_scale),
-            DataType::Decimal256(requested_precision, requested_scale),
-        ) => decimal_type_compatible(
-            *physical_precision,
-            *physical_scale,
-            *requested_precision,
-            *requested_scale,
-        ),
-        (
-            DataType::Decimal128(physical_precision, physical_scale),
-            DataType::Decimal256(requested_precision, requested_scale),
-        ) => decimal_type_compatible(
-            *physical_precision,
-            *physical_scale,
-            *requested_precision,
-            *requested_scale,
-        ),
-        // INT96 carries no timezone marker, so the explicit schema determines the
-        // timestamp family. Spark permits the same reinterpretation for Parquet.
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => true,
-        (DataType::Date32, DataType::Timestamp(_, None)) => true,
-        (physical, requested) if is_string_type(physical) && is_string_type(requested) => true,
-        (physical, requested) if is_binary_type(physical) && is_binary_type(requested) => true,
-        _ => false,
+        (DataType::Struct(a), DataType::Struct(b)) => {
+            DataType::Struct(merge_parquet_fields(a, b, matching)?)
+        }
+        (DataType::List(a), DataType::List(b)) => {
+            DataType::List(merge_parquet_field(a, b, matching)?)
+        }
+        (DataType::Map(a, sorted), DataType::Map(b, _)) => {
+            DataType::Map(merge_parquet_field(a, b, matching)?, *sorted)
+        }
+        (a, b) => {
+            return plan_err!(
+                "Cannot merge Parquet column '{}' with types {a} and {b}",
+                left.name()
+            );
+        }
+    };
+    let mut field = left
+        .clone()
+        .with_data_type(ty)
+        .with_nullable(left.is_nullable() || right.is_nullable());
+    if matches!(
+        field.data_type(),
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        // Arrow stores Spark interval bounds in field metadata.
+        match widest_interval_metadata([(left, None), (right, None)])? {
+            Some(qualifier) => {
+                field
+                    .metadata_mut()
+                    .insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_owned(), qualifier);
+            }
+            None => {
+                field
+                    .metadata_mut()
+                    .remove(SAIL_SPARK_INTERVAL_METADATA_KEY);
+            }
+        }
     }
-}
-
-fn decimal_integer_digits(precision: u8, scale: i8) -> i16 {
-    i16::from(precision) - i16::from(scale)
-}
-
-fn decimal_type_compatible(
-    physical_precision: u8,
-    physical_scale: i8,
-    requested_precision: u8,
-    requested_scale: i8,
-) -> bool {
-    let scale_increase = i16::from(requested_scale) - i16::from(physical_scale);
-    let precision_increase = i16::from(requested_precision) - i16::from(physical_precision);
-    scale_increase >= 0 && precision_increase >= scale_increase
-}
-
-fn is_string_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    )
-}
-
-fn is_binary_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_)
-    )
+    Ok(Arc::new(field))
 }
 
 /// Retags producer-specific Arrow timezone labels to the Spark session timezone on timestamp
@@ -506,7 +788,7 @@ fn is_binary_type(data_type: &DataType) -> bool {
 /// metadata-only (the stored instants are identical), so the retag is lossless. A `None` timezone
 /// (`TIMESTAMP_NTZ`) is preserved untouched so it stays distinct from the aware type. Only fields
 /// that appear as timezone-aware milliseconds in at least one file are retagged; a
-/// microsecond-only field keeps its producer label (that pre-existing case is deferred above).
+/// microsecond-only field keeps its producer label in legacy sampling mode.
 fn normalize_widened_timestamp_timezones(
     schemas: &mut [(object_store::path::Path, Schema)],
     session_timezone: &str,
@@ -549,7 +831,15 @@ fn clear_metadata(schema: Schema) -> Schema {
         .fields()
         .iter()
         .map(|field| {
-            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
+            let metadata = if field
+                .metadata()
+                .contains_key(SAIL_SPARK_INTERVAL_METADATA_KEY)
+            {
+                type_metadata(&FieldMetadata::from(field.as_ref())).to_hashmap()
+            } else {
+                Default::default()
+            };
+            Arc::new(field.as_ref().clone().with_metadata(metadata))
         })
         .collect::<Fields>();
     Schema::new(fields)

@@ -3,6 +3,7 @@
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 
 use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
@@ -32,7 +33,11 @@ impl FormatFactory for ParquetFormatFactory {
 
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
         let options = ParquetReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
-        Ok(ParquetReadFormat { options })
+        Ok(ParquetReadFormat {
+            options,
+            matching: StructFieldMatching::Name,
+            duration_hints: read::DurationHints::All,
+        })
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
