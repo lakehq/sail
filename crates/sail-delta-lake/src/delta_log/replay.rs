@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use datafusion::common::runtime::SpawnedTask;
@@ -9,9 +9,10 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
+use super::segment::try_read_checksum_header;
 use super::{
     CheckpointFileSet, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
-    latest_version_from_listing,
+    latest_version_from_listing, list_log_files, read_last_checkpoint_version_from_store,
 };
 use crate::checkpoint::{
     ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState, decode_checkpoint_rows,
@@ -262,56 +263,72 @@ pub(crate) async fn load_replayed_table_header(
 
 /// Returns whether the table protocol satisfies `predicate` at some version up to `version`.
 ///
-/// The search starts from the state that a table header load starts from: a checksum, or the
-/// latest checkpoint. The commits after it are then read in order, decoding only their protocol
-/// action, and the search stops at the first protocol that satisfies `predicate`, so the commits
-/// after that one are not read.
+/// The search starts from a checksum or the latest checkpoint, and then reads the published log
+/// files after it in version order, decoding only their protocol action. It stops at the first
+/// protocol that satisfies `predicate`, so the files after it are not read. A missing published
+/// commit also stops the search and counts as satisfying `predicate`.
 pub(crate) async fn protocol_satisfies_up_to(
     version: i64,
     log_store: &dyn LogStore,
     predicate: impl Fn(&Protocol) -> bool,
 ) -> DeltaResult<bool> {
-    let segment = LogSegmentResolver::new(log_store, version, None, None)
-        .resolve_for_header()
-        .await?;
-    let (base, checkpoint, commit_files, compaction_files) = match segment {
-        ResolvedLogSegment::ExactChecksum { header } => return Ok(predicate(&header.protocol)),
-        ResolvedLogSegment::Incremental {
-            base,
-            checkpoint,
-            commit_files,
-            compaction_files,
-            ..
-        } => (Some(base), checkpoint, commit_files, compaction_files),
-        ResolvedLogSegment::FullReplay {
-            checkpoint,
-            commit_files,
-            compaction_files,
-            ..
-        } => (None, checkpoint, commit_files, compaction_files),
-    };
-
     let store = log_store.object_store(None);
-    // The resolver returns a checkpoint only when it is newer than the base.
-    let start_protocol = match checkpoint {
-        Some(checkpoint) => read_checkpoint_protocol(store.clone(), checkpoint).await?,
-        None => base.map(|base| base.protocol),
-    };
-    if start_protocol.as_ref().is_some_and(&predicate) {
-        return Ok(true);
+    if let Some(header) = try_read_checksum_header(store.clone(), version).await {
+        return Ok(predicate(&header.protocol));
     }
 
-    let mut log_files = commit_files
+    let list_offset = read_last_checkpoint_version_from_store(store.clone())
+        .await
+        .filter(|hint| (0..=version).contains(hint))
+        .map(|hint| hint.saturating_sub(1))
+        .unwrap_or(0);
+    let (checksum_files, checkpoint, commit_files, compaction_files) =
+        list_log_files(store.clone(), list_offset, version).await?;
+
+    let mut next_version = 0;
+    if let Some(checkpoint) = checkpoint {
+        next_version = checkpoint.version().saturating_add(1);
+        if read_checkpoint_protocol(store.clone(), checkpoint)
+            .await?
+            .as_ref()
+            .is_some_and(&predicate)
+        {
+            return Ok(true);
+        }
+    }
+    // A newer checksum lets the search skip the commits before it. Checksums are listed newest
+    // first, and the one at `version` was read above.
+    if let Some((checksum_version, _)) = checksum_files
         .iter()
-        .map(|(version, meta)| (*version, *version, meta))
-        .chain(
-            compaction_files
-                .iter()
-                .map(|((start, end), meta)| (*start, *end, meta)),
-        )
-        .collect::<Vec<_>>();
-    log_files.sort_by_key(|(start, _, _)| *start);
-    for (_, end, meta) in log_files {
+        .find(|(checksum_version, _)| *checksum_version < version)
+        && *checksum_version >= next_version
+        && let Some(header) = try_read_checksum_header(store.clone(), *checksum_version).await
+    {
+        if predicate(&header.protocol) {
+            return Ok(true);
+        }
+        next_version = checksum_version.saturating_add(1);
+    }
+
+    let commit_files = commit_files
+        .iter()
+        .map(|(version, meta)| (*version, meta))
+        .collect::<HashMap<_, _>>();
+    let compaction_files = compaction_files
+        .iter()
+        .map(|((start, end), meta)| (*start, (*end, meta)))
+        .collect::<HashMap<_, _>>();
+    while next_version <= version {
+        let (end, meta) = match (
+            compaction_files.get(&next_version),
+            commit_files.get(&next_version),
+        ) {
+            (Some((end, meta)), _) => (*end, *meta),
+            (None, Some(meta)) => (next_version, *meta),
+            // A published commit can only be missing for a catalog-managed table, whose catalog
+            // ratified a staged commit that is not published yet.
+            (None, None) => return Ok(true),
+        };
         let bytes = store.get(&meta.location).await?.bytes().await?;
         if get_protocol_action(end, &bytes)?
             .as_ref()
@@ -319,6 +336,7 @@ pub(crate) async fn protocol_satisfies_up_to(
         {
             return Ok(true);
         }
+        next_version = end.saturating_add(1);
     }
     Ok(false)
 }

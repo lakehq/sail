@@ -1432,6 +1432,16 @@ mod tests {
         Ok(())
     }
 
+    async fn put_add_commit(store: &Arc<dyn ObjectStore>, version: i64) -> DeltaResult<()> {
+        let add = Add {
+            path: format!("part-{version}.parquet"),
+            size: 1,
+            data_change: true,
+            ..Default::default()
+        };
+        put_commit(store, version, &[Action::Add(add)]).await
+    }
+
     /// Writes version 0 with `protocol`, adds a file in each version up to `last_version`, and
     /// publishes a commit after it that cannot be parsed. No checksum files are written.
     async fn log_with_corrupt_tail(
@@ -1456,13 +1466,7 @@ mod tests {
         )
         .await?;
         for version in 1..=last_version {
-            let add = Add {
-                path: format!("part-{version}.parquet"),
-                size: 1,
-                data_change: true,
-                ..Default::default()
-            };
-            put_commit(&store, version, &[Action::Add(add)]).await?;
+            put_add_commit(&store, version).await?;
         }
         store
             .put(
@@ -1561,6 +1565,39 @@ mod tests {
         assert!(is_catalog_managed(&log_store, 3, Some(3)).await?);
         // Versions after the latest published one exist only in the catalog.
         assert!(is_catalog_managed(&log_store, 3, Some(5)).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detection_stops_at_an_upgrade_before_an_unpublished_commit() -> DeltaResult<()> {
+        let protocol = Protocol::new(1, 2, None, None);
+        let (store, log_store) = log_with_corrupt_tail(protocol.clone(), 1).await?;
+        put_commit(
+            &store,
+            2,
+            &[Action::Protocol(protocol_with_catalog_managed(&protocol))],
+        )
+        .await?;
+        // The catalog ratified version 3, which is not published yet.
+        put_add_commit(&store, 4).await?;
+
+        assert!(is_catalog_managed(&log_store, 4, None).await?);
+        assert!(!is_catalog_managed(&log_store, 4, Some(1)).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detection_treats_a_missing_published_commit_as_catalog_managed() -> DeltaResult<()> {
+        let (store, log_store) = log_with_corrupt_tail(Protocol::new(1, 2, None, None), 0).await?;
+        // Version 1, for example the commit that enables catalog-managed commits, is ratified
+        // by the catalog but not published yet.
+        store
+            .delete(&Path::from(format!("_delta_log/{:020}.json", 1)))
+            .await?;
+        put_add_commit(&store, 2).await?;
+
+        assert!(is_catalog_managed(&log_store, 2, None).await?);
+        assert!(!is_catalog_managed(&log_store, 2, Some(0)).await?);
         Ok(())
     }
 }
