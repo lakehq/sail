@@ -1698,11 +1698,33 @@ def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, nest
     assert df.selectExpr(f"{element}.good AS v").orderBy("v").collect() == [(0,), (1,)]
     invalid = [f"{element}.bad", column]
     if not is_map:
-        assert sorted(df.select(f"{column}.good").collect()) == [([0],), ([1],)]
+        for array in [column, f"reverse({column})", f"shuffle({column})", f"slice({column}, 1, 1)"]:
+            assert sorted(df.selectExpr(f"{array}.good").collect()) == [([0],), ([1],)]
+        assert sorted(df.selectExpr(f"get({column}, 0).good").collect()) == [(0,), (1,)]
+        assert df.selectExpr(f"try_element_at({column}, 2).good").collect() == [(None,), (None,)]
         invalid.append(f"{column}.bad")
+    key = "'k'" if is_map else "1"
+    assert sorted(df.selectExpr(f"try_element_at({column}, {key}).good").collect()) == [(0,), (1,)]
     for expression in invalid:
         with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
             df.selectExpr(expression).collect()
+
+
+@pytest.mark.parametrize("accessor", ["map_keys", "map_values"])
+def test_parquet_projected_map_struct_field(spark, tmp_path, accessor):
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        struct = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        item = {"good": i, "bad": "two" if i else 1}
+        if accessor == "map_keys":
+            entries = pa.array([[(item, "v")]], pa.map_(struct, pa.string()))
+        else:
+            entries = pa.array([[("k", item)]], pa.map_(pa.string(), struct))
+        pq.write_table(pa.table({"items": entries}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert sorted(df.selectExpr(f"{accessor}(items).good").collect()) == [([0],), ([1],)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.selectExpr(f"{accessor}(items)").collect()
 
 
 def test_parquet_projected_chained_collection_access(spark, tmp_path):

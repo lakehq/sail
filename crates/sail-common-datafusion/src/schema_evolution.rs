@@ -435,51 +435,87 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         if let Some(case) = expr.downcast_ref::<expressions::CaseExpr>()
             && case.expr().is_none()
             && let [(condition, error)] = case.when_then_expr()
-            && let Some(cast) = error.downcast_ref::<CastExpr>()
-            && cast
-                .expr()
-                .downcast_ref::<ScalarFunctionExpr>()
-                .is_some_and(|f| f.name() == "raise_error")
             && let Some(element) = case
                 .else_expr()
                 .and_then(|e| e.downcast_ref::<ScalarFunctionExpr>())
             && element.name() == "spark_array_element"
         {
-            return self.project_parquet_element(
-                element,
-                requested,
-                Some((condition, cast.expr())),
-            );
+            let fallback = if let Some(cast) = error.downcast_ref::<CastExpr>()
+                && cast
+                    .expr()
+                    .downcast_ref::<ScalarFunctionExpr>()
+                    .is_some_and(|f| f.name() == "raise_error")
+            {
+                Arc::clone(cast.expr())
+            } else if error
+                .downcast_ref::<Literal>()
+                .is_some_and(|lit| lit.value().is_null())
+            {
+                Arc::new(Literal::new(ScalarValue::Null))
+            } else {
+                return Ok(None);
+            };
+            return self.project_parquet_element(element, requested, Some((condition, &fallback)));
         }
         let Some(function) = expr.downcast_ref::<ScalarFunctionExpr>() else {
             return Ok(None);
         };
-        if matches!(function.name(), "spark_array_element" | "spark_map_element") {
+        if matches!(
+            function.name(),
+            "spark_array_element" | "spark_map_element" | "array_element"
+        ) {
             return self.project_parquet_element(function, requested, None);
         }
         let Some((root, names)) = function.args().split_first() else {
             return Ok(None);
         };
-        let Some(path) = names
-            .iter()
-            .map(literal_field_name)
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Ok(None);
-        };
         let field = root.return_field(self.logical_file_schema)?;
-        let narrow = if function.name() == "array_struct_field" {
-            let item = match requested {
-                DataType::List(item)
-                | DataType::LargeList(item)
-                | DataType::FixedSizeList(item, _) => item,
-                _ => return Ok(None),
-            };
-            narrow_parquet_collection(field.data_type(), &path, item.data_type())
-        } else if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() {
-            narrow_parquet_struct(field.data_type(), &path, requested)
-        } else {
-            return Ok(None);
+        let narrow = match function.name() {
+            // These functions reorder or slice the list without inspecting its elements.
+            "spark_reverse" | "shuffle" | "array_slice"
+                if matches!(
+                    requested,
+                    DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+                ) && names.iter().all(|arg| arg.is::<Literal>()) =>
+            {
+                Some(requested.clone())
+            }
+            "array_struct_field" | "map_keys" | "map_values" | "map_extract" => {
+                let item = match requested {
+                    DataType::List(item)
+                    | DataType::LargeList(item)
+                    | DataType::FixedSizeList(item, _) => item,
+                    _ => return Ok(None),
+                };
+                match (function.name(), names) {
+                    ("array_struct_field", [name]) => {
+                        let Some(name) = literal_field_name(name) else {
+                            return Ok(None);
+                        };
+                        narrow_parquet_collection(field.data_type(), &[name], item.data_type())
+                    }
+                    ("map_values" | "map_keys", []) => narrow_parquet_map(
+                        field.data_type(),
+                        function.name() == "map_keys",
+                        item.data_type(),
+                    ),
+                    ("map_extract", [key]) if key.is::<Literal>() => {
+                        narrow_parquet_map(field.data_type(), false, item.data_type())
+                    }
+                    _ => return Ok(None),
+                }
+            }
+            _ if ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()).is_some() => {
+                let Some(path) = names
+                    .iter()
+                    .map(literal_field_name)
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return Ok(None);
+                };
+                narrow_parquet_struct(field.data_type(), &path, requested)
+            }
+            _ => return Ok(None),
         };
         let Some(narrow) = narrow else {
             return Ok(None);
@@ -891,26 +927,37 @@ fn narrow_parquet_collection(
         DataType::List(item) => DataType::List(narrow(item)?),
         DataType::LargeList(item) => DataType::LargeList(narrow(item)?),
         DataType::FixedSizeList(item, size) => DataType::FixedSizeList(narrow(item)?, *size),
-        DataType::Map(entries, sorted) => {
-            let DataType::Struct(fields) = entries.data_type() else {
-                return None;
-            };
-            let [key, value] = fields.as_ref() else {
-                return None;
-            };
-            let fields = vec![Arc::clone(key), narrow(value)?].into();
-            DataType::Map(
-                Arc::new(
-                    entries
-                        .as_ref()
-                        .clone()
-                        .with_data_type(DataType::Struct(fields)),
-                ),
-                *sorted,
-            )
-        }
+        DataType::Map(_, _) if path.is_empty() => narrow_parquet_map(ty, false, requested)?,
         _ => return None,
     })
+}
+
+fn narrow_parquet_map(ty: &DataType, project_key: bool, requested: &DataType) -> Option<DataType> {
+    let DataType::Map(entries, sorted) = ty else {
+        return None;
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return None;
+    };
+    let [key, value] = fields.as_ref() else {
+        return None;
+    };
+    let project =
+        |field: &Arc<Field>| Arc::new(field.as_ref().clone().with_data_type(requested.clone()));
+    let fields = if project_key {
+        [project(key), Arc::clone(value)]
+    } else {
+        [Arc::clone(key), project(value)]
+    };
+    Some(DataType::Map(
+        Arc::new(
+            entries
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(fields.into())),
+        ),
+        *sorted,
+    ))
 }
 
 fn literal_field_name(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
