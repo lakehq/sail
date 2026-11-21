@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
     new_null_array,
 };
 use datafusion::arrow::compute::{CastOptions, can_cast_types, cast_with_options};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -974,6 +974,20 @@ fn validate_struct_compatibility_with_variant(
     Ok(())
 }
 
+fn map_entry_index(
+    source_fields: &Fields,
+    target_index: usize,
+    target_field: &Field,
+    cast_mode: SchemaEvolutionCastMode,
+) -> Option<usize> {
+    if cast_mode == SchemaEvolutionCastMode::Parquet {
+        // Legacy Parquet maps identify the key and value by their position.
+        (target_index < source_fields.len()).then_some(target_index)
+    } else {
+        source_fields.find(target_field.name()).map(|(i, _)| i)
+    }
+}
+
 fn validate_map_entries_compatibility(
     source_entries: &Field,
     target_entries: &Field,
@@ -986,11 +1000,9 @@ fn validate_map_entries_compatibility(
         return exec_err!("map entries must use struct types");
     };
 
-    for target_field in target_fields {
-        // Arrow map key/value fields are structural wrappers without column-mapping metadata.
-        match source_fields
-            .iter()
-            .find(|source| source.name() == target_field.name())
+    for (index, target_field) in target_fields.iter().enumerate() {
+        match map_entry_index(source_fields, index, target_field, cast_mode)
+            .map(|i| &source_fields[i])
         {
             Some(source_field)
                 if can_cast_field_with_schema_evolution(
@@ -1299,10 +1311,13 @@ fn cast_array_with_schema_evolution_inner(
         return cast_parquet_integer(source.as_ref(), target_field.data_type());
     }
 
-    if cast_mode == SchemaEvolutionCastMode::RelaxedTimezone
-        && let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
-            (source.data_type(), target_field.data_type())
+    if matches!(
+        cast_mode,
+        SchemaEvolutionCastMode::RelaxedTimezone | SchemaEvolutionCastMode::Parquet
+    ) && let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
+        (source.data_type(), target_field.data_type())
     {
+        // Parquet timestamp readers preserve the stored epoch ticks across timezone families.
         let source_without_timezone = DataType::Timestamp(*source_unit, None);
         let source = cast_array_recursively(source, &source_without_timezone)?;
         let target_without_timezone = DataType::Timestamp(*target_unit, None);
@@ -1428,12 +1443,16 @@ fn cast_array_with_schema_evolution_inner(
             let mut kv_arrays: Vec<ArrayRef> = Vec::with_capacity(target_kv_fields.len());
             let mut kv_fields: Vec<Arc<Field>> = Vec::with_capacity(target_kv_fields.len());
 
-            for target_child in target_kv_fields {
-                // Match the synthetic key/value wrapper by name, then apply mapping recursively.
+            for (index, target_child) in target_kv_fields.iter().enumerate() {
                 kv_fields.push(Arc::clone(target_child));
-                match source_map.entries().column_by_name(target_child.name()) {
-                    Some(source_child) => kv_arrays.push(cast_array_with_schema_evolution_inner(
-                        source_child,
+                match map_entry_index(
+                    source_map.entries().fields(),
+                    index,
+                    target_child,
+                    cast_mode,
+                ) {
+                    Some(i) => kv_arrays.push(cast_array_with_schema_evolution_inner(
+                        source_map.entries().column(i),
                         target_child.as_ref(),
                         cast_options,
                         matching,

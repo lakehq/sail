@@ -76,13 +76,32 @@ pub fn normalize_parquet_field(
                 .map(|f| normalize_parquet_field(f, merge_timezone, binary_as_string))
                 .collect(),
         ),
-        DataType::Map(entries, sorted) => DataType::Map(
-            normalize_parquet_field(entries, merge_timezone, binary_as_string),
-            *sorted,
-        ),
+        DataType::Map(entries, sorted) => {
+            let Some([key, value]) = map_fields(entries) else {
+                return Arc::clone(field);
+            };
+            // Legacy Parquet maps use arbitrary names for the two positional children.
+            let children = [(key, "key"), (value, "value")].map(|(child, name)| {
+                let child = normalize_parquet_field(child, merge_timezone, binary_as_string);
+                Arc::new(child.as_ref().clone().with_name(name))
+            });
+            let entries = entries
+                .as_ref()
+                .clone()
+                .with_name("key_value")
+                .with_data_type(DataType::Struct(children.into()));
+            DataType::Map(Arc::new(entries), *sorted)
+        }
         _ => return Arc::clone(field),
     };
     Arc::new(field.as_ref().clone().with_data_type(ty))
+}
+
+fn map_fields(entries: &Field) -> Option<&[Arc<Field>; 2]> {
+    let DataType::Struct(fields) = entries.data_type() else {
+        return None;
+    };
+    fields.as_ref().try_into().ok()
 }
 
 pub fn validate_parquet_field(
@@ -122,7 +141,12 @@ pub fn validate_parquet_field(
             validate_parquet_field(&format!("{path}[]"), field, actual, matching)?;
         }
         (DataType::Map(actual, _), DataType::Map(field, _)) => {
-            validate_parquet_field(path, field, actual, matching)?;
+            let (Some(physical), Some(requested)) = (map_fields(actual), map_fields(field)) else {
+                return internal_err!("Expected two map entry fields in Parquet column {path}");
+            };
+            for (source, target) in physical.iter().zip(requested) {
+                validate_parquet_field(path, target, source, matching)?;
+            }
         }
         (actual, expected)
             if parquet_temporal_storage_cast(actual, expected).is_some()

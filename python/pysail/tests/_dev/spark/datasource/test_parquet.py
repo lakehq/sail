@@ -1599,3 +1599,31 @@ def test_parquet_fixed_binary_rejects_string_schema(spark, tmp_path):
     pq.write_table(pa.table({"value": pa.array([b"abc"], type=pa.binary(3))}), path)
     with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
         spark.read.schema("value STRING").parquet(str(path)).collect()
+
+
+def test_parquet_single_footer_preserves_epoch_across_timestamp_families(spark, tmp_path):
+    for i, zone in enumerate(["Asia/Shanghai", None]):
+        values = pa.array([i], type=pa.timestamp("us", tz=zone))
+        pq.write_table(pa.table({"id": [i], "v": values}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr("id", "unix_micros(v)").orderBy("id").collect() == [(0, 0), (1, 1)]
+    assert df.where("unix_micros(v) = 1").select("id").collect() == [(1,)]
+    assert df.selectExpr("unix_micros(min(v))", "unix_micros(max(v))").collect() == [(0, 1)]
+
+
+@pytest.mark.parametrize("merge_schema", [False, True])
+def test_parquet_reads_legacy_map_child_names(spark, tmp_path, merge_schema):
+    for i in range(2):
+        values = pa.array([[("x", i)]], type=pa.map_(pa.string(), pa.int64()))
+        path = tmp_path / f"{i}.parquet"
+        pq.write_table(pa.table({"id": [i], "m": values}), path, store_schema=False)
+        if i == 1:
+            # PyArrow emits standard map names. Rename the length-prefixed footer
+            # strings to same-length legacy names, keeping the footer length and offsets.
+            data = path.read_bytes()
+            path.write_bytes(data.replace(b"\x03key", b"\x03abc").replace(b"\x05value", b"\x05entry"))
+
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<id:bigint,m:map<string,bigint>>"
+    assert df.orderBy("id").collect() == [(0, {"x": 0}), (1, {"x": 1})]
