@@ -83,7 +83,9 @@ use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, 
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
-use crate::listing::commit::{FileWriteCommitExec, manifest_files, manifest_schema};
+use crate::listing::commit::{
+    FileWriteCommitExec, WriteCommitLedger, manifest_files, manifest_schema,
+};
 use crate::listing::partition::pruned_partition_list;
 use crate::listing::staging::{Publisher, StagedUpload};
 use crate::listing::testing::{FaultStore, Mode};
@@ -2732,8 +2734,13 @@ fn commit_exec(writer: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>
     )))
 }
 
+/// The configuration of a session that commits writes.
+fn commit_config() -> SessionConfig {
+    SessionConfig::new().with_extension(Arc::new(WriteCommitLedger::default()))
+}
+
 fn memory_context() -> Result<(SessionContext, Arc<dyn ObjectStore>)> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(commit_config());
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     ctx.register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),
@@ -2843,7 +2850,7 @@ fn fault_context(
     use sail_common_datafusion::session::multipart::MultipartStoreProvider;
 
     let store = FaultStore::new();
-    let mut config = SessionConfig::new();
+    let mut config = commit_config();
     if mode == Mode::Multipart {
         let multipart = Arc::clone(&store);
         config = config.with_extension(Arc::new(MultipartStoreProvider::new(move |_| {
@@ -2976,12 +2983,14 @@ async fn test_write_that_is_attempted_again_publishes_one_attempt() -> Result<()
 
         let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![12]);
-        // The files of the first attempt are not visible. They stay as hidden
-        // objects or as open uploads, since nothing owns them.
-        let mut expected = vec!["table/_SUCCESS".to_string()];
-        expected.extend(staged.iter().map(|x| x.to_string()));
-        expected.push(file_name(0, 0, ".zstd.parquet"));
-        expected.push(file_name(1, 0, ".zstd.parquet"));
+        // The files of the first attempt are not visible. The commit removes
+        // them when they are objects, and they stay as open uploads otherwise,
+        // since uploads cannot be listed.
+        let expected = vec![
+            "table/_SUCCESS".to_string(),
+            file_name(0, 0, ".zstd.parquet"),
+            file_name(1, 0, ".zstd.parquet"),
+        ];
         assert_eq!(store.objects().await?, expected, "{mode:?}");
         let uploads = match mode {
             Mode::Rename => vec![],

@@ -1601,6 +1601,9 @@ mod tests {
                     0,
                     std::num::NonZeroUsize::MIN,
                 ),
+            ))
+            .with_extension(Arc::new(
+                sail_data_source::listing::commit::WriteCommitLedger::default(),
             ));
         let state = SessionStateBuilder::new()
             .with_config(config)

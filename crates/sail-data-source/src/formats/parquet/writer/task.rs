@@ -108,9 +108,10 @@ impl ParquetWriteMetrics {
 /// The files that a writer task has staged and not reported.
 ///
 /// The task owns these files until its manifest is taken. It removes them
-/// when it fails or is canceled before that, so that a write that is not
-/// committed leaves nothing in the object store. None of the files is visible
-/// to the readers of the table in either case.
+/// when it fails or is canceled before that. None of the files is visible
+/// to the readers of the table in either case. The files stay in the object
+/// store as staged files when the process is stopped, or when the manifest
+/// was taken and no commit of the write receives it.
 struct TaskFiles {
     publisher: Publisher,
     table_path: Path,
@@ -192,16 +193,25 @@ impl Drop for AbandonGuard {
         if staged.is_empty() {
             return;
         }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            log::warn!(
+                "{} staged files of the write {} to {} are not removed, \
+                since a writer task has ended outside of a runtime",
+                staged.len(),
+                self.0.write_id,
+                self.0.table_path
+            );
+            return;
+        };
         log::warn!(
-            "removing {} staged files of the write {} to {} after a writer task has ended without success",
+            "removing {} staged files of the write {} to {} \
+            after a writer task has ended without success",
             staged.len(),
             self.0.write_id,
             self.0.table_path
         );
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let files = Arc::clone(&self.0);
-            runtime.spawn(async move { files.publisher.abort_all(&staged).await });
-        }
+        let files = Arc::clone(&self.0);
+        runtime.spawn(async move { files.publisher.abort_all(&staged).await });
     }
 }
 

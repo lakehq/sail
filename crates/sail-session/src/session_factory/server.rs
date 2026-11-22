@@ -21,6 +21,7 @@ use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
+use sail_data_source::listing::commit::WriteCommitLedger;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
@@ -151,7 +152,8 @@ impl ServerSessionFactory {
                 .with_write_success_file(self.config.parquet.write_success_file),
             ))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
-            .with_extension(Arc::new(DeltaTableCache::default()));
+            .with_extension(Arc::new(DeltaTableCache::default()))
+            .with_extension(Arc::new(WriteCommitLedger::default()));
         self.apply_execution_config(&mut config)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,

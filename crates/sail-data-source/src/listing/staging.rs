@@ -48,6 +48,7 @@
 //! the uploads that a commit has accepted are ever completed.
 
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bytes::Bytes;
@@ -83,6 +84,18 @@ pub(crate) fn is_staged_name(name: &str) -> bool {
         .unwrap_or(name)
         .starts_with(STAGED_NAME_PREFIX)
 }
+
+/// The number of files that are published or removed at the same time.
+///
+/// A file is published with one small request, and the commit publishes
+/// the files of all writer tasks, so the requests are sent concurrently.
+/// The client of an object store opens a connection for each request that
+/// is in flight, and it sends a request again when the object store asks
+/// it to slow down. The number is of the order of the part uploads that
+/// the writer tasks of one process have in flight during the write, which
+/// the client sustains, so the commit does not load the object store more
+/// than the write itself does.
+pub(crate) const PUBLISH_CONCURRENCY: usize = 64;
 
 /// How a file that a writer task has uploaded becomes visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +180,7 @@ impl Publisher {
         part_size: usize,
         max_concurrency: usize,
     ) -> StagedUpload {
+        let mut buffered = Arc::new(AtomicUsize::new(0));
         let inner = match self {
             Self::Rename { store } => {
                 // The name is unique to the file, so that no attempt of
@@ -187,6 +201,7 @@ impl Publisher {
             Self::Multipart { multipart, .. } => {
                 let parts = Arc::new(UploadedParts::default());
                 let upload = DeferredUpload::new(Arc::clone(multipart), location, &parts);
+                buffered = Arc::clone(&parts.buffered);
                 UploadState::Multipart {
                     writer: Box::new(WriteMultipart::new_with_chunk_size(
                         Box::new(upload),
@@ -197,7 +212,13 @@ impl Publisher {
                 }
             }
         };
-        StagedUpload { inner }
+        StagedUpload { inner, buffered }
+    }
+
+    /// Whether the files have a largest number of parts, which is the case
+    /// for the object stores with a multipart upload interface.
+    pub fn limits_parts(&self) -> bool {
+        matches!(self, Self::Multipart { .. })
     }
 
     /// Whether the file is staged in the way in which this publishes files.
@@ -263,7 +284,16 @@ impl Publisher {
             (Self::Multipart { multipart, .. }, Publish::Multipart { upload_id, .. }) => {
                 multipart.abort_multipart(&file.location, upload_id).await
             }
-            (Self::Rename { .. }, Publish::Multipart { .. }) => Ok(()),
+            (Self::Rename { .. }, Publish::Multipart { upload_id, .. }) => {
+                // The upload cannot be aborted without the multipart upload
+                // interface of the object store, so it stays open.
+                log::warn!(
+                    "the multipart upload {upload_id} of {} is not aborted, since the session \
+                    does not have the multipart upload interface of the object store",
+                    file.location
+                );
+                Ok(())
+            }
         };
         if let Err(e) = result {
             log::warn!(
@@ -274,8 +304,11 @@ impl Publisher {
     }
 
     /// Removes what the files occupy before they are published.
+    /// The requests are limited as the requests that publish files are.
     pub async fn abort_all(&self, files: &[StagedFile]) {
-        futures::future::join_all(files.iter().map(|file| self.abort(file))).await;
+        for files in files.chunks(PUBLISH_CONCURRENCY) {
+            futures::future::join_all(files.iter().map(|file| self.abort(file))).await;
+        }
     }
 }
 
@@ -287,6 +320,8 @@ impl Publisher {
 /// is not to be published.
 pub struct StagedUpload {
     inner: UploadState,
+    /// The size in bytes of the data that was added and that is not stored.
+    buffered: Arc<AtomicUsize>,
 }
 
 enum UploadState {
@@ -314,7 +349,19 @@ impl StagedUpload {
                 writer: Box::new(writer),
                 staged: location,
             },
+            buffered: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// The size in bytes of the data that was added to a multipart upload and
+    /// that the object store has not stored yet. This is the data of the part
+    /// that is not full and of the parts that are being uploaded, so it is
+    /// at most the size of a part for each part that is uploaded at the same
+    /// time and for one more. The data of an upload that is renamed is held
+    /// by the object store writer, which has the same bound and does not
+    /// report it.
+    pub fn buffered(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.buffered)
     }
 
     /// Adds data to the file. This waits when too many parts are being uploaded.
@@ -327,6 +374,7 @@ impl StagedUpload {
                 ..
             } => {
                 writer.wait_for_capacity(*max_concurrency).await?;
+                self.buffered.fetch_add(data.len(), Ordering::Relaxed);
                 writer.put(data);
                 Ok(())
             }
@@ -360,6 +408,8 @@ impl StagedUpload {
 /// The parts of a multipart upload that have been stored.
 #[derive(Default)]
 struct UploadedParts {
+    /// The size in bytes of the data that is not stored.
+    buffered: Arc<AtomicUsize>,
     upload_id: OnceLock<MultipartId>,
     /// The identifier of each part at the index of the part.
     parts: Mutex<Vec<Option<String>>>,
@@ -486,6 +536,15 @@ impl DeferredUpload {
     }
 }
 
+/// Subtracts the size of the data of a part from the data that is not stored.
+struct Buffered(Arc<AtomicUsize>, usize);
+
+impl Drop for Buffered {
+    fn drop(&mut self) {
+        self.0.fetch_sub(self.1, Ordering::Relaxed);
+    }
+}
+
 fn shared_error(error: Arc<object_store::Error>) -> object_store::Error {
     object_store::Error::Generic {
         store: "DeferredUpload",
@@ -506,6 +565,8 @@ impl MultipartUpload for DeferredUpload {
         let in_flight = self.in_flight.clone();
         Box::pin(async move {
             let _in_flight = in_flight;
+            // The data is released when the request ends in any way.
+            let _buffered = Buffered(Arc::clone(&parts.buffered), data.content_length());
             let upload_id = created.await.map_err(shared_error)?;
             let part = store.put_part(&location, &upload_id, index, data).await?;
             parts.upload_id.get_or_init(|| upload_id);
@@ -618,7 +679,10 @@ mod tests {
             let mut upload = upload(&store, mode, 2);
             upload.put(Bytes::from_static(b"abc")).await?;
             upload.put(Bytes::from_static(b"de")).await?;
+            let buffered = upload.buffered();
             let publish = upload.finish().await?;
+            // The data is stored, so it is not counted as memory any longer.
+            assert_eq!(buffered.load(Ordering::Relaxed), 0);
             // The result is the same when the upload is finished again.
             assert_eq!(upload.finish().await?, publish);
             assert!(upload.put(Bytes::from_static(b"f")).await.is_err());
@@ -702,6 +766,8 @@ mod tests {
             let mut upload = upload(&store, Mode::Multipart, 2);
             upload.put(Bytes::from_static(b"abcd")).await?;
             gate.wait_for(1).await;
+            // The data of the parts is in memory while it is uploaded.
+            assert_eq!(upload.buffered().load(Ordering::Relaxed), 4);
             drop(upload);
             assert_eq!(store.count("ABORT"), 0);
             gate.open();
