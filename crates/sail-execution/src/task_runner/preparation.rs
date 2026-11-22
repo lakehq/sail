@@ -18,6 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio_util::sync::CancellationToken;
@@ -60,6 +61,7 @@ impl TaskPreparation {
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
         let plan = self.rewrite_file_scans(plan)?;
+        let plan = rewrite_write_attempt(plan, key.attempt)?;
         let plan = self.rewrite_shuffle(
             key,
             &definition.inputs,
@@ -170,6 +172,24 @@ impl TaskPreparation {
     }
 }
 
+/// Tells the file writers in the plan which attempt of the task they run in.
+/// The writers use the attempt number in the file names, so that a retried
+/// task never writes to a file of an earlier attempt that may still be running.
+fn rewrite_write_attempt(
+    plan: Arc<dyn ExecutionPlan>,
+    attempt: usize,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let result = plan.transform(|node| {
+        if let Some(write) = node.downcast_ref::<ParquetWriteExec>() {
+            return Ok(Transformed::yes(
+                Arc::new(write.with_attempt(attempt)) as Arc<dyn ExecutionPlan>
+            ));
+        }
+        Ok(Transformed::no(node))
+    });
+    Ok(result.data()?)
+}
+
 /// Releases the inputs the task never executed once its stream is dropped,
 /// which happens when the task succeeds, fails, or is canceled.
 fn release_unexecuted_on_drop(
@@ -255,6 +275,47 @@ mod tests {
             partition: 0,
             attempt: 0,
         }
+    }
+
+    #[test]
+    fn write_attempt_is_set_on_parquet_writers() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::config::TableParquetOptions;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let write = ParquetWriteExec::try_new(
+            Arc::new(EmptyExec::new(schema).with_partitions(2)),
+            ObjectStoreUrl::parse("memory://")?,
+            object_store::path::Path::from("table"),
+            uuid::Uuid::from_u128(1),
+            vec![],
+            TableParquetOptions::default(),
+            ".parquet".to_string(),
+            None,
+            false,
+        )?;
+        assert_eq!(write.attempt(), 0);
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(Arc::new(write)));
+
+        for attempt in [0, 3] {
+            let plan = rewrite_write_attempt(Arc::clone(&plan), attempt)?;
+            let coalesce = plan
+                .downcast_ref::<CoalescePartitionsExec>()
+                .ok_or("missing coalesce")?;
+            let write = coalesce
+                .input()
+                .downcast_ref::<ParquetWriteExec>()
+                .ok_or("missing writer")?;
+            assert_eq!(write.attempt(), attempt);
+            assert_eq!(
+                write.properties().output_partitioning().partition_count(),
+                2
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]

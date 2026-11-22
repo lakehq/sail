@@ -18,6 +18,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
 use datafusion::execution::SendableRecordBatchStream;
@@ -25,6 +26,7 @@ use datafusion::execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -32,11 +34,16 @@ use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use datafusion::parquet::file::properties::WriterPropertiesBuilder;
+use datafusion::physical_expr::Distribution;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::prelude::SessionContext;
+use datafusion::physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, ReplaceChildrenOptions, collect,
+};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_datasource::ListingTableUrl;
@@ -47,9 +54,11 @@ use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 use uuid::Uuid;
 
+use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
+use crate::listing::commit::{FileWriteCommitExec, manifest_schema};
 
 const WRITE_ID: Uuid = Uuid::from_u128(0x0f1e2d3c_4b5a_4978_8a9b_acbdcedfe0f1);
 
@@ -1307,6 +1316,258 @@ async fn test_partition_sorting_columns() -> Result<()> {
             descending: false,
             nulls_first: true,
         }])
+    );
+    Ok(())
+}
+
+fn write_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: &SchemaRef,
+    ordering: Option<LexOrdering>,
+    write_sorting_columns: bool,
+) -> Result<ParquetWriteExec> {
+    let input = MemorySourceConfig::try_new_exec(partitions, Arc::clone(schema), None)?;
+    ParquetWriteExec::try_new(
+        input,
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+        vec![],
+        TableParquetOptions::default(),
+        ".zstd.parquet".to_string(),
+        ordering,
+        write_sorting_columns,
+    )
+}
+
+fn commit_exec(writer: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    Ok(Arc::new(FileWriteCommitExec::new(
+        Arc::new(CoalescePartitionsExec::new(writer)),
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+    )))
+}
+
+fn memory_context() -> Result<(SessionContext, Arc<dyn ObjectStore>)> {
+    let ctx = SessionContext::new();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    ctx.register_object_store(
+        ObjectStoreUrl::parse("memory://")?.as_ref(),
+        Arc::clone(&store),
+    );
+    Ok((ctx, store))
+}
+
+fn count_value(batches: &[RecordBatch]) -> Result<Vec<u64>> {
+    let mut values = vec![];
+    for batch in batches {
+        let count = datafusion_common::cast::as_uint64_array(batch.column(0))?;
+        values.extend(count.values().iter().copied());
+    }
+    Ok(values)
+}
+
+#[tokio::test]
+#[expect(deprecated)]
+async fn test_write_and_commit_plan() -> Result<()> {
+    let (ctx, store) = memory_context()?;
+    let schema = int_schema();
+    let partitions = vec![
+        vec![int_batch(&schema, 0..5)?],
+        vec![],
+        vec![int_batch(&schema, 5..7)?, int_batch(&schema, 7..12)?],
+    ];
+    let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
+    assert_eq!(
+        writer.properties().output_partitioning().partition_count(),
+        3
+    );
+    assert_eq!(writer.schema(), manifest_schema());
+    assert_eq!(writer.benefits_from_input_partitioning(), vec![false]);
+    assert_eq!(writer.required_input_ordering(), vec![None]);
+    assert!(matches!(
+        writer.required_input_distribution().as_slice(),
+        [Distribution::UnspecifiedDistribution]
+    ));
+
+    let plan = commit_exec(writer.clone())?;
+    assert!(matches!(
+        plan.required_input_distribution().as_slice(),
+        [Distribution::SinglePartition]
+    ));
+    assert_eq!(plan.output_partitioning().partition_count(), 1);
+    let output = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(output[0].schema().field(0).name(), "count");
+    assert_eq!(count_value(&output)?, vec![12]);
+
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files,
+        vec![
+            ("table/_SUCCESS".to_string(), 0),
+            (file_name(0, 0, ".zstd.parquet"), files[1].1),
+            (file_name(2, 0, ".zstd.parquet"), files[2].1),
+        ]
+    );
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &files[2].0).await?)?;
+    assert_eq!(data, int_batch(&schema, 5..12)?);
+
+    let metrics = writer
+        .metrics()
+        .ok_or_else(|| internal_datafusion_err!("missing metrics"))?;
+    assert_eq!(
+        metrics.sum_by_name("rows_written").map(|x| x.as_usize()),
+        Some(12)
+    );
+    assert_eq!(
+        metrics.sum_by_name("files_written").map(|x| x.as_usize()),
+        Some(2)
+    );
+
+    assert!(plan.execute(1, ctx.task_ctx()).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_and_commit_plan_with_empty_input() -> Result<()> {
+    let (ctx, store) = memory_context()?;
+    let schema = int_schema();
+    let writer = Arc::new(write_exec(&[vec![], vec![]], &schema, None, false)?);
+    let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
+    assert_eq!(count_value(&output)?, vec![0]);
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            "table/_SUCCESS".to_string(),
+            file_name(0, 0, ".zstd.parquet")
+        ]
+    );
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &files[1].0).await?)?;
+    assert_eq!(data.num_rows(), 0);
+    assert_eq!(data.schema().fields(), schema.fields());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_failed_writer_leaves_no_success_file() -> Result<()> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(16)))
+        .build_arc()?;
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    ctx.register_object_store(
+        ObjectStoreUrl::parse("memory://")?.as_ref(),
+        Arc::clone(&store),
+    );
+    let schema = int_schema();
+    let partitions = vec![vec![], vec![int_batch(&schema, 0..1000)?]];
+    let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
+    let result = collect(commit_exec(writer)?, ctx.task_ctx()).await;
+    assert!(matches!(
+        result.map_err(|e| e.find_root().strip_backtrace()),
+        Err(e) if e.contains("Resources exhausted")
+    ));
+    let files = list_files(store.as_ref()).await?;
+    assert!(files.iter().all(|x| x.0 != "table/_SUCCESS"), "{files:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_commit_removes_files_of_earlier_attempt() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new_with_prefix(directory.path())?);
+    let ctx = SessionContext::new();
+    ctx.register_object_store(
+        ObjectStoreUrl::parse("memory://")?.as_ref(),
+        Arc::clone(&store),
+    );
+    let schema = int_schema();
+    let partitions = vec![
+        vec![int_batch(&schema, 0..5)?],
+        vec![int_batch(&schema, 5..12)?],
+    ];
+    let writer = write_exec(&partitions, &schema, None, false)?;
+    assert_eq!(writer.attempt(), 0);
+
+    // The first attempt writes its files, but the write is not committed.
+    collect(Arc::new(writer.with_attempt(0)), ctx.task_ctx()).await?;
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            file_name(0, 0, ".zstd.parquet"),
+            file_name(1, 0, ".zstd.parquet")
+        ]
+    );
+
+    let retry = Arc::new(writer.with_attempt(1));
+    assert_eq!(retry.attempt(), 1);
+    let output = collect(commit_exec(retry)?, ctx.task_ctx()).await?;
+    assert_eq!(count_value(&output)?, vec![12]);
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            "table/_SUCCESS".to_string(),
+            format!("table/part-00000-{WRITE_ID}-c000-a1.zstd.parquet"),
+            format!("table/part-00001-{WRITE_ID}-c000-a1.zstd.parquet"),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_write_plan_requires_input_ordering() -> Result<()> {
+    let schema = int_schema();
+    let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
+        .ok_or_else(|| internal_datafusion_err!("empty ordering"))?;
+    let writer: Arc<dyn ExecutionPlan> = Arc::new(write_exec(
+        &[vec![]],
+        &schema,
+        Some(ordering.clone()),
+        true,
+    )?);
+    let required = vec![Some(ordering.into())];
+    assert_eq!(writer.required_input_ordering(), required);
+    assert!(writer.properties().output_ordering().is_none());
+    assert_eq!(writer.maintains_input_order(), vec![false]);
+
+    // The properties of the plan are kept when the input is replaced.
+    let input = MemorySourceConfig::try_new_exec(&[vec![], vec![]], schema, None)?;
+    let writer = writer.replace_children(
+        vec![input],
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    )?;
+    assert_eq!(writer.required_input_ordering(), required);
+    assert_eq!(writer.output_partitioning().partition_count(), 2);
+    let writer = writer
+        .downcast_ref::<ParquetWriteExec>()
+        .ok_or_else(|| internal_datafusion_err!("unexpected plan"))?;
+    assert!(writer.write_sorting_columns());
+    assert_eq!(writer.file_suffix(), ".zstd.parquet");
+    assert_eq!(writer.write_id(), &WRITE_ID);
+    Ok(())
+}
+
+#[test]
+fn test_write_plan_validation() -> Result<()> {
+    let schema = int_schema();
+    let input = MemorySourceConfig::try_new_exec(&[vec![]], schema, None)?;
+    let result = ParquetWriteExec::try_new(
+        input,
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+        vec!["missing".to_string()],
+        TableParquetOptions::default(),
+        ".parquet".to_string(),
+        None,
+        false,
+    );
+    assert!(
+        matches!(&result, Err(e) if e.to_string().contains("partition column missing does not exist"))
     );
     Ok(())
 }

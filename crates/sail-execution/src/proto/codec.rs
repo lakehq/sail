@@ -121,6 +121,7 @@ use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;
 use sail_data_source::formats::noop::NoopSinkExec;
+use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -129,6 +130,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::commit::FileWriteCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
@@ -1488,6 +1490,71 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     object_store_url,
                     path,
                     keep_write_id,
+                )))
+            }
+            NodeKind::ParquetWrite(r#gen::ParquetWriteExecNode {
+                input,
+                object_store_url,
+                table_path,
+                write_id,
+                partition_columns,
+                options,
+                file_suffix,
+                ordering,
+                write_sorting_columns,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let table_path = object_store::path::Path::parse(table_path)
+                    .map_err(|e| plan_datafusion_err!("invalid Parquet write path: {e}"))?;
+                let write_id = uuid::Uuid::try_parse(&write_id)
+                    .map_err(|e| plan_datafusion_err!("invalid Parquet write ID: {e}"))?;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let options: TableParquetOptions = (&options).try_into()?;
+                let ordering = ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(
+                            &ordering,
+                            &input.schema(),
+                            ctx,
+                            proto_converter,
+                        )
+                    })
+                    .transpose()?;
+                Ok(Arc::new(ParquetWriteExec::try_new(
+                    input,
+                    object_store_url,
+                    table_path,
+                    write_id,
+                    partition_columns,
+                    options,
+                    file_suffix,
+                    ordering,
+                    write_sorting_columns,
+                )?))
+            }
+            NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
+                input,
+                object_store_url,
+                table_path,
+                write_id,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let table_path = object_store::path::Path::parse(table_path)
+                    .map_err(|e| plan_datafusion_err!("invalid file write commit path: {e}"))?;
+                let write_id = uuid::Uuid::try_parse(&write_id)
+                    .map_err(|e| plan_datafusion_err!("invalid file write commit ID: {e}"))?;
+                Ok(Arc::new(FileWriteCommitExec::new(
+                    input,
+                    object_store_url,
+                    table_path,
+                    write_id,
                 )))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
@@ -3693,6 +3760,37 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 keep_write_id: file_delete_exec
                     .keep_write_id()
                     .map(|id| id.as_hyphenated().to_string()),
+            })
+        } else if let Some(write) = node.downcast_ref::<ParquetWriteExec>() {
+            let options = gen_datafusion_common::TableParquetOptions::try_from(write.options())?;
+            NodeKind::ParquetWrite(r#gen::ParquetWriteExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    write.input().clone(),
+                )?,
+                object_store_url: write.object_store_url().as_str().to_string(),
+                table_path: write.table_path().to_string(),
+                write_id: write.write_id().as_hyphenated().to_string(),
+                partition_columns: write.partition_columns().to_vec(),
+                options: try_encode_message(options)?,
+                file_suffix: write.file_suffix().to_string(),
+                ordering: write
+                    .ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+                    .transpose()?,
+                write_sorting_columns: write.write_sorting_columns(),
+            })
+        } else if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
+            NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    commit.input().clone(),
+                )?,
+                object_store_url: commit.object_store_url().as_str().to_string(),
+                table_path: commit.table_path().to_string(),
+                write_id: commit.write_id().as_hyphenated().to_string(),
             })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
@@ -9797,6 +9895,104 @@ mod tests {
             );
             assert_eq!(decoded.keep_write_id(), keep_write_id.as_ref());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_write_plan() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let ordering = LexOrdering::from([PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )]);
+        let required_ordering = vec![Some(ordering.clone().into())];
+        let mut options = TableParquetOptions::default();
+        options.global.compression = Some("snappy".to_string());
+        options.global.created_by = "sail version test".to_string();
+        options.global.max_row_group_size = 1234;
+        options.global.skip_arrow_metadata = true;
+        options.global.allow_single_file_parallelism = false;
+        options.global.bloom_filter_on_write = true;
+        let write_id = uuid::Uuid::from_u128(42);
+        let codec = RemoteExecutionCodec;
+
+        for (ordering, write_sorting_columns, required_ordering) in [
+            (Some(ordering), true, required_ordering),
+            (None, false, vec![None]),
+        ] {
+            let write = ParquetWriteExec::try_new(
+                Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(3)),
+                datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+                object_store::path::Path::from("warehouse/table"),
+                write_id,
+                vec!["b".to_string()],
+                options.clone(),
+                ".snappy.parquet".to_string(),
+                ordering,
+                write_sorting_columns,
+            )?
+            .with_attempt(2);
+            let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<ParquetWriteExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet write"))?;
+            assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
+            assert_eq!(
+                decoded.table_path(),
+                &object_store::path::Path::from("warehouse/table")
+            );
+            assert_eq!(decoded.write_id(), &write_id);
+            assert_eq!(decoded.partition_columns(), ["b".to_string()]);
+            assert_eq!(decoded.options(), &options);
+            assert_eq!(decoded.file_suffix(), ".snappy.parquet");
+            assert_eq!(decoded.write_sorting_columns(), write_sorting_columns);
+            assert_eq!(decoded.required_input_ordering(), required_ordering);
+            assert_eq!(decoded.input().schema(), schema);
+            assert_eq!(
+                decoded.properties().output_partitioning().partition_count(),
+                3
+            );
+            // The attempt is set by the task runner and is not part of the encoded plan.
+            assert_eq!(decoded.attempt(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_file_write_commit_plan() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_data_source::listing::commit::manifest_schema;
+
+        let write_id = uuid::Uuid::from_u128(42);
+        let commit = FileWriteCommitExec::new(
+            Arc::new(EmptyExec::new(manifest_schema())),
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+            object_store::path::Path::from("warehouse/table"),
+            write_id,
+        );
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<FileWriteCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a file write commit"))?;
+        assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
+        assert_eq!(
+            decoded.table_path(),
+            &object_store::path::Path::from("warehouse/table")
+        );
+        assert_eq!(decoded.write_id(), &write_id);
+        assert_eq!(decoded.input().schema(), manifest_schema());
+        assert_eq!(decoded.schema().field(0).name(), "count");
         Ok(())
     }
 
