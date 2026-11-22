@@ -857,7 +857,7 @@ fn is_commit_state_unknown(error: &DataFusionError) -> bool {
 /// file to the table directory, unless the write is not to have the file.
 /// A write that overwrites deletes the old content of the table directory
 /// when the files are published. A write that fails or is canceled before
-/// the files are published leaves the table directory as it was.
+/// the files are published leaves the content of the table as it was.
 /// The output is a single row with the number of rows written.
 ///
 /// The manifests are read from the time the plan is executed, to the end of
