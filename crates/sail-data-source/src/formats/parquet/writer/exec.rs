@@ -36,49 +36,36 @@ use crate::formats::parquet::writer::task::{
 use crate::listing::commit::manifest_schema;
 use crate::listing::staging::Publisher;
 
-/// The smallest size in bytes of the parts in which a file is uploaded.
-const UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+/// The size in bytes of the parts in which a file is uploaded.
+const UPLOAD_PART_SIZE: usize = 10 * 1024 * 1024;
 
 /// The largest number of parts of a multipart upload that object stores accept.
 /// This is the limit of Amazon S3 and Google Cloud Storage.
 const MAX_UPLOAD_PARTS: u64 = 10_000;
 
-/// The largest size in bytes of a part of a multipart upload that all object
-/// stores accept. This is the limit of a block of Azure Blob Storage.
-/// The limit of Amazon S3 and Google Cloud Storage is 5 GiB.
-const MAX_UPLOAD_PART_SIZE: u64 = 4000 * 1024 * 1024;
-
-/// Returns the size in bytes at which a task continues with a new file,
-/// and the size in bytes of the parts in which each file is uploaded.
+/// Returns the size in bytes at which a task continues with a new file.
 /// A size of zero means that the size of a file is not limited.
 ///
-/// The limit on the size of a file and the smallest size of a part are used
-/// as they are when the object store does not limit the number of parts
-/// of a file, which is the case for the local file system and HDFS.
+/// The limit on the size of a file is used as it is when the object store
+/// does not limit the number of parts of a file, which is the case for
+/// the local file system and HDFS.
 ///
-/// Otherwise all parts of a file have the same size, and an upload fails
-/// when it has more parts than the object store accepts. The parts are
-/// therefore larger when the limit on the size of a file is larger than
-/// the size that the parts of the smallest size allow. A task continues with
-/// a new file before a file has the largest number of parts, also when
-/// the size of the files is not limited. A tenth of the parts is left for
-/// the row groups that are being encoded when the size of the file is checked.
-/// The data of a part is in memory until the part is stored, and the task
-/// counts it as the memory of the file.
-pub(super) fn upload_limits(max_file_size: u64, limits_parts: bool) -> (u64, usize) {
+/// Otherwise an upload fails when it has more parts than the object store
+/// accepts, so a task continues with a new file before a file has the largest
+/// number of parts, also when the limit on the size of a file is larger or
+/// when the size is not limited. A tenth of the parts is left for the row
+/// groups that are being encoded when the size of the file is checked.
+/// The parts are not made larger for a larger file, since the data of a part
+/// is in memory until the part is stored, for each file that a task has open.
+pub(super) fn file_size_limit(max_file_size: u64, limits_parts: bool) -> u64 {
     if !limits_parts {
-        return (max_file_size, UPLOAD_BUFFER_SIZE);
+        return max_file_size;
     }
-    let parts = MAX_UPLOAD_PARTS / 10 * 9;
-    let part_size = max_file_size
-        .div_ceil(parts)
-        .clamp(UPLOAD_BUFFER_SIZE as u64, MAX_UPLOAD_PART_SIZE);
-    let upload_limit = part_size * parts;
-    let max_file_size = match max_file_size {
+    let upload_limit = UPLOAD_PART_SIZE as u64 * (MAX_UPLOAD_PARTS / 10 * 9);
+    match max_file_size {
         0 => upload_limit,
         size => size.min(upload_limit),
-    };
-    (max_file_size, part_size as usize)
+    }
 }
 
 /// Returns whether the partitions of the plan are the partitions
@@ -402,8 +389,7 @@ impl ExecutionPlan for ParquetWriteExec {
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)))
             };
         let publisher = Publisher::try_new(&context, &self.object_store_url)?;
-        let (max_file_size, part_size) =
-            upload_limits(self.max_file_size, publisher.limits_parts());
+        let max_file_size = file_size_limit(self.max_file_size, publisher.limits_parts());
         let task = ParquetWriteTask {
             publisher,
             table_path: self.table_path.clone(),
@@ -415,7 +401,7 @@ impl ExecutionPlan for ParquetWriteExec {
             options: self.options.clone(),
             ordering: self.ordering.clone(),
             write_sorting_columns: self.write_sorting_columns,
-            buffer_size: part_size,
+            buffer_size: UPLOAD_PART_SIZE,
             max_records_per_file: self.max_records_per_file,
             max_file_size,
             max_open_files: self.max_open_files_per_task.get(),

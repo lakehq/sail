@@ -847,6 +847,8 @@
     A file can be larger than this value by about the size of one row group,
     and the row group at which a file ends can differ between runs of the same write.
     If the value is `0`, there is no limit.
+    A file that is uploaded to an object store in parts is at most about 88 GiB in any case,
+    which is 9,000 parts of 10 MiB.
     This limit applies together with `parquet.max_records_per_file`, whichever is reached first.
   experimental: true
 

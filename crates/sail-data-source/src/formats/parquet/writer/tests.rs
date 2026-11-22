@@ -3609,35 +3609,22 @@ async fn test_write_plan_writes_planned_schema() -> Result<()> {
 }
 
 #[test]
-fn test_file_size_and_part_size_of_upload() {
-    use crate::formats::parquet::writer::exec::upload_limits;
+fn test_file_size_limit_of_upload() {
+    use crate::formats::parquet::writer::exec::file_size_limit;
 
-    const MB: u64 = 1024 * 1024;
-    const GB: u64 = 1024 * MB;
-    let part = 10 * MB as usize;
-    // An object store that limits the parts of a file:
-    // a file of this size has nine tenths of the parts that an upload can have.
-    assert_eq!(upload_limits(0, true), (94_371_840_000, part));
-    assert_eq!(upload_limits(5, true), (5, part));
-    assert_eq!(upload_limits(64 * GB, true), (64 * GB, part));
-    assert_eq!(upload_limits(94_371_840_000, true), (94_371_840_000, part));
-    // The parts are larger for a file that would have more parts otherwise.
-    assert_eq!(
-        upload_limits(94_371_840_001, true),
-        (94_371_840_001, part + 1)
-    );
-    let (max_file_size, part_size) = upload_limits(900 * GB, true);
-    assert_eq!(max_file_size, 900 * GB);
-    assert_eq!(part_size, 107_374_183);
-    assert!(part_size as u64 * 9000 >= max_file_size);
-    // A part is not larger than the object stores accept.
-    assert_eq!(
-        upload_limits(u64::MAX, true),
-        (4000 * MB * 9000, 4000 * MB as usize)
-    );
+    const GB: u64 = 1024 * 1024 * 1024;
+    // An object store that limits the parts of a file: a file has at most
+    // nine tenths of the parts that an upload can have, which are 10 MiB each.
+    let limit = 9000 * 10 * 1024 * 1024;
+    assert_eq!(file_size_limit(0, true), limit);
+    assert_eq!(file_size_limit(5, true), 5);
+    assert_eq!(file_size_limit(64 * GB, true), 64 * GB);
+    assert_eq!(file_size_limit(limit, true), limit);
+    assert_eq!(file_size_limit(limit + 1, true), limit);
+    assert_eq!(file_size_limit(u64::MAX, true), limit);
     // An object store that does not limit the parts of a file.
     for size in [0, 5, 900 * GB, u64::MAX] {
-        assert_eq!(upload_limits(size, false), (size, part));
+        assert_eq!(file_size_limit(size, false), size);
     }
 }
 
@@ -4787,6 +4774,7 @@ async fn test_columns_in_order_write_the_same_file_without_rows() -> Result<()> 
 
 #[tokio::test]
 async fn test_file_writer_memory_size() -> Result<()> {
+    const PART_SIZE: usize = 256 * 1024;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let schema = int_schema();
@@ -4803,14 +4791,15 @@ async fn test_file_writer_memory_size() -> Result<()> {
         Arc::clone(&schema),
         props,
         false,
-        10 * 1024 * 1024,
+        PART_SIZE,
         test_resources(fixed_degree(1), &pool),
     )?;
     assert_eq!(writer.memory_size(), 0);
     assert!(!writer.write(&int_batch(&schema, 0..199_999)?).await?);
     assert!(writer.memory_size() > 1_500_000);
     assert!(writer.write(&int_batch(&schema, 0..1)?).await?);
-    assert!(writer.memory_size() <= 1024 * 1024);
+    // The data that is handed to the upload is counted until its part is stored.
+    assert!(writer.memory_size() <= 1024 * 1024 + PART_SIZE);
     let file = writer.close().await?;
     assert_eq!(file.num_rows, 200_000);
     Ok(())

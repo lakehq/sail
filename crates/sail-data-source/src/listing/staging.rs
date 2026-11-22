@@ -187,7 +187,7 @@ impl Publisher {
         part_size: usize,
         max_concurrency: usize,
     ) -> StagedUpload {
-        let mut buffered = Arc::new(AtomicUsize::new(0));
+        let buffered = Arc::new(AtomicUsize::new(0));
         let inner = match self {
             Self::Rename { store } => {
                 // The name is unique to the file, so that no attempt of
@@ -203,12 +203,16 @@ impl Publisher {
                 UploadState::Rename {
                     writer: Box::new(writer),
                     staged,
+                    part_size,
+                    size: 0,
                 }
             }
             Self::Multipart { multipart, .. } => {
-                let parts = Arc::new(UploadedParts::default());
+                let parts = Arc::new(UploadedParts {
+                    buffered: Arc::clone(&buffered),
+                    ..Default::default()
+                });
                 let upload = DeferredUpload::new(Arc::clone(multipart), location, &parts);
-                buffered = Arc::clone(&parts.buffered);
                 UploadState::Multipart {
                     writer: Box::new(WriteMultipart::new_with_chunk_size(
                         Box::new(upload),
@@ -335,6 +339,9 @@ enum UploadState {
     Rename {
         writer: Box<BufWriter>,
         staged: Path,
+        part_size: usize,
+        /// The size in bytes of the data that was added.
+        size: usize,
     },
     Multipart {
         writer: Box<WriteMultipart>,
@@ -355,18 +362,23 @@ impl StagedUpload {
             inner: UploadState::Rename {
                 writer: Box::new(writer),
                 staged: location,
+                part_size,
+                size: 0,
             },
             buffered: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// The size in bytes of the data that was added to a multipart upload and
-    /// that the object store has not stored yet. This is the data of the part
-    /// that is not full and of the parts that are being uploaded, so it is
-    /// at most the size of a part for each part that is uploaded at the same
-    /// time and for one more. The data of an upload that is renamed is held
-    /// by the object store writer, which has the same bound and does not
-    /// report it.
+    /// The size in bytes of the data that was added and that the object store
+    /// has not stored yet. This is the data of the part that is not full and
+    /// of the parts that are being uploaded, so it is at most the size of
+    /// a part for each part that is uploaded at the same time and for one more.
+    ///
+    /// The object store writer of an upload that is renamed does not report
+    /// what it holds. It keeps the data until a part is full, and the file
+    /// as a whole while the file is smaller than a part, so the data of
+    /// the part that is not full is counted. The parts that are being
+    /// written are not counted for such an upload.
     pub fn buffered(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.buffered)
     }
@@ -374,7 +386,18 @@ impl StagedUpload {
     /// Adds data to the file. This waits when too many parts are being uploaded.
     pub async fn put(&mut self, data: Bytes) -> Result<()> {
         match &mut self.inner {
-            UploadState::Rename { writer, .. } => Ok(writer.put(data).await?),
+            UploadState::Rename {
+                writer,
+                part_size,
+                size,
+                ..
+            } => {
+                *size += data.len();
+                writer.put(data).await?;
+                self.buffered
+                    .store(*size % (*part_size).max(1), Ordering::Relaxed);
+                Ok(())
+            }
             UploadState::Multipart {
                 writer,
                 max_concurrency,
@@ -395,9 +418,12 @@ impl StagedUpload {
     /// The result is the same when this is called again.
     pub async fn finish(&mut self) -> Result<Publish> {
         let publish = match std::mem::replace(&mut self.inner, UploadState::Failed) {
-            UploadState::Rename { mut writer, staged } => {
+            UploadState::Rename {
+                mut writer, staged, ..
+            } => {
                 use tokio::io::AsyncWriteExt;
                 writer.shutdown().await?;
+                self.buffered.store(0, Ordering::Relaxed);
                 Publish::Rename { staged }
             }
             UploadState::Multipart { writer, parts, .. } => {
@@ -728,6 +754,34 @@ mod tests {
             assert_eq!(store.open_uploads(), Vec::<String>::new());
             let data = store.inner().get(&file.location).await?.bytes().await?;
             assert_eq!(data.as_ref(), b"abcde");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upload_counts_the_data_that_is_not_stored() -> Result<()> {
+        for mode in Mode::ALL {
+            let store = FaultStore::new();
+            let mut upload = upload(&store, mode, 4);
+            let buffered = upload.buffered();
+            // The data of a part that is not full is in memory.
+            upload.put(Bytes::from_static(b"abc")).await?;
+            assert_eq!(buffered.load(Ordering::Relaxed), 3, "{mode:?}");
+            // A part is full, and one byte of the next part remains.
+            let gate = store.hold("PART");
+            upload.put(Bytes::from_static(b"de")).await?;
+            match mode {
+                // The parts that are being written are not counted.
+                Mode::Rename => assert_eq!(buffered.load(Ordering::Relaxed), 1),
+                Mode::Multipart => {
+                    gate.wait_for(1).await;
+                    assert_eq!(buffered.load(Ordering::Relaxed), 5);
+                }
+            }
+            gate.open();
+            upload.put(Bytes::from_static(b"fgh")).await?;
+            upload.finish().await?;
+            assert_eq!(buffered.load(Ordering::Relaxed), 0, "{mode:?}");
         }
         Ok(())
     }
