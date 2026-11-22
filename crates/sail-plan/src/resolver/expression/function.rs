@@ -6,7 +6,6 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
 use datafusion_functions::core::getfield::GetFieldFunc;
-use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -81,8 +80,7 @@ impl PlanResolver<'_> {
         }
 
         let canonical_function_name = function_name.to_ascii_lowercase();
-        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        if let Some(udf) = self.lookup_session_function(&canonical_function_name, state)?
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
@@ -122,7 +120,7 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = match catalog_manager.get_function(&canonical_function_name)? {
+        let func = match self.lookup_session_function(&canonical_function_name, state)? {
             Some(udf) => {
                 if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                     return Err(PlanError::invalid("invalid scalar function clause"));

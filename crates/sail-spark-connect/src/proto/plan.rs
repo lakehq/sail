@@ -1867,6 +1867,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
                 replace,
                 comment: None,
                 properties: vec![],
+                kind: spec::TemporaryViewKind::Plan,
             },
         })
     }

@@ -225,7 +225,7 @@ const LOGICAL_TYPE_METADATA_KEYS: [&str; 5] = [
 ];
 
 /// Returns the logical type metadata of a field that differs from that of another field.
-fn logical_type_change<'a>(
+pub(super) fn logical_type_change<'a>(
     stored: &'a Field,
     current: &'a Field,
 ) -> Option<(Option<&'a String>, Option<&'a String>)> {
@@ -250,7 +250,7 @@ fn logical_type_change<'a>(
 }
 
 /// Returns whether the metadata that clients see in a schema differs, at any level.
-fn user_metadata_differs(stored: &Field, current: &Field) -> bool {
+pub(super) fn user_metadata_differs(stored: &Field, current: &Field) -> bool {
     if stored.metadata().get(SPARK_METADATA_JSON_KEY)
         != current.metadata().get(SPARK_METADATA_JSON_KEY)
     {
@@ -817,7 +817,8 @@ impl PlanResolver<'_> {
                 None => {
                     let request = Self::catalog_table_lookup_request(&origin.name);
                     match table.get_lakehouse_table(request).await {
-                        Ok(lookup) => {
+                        Ok((status, resolved)) => {
+                            let lookup = (status, Some(resolved));
                             state.insert_session_catalog_table_lookup(
                                 table,
                                 origin.name.clone(),
@@ -832,8 +833,7 @@ impl PlanResolver<'_> {
                         Err(error) => Err(error),
                     }
                 }
-            }
-            .map(|(status, resolved)| (status, Some(resolved))),
+            },
             None => Self::lookup_catalog_object(&manager, origin.name.clone(), state).await,
         };
         let (status, resolved) = match lookup {
@@ -904,7 +904,7 @@ impl PlanResolver<'_> {
 }
 
 /// Returns the quoted name of a temporary view.
-fn view_name(view: &TableStatus) -> String {
+pub(super) fn view_name(view: &TableStatus) -> String {
     let mut name = view.database.clone();
     name.push(view.name.clone());
     quote_names(&name)

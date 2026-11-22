@@ -89,11 +89,20 @@ impl Fixture {
                     replace: true,
                     comment: None,
                     properties: vec![],
+                    kind: spec::TemporaryViewKind::Plan,
                 },
             },
         ));
         let plan = self.resolver().resolve_named_plan(plan).await?.plan;
         self.execute_plan(plan).await
+    }
+
+    /// Creates a temporary view that stores the plan of the query, as a DataFrame does.
+    async fn create_plan_view(&self, view: &str, query: &str) -> TestResult {
+        let spec::Plan::Query(input) = from_ast_statement(parse_one_statement(query)?)? else {
+            return Err("not a query".into());
+        };
+        self.create_data_frame_view(view, false, input).await
     }
 
     /// Resolves the statement and returns its plan.
@@ -148,6 +157,11 @@ fn count_scans(plan: &LogicalPlan) -> datafusion_common::Result<(usize, usize)> 
     let mut scans = (0, 0);
     count(plan, &mut vec![], &mut scans)?;
     Ok(scans)
+}
+
+/// Returns whether a view of [`create_views`] stores a plan.
+fn stores_plan(view: &str) -> bool {
+    view.ends_with("_dv") || view.ends_with("_dgv")
 }
 
 /// Creates the temporary views of each kind over the table `t`, which are named after
@@ -311,18 +325,26 @@ async fn stored_temporary_view_plan_holds_no_table_source() -> TestResult {
 }
 
 async fn stored_view_plan_holds_no_table_source(share_ctes: bool) -> TestResult {
-    let setup = [
-        "CREATE VIEW pv AS SELECT * FROM default.t",
-        "CREATE TEMPORARY VIEW a AS SELECT * FROM t",
-        "CREATE TEMPORARY VIEW b AS SELECT a.k, t.v FROM a JOIN t ON a.k = t.k",
-        "CREATE TEMPORARY VIEW c AS WITH c AS (SELECT k, rand() AS r FROM t) \
-            SELECT x.k, x.r, y.r AS r2 FROM c x JOIN c y ON x.k = y.k",
-        "CREATE TEMPORARY VIEW d AS SELECT k FROM t WHERE v = (SELECT max(v) FROM t) \
-            AND k IN (SELECT k FROM a) AND EXISTS (SELECT 1 FROM pv WHERE pv.k = t.k)",
-        "CREATE TEMPORARY VIEW e AS SELECT * FROM t VERSION AS OF 1",
-        "CREATE TEMPORARY VIEW f AS SELECT * FROM pv UNION ALL SELECT * FROM a",
-    ];
+    let setup = ["CREATE VIEW pv AS SELECT * FROM default.t"];
     let fixture = Fixture::try_new_with(TableNames::Exact, share_ctes, &setup).await?;
+    for (view, query) in [
+        ("a", "SELECT * FROM t"),
+        ("b", "SELECT a.k, t.v FROM a JOIN t ON a.k = t.k"),
+        (
+            "c",
+            "WITH c AS (SELECT k, rand() AS r FROM t) \
+            SELECT x.k, x.r, y.r AS r2 FROM c x JOIN c y ON x.k = y.k",
+        ),
+        (
+            "d",
+            "SELECT k FROM t WHERE v = (SELECT max(v) FROM t) \
+            AND k IN (SELECT k FROM a) AND EXISTS (SELECT 1 FROM pv WHERE pv.k = t.k)",
+        ),
+        ("e", "SELECT * FROM t VERSION AS OF 1"),
+        ("f", "SELECT * FROM pv UNION ALL SELECT * FROM a"),
+    ] {
+        fixture.create_plan_view(view, query).await?;
+    }
     // The volatile CTE of the view `c` is one definition when the session shares CTEs.
     let c = if share_ctes { 1 } else { 2 };
     for (view, scans) in [("a", 1), ("b", 2), ("c", c), ("d", 4), ("e", 1), ("f", 2)] {
@@ -488,10 +510,13 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
     }
     // A view over a view and the table: the view side has the columns of the view.
     fixture
-        .execute("CREATE TEMPORARY VIEW wide AS SELECT a.k, a.v, b.w FROM cols_sv a JOIN t b ON a.k = b.k")
+        .create_plan_view(
+            "wide",
+            "SELECT a.k, a.v, b.w FROM cols_dv a JOIN t b ON a.k = b.k",
+        )
         .await?;
     fixture
-        .execute("CREATE TEMPORARY VIEW narrow AS SELECT * FROM cols_sv")
+        .create_plan_view("narrow", "SELECT * FROM cols_dv")
         .await?;
     let sql = "SELECT * FROM wide";
     fixture.resolve(sql).await?.expect(1, 1, sql);
@@ -501,7 +526,7 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
     fixture
         .replace_table(&["t"], vec![column("k"), column("v")])
         .await?;
-    let sql = "SELECT * FROM cols_sv";
+    let sql = "SELECT * FROM cols_dv";
     fixture.resolve(sql).await?.expect(1, 1, sql);
     fixture.execute(sql).await?;
     for view in ["wide", "narrow"] {
@@ -525,7 +550,7 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
 async fn test_temporary_view_validates_the_columns_that_it_does_not_read() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
     fixture
-        .execute("CREATE TEMPORARY VIEW only_k AS SELECT k FROM t")
+        .create_plan_view("only_k", "SELECT k FROM t")
         .await?;
     fixture.replace_table(&["t"], vec![column("k")]).await?;
     let resolution = fixture.resolve("SELECT * FROM only_k").await?;
@@ -588,7 +613,7 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
         let fixture = Fixture::try_new(&[]).await?;
         let views = create_views(&fixture, &format!("change{index}")).await?;
         fixture.replace_table(&["t"], columns).await?;
-        for view in &views {
+        for view in views.iter().filter(|x| stores_plan(x)) {
             let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
             assert_eq!(resolution.loads, 1, "{view}");
             let error = resolution.error.ok_or("missing error")?;
@@ -688,7 +713,14 @@ async fn temporary_view_of_a_missing_table_is_not_found() -> TestResult {
         .execute("CREATE VIEW t AS SELECT 1L AS k, 2L AS v")
         .await?;
     for view in &views {
-        let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
+        let sql = format!("SELECT * FROM {view}");
+        let resolution = fixture.resolve(&sql).await?;
+        // A view with a query reads what the name refers to now.
+        if !stores_plan(view) {
+            assert_eq!(resolution.error, None, "{view}");
+            fixture.execute(&sql).await?;
+            continue;
+        }
         let error = resolution.error.ok_or("missing error")?;
         assert!(error.contains("[TABLE_OR_VIEW_NOT_FOUND]"), "{error}");
         assert!(
@@ -706,7 +738,7 @@ async fn test_replaced_and_dropped_temporary_views() -> TestResult {
         .create_table_at(&["other", "u"], &["k", "v"], "memory:///other")
         .await?;
     fixture
-        .execute("CREATE TEMPORARY VIEW moving AS SELECT * FROM t")
+        .create_plan_view("moving", "SELECT * FROM t")
         .await?;
     // A reader holds the plan that it looked up, whatever happens to the view next.
     let stored = fixture.stored_view_plan(&["moving"]).await?;
@@ -939,7 +971,12 @@ async fn test_temporary_view_reads_the_lake_table_path_again() -> TestResult {
             .await?;
         for view in ["p_sql", "p_old", "p_df", "p_opt"] {
             let stored = fixture.stored_view_plan(&[view]).await?;
-            assert_eq!(count_scans(&stored)?, (0, 1), "stored plan of {view}");
+            let references = usize::from(matches!(view, "p_df" | "p_opt"));
+            assert_eq!(
+                count_scans(&stored)?,
+                (0, references),
+                "stored plan of {view}"
+            );
             // Each statement reads the path once, however often it reads the view.
             for sql in [
                 format!("SELECT * FROM {view}"),

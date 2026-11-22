@@ -41,12 +41,16 @@ mod time_travel;
 mod udf;
 mod udtf;
 mod values;
+mod view_definition;
 mod window;
 mod with_relations;
 
 pub(super) use cte::{CteInfo, CteKind};
 pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
 pub(super) use temp_view::TableOrigin;
+pub(super) use view_definition::{
+    TemporaryViewDefinitionNode, TemporaryViewName, ViewBodyContext, ViewBodyKey, ViewDefinition,
+};
 
 impl PlanResolver<'_> {
     /// Resolve query plan.

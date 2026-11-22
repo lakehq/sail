@@ -471,6 +471,21 @@ impl CatalogManager {
         Ok(None)
     }
 
+    /// Returns the name of the temporary view that `reference` can name: whether the view
+    /// is global, and the name of the view.
+    pub fn temporary_view_name<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+    ) -> CatalogResult<Option<(bool, String)>> {
+        Ok(match reference {
+            [name] => Some((false, name.as_ref().to_string())),
+            [x @ .., name] if self.state()?.is_global_temporary_view_database(x) => {
+                Some((true, name.as_ref().to_string()))
+            }
+            _ => None,
+        })
+    }
+
     /// Looks up the catalog table with `table`, then catalog views.
     /// Views are converted with `view`.
     async fn get_catalog_table_or_view_with<T: AsRef<str>, R>(

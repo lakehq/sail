@@ -170,8 +170,6 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_field = expr.to_field(schema)?.1;
-        let expr_type = expr_field.data_type().clone();
-        let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(naming, &expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
@@ -186,6 +184,58 @@ impl PlanResolver<'_> {
         } else {
             name
         };
+        let expr = self.cast_resolved_expression(
+            expr,
+            expr_field.as_ref(),
+            cast_to_type,
+            day_time_interval_field,
+            spark_interval_metadata,
+            is_try,
+            schema,
+        )?;
+        Ok(match spark_interval_metadata {
+            Some(metadata) => {
+                let metadata = metadata.to_json()?;
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
+            }
+            None => NamedExpr::new(name, expr),
+        })
+    }
+
+    /// Returns the cast of a resolved expression of the given field to an Arrow type.
+    pub(in crate::resolver) fn cast_resolved_expression(
+        &self,
+        expr: expr::Expr,
+        expr_field: &Field,
+        cast_to_type: DataType,
+        day_time_interval_field: Option<spec::IntervalFieldType>,
+        spark_interval_metadata: Option<spec::SparkIntervalMetadata>,
+        is_try: bool,
+        schema: &DFSchemaRef,
+    ) -> PlanResult<expr::Expr> {
+        let expr_type = expr_field.data_type().clone();
+        let expr_is_variant = is_variant_storage_field(expr_field);
         let override_string_cast = matches!(
             expr_type,
             DataType::Date32
@@ -355,34 +405,7 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(match spark_interval_metadata {
-            Some(metadata) => {
-                let metadata = metadata.to_json()?;
-                // Nested expressions consume the Expr without its NamedExpr metadata.
-                // Keep the target qualifier on the cast field as well as the projection.
-                let field = expr.to_field(schema)?.1;
-                let mut field_metadata = field.metadata().clone();
-                field_metadata.insert(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata.clone(),
-                );
-                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
-                let expr = match expr {
-                    expr::Expr::Cast(cast) => {
-                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
-                    }
-                    expr::Expr::TryCast(cast) => {
-                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
-                    }
-                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
-                };
-                NamedExpr::new(name, expr).with_metadata(vec![(
-                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                    metadata,
-                )])
-            }
-            None => NamedExpr::new(name, expr),
-        })
+        Ok(expr)
     }
 }
 

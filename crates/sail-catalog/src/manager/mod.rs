@@ -22,7 +22,7 @@ pub mod view;
 /// Each catalog has a name and a corresponding [`CatalogProvider`] instance.
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
-    pub(super) temporary_views: TemporaryViewManager,
+    pub(super) temporary_views: Arc<TemporaryViewManager>,
     pub(super) tracker: CatalogObjectTracker,
 }
 
@@ -138,6 +138,54 @@ impl CatalogManager {
         parts.extend(Vec::<String>::from(database));
         parts.push(name.to_string());
         Ok(parts)
+    }
+
+    /// Returns the fully qualified name of an object for a query that was created with
+    /// the given current catalog and database. A name that starts with a catalog is
+    /// complete, and any other name is in the given catalog.
+    pub fn resolve_fully_qualified_object_name_in<T: AsRef<str>>(
+        &self,
+        object: &[T],
+        catalog: &str,
+        database: &[String],
+    ) -> CatalogResult<Vec<String>> {
+        let state = self.state()?;
+        let parts = object.iter().map(|x| x.as_ref().to_string());
+        match object {
+            [] => Err(CatalogError::InvalidArgument(
+                "empty object reference".to_string(),
+            )),
+            [_] => Ok(std::iter::once(catalog.to_string())
+                .chain(database.iter().cloned())
+                .chain(parts)
+                .collect()),
+            [head, ..] if state.catalogs.contains_key(head.as_ref()) => Ok(parts.collect()),
+            _ => Ok(std::iter::once(catalog.to_string()).chain(parts).collect()),
+        }
+    }
+
+    /// Returns the current catalog and the current database.
+    pub fn current_catalog_and_database(&self) -> CatalogResult<(String, Vec<String>)> {
+        let state = self.state()?;
+        Ok((
+            state.default_catalog.to_string(),
+            state.default_database.clone().into(),
+        ))
+    }
+
+    /// Returns a manager of the catalogs, temporary views, and functions of this session
+    /// that remains valid after the session ends.
+    pub fn session_handle(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            temporary_views: Arc::clone(&self.temporary_views),
+            tracker: Default::default(),
+        }
+    }
+
+    /// Returns whether another manager is a manager of the same session.
+    pub fn is_same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
     }
 
     pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
