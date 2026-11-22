@@ -37,6 +37,7 @@ use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
+use uuid::Uuid;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
@@ -244,6 +245,7 @@ async fn plan_file_write(
         file_output_mode: FileOutputMode::Automatic,
     };
     let sort_order = create_sort_order(session, sort_by.clone(), logical_input.schema())?;
+    let write_id = Uuid::new_v4();
     let plan = format
         .sink(
             session,
@@ -251,6 +253,7 @@ async fn plan_file_write(
                 input: physical_input,
                 sink: conf,
                 sort_order,
+                write_id,
             },
         )
         .await?;
@@ -258,6 +261,7 @@ async fn plan_file_write(
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
+            Some(write_id),
         ));
         Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
     } else {

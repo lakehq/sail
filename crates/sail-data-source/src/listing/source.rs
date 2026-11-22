@@ -25,6 +25,7 @@ use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema,
 };
 use url::Url;
+use uuid::Uuid;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
@@ -136,6 +137,8 @@ pub struct ListingSinkInput {
     pub input: Arc<dyn ExecutionPlan>,
     pub sink: FileSinkConfig,
     pub sort_order: Option<LexRequirement>,
+    /// The identifier of the write, shared by all files that the write produces.
+    pub write_id: Uuid,
 }
 
 /// A trait for format-specific logic for writing listing files.

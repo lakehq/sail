@@ -7288,6 +7288,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -7395,6 +7396,7 @@ dependencies = [
  "tonic-types",
  "tower",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -1047,6 +1047,7 @@ message TextSinkExecNode {
 message FileDeleteExecNode {
   string object_store_url = 1;
   string path = 2;
+  optional string keep_write_id = 3;
 }
 
 message StreamCollectorExecNode {

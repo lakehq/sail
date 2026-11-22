@@ -1472,12 +1472,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
+                keep_write_id,
             }) => {
                 let object_store_url =
                     datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
                 let path = object_store::path::Path::parse(path)
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
-                Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
+                let keep_write_id = keep_write_id
+                    .map(|id| {
+                        uuid::Uuid::try_parse(&id)
+                            .map_err(|e| plan_datafusion_err!("invalid file delete write ID: {e}"))
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileDeleteExec::new(
+                    object_store_url,
+                    path,
+                    keep_write_id,
+                )))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
                 let input =
@@ -3679,6 +3690,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
                 path: file_delete_exec.path().to_string(),
+                keep_write_id: file_delete_exec
+                    .keep_write_id()
+                    .map(|id| id.as_hyphenated().to_string()),
             })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
@@ -9760,6 +9774,30 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_file_delete_plan() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        for keep_write_id in [None, Some(uuid::Uuid::from_u128(42))] {
+            let delete = FileDeleteExec::new(
+                datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+                object_store::path::Path::from("warehouse/table"),
+                keep_write_id,
+            );
+            let bytes = try_encode_physical_plan(&codec, Arc::new(delete))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<FileDeleteExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a file delete"))?;
+            assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
+            assert_eq!(
+                decoded.path(),
+                &object_store::path::Path::from("warehouse/table")
+            );
+            assert_eq!(decoded.keep_write_id(), keep_write_id.as_ref());
+        }
+        Ok(())
     }
 
     #[test]
