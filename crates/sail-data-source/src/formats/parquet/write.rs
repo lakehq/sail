@@ -114,6 +114,9 @@ fn sorted_input_ordering(input: &Arc<dyn ExecutionPlan>) -> Option<LexOrdering> 
 
 /// Returns the suffix of the file names, which has the compression codec
 /// of the files when the files are compressed.
+///
+/// The codecs have the file extensions that Spark writes, which are the extensions of
+/// `org.apache.parquet.hadoop.metadata.CompressionCodecName` in parquet-java.
 fn file_suffix(options: &TableParquetOptions) -> Result<String> {
     let Some(compression) = &options.global.compression else {
         return Ok(".parquet".to_string());
@@ -122,6 +125,8 @@ fn file_suffix(options: &TableParquetOptions) -> Result<String> {
     let codec = match codec.as_str() {
         "uncompressed" => return Ok(".parquet".to_string()),
         "gzip" => "gz",
+        "brotli" => "br",
+        "lz4" => "lz4hadoop",
         "lz4_raw" => "lz4raw",
         codec => codec,
     };
@@ -153,8 +158,11 @@ mod tests {
             (Some("gzip(6)"), ".gz.parquet"),
             (Some("snappy"), ".snappy.parquet"),
             (Some("lz4_raw"), ".lz4raw.parquet"),
-            (Some("lz4"), ".lz4.parquet"),
-            (Some("brotli(3)"), ".brotli.parquet"),
+            (Some("lz4"), ".lz4hadoop.parquet"),
+            (Some("LZ4"), ".lz4hadoop.parquet"),
+            (Some("brotli(3)"), ".br.parquet"),
+            (Some("zstd"), ".zstd.parquet"),
+            (Some("gzip"), ".gz.parquet"),
             (Some("lzo"), ".lzo.parquet"),
         ] {
             options.global.compression = compression.map(|x| x.to_string());

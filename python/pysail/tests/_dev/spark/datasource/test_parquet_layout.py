@@ -149,6 +149,10 @@ def test_parquet_empty_partitioned_write(spark, tmp_path):
         ("snappy", ".snappy.parquet", "SNAPPY"),
         # PyArrow reports the LZ4_RAW codec as LZ4.
         ("lz4_raw", ".lz4raw.parquet", "LZ4"),
+        # The codec of the file is not checked for the LZ4 codec with the Hadoop framing,
+        # since PyArrow versions report it with different names.
+        ("lz4", ".lz4hadoop.parquet", None),
+        ("brotli", ".br.parquet", "BROTLI"),
     ],
 )
 def test_parquet_write_compression_in_file_name(spark, tmp_path, compression, suffix, codec):
@@ -157,7 +161,9 @@ def test_parquet_write_compression_in_file_name(spark, tmp_path, compression, su
     (file,) = data_files(path)
     assert _PART_FILE_RE.match(file.name) is not None
     assert file.name.endswith(f"-c000{suffix}")
-    assert pq.ParquetFile(path / file).metadata.row_group(0).column(0).compression == codec
+    if codec is not None:
+        assert pq.ParquetFile(path / file).metadata.row_group(0).column(0).compression == codec
+    assert sorted(r.id for r in spark.read.parquet(str(path)).collect()) == list(range(10))
 
 
 def test_parquet_write_uncompressed_file_name(spark, tmp_path):
