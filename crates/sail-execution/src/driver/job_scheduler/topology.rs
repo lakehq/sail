@@ -246,6 +246,146 @@ mod tests {
         )
     }
 
+    /// The plan of a Parquet write: the commit reads the manifests of the writers.
+    fn parquet_write_plan(
+        partitions: usize,
+        coalesce: bool,
+    ) -> Arc<dyn datafusion::physical_plan::ExecutionPlan> {
+        use datafusion::common::config::TableParquetOptions;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+        use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
+        use sail_data_source::listing::commit::FileWriteCommitExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let write_id = uuid::Uuid::from_u128(1);
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(
+            ParquetWriteExec::try_new(
+                Arc::new(EmptyExec::new(schema).with_partitions(partitions)),
+                ObjectStoreUrl::parse("memory://").unwrap(),
+                object_store::path::Path::from("table"),
+                write_id,
+                vec![],
+                TableParquetOptions::default(),
+                ".parquet".to_string(),
+                None,
+                false,
+                0,
+                std::num::NonZeroUsize::MIN,
+            )
+            .unwrap(),
+        );
+        if coalesce {
+            plan = Arc::new(CoalescePartitionsExec::new(plan));
+        }
+        Arc::new(
+            FileWriteCommitExec::new(
+                plan,
+                ObjectStoreUrl::parse("memory://").unwrap(),
+                object_store::path::Path::from("table"),
+                write_id,
+            )
+            .with_overwrite(true),
+        )
+    }
+
+    #[test]
+    fn file_write_commit_shares_region_with_writers_only_for_pipelined_shuffle() {
+        use datafusion::common::tree_node::TreeNode;
+        use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
+        use sail_data_source::listing::commit::FileWriteCommitExec;
+
+        use crate::job_graph::OutputMode;
+
+        let flight = ShuffleBackendKind::Flight {
+            compression: ShuffleCompression::None,
+            connection_count: std::num::NonZeroUsize::MIN,
+            initial_stream_window_size: None,
+            initial_connection_window_size: None,
+        };
+        let storage = ShuffleBackendKind::Storage {
+            path: None,
+            max_file_size: 1,
+            compression: ShuffleCompression::None,
+        };
+        let celeborn = ShuffleBackendKind::Celeborn {
+            master_endpoints: vec!["localhost:1".to_string()],
+            compression: sail_celeborn::common::CompressionCodec::Lz4,
+            endpoint_overrides: vec![],
+            heartbeat_interval_secs: 10,
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: sail_celeborn::common::PartitionSplitMode::Soft,
+        };
+        // (backend, the commit and the writers are attempted together,
+        // the number of stages between the writers and the commit)
+        for (backend, together, between) in
+            [(flight, true, 0), (storage, false, 1), (celeborn, false, 0)]
+        {
+            // A single writer partition gets its exchange from the job graph.
+            for (partitions, coalesce) in [(1, false), (1, true), (4, true)] {
+                let graph = JobGraph::try_new(
+                    parquet_write_plan(partitions, coalesce),
+                    JobGraphOptions {
+                        shuffle_backend: backend.clone(),
+                    },
+                )
+                .unwrap();
+                let topology = JobTopology::try_new(&graph).unwrap();
+                let stage_of =
+                    |predicate: fn(&Arc<dyn datafusion::physical_plan::ExecutionPlan>) -> bool| {
+                        graph
+                            .stages()
+                            .iter()
+                            .position(|stage| {
+                                stage.plan.exists(|plan| Ok(predicate(plan))).unwrap()
+                            })
+                            .expect("stage")
+                    };
+                let writer = stage_of(|plan| plan.is::<ParquetWriteExec>());
+                let commit = stage_of(|plan| plan.is::<FileWriteCommitExec>());
+                let regions_of = |stage: usize| {
+                    topology
+                        .regions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, region)| region.tasks.iter().any(|task| task.stage == stage))
+                        .map(|(r, _)| r)
+                        .collect::<Vec<_>>()
+                };
+                let commit_regions = regions_of(commit);
+                assert_eq!(commit_regions.len(), 1);
+                let commit_region = &commit_regions[0];
+                let writer_regions = regions_of(writer);
+                assert_eq!(
+                    writer_regions == vec![*commit_region],
+                    together,
+                    "{backend:?} {partitions} {coalesce}"
+                );
+                if !together {
+                    assert!(!writer_regions.contains(commit_region));
+                    // The commit runs after the writers have succeeded.
+                    let dependencies = &topology.regions[*commit_region].dependencies;
+                    assert!(writer_regions.iter().all(|r| dependencies.contains(r)));
+                }
+
+                // The task of the commit reads the output of a running task only
+                // when the stage that it reads from has a pipelined output.
+                assert_eq!(graph.stages()[commit].inputs.len(), 1);
+                let mut stage = graph.stages()[commit].inputs[0].stage;
+                assert_eq!(
+                    matches!(graph.stages()[stage].mode, OutputMode::Pipelined),
+                    together
+                );
+                for _ in 0..between {
+                    assert_eq!(graph.stages()[stage].inputs.len(), 1);
+                    stage = graph.stages()[stage].inputs[0].stage;
+                }
+                assert_eq!(stage, writer);
+            }
+        }
+    }
+
     #[test]
     fn union_stage_waits_for_every_blocking_forward_input() {
         let graph = JobGraph::try_new(

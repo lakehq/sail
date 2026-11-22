@@ -177,6 +177,90 @@ async fn delete_file_stream(
     Ok(())
 }
 
+/// Removes the files of a write that ends without success.
+///
+/// A writer task removes its own files unless its manifest was delivered, and
+/// the manifest can be delivered to a commit that fails or is canceled before
+/// it has read the manifest. The commit therefore removes the files of the
+/// write by their names when it ends before it has verified the manifests.
+///
+/// This is done only when the writer tasks are attempted again whenever the
+/// commit is, which is the case when the attempt is known. The files of later
+/// attempts are kept then, since a later attempt can be running already.
+/// When the commit can be attempted again on its own, it reads the manifests
+/// of the same files again, so the files must be kept.
+///
+/// A file is not removed if a writer task completes it and delivers its
+/// manifest after the directory was listed here, which can happen while
+/// the writer tasks of a failed write are being stopped.
+struct FailedWriteCleanup {
+    store: Arc<dyn ObjectStore>,
+    table_path: Path,
+    write_id: Uuid,
+    /// The attempt that the commit shares with its writer tasks, if it does.
+    attempt: Option<u64>,
+}
+
+impl FailedWriteCleanup {
+    /// Removes the files now. The files are not removed again when this is dropped.
+    async fn run(mut self) {
+        if let Some(attempt) = self.attempt.take() {
+            Self::delete(&self.store, &self.table_path, self.write_id, attempt).await;
+        }
+    }
+
+    /// The write has all its files, which are kept from here on.
+    fn disarm(mut self) {
+        self.attempt = None;
+    }
+
+    async fn delete(store: &Arc<dyn ObjectStore>, table_path: &Path, write_id: Uuid, attempt: u64) {
+        let files = store
+            .list(Some(table_path))
+            .try_filter_map(move |meta| {
+                let delete = meta
+                    .location
+                    .filename()
+                    .and_then(parse_part_file_name)
+                    .is_some_and(|name| {
+                        name.write_id == write_id && name.attempt as u64 <= attempt
+                    });
+                futures::future::ready(Ok(delete.then_some(meta.location)))
+            })
+            .boxed();
+        if let Err(e) = delete_file_stream(store, files).await {
+            log::warn!("failed to delete the files of a failed write to {table_path}: {e}");
+        }
+    }
+}
+
+impl Drop for FailedWriteCleanup {
+    fn drop(&mut self) {
+        // The commit was canceled before it has verified the manifests.
+        let Some(attempt) = self.attempt.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let store = Arc::clone(&self.store);
+            let table_path = self.table_path.clone();
+            let write_id = self.write_id;
+            runtime.spawn(async move {
+                Self::delete(&store, &table_path, write_id, attempt).await;
+            });
+        }
+    }
+}
+
+/// Reads the manifests of all writer tasks.
+async fn read_manifests(mut input: SendableRecordBatchStream) -> Result<Manifests> {
+    let mut manifests = Manifests::default();
+    while let Some(manifest) = input.next().await {
+        manifests.add(&manifest?)?;
+    }
+    manifests.validate()?;
+    Ok(manifests)
+}
+
 /// Completes a write and returns the number of rows written.
 ///
 /// A write that overwrites replaces the content of the table directory when
@@ -191,38 +275,35 @@ async fn commit_file_write(
     table_path: Path,
     write_id: Uuid,
     overwrite: bool,
+    attempt: Option<u64>,
 ) -> Result<u64> {
     let success_file = table_path.clone().join(SUCCESS_FILE_NAME);
     if overwrite {
         delete_files(&store, vec![success_file.clone()]).await?;
     }
-    let mut input = open_input()?;
-    let mut manifests = Manifests::default();
-    let mut result = Ok(());
-    while let Some(manifest) = input.next().await {
-        result = manifest.and_then(|manifest| manifests.add(&manifest));
-        if result.is_err() {
-            break;
+    let cleanup = FailedWriteCleanup {
+        store: Arc::clone(&store),
+        table_path: table_path.clone(),
+        write_id,
+        attempt,
+    };
+    let result = match open_input() {
+        Ok(input) => read_manifests(input).await,
+        Err(e) => Err(e),
+    };
+    let mut manifests = match result {
+        Ok(manifests) => manifests,
+        Err(e) => {
+            // The writer tasks that are still running have been stopped,
+            // since the input has been dropped.
+            cleanup.run().await;
+            return Err(e);
         }
-    }
-    let result = result.and_then(|()| manifests.validate());
-    if let Err(e) = result {
-        // Stop the writer tasks that are still running, and remove the files
-        // of the tasks that have completed. A writer task removes its own files
-        // unless its manifest was delivered, so the commit is only responsible
-        // for the files in the manifests that it has received. These files have
-        // names that no other attempt uses, so a later attempt of the write is
-        // not affected.
-        drop(input);
-        let files = manifests.files.into_iter().collect();
-        if let Err(cleanup) = delete_files(&store, files).await {
-            log::warn!("failed to delete the files of a failed write to {table_path}: {cleanup}");
-        }
-        return Err(e);
-    }
+    };
 
     // The write has all its files from here on, and none of them is deleted
     // if the rest of the commit fails.
+    cleanup.disarm();
     //
     // The write has files that are not in a manifest only if a writer task was
     // attempted more than once. These are the files whose name has another
@@ -281,6 +362,10 @@ pub struct FileWriteCommitExec {
     write_id: Uuid,
     /// Whether the write replaces the content of the table directory.
     overwrite: bool,
+    /// The attempt of the task that runs the commit, when the writer tasks
+    /// are attempted again whenever the commit is. This is [`None`] when the
+    /// commit can be attempted again on its own.
+    attempt: Option<usize>,
     properties: Arc<PlanProperties>,
 }
 
@@ -303,8 +388,22 @@ impl FileWriteCommitExec {
             table_path,
             write_id,
             overwrite: false,
+            // The commit and the writer tasks are attempted once
+            // when the plan is not run by tasks.
+            attempt: Some(0),
             properties,
         }
+    }
+
+    /// Returns the plan for a task attempt. The attempt is [`None`] when
+    /// the writer tasks are not attempted again with the commit.
+    pub fn with_attempt(mut self, attempt: Option<usize>) -> Self {
+        self.attempt = attempt;
+        self
+    }
+
+    pub fn attempt(&self) -> Option<usize> {
+        self.attempt
     }
 
     /// Sets whether the write replaces the content of the table directory.
@@ -405,7 +504,8 @@ impl ExecutionPlan for FileWriteCommitExec {
                 self.table_path.clone(),
                 self.write_id,
             )
-            .with_overwrite(self.overwrite),
+            .with_overwrite(self.overwrite)
+            .with_attempt(self.attempt),
         ))
     }
 
@@ -426,13 +526,15 @@ impl ExecutionPlan for FileWriteCommitExec {
         let table_path = self.table_path.clone();
         let write_id = self.write_id;
         let overwrite = self.overwrite;
+        let attempt = self.attempt.map(|x| x as u64);
         let schema = self.schema();
         let output = stream::once(async move {
             // The writer tasks can start when the input is executed, which must
             // not be before the commit has prepared the table directory.
             let open_input = move || input.execute(0, context);
             let count =
-                commit_file_write(open_input, store, table_path, write_id, overwrite).await?;
+                commit_file_write(open_input, store, table_path, write_id, overwrite, attempt)
+                    .await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -628,6 +730,15 @@ mod tests {
             manifests: Vec<Result<RecordBatch>>,
             overwrite: bool,
         ) -> Result<u64> {
+            self.commit_as(manifests, overwrite, Some(0)).await
+        }
+
+        async fn commit_as(
+            &self,
+            manifests: Vec<Result<RecordBatch>>,
+            overwrite: bool,
+            attempt: Option<u64>,
+        ) -> Result<u64> {
             let requests = Arc::clone(&self.recording.requests);
             let open_input = move || {
                 record(&requests, "INPUT".to_string());
@@ -643,6 +754,7 @@ mod tests {
                 Path::from("table"),
                 WRITE_ID,
                 overwrite,
+                attempt,
             )
             .await
         }
@@ -827,24 +939,182 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_commit_input_error_deletes_received_files() -> Result<()> {
-        let write = TestWrite::new();
+    /// Creates the files of a write that fails in its attempt 1, and other files.
+    /// Returns the files of the attempts 0 and 1, the file of the attempt 2,
+    /// the other files, and the file that the first writer partition reports.
+    async fn create_files_of_failed_write(
+        write: &TestWrite,
+    ) -> Result<(Vec<String>, String, Vec<String>, WrittenFile)> {
         let a = write
             .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
             .await?;
-        let other = format!("table/{}", name(1, &WRITE_ID, 0, 1));
-        write.create(&other).await?;
+        let earlier = vec![
+            a.location.to_string(),
+            // The manifests of these files are not received.
+            format!("table/{}", name(1, &WRITE_ID, 0, 1)),
+            format!("table/x=1/y=2/{}", name(2, &WRITE_ID, 3, 1)),
+            format!("table/{}", name(1, &WRITE_ID, 0, 0)),
+        ];
+        let later = format!("table/{}", name(1, &WRITE_ID, 0, 2));
+        let other = vec![
+            format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 0)),
+            "table/_SUCCESS".to_string(),
+            "table/old.parquet".to_string(),
+            format!("other/{}", name(0, &WRITE_ID, 0, 0)),
+        ];
+        for path in earlier[1..].iter().chain([&later]).chain(&other) {
+            write.create(path).await?;
+        }
+        Ok((earlier, later, other, a))
+    }
+
+    #[tokio::test]
+    async fn test_failed_commit_deletes_files_of_write() -> Result<()> {
+        // The input fails, or the input ends before all writer tasks have reported.
+        for failed_input in [true, false] {
+            let write = TestWrite::new();
+            let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
+            let mut manifests = vec![manifest_batch(0, 3, 1, &[a])];
+            if failed_input {
+                manifests.push(exec_err!("writer failure"));
+                manifests.push(manifest_batch(1, 3, 1, &[]));
+            }
+            let result = write.commit_as(manifests, false, Some(1)).await;
+            let message = if failed_input {
+                "writer failure"
+            } else {
+                "1 of 3 writer tasks"
+            };
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains(message)),
+                "{result:?}"
+            );
+            // The directory is listed once, and the files of the write are deleted
+            // whether a manifest was received for them or not. The file of a later
+            // attempt and the files that are not files of the write are kept.
+            let requests = write.requests();
+            assert_eq!(requests.first().map(|x| x.as_str()), Some("LIST table"));
+            let expected: Vec<_> = earlier.iter().map(|x| format!("DELETE {x}")).collect();
+            assert_eq!(sorted(requests[1..].to_vec()), sorted(expected));
+            let mut expected = other;
+            expected.push(later);
+            assert_eq!(write.files().await?, sorted(expected));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_commit_keeps_files_of_later_attempts() -> Result<()> {
+        let write = TestWrite::new();
+        let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
         let result = write
-            .commit(vec![
-                manifest_batch(0, 2, 1, std::slice::from_ref(&a)),
-                exec_err!("writer failure"),
-                manifest_batch(1, 2, 1, &[]),
-            ])
+            .commit_as(
+                vec![manifest_batch(0, 3, 1, &[a]), exec_err!("writer failure")],
+                false,
+                Some(0),
+            )
             .await;
-        assert!(matches!(&result, Err(e) if e.to_string().contains("writer failure")));
-        assert_eq!(write.requests(), vec![format!("DELETE {}", a.location)]);
-        assert_eq!(write.files().await?, vec![other]);
+        assert!(result.is_err());
+        // The commit of the attempt 0 only deletes the file of the attempt 0.
+        assert_eq!(
+            write.requests(),
+            vec!["LIST table".to_string(), format!("DELETE {}", earlier[3])]
+        );
+        let mut expected = other;
+        expected.push(later);
+        expected.extend(earlier[..3].iter().cloned());
+        assert_eq!(write.files().await?, sorted(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_commit_that_is_attempted_alone_keeps_files() -> Result<()> {
+        // The writer tasks are not attempted again with the commit, so the next
+        // attempt of the commit reads the manifests of the same files.
+        let write = TestWrite::new();
+        let a = write
+            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
+            .await?;
+        let b = write
+            .create(&format!("table/x=1/{}", name(1, &WRITE_ID, 0, 0)))
+            .await?;
+        let files = vec![a.location.to_string(), b.location.to_string()];
+        for overwrite in [false, true] {
+            for manifests in [
+                vec![
+                    manifest_batch(0, 2, 0, std::slice::from_ref(&a)),
+                    exec_err!("input failure"),
+                ],
+                vec![manifest_batch(0, 2, 0, std::slice::from_ref(&a))],
+            ] {
+                let result = write.commit_as(manifests, overwrite, None).await;
+                assert!(result.is_err());
+                assert!(
+                    write
+                        .requests()
+                        .iter()
+                        .all(|x| x == "DELETE table/_SUCCESS")
+                );
+                assert_eq!(write.files().await?, sorted(files.clone()));
+            }
+        }
+        let count = write
+            .commit_as(
+                vec![
+                    manifest_batch(0, 2, 0, std::slice::from_ref(&a)),
+                    manifest_batch(1, 2, 0, std::slice::from_ref(&b)),
+                ],
+                true,
+                None,
+            )
+            .await?;
+        assert_eq!(count, 20);
+        let mut expected = files;
+        expected.push("table/_SUCCESS".to_string());
+        assert_eq!(write.files().await?, sorted(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_canceled_commit_deletes_files_of_write() -> Result<()> {
+        for attempt in [Some(1), None] {
+            let write = TestWrite::new();
+            let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
+            // The input does not end after the first manifest.
+            let manifests = stream::iter(vec![manifest_batch(0, 3, 1, &[a])])
+                .chain(stream::pending())
+                .boxed();
+            let open_input = move || {
+                let input: SendableRecordBatchStream =
+                    Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
+                Ok(input)
+            };
+            let commit = commit_file_write(
+                open_input,
+                Arc::clone(&write.store),
+                Path::from("table"),
+                WRITE_ID,
+                false,
+                attempt,
+            );
+            let canceled = tokio::time::timeout(std::time::Duration::from_millis(50), commit).await;
+            assert!(canceled.is_err());
+            let mut expected = other;
+            expected.push(later);
+            if attempt.is_none() {
+                expected.extend(earlier);
+            }
+            let expected = sorted(expected);
+            // The files are deleted by a task that is started when the commit is dropped.
+            for _ in 0..500 {
+                if write.files().await? == expected {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert_eq!(write.files().await?, expected);
+            assert_eq!(write.requests().is_empty(), attempt.is_none());
+        }
         Ok(())
     }
 
@@ -869,8 +1139,11 @@ mod tests {
         // of a failed writer task is reported for the write instead.
         let is_incomplete = |result: &Result<u64>| matches!(result, Err(DataFusionError::External(e)) if e.is::<InputIncompleteError>());
         assert!(is_incomplete(&result), "{result:?}");
-        // The files that the commit has received are deleted.
-        assert_eq!(write.requests(), vec![format!("DELETE {}", a.location)]);
+        // The files of the write are deleted.
+        assert_eq!(
+            write.requests(),
+            vec!["LIST table".to_string(), format!("DELETE {}", a.location)]
+        );
         assert_eq!(write.files().await?, Vec::<String>::new());
 
         // no manifest at all
@@ -1098,12 +1371,13 @@ mod tests {
                 matches!(&result, Err(e) if e.to_string().contains(message)),
                 "{result:?}"
             );
-            // The directory is not listed, and only the file of the write is deleted.
+            // Only the file of the write is deleted.
             assert_eq!(
                 write.requests_and_input(),
                 vec![
                     "DELETE table/_SUCCESS".to_string(),
                     "INPUT".to_string(),
+                    "LIST table".to_string(),
                     format!("DELETE {}", a.location)
                 ]
             );
@@ -1301,6 +1575,7 @@ mod tests {
                     table.clone(),
                     WRITE_ID,
                     overwrite,
+                    Some(attempt as u64),
                 )
                 .await?;
                 assert_eq!(count, 4);

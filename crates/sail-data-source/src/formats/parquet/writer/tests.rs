@@ -1970,6 +1970,42 @@ async fn test_failed_writer_leaves_no_success_file() -> Result<()> {
         Arc::clone(&store),
     );
     let schema = int_schema();
+    // The table has files of an earlier write, and files of writer tasks of
+    // this write that have completed and handed over their manifests, which
+    // the commit has not read.
+    let old = vec![
+        "table/_SUCCESS".to_string(),
+        "table/old.parquet".to_string(),
+        format!(
+            "table/{}",
+            crate::listing::part_file::part_file_name(
+                0,
+                &Uuid::from_u128(77),
+                0,
+                0,
+                ".zstd.parquet"
+            )
+        ),
+    ];
+    for file in &old {
+        store.put(&Path::from(file.as_str()), "old".into()).await?;
+    }
+    let completed = vec![
+        vec![int_batch(&schema, 0..5)?],
+        vec![int_batch(&schema, 5..9)?],
+    ];
+    let writer = Arc::new(write_exec(&completed, &schema, None, false)?);
+    let other = SessionContext::new();
+    other.register_object_store(
+        ObjectStoreUrl::parse("memory://")?.as_ref(),
+        Arc::clone(&store),
+    );
+    collect(
+        Arc::new(CoalescePartitionsExec::new(writer)),
+        other.task_ctx(),
+    )
+    .await?;
+    assert_eq!(list_files(store.as_ref()).await?.len(), old.len() + 2);
     let partitions = vec![vec![], vec![int_batch(&schema, 0..1000)?]];
     let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
     let result = collect(commit_exec(writer)?, ctx.task_ctx()).await;
@@ -1977,8 +2013,8 @@ async fn test_failed_writer_leaves_no_success_file() -> Result<()> {
         result.map_err(|e| e.find_root().strip_backtrace()),
         Err(e) if e.contains("Resources exhausted")
     ));
-    let files = list_files(store.as_ref()).await?;
-    assert!(files.iter().all(|x| x.0 != "table/_SUCCESS"), "{files:?}");
+    // The write leaves none of its files, and the other files are kept.
+    wait_for_files(store.as_ref(), &old).await?;
     Ok(())
 }
 
