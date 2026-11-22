@@ -2346,9 +2346,9 @@ async fn test_partition_clustered_input_with_repeated_key() -> Result<()> {
         rows,
         vec![
             (name("__HIVE_DEFAULT_PARTITION__", 0), vec![0]),
-            (name("__HIVE_DEFAULT_PARTITION__", 1), vec![4]),
-            (name("a", 0), vec![1, 2]),
-            (name("b", 0), vec![3]),
+            (name("__HIVE_DEFAULT_PARTITION__", 3), vec![4]),
+            (name("a", 1), vec![1, 2]),
+            (name("b", 2), vec![3]),
         ]
     );
     Ok(())

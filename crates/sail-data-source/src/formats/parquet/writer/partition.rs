@@ -117,10 +117,14 @@ impl PartitionRouter {
     /// the rows with the empty string, and both have the key of the default partition.
     pub fn split(&mut self, batch: &RecordBatch) -> Result<Vec<KeyRows>> {
         let keys = batch.project(&self.column_indices)?;
+        if self.converter.is_none() {
+            // The formatting function reports a partition column type that it
+            // does not support, and it does so for a batch without rows. It is
+            // asked before anything else is done with the columns of the first
+            // batch, so that the error does not depend on the values of the rows.
+            compute_partition_keys_by_row(&keys.slice(0, 0), &self.columns)?;
+        }
         let values = KeyValues::try_new(&keys)?;
-        // Format the first row before anything else, so that an unsupported
-        // partition column type is reported by the formatting function.
-        self.key(&values, 0)?;
         let converter = match &mut self.converter {
             Some(converter) => converter,
             converter @ None => {
@@ -176,10 +180,10 @@ impl PartitionRouter {
         let formatted = compute_partition_keys_by_row(&present, &self.columns)?;
         formatted
             .iter()
-            .zip(&values.nulls)
-            .map(|(value, nulls)| {
+            .zip(&values.valid)
+            .map(|(value, valid)| {
                 let value = match value.first() {
-                    Some(value) if nulls.as_ref().is_none_or(|x| x.is_valid(row)) => value,
+                    Some(value) if valid.as_ref().is_none_or(|x| x.is_valid(row)) => value,
                     _ => return Ok(DEFAULT_PARTITION_NAME.to_string()),
                 };
                 match value.is_empty() {
@@ -218,7 +222,7 @@ struct KeyValues {
     present: RecordBatch,
     /// The rows of each partition column that have a value,
     /// or nothing when all rows of the column have a value.
-    nulls: Vec<Option<NullBuffer>>,
+    valid: Vec<Option<NullBuffer>>,
 }
 
 impl KeyValues {
@@ -230,7 +234,7 @@ impl KeyValues {
             .collect::<Result<Vec<ArrayRef>>>()?;
         Ok(Self {
             present: RecordBatch::try_new(keys.schema(), present)?,
-            nulls: keys.columns().iter().map(|x| x.logical_nulls()).collect(),
+            valid: keys.columns().iter().map(|x| x.logical_nulls()).collect(),
         })
     }
 }
@@ -645,12 +649,15 @@ pub(super) struct PartitionedWriter {
     context: Arc<TaskContext>,
     rows_sorted: Count,
     open: HashMap<PartitionKey, DirectoryWriter>,
-    /// The directories whose file was completed when the rows of another partition key
-    /// followed. More rows for such a directory go to a new file.
-    closed: HashMap<PartitionKey, DirectoryWriter>,
+    /// The number of files that the task has written for an input in which the rows
+    /// of each partition key are next to each other. The files of such an input are
+    /// numbered across the directories, so that the files of a directory have
+    /// different names also when the directory has rows in several places of the
+    /// input, as the default partition has for the missing value and the empty string.
+    clustered_files: u32,
     /// The files that are being completed, in the order in which they received
-    /// their last rows. The number of these files and of the open directories
-    /// together is at most the number of directories that can be open.
+    /// their last rows. The number of these files and of the directories that
+    /// receive rows together is at most the number of directories that can be open.
     closing: VecDeque<JoinHandle<Result<StagedFile>>>,
     overflow: Option<Overflow>,
 }
@@ -676,7 +683,7 @@ impl PartitionedWriter {
             context,
             rows_sorted,
             open: HashMap::new(),
-            closed: HashMap::new(),
+            clustered_files: 0,
             closing: VecDeque::new(),
             overflow: None,
         }
@@ -695,8 +702,9 @@ impl PartitionedWriter {
         for part in parts {
             if !self.open.contains_key(&part.key) {
                 if self.clustered {
-                    // The rows of the open directory have ended.
-                    self.close_open(factory, written).await?;
+                    // The rows of the open directory have ended,
+                    // and the directory of these rows is opened next.
+                    self.close_open(factory, written, 1).await?;
                 } else if self.open.len() >= self.max_open_files {
                     let rows = part.take(batch)?;
                     self.rows_sorted.add(rows.num_rows());
@@ -725,29 +733,30 @@ impl PartitionedWriter {
         match self.open.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let writer = match self.closed.remove(entry.key()) {
-                    Some(writer) => writer,
-                    None => {
-                        DirectoryWriter::new(self.router.directory(&self.table_path, entry.key()))
-                    }
-                };
-                entry.insert(writer)
+                let directory = self.router.directory(&self.table_path, entry.key());
+                entry.insert(DirectoryWriter::starting_at(
+                    directory,
+                    self.clustered_files,
+                ))
             }
         }
     }
 
-    /// Starts to complete the files of the open directories.
+    /// Starts to complete the files of the open directories, before the given
+    /// number of other directories receive rows.
     async fn close_open(
         &mut self,
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
+        others: usize,
     ) -> Result<()> {
-        let keys: Vec<_> = self.open.keys().cloned().collect();
-        for key in keys {
-            if let Some(mut writer) = self.open.remove(&key) {
-                self.start_close(&mut writer, factory, written).await?;
-                self.closed.insert(key, writer);
+        let open = std::mem::take(&mut self.open);
+        for mut writer in open.into_values() {
+            if self.clustered {
+                self.clustered_files = writer.next_counter();
             }
+            self.start_close(&mut writer, factory, written, others)
+                .await?;
         }
         Ok(())
     }
@@ -756,15 +765,18 @@ impl PartitionedWriter {
     ///
     /// The files are completed while the task writes to other directories, so that
     /// the task does not wait for each file. The task waits for the files that
-    /// have been completing the longest when it has its number of open files.
+    /// have been completing the longest when it has its number of open files,
+    /// which are these files, the open directories, and the given number of
+    /// other directories that receive rows.
     async fn start_close(
         &mut self,
         writer: &mut DirectoryWriter,
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
+        others: usize,
     ) -> Result<()> {
         self.closing.extend(writer.start_close(factory));
-        let limit = self.max_open_files.saturating_sub(self.open.len());
+        let limit = self.max_open_files.saturating_sub(self.open.len() + others);
         self.wait_for_closing(limit, written).await
     }
 
@@ -794,7 +806,9 @@ impl PartitionedWriter {
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
     ) -> Result<()> {
-        self.close_open(factory, written).await?;
+        // The sorted rows are written to one directory at a time.
+        let others = usize::from(self.overflow.is_some());
+        self.close_open(factory, written, others).await?;
         let Some(mut overflow) = self.overflow.take() else {
             return self.wait_for_closing(0, written).await;
         };
@@ -819,7 +833,8 @@ impl PartitionedWriter {
                     Some((current, writer)) if *current == id => writer,
                     current => {
                         if let Some((_, mut writer)) = current.take() {
-                            self.start_close(&mut writer, factory, written).await?;
+                            // The directory of the next rows is open as well.
+                            self.start_close(&mut writer, factory, written, 1).await?;
                         }
                         let directory = self.router.directory(&self.table_path, overflow.key(id)?);
                         &mut current.insert((id, DirectoryWriter::new(directory))).1
@@ -832,7 +847,7 @@ impl PartitionedWriter {
             }
         }
         if let Some((_, mut writer)) = current {
-            self.start_close(&mut writer, factory, written).await?;
+            self.start_close(&mut writer, factory, written, 0).await?;
         }
         self.wait_for_closing(0, written).await
     }

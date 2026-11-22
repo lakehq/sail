@@ -335,12 +335,22 @@ struct ClosingFile {
 
 impl DirectoryWriter {
     pub fn new(directory: Path) -> Self {
+        Self::starting_at(directory, 0)
+    }
+
+    /// Returns the writer whose first file has the given number in its name.
+    pub fn starting_at(directory: Path, counter: u32) -> Self {
         Self {
             directory,
             writer: None,
             closing: None,
-            next_counter: 0,
+            next_counter: counter,
         }
+    }
+
+    /// The number in the name of the next file.
+    pub fn next_counter(&self) -> u32 {
+        self.next_counter
     }
 
     fn open(&mut self, factory: &FileFactory) -> Result<&mut ParquetFileWriter> {
@@ -405,6 +415,7 @@ impl DirectoryWriter {
     }
 
     /// Whether the directory has received a file.
+    /// This is for a writer whose first file has the number zero.
     fn has_files(&self) -> bool {
         self.next_counter > 0
     }
@@ -562,6 +573,8 @@ async fn write_files(
         );
         (TaskOutput::Partitioned(Box::new(output)), schema)
     };
+    // The plan has checked the columns. They are checked here as well,
+    // since a task can be created without the plan.
     check_file_columns(schema.fields().iter().map(|field| field.as_ref()))?;
     // The input that waits to be encoded is counted separately from the memory
     // of the encoders, and without a limit, since its size is limited by the
