@@ -102,8 +102,8 @@ impl PlanResolver<'_> {
 
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let table_name: Vec<String> = table.clone().into();
-        // The target is looked up as its scan and the other reads of the statement look
-        // it up, so that the operation is planned on the table metadata that it reads.
+        // The target shares the catalog lookup of its scan and of the other reads in the
+        // statement, so that the operation is planned on the table metadata that it reads.
         let (status, resolved) =
             Self::lookup_catalog_table_or_view(&catalog_manager, &table_name, state).await?;
         match status.kind {

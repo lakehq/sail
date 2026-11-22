@@ -820,7 +820,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Option<TableInfo>> {
         let catalog_table: Vec<String> = table.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
-        // The table is looked up as the reads of the query look it up, so that the query
+        // The table shares the catalog lookup of the reads in the query, so that the query
         // writes to the table metadata that it reads.
         let (status, resolved) =
             match Self::lookup_catalog_table(&manager, &catalog_table, state).await {
@@ -841,9 +841,6 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
-                let resolved = resolved.ok_or_else(|| {
-                    PlanError::internal("catalog table without lakehouse resolution")
-                })?;
                 let lakehouse_table = self
                     .begin_resolved_table_access(&catalog_table, resolved, LakehouseOperation::Read)
                     .await?;

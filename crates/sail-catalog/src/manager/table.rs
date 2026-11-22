@@ -338,7 +338,10 @@ impl CatalogManager {
         &self,
         reference: &[T],
     ) -> CatalogResult<TableStatus> {
-        self.get_table_or_view_with(reference, self.get_table(reference), |status| status)
+        if let Some(view) = self.find_temporary_view(reference).await? {
+            return Ok(view);
+        }
+        self.get_catalog_table_or_view_with(reference, self.get_table(reference), |status| status)
             .await
     }
 
@@ -395,21 +398,6 @@ impl CatalogManager {
                 .map(Some);
         }
         Ok(None)
-    }
-
-    /// Looks up temporary views, then the catalog table with `table`, then catalog views.
-    /// Views are converted with `view`.
-    async fn get_table_or_view_with<T: AsRef<str>, R>(
-        &self,
-        reference: &[T],
-        table: impl Future<Output = CatalogResult<R>>,
-        view: impl Fn(TableStatus) -> R,
-    ) -> CatalogResult<R> {
-        if let Some(x) = self.find_temporary_view(reference).await? {
-            return Ok(view(x));
-        }
-        self.get_catalog_table_or_view_with(reference, table, view)
-            .await
     }
 
     /// Looks up the catalog table with `table`, then catalog views.

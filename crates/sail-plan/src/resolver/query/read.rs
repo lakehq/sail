@@ -12,10 +12,14 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
+use sail_catalog::lakehouse::{
+    LakehouseResolvedTable, ResolveLakehouseTableRequest, TableAccessPurpose,
+};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseOperation, TableColumnStatus, TableKind, TableStatus,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::{
@@ -176,19 +180,18 @@ impl PlanResolver<'_> {
         manager: &CatalogManager,
         reference: &[String],
         state: &mut PlanResolverState,
-    ) -> Result<CatalogTableLookup, CatalogError> {
+    ) -> Result<(TableStatus, LakehouseResolvedTable), CatalogError> {
         let table = manager.resolve_fully_qualified_object_name(reference)?;
         // An earlier lookup that found a view is not reused: the catalog is asked for
         // the table, and reports that there is none.
-        if let Some(lookup @ (_, Some(_))) = state.get_catalog_table_lookup(&table) {
-            return Ok(lookup);
+        if let Some((status, Some(resolved))) = state.get_catalog_table_lookup(&table) {
+            return Ok((status, resolved));
         }
         let (status, resolved) = manager
             .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
             .await?;
-        let lookup = (status, Some(resolved));
-        state.insert_catalog_table_lookup(table, lookup.clone());
-        Ok(lookup)
+        state.insert_catalog_table_lookup(table, (status.clone(), Some(resolved.clone())));
+        Ok((status, resolved))
     }
 
     /// Looks up what a read refers to. A read with a required format reads tables only.
@@ -199,7 +202,8 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
         if required_format.is_some() {
-            Self::lookup_catalog_table(manager, reference, state).await
+            let (status, resolved) = Self::lookup_catalog_table(manager, reference, state).await?;
+            Ok((status, Some(resolved)))
         } else {
             Self::lookup_catalog_table_or_view(manager, reference, state).await
         }
