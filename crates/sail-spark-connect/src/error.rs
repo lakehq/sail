@@ -435,8 +435,7 @@ impl From<CommonErrorCause> for SparkThrowable {
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
             CommonErrorCause::Unknown(x)
             | CommonErrorCause::Internal(x)
-            | CommonErrorCause::CommitStateUnknown(x)
-            | CommonErrorCause::InputIncomplete(x) => SparkThrowable::SparkRuntimeException(x),
+            | CommonErrorCause::CommitStateUnknown(x) => SparkThrowable::SparkRuntimeException(x),
             CommonErrorCause::Io(x)
             | CommonErrorCause::ArrowMemory(x)
             | CommonErrorCause::ArrowCompute(x)
@@ -606,18 +605,6 @@ mod tests {
         let sql_state = info.metadata.get("sqlState");
         assert_eq!(sql_state.ok_or("missing sql state")?, "HY000");
         Ok(())
-    }
-
-    #[test]
-    fn input_incomplete_error_maps_to_runtime_exception() {
-        let throwable = SparkThrowable::from(CommonErrorCause::InputIncomplete(
-            "the write is incomplete: no writer task has reported its files".to_string(),
-        ));
-
-        assert!(matches!(
-            &throwable,
-            SparkThrowable::SparkRuntimeException(_)
-        ));
     }
 
     #[test]
