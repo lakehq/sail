@@ -526,9 +526,7 @@ async fn write_files(
     reservation: MemoryReservation,
     metrics: ParquetWriteMetrics,
 ) -> Result<RecordBatch> {
-    // The task shares the threads with the other writer tasks from here on,
-    // until it has written its files, has failed, or is canceled.
-    let _active_writer = ActiveWriter::new(&task.encode.active_writers);
+    let active_writers = Arc::clone(&task.encode.active_writers);
     let partition = task.partition;
     let partitions = task.partitions;
     let attempt = task.attempt;
@@ -569,10 +567,15 @@ async fn write_files(
     };
     let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
+    // The task shares the threads with the other writer tasks from its first rows on,
+    // until it has written its files, has failed, or is canceled. A task without rows
+    // encodes nothing, so it does not take threads from the tasks that have rows.
+    let mut active_writer = None;
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
             continue;
         }
+        active_writer.get_or_insert_with(|| ActiveWriter::new(&active_writers));
         if let Some(message) = rows_not_supported {
             return exec_err!("{message}");
         }
