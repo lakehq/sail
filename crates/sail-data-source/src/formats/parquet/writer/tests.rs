@@ -4885,6 +4885,46 @@ fn shared_settings(threads: usize, active_writers: &Arc<AtomicUsize>) -> EncodeS
     }
 }
 
+#[tokio::test]
+async fn test_task_is_active_from_its_first_rows() -> Result<()> {
+    let schema = int_schema();
+    let active_writers = Arc::new(AtomicUsize::new(0));
+    // The number of active writer tasks when the task asks for each batch of its input.
+    let observed = Arc::new(std::sync::Mutex::new(vec![]));
+    let batches = vec![
+        RecordBatch::new_empty(Arc::clone(&schema)),
+        int_batch(&schema, 0..3)?,
+        int_batch(&schema, 3..5)?,
+    ];
+    let input = {
+        let active_writers = Arc::clone(&active_writers);
+        let observed = Arc::clone(&observed);
+        futures::stream::iter(batches).map(move |batch| {
+            if let Ok(mut observed) = observed.lock() {
+                observed.push(active_writers.load(Ordering::SeqCst));
+            }
+            Ok(batch)
+        })
+    };
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = test_task(store, 0);
+    task.encode = shared_settings(4, &active_writers);
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let metrics = ExecutionPlanMetricsSet::new();
+    read_manifest(write_partition(
+        task,
+        Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), input)),
+        MemoryConsumer::new("test").register(&pool),
+        ParquetWriteMetrics::new(&metrics, 0),
+    ))
+    .await?;
+    // The task is not active before it has rows, and it is not active after it has ended.
+    let observed = observed.lock().map(|x| x.clone()).unwrap_or_default();
+    assert_eq!(observed, vec![0, 0, 1]);
+    assert_eq!(active_writers.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_degree_follows_active_writers_at_each_row_group() -> Result<()> {
     const MB: usize = 1024 * 1024;
