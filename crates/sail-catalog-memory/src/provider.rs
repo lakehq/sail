@@ -400,6 +400,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         self.default_namespace.clone()
     }
 
+    fn is_session_local(&self) -> bool {
+        true
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

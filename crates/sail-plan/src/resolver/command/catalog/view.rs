@@ -144,6 +144,9 @@ impl PlanResolver<'_> {
             None => (Self::get_field_names(input.schema(), state)?, vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
+        // The view reads its tables again at each read, so its plan does not keep the
+        // table sources that the definition was resolved with.
+        let input = Self::store_view_plan(input, state)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
         let input: CatalogLogicalPlanId = manager.track_logical_plan(Arc::new(input))?;
         let command = CatalogCommand::CreateTemporaryView {

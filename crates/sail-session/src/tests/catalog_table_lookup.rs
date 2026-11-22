@@ -9,6 +9,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
+use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion_common::plan_datafusion_err;
 use sail_catalog::error::CatalogResult;
@@ -29,12 +30,16 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{LakeSource, RowLevelOperation};
+use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_plan::config::PlanConfig;
 use sail_plan::resolver::PlanResolver;
+use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 
 use super::{create_memory_catalog, create_session_with_catalogs};
+
+mod temporary_view;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -48,6 +53,8 @@ struct SnapshotCatalogProvider {
     loads: AtomicUsize,
     /// The table and view requests, whether they found something or not.
     requests: Mutex<Vec<String>>,
+    /// Whether each session has its own catalog of this name, as the memory catalog.
+    session_local: bool,
 }
 
 /// How a catalog finds a table and which name it returns for the table.
@@ -75,6 +82,7 @@ impl SnapshotCatalogProvider {
             names,
             loads: AtomicUsize::new(0),
             requests: Mutex::new(vec![]),
+            session_local: false,
         }
     }
 
@@ -93,6 +101,10 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     fn default_namespace(&self) -> Namespace {
         self.inner.default_namespace()
+    }
+
+    fn is_session_local(&self) -> bool {
+        self.session_local
     }
 
     async fn create_database(
@@ -408,6 +420,8 @@ struct Fixture {
     /// The catalog `second`, which is not the default catalog.
     second: Arc<SnapshotCatalogProvider>,
     source: Arc<RecordingDataSource>,
+    /// Whether the session shares the repeated references to a CTE.
+    share_ctes: bool,
 }
 
 impl Fixture {
@@ -419,6 +433,12 @@ impl Fixture {
     /// Creates a session like [`Self::try_new`], with catalogs that find and return
     /// table names as `names` says.
     async fn try_new_with_names(names: TableNames, setup: &[&str]) -> TestResult<Self> {
+        Self::try_new_with(names, false, setup).await
+    }
+
+    /// Creates a session like [`Self::try_new_with_names`], which shares the repeated
+    /// references to a CTE if `share_ctes` is set.
+    async fn try_new_with(names: TableNames, share_ctes: bool, setup: &[&str]) -> TestResult<Self> {
         let catalog = Arc::new(SnapshotCatalogProvider::new(
             create_memory_catalog()?,
             names,
@@ -438,6 +458,13 @@ impl Fixture {
                 Arc::clone(&second) as Arc<dyn CatalogProvider>,
             )],
         )?;
+        if share_ctes {
+            session
+                .state_ref()
+                .write()
+                .config_mut()
+                .set_extension(Arc::new(SharedCteConfig::new(true)));
+        }
         let source = RecordingDataSource::new("iceberg");
         session
             .extension::<DataSourceRegistry>()?
@@ -447,6 +474,7 @@ impl Fixture {
             catalog,
             second,
             source,
+            share_ctes,
         };
         fixture.create_table(&["t"], &["k", "v"]).await?;
         for sql in setup {
@@ -476,17 +504,52 @@ impl Fixture {
     }
 
     fn resolver(&self) -> PlanResolver<'_> {
-        PlanResolver::new(&self.session, Arc::new(PlanConfig::default()))
+        PlanResolver::new(&self.session, Arc::new(PlanConfig::default())).with_shared_ctes()
     }
 
     async fn execute(&self, sql: &str) -> TestResult {
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let plan = self.resolver().resolve_named_plan(plan).await?.plan;
+        self.execute_plan(plan).await
+    }
+
+    async fn execute_plan(&self, plan: LogicalPlan) -> TestResult {
+        if self.share_ctes {
+            // The future is boxed to keep the futures of the tests small.
+            return Box::pin(self.execute_plan_with_shared_ctes(plan)).await;
+        }
         self.session
             .execute_logical_plan(plan)
             .await?
             .collect()
             .await?;
+        Ok(())
+    }
+
+    async fn execute_plan_with_shared_ctes(&self, plan: LogicalPlan) -> TestResult {
+        let state = self.session.state();
+        let mut restart = false;
+        let plan = optimize_and_plan_shared_ctes(
+            plan,
+            &mut |plan, query| {
+                if query && std::mem::replace(&mut restart, true) {
+                    session_state_for_restart(&state).optimize(&plan)
+                } else {
+                    state.optimize(&plan)
+                }
+            },
+            |plan| {
+                let state = &state;
+                async move {
+                    state
+                        .query_planner()
+                        .create_physical_plan(&plan, state)
+                        .await
+                }
+            },
+        )
+        .await?;
+        collect(plan, state.task_ctx()).await?;
         Ok(())
     }
 

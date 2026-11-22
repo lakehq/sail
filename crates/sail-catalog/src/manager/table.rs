@@ -14,8 +14,8 @@ use crate::lakehouse::{
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace, StageTableOptions,
+    AlterTableOptions, CatalogProvider, CreateTableMetadataRequirement, CreateTableOptions,
+    DropTableOptions, Namespace, StageTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -32,7 +32,78 @@ impl ResolvedCatalogTableReference {
     }
 }
 
+/// A table of a catalog that each session has its own instance of (see
+/// [`CatalogProvider::is_session_local`]). A global temporary view reads such a table
+/// in the catalog of the session that created the view, from every session.
+#[derive(Clone)]
+pub struct SessionCatalogTable {
+    provider: Arc<dyn CatalogProvider>,
+    database: Namespace,
+    table: Arc<str>,
+}
+
+impl std::fmt::Debug for SessionCatalogTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionCatalogTable")
+            .field("catalog", &self.provider.get_name())
+            .field("database", &self.database)
+            .field("table", &self.table)
+            .finish()
+    }
+}
+
+impl SessionCatalogTable {
+    /// Identifies the catalog instance of the table among the catalogs of all sessions.
+    pub fn catalog_id(&self) -> usize {
+        Arc::as_ptr(&self.provider) as *const () as usize
+    }
+
+    /// Loads the table like [`CatalogManager::get_lakehouse_table`].
+    pub async fn get_lakehouse_table(
+        &self,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
+        self.provider
+            .get_lakehouse_table(&self.database, &self.table, request)
+            .await
+    }
+
+    /// Begins a table access like [`CatalogManager::begin_table_access`].
+    pub async fn begin_table_access(
+        &self,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        self.provider
+            .begin_table_access(&self.database, &self.table, request)
+            .await
+    }
+}
+
 impl CatalogManager {
+    /// Returns the table in the catalog instance of this session, if each session has
+    /// its own instance of the catalog of the table.
+    pub fn session_catalog_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+    ) -> CatalogResult<Option<SessionCatalogTable>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        Ok(provider.is_session_local().then_some(SessionCatalogTable {
+            provider,
+            database,
+            table,
+        }))
+    }
+
+    /// Returns whether the table is in a catalog instance of this session.
+    pub fn has_session_catalog_table(&self, table: &SessionCatalogTable) -> CatalogResult<bool> {
+        let state = self.state()?;
+        Ok(state
+            .get_catalog(table.provider.get_name())
+            .is_ok_and(|provider| {
+                Arc::as_ptr(&provider) as *const () as usize == table.catalog_id()
+            }))
+    }
+
     pub async fn rename_table(
         &self,
         table: &[String],

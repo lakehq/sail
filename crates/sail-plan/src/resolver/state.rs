@@ -6,13 +6,16 @@ use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
+use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+use crate::resolver::query::{
+    CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
+};
 use crate::shared_cte::CteDefinition;
 
 /// Identifies what a catalog table read scans.
@@ -26,6 +29,12 @@ pub(super) struct TableSourceKey {
     pub properties: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
     pub temporal_options: Vec<(String, String)>,
+    /// How the source matches the letter case of column names, for a source that matches
+    /// the columns of the table with the columns of its files.
+    pub read_case_sensitive: Option<bool>,
+    /// The catalog instance of the table, for a table that a global temporary view reads
+    /// in a catalog of the session that created the view.
+    pub session_catalog: Option<usize>,
 }
 
 struct SharedTableSource(Arc<dyn TableSource>);
@@ -160,6 +169,19 @@ pub(super) struct PlanResolverState {
     /// to write the name of the table. Names that the catalog returned the same table
     /// for have the same lookup, see [`PlanResolverState::share_catalog_table`].
     catalog_table_lookups: HashMap<Vec<String>, CatalogTableLookup>,
+    /// The successful lookups so far of the tables that global temporary views read in a
+    /// catalog of the session that created them (see [`SessionCatalogTable`]), by the
+    /// catalog instance and the fully qualified name of the table.
+    session_catalog_table_lookups:
+        HashMap<(usize, Vec<String>), (TableStatus, LakehouseResolvedTable)>,
+    /// What the table sources of the scans resolved so far read, by the address of the
+    /// source, for the sources that a temporary view obtains again at each read.
+    table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
+}
+
+/// Returns the address of a table source, which identifies the source while it is alive.
+pub(super) fn table_source_address(source: &Arc<dyn TableSource>) -> usize {
+    Arc::as_ptr(source) as *const () as usize
 }
 
 /// A catalog table or view, with the lakehouse resolution of a catalog table.
@@ -197,6 +219,8 @@ impl PlanResolverState {
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
             catalog_table_lookups: HashMap::new(),
+            session_catalog_table_lookups: HashMap::new(),
+            table_origins: HashMap::new(),
         }
     }
 
@@ -515,6 +539,40 @@ impl PlanResolverState {
 
     pub fn insert_catalog_table_lookup(&mut self, table: Vec<String>, lookup: CatalogTableLookup) {
         self.catalog_table_lookups.insert(table, lookup);
+    }
+
+    pub fn get_session_catalog_table_lookup(
+        &self,
+        table: &SessionCatalogTable,
+        name: &[String],
+    ) -> Option<(TableStatus, LakehouseResolvedTable)> {
+        self.session_catalog_table_lookups
+            .get(&(table.catalog_id(), name.to_vec()))
+            .cloned()
+    }
+
+    pub fn insert_session_catalog_table_lookup(
+        &mut self,
+        table: &SessionCatalogTable,
+        name: Vec<String>,
+        lookup: (TableStatus, LakehouseResolvedTable),
+    ) {
+        self.session_catalog_table_lookups
+            .insert((table.catalog_id(), name), lookup);
+    }
+
+    /// Records what the source of a scan reads. The first record of a source remains.
+    pub fn record_table_origin(&mut self, source: &Arc<dyn TableSource>, origin: Arc<TableOrigin>) {
+        self.table_origins
+            .entry(table_source_address(source))
+            .or_insert_with(|| (SharedTableSource(Arc::clone(source)), origin));
+    }
+
+    /// Returns what the source of a scan reads, if a temporary view obtains it again.
+    pub fn table_origin(&self, source: &Arc<dyn TableSource>) -> Option<&Arc<TableOrigin>> {
+        self.table_origins
+            .get(&table_source_address(source))
+            .map(|(_, origin)| origin)
     }
 
     /// Stores what the catalog returned for the table `name` and returns the lookup that

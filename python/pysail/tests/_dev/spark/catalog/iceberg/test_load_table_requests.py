@@ -151,6 +151,36 @@ def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+def test_temporary_view_read_loads_its_table_once_per_statement(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    table = f"{NAMESPACE}.viewed"
+    views = ["viewed_sql", "viewed_data_frame"]
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        spark.sql(f"CREATE TEMPORARY VIEW viewed_sql AS SELECT id FROM {table}")
+        spark.table(table).createOrReplaceTempView("viewed_data_frame")
+        spark.sql(f"INSERT INTO {table} VALUES (2)")
+        for view in views:
+            # Each read of a temporary view loads the table and sees its latest version.
+            start = len(records)
+            assert [row.id for row in spark.table(view).orderBy("id").collect()] == [1, 2]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/viewed", 200, None)]
+            # The view and the other references to the table share one load.
+            start = len(records)
+            rows = spark.sql(
+                f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {table} t ON v.id = t.id "
+                f"WHERE v.id IN (SELECT id FROM viewed_sql) AND t.id IN (SELECT id FROM viewed_data_frame)"
+            ).collect()
+            assert sorted(tuple(row) for row in rows) == [(1, 1), (2, 2)]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/viewed", 200, None)]
+    finally:
+        for view in views:
+            spark.catalog.dropTempView(view)
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_invalid_scan_planning_mode_is_reported_after_read_validation(
     spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
 ):

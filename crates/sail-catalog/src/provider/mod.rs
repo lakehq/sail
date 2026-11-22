@@ -45,6 +45,13 @@ pub trait CatalogProvider: Send + Sync {
         }
     }
 
+    /// Whether each session has its own catalog of this name, with its own tables, as
+    /// for a catalog that keeps its tables in the memory of the session. A catalog of
+    /// the same name in another session is otherwise the same catalog.
+    fn is_session_local(&self) -> bool {
+        false
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

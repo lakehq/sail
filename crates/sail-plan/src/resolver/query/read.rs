@@ -16,6 +16,7 @@ use sail_catalog::lakehouse::{
     LakehouseResolvedTable, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseOperation, TableColumnStatus, TableKind, TableStatus,
@@ -37,6 +38,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use url::Url;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
+use super::temp_view::{CatalogTableOrigin, TableOrigin};
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -137,7 +139,7 @@ impl PlanResolver<'_> {
     /// The request names the table by its fully qualified name, which the execution
     /// context carries, so that a commit looks up the same table whichever reference
     /// of the query came first and whatever the current database is by then.
-    fn catalog_table_lookup_request(table: &[String]) -> ResolveLakehouseTableRequest {
+    pub(super) fn catalog_table_lookup_request(table: &[String]) -> ResolveLakehouseTableRequest {
         ResolveLakehouseTableRequest {
             catalog_table: table.to_vec(),
             operation: LakehouseOperation::Read,
@@ -167,7 +169,7 @@ impl PlanResolver<'_> {
 
     /// Looks up the catalog table or the catalog view of the fully qualified name `table`,
     /// reusing an earlier successful lookup in the query.
-    async fn lookup_catalog_object(
+    pub(super) async fn lookup_catalog_object(
         manager: &CatalogManager,
         table: Vec<String>,
         state: &mut PlanResolverState,
@@ -326,14 +328,30 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
+                let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
+                let origin = TableOrigin::CatalogTable(CatalogTableOrigin {
+                    session_table: manager.session_catalog_table(&name)?,
+                    name,
+                    lake_relation: lake_relation
+                        .as_ref()
+                        .map(|(_, relation)| relation.name().to_string()),
+                    format: format.clone(),
+                    options: options.clone(),
+                    temporal_options: temporal_options.clone(),
+                    read_case_sensitive: self.config.case_sensitive,
+                });
                 let table_source = self
                     .resolve_catalog_table_source(
-                        status,
-                        resolved,
-                        &catalog_reference,
-                        lake_relation,
-                        options,
-                        temporal_options,
+                        CatalogTableRead {
+                            status,
+                            resolved,
+                            reference: &catalog_reference,
+                            session_table: None,
+                            lake_relation,
+                            options,
+                            temporal_options,
+                            read_case_sensitive: self.config.case_sensitive,
+                        },
                         state,
                     )
                     .await?;
@@ -343,6 +361,7 @@ impl PlanResolver<'_> {
                     None,
                     vec![],
                     None,
+                    Some(origin),
                     state,
                 )?
             }
@@ -360,17 +379,15 @@ impl PlanResolver<'_> {
                 self.resolve_table_view(definition, columns, table_reference.clone(), state)
                     .await?
             }
-            TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+            TableKind::TemporaryView { ref plan, .. }
+            | TableKind::GlobalTemporaryView { ref plan, .. } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for temporary views",
                     ));
                 }
-                let plan = if self.share_ctes {
-                    self.renew_shared_cte_definitions(plan.as_ref().clone(), state)?
-                } else {
-                    Self::inline_shared_cte_references(plan.as_ref().clone())?
-                };
+                // The future is boxed to keep it out of the recursive resolver futures.
+                let plan = Box::pin(self.resolve_stored_view_plan(plan, &status, state)).await?;
                 let names = state.register_fields(plan.schema().inner().fields());
                 let plan = rename_logical_plan(plan, &names)?;
                 // The stored plan's internal field IDs belong to another resolver
@@ -388,16 +405,21 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the source that a read of a catalog table scans.
-    async fn resolve_catalog_table_source(
+    pub(super) async fn resolve_catalog_table_source(
         &self,
-        status: TableStatus,
-        resolved: Option<LakehouseResolvedTable>,
-        catalog_reference: &[String],
-        lake_relation: Option<(Arc<dyn LakeRelationProvider>, LakeRelation)>,
-        options: Vec<(String, String)>,
-        temporal_options: Vec<(String, String)>,
+        read: CatalogTableRead<'_>,
         state: &mut PlanResolverState,
     ) -> PlanResult<Arc<dyn TableSource>> {
+        let CatalogTableRead {
+            status,
+            resolved,
+            reference,
+            session_table,
+            lake_relation,
+            options,
+            temporal_options,
+            read_case_sensitive,
+        } = read;
         let TableKind::Table {
             columns,
             comment: _,
@@ -420,6 +442,11 @@ impl PlanResolver<'_> {
         // also pin one table snapshot, while file tables still list files for each scan.
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
         let data_source = data_source_registry.get_data_source(&format)?;
+        // Delta Lake and Iceberg sources read their columns by the metadata of the table,
+        // whatever the letter case of column names is matched by.
+        let is_lake_source = data_source_registry
+            .get_lake_source_if_supported(&format)?
+            .is_some();
         let source_key = lake_relation.is_none().then(|| TableSourceKey {
             catalog: status.catalog,
             database: status.database,
@@ -435,6 +462,8 @@ impl PlanResolver<'_> {
             },
             options: options.clone(),
             temporal_options: temporal_options.clone(),
+            read_case_sensitive: (!is_lake_source).then_some(read_case_sensitive),
+            session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(table_source) = source_key
             .as_ref()
@@ -448,9 +477,16 @@ impl PlanResolver<'_> {
         };
         let resolved = resolved
             .ok_or_else(|| PlanError::internal("catalog table without lakehouse resolution"))?;
-        let lakehouse_table = self
-            .begin_lakehouse_table_access(catalog_reference, resolved.execution, access_purpose)
-            .await?;
+        let lakehouse_table = match session_table {
+            Some(table) => {
+                Self::begin_session_catalog_table_access(table, resolved.execution, access_purpose)
+                    .await?
+            }
+            None => {
+                self.begin_lakehouse_table_access(reference, resolved.execution, access_purpose)
+                    .await?
+            }
+        };
         let info = SourceInfo {
             paths: location.map(|x| vec![x]).unwrap_or_default(),
             lakehouse_table: Some(lakehouse_table),
@@ -467,7 +503,7 @@ impl PlanResolver<'_> {
                     items: temporal_options,
                 },
             ],
-            read_case_sensitive: self.config.case_sensitive,
+            read_case_sensitive,
         };
         let table_source = match lake_relation {
             Some((relation_provider, relation)) => {
@@ -853,6 +889,7 @@ impl PlanResolver<'_> {
             None,
             vec![],
             None,
+            None,
             state,
         )
     }
@@ -899,10 +936,13 @@ impl PlanResolver<'_> {
             projection,
             filters,
             fetch,
+            None,
             state,
         )
     }
 
+    /// Resolves a scan of the table source. `origin` is what the source reads, for a
+    /// source that a temporary view obtains again at each read.
     pub(super) fn resolve_table_source_with_rename(
         &self,
         table_source: Arc<dyn TableSource>,
@@ -910,6 +950,7 @@ impl PlanResolver<'_> {
         projection: Option<Vec<usize>>,
         filters: Vec<datafusion_expr::expr::Expr>,
         fetch: Option<usize>,
+        origin: Option<TableOrigin>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let schema = table_source.schema();
@@ -933,6 +974,9 @@ impl PlanResolver<'_> {
         } else {
             table_source
         };
+        if let Some(origin) = origin {
+            state.record_table_origin(&table_source, Arc::new(origin));
+        }
 
         let table_scan = LogicalPlan::TableScan(
             TableScanBuilder::new(table_reference, table_source)
@@ -953,6 +997,21 @@ impl PlanResolver<'_> {
             Ok(table_scan)
         }
     }
+}
+
+/// A read of a catalog table.
+pub(super) struct CatalogTableRead<'a> {
+    pub status: TableStatus,
+    pub resolved: Option<LakehouseResolvedTable>,
+    /// The name that the catalog is asked for the table by.
+    pub reference: &'a [String],
+    /// The table in the catalog of another session, for a table that a global temporary
+    /// view reads in the session that created the view.
+    pub session_table: Option<&'a SessionCatalogTable>,
+    pub lake_relation: Option<(Arc<dyn LakeRelationProvider>, LakeRelation)>,
+    pub options: Vec<(String, String)>,
+    pub temporal_options: Vec<(String, String)>,
+    pub read_case_sensitive: bool,
 }
 
 fn lake_relation_access_purpose(access: LakeRelationAccess) -> TableAccessPurpose {
