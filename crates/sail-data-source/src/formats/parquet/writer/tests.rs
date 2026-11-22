@@ -2626,10 +2626,16 @@ async fn test_partition_canceled_task_with_sorted_keys_leaves_no_file() -> Resul
     let task = sorted_key_task(Arc::clone(&store), Arc::clone(&pool))?;
     let input = test_stream_with_end(&schema, batches.clone(), futures::stream::pending());
     let mut stream = Box::pin(write_stream(task, input));
-    let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
-    assert!(waiting.await.is_err());
+    let write = tokio::spawn(async move { stream.next().await });
+    for _ in 0..6000 {
+        if pool.reserved() > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     assert!(pool.reserved() > 0);
-    drop(stream);
+    write.abort();
+    assert!(write.await.is_err_and(|e| e.is_cancelled()));
     wait_for_tasks(tasks).await?;
     assert_eq!(list_files(store.as_ref()).await?, vec![]);
     assert_eq!(pool.reserved(), 0);
