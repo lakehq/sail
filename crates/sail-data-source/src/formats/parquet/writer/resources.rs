@@ -14,7 +14,12 @@ const READ_AHEAD_BYTES_PER_DEGREE: usize = 16 * 1024 * 1024;
 /// The number of row groups that are encoded at the same time for each
 /// set of lanes that the degree has room for, in addition to the row group
 /// that receives rows.
-const WINDOW_MULTIPLIER: usize = 1;
+///
+/// A file with few columns has few lanes for each row group, so its row groups
+/// must overlap for the encoding to use the degree. The value comes from
+/// measurement: writes of tables with few columns were faster with 3 than
+/// with 1 or 2, and writes of tables with many columns did not change.
+const WINDOW_MULTIPLIER: usize = 3;
 
 /// The number of bytes that one permit of the read-ahead budget stands for.
 const BYTES_PER_PERMIT: usize = 1024;
