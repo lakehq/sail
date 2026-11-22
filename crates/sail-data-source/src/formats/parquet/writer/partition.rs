@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use datafusion::arrow::array::{
     ArrayAccessor, ArrayRef, RecordBatch, StringArray, UInt32Array, downcast_dictionary_array,
 };
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::kernels::zip::zip;
 use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -25,6 +26,7 @@ use object_store::path::Path;
 
 use crate::formats::parquet::writer::task::{DirectoryWriter, FileFactory};
 use crate::listing::commit::WrittenFile;
+use crate::listing::partition::DEFAULT_PARTITION_NAME;
 
 /// The values of the partition columns, formatted for the directory names.
 type PartitionKey = Vec<String>;
@@ -79,19 +81,15 @@ impl PartitionRouter {
 
     /// Splits a non-empty batch into one batch per distinct value of the partition columns.
     /// The returned batches do not have the partition columns.
+    ///
+    /// The rows without a value of a partition column are returned separately from
+    /// the rows with the empty string, and both have the key of the default partition.
     pub fn split(&mut self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
+        let keys = batch.project(&self.column_indices)?;
+        let values = KeyValues::try_new(&keys)?;
         // Format the first row before anything else, so that an unsupported
         // partition column type is reported by the formatting function.
-        self.key(batch, 0)?;
-        let columns = self
-            .column_indices
-            .iter()
-            .map(|i| fill_missing_values(batch.column(*i)))
-            .collect::<Result<Vec<ArrayRef>>>()?;
-        let keys = RecordBatch::try_new(
-            Arc::new(batch.schema().project(&self.column_indices)?),
-            columns,
-        )?;
+        self.key(&values, 0)?;
         let converter = match &mut self.converter {
             Some(converter) => converter,
             converter @ None => {
@@ -107,7 +105,7 @@ impl PartitionRouter {
         let data = batch.project(&self.file_indices)?;
         let first = rows.row(0);
         if rows.iter().all(|row| row == first) {
-            return Ok(vec![(self.key(&keys, 0)?, data)]);
+            return Ok(vec![(self.key(&values, 0)?, data)]);
         }
         let mut indices: Vec<Vec<u32>> = vec![];
         let mut groups = HashMap::new();
@@ -116,22 +114,41 @@ impl PartitionRouter {
                 indices.push(vec![]);
                 indices.len() - 1
             });
-            indices[group].push(i as u32);
+            if let Some(indices) = indices.get_mut(group) {
+                indices.push(i as u32);
+            }
         }
         indices
             .into_iter()
             .map(|indices| {
-                let key = self.key(&keys, indices[0] as usize)?;
+                let row = indices.first().copied().unwrap_or_default();
+                let key = self.key(&values, row as usize)?;
                 let data = take_record_batch(&data, &UInt32Array::from(indices))?;
                 Ok((key, data))
             })
             .collect()
     }
 
-    fn key(&self, batch: &RecordBatch, row: usize) -> Result<PartitionKey> {
-        let row = batch.slice(row, 1);
-        let values = compute_partition_keys_by_row(&row, &self.columns)?;
-        Ok(values.iter().map(|x| x[0].to_string()).collect())
+    /// Returns the values of the partition columns at the row, formatted for
+    /// the directory names. A row without a value and a row with the empty string
+    /// are in the default partition, as they are for Spark.
+    fn key(&self, values: &KeyValues, row: usize) -> Result<PartitionKey> {
+        let present = values.present.slice(row, 1);
+        let formatted = compute_partition_keys_by_row(&present, &self.columns)?;
+        formatted
+            .iter()
+            .zip(&values.nulls)
+            .map(|(value, nulls)| {
+                let value = match value.first() {
+                    Some(value) if nulls.as_ref().is_none_or(|x| x.is_valid(row)) => value,
+                    _ => return Ok(DEFAULT_PARTITION_NAME.to_string()),
+                };
+                match value.is_empty() {
+                    true => Ok(DEFAULT_PARTITION_NAME.to_string()),
+                    false => Ok(value.to_string()),
+                }
+            })
+            .collect()
     }
 
     /// Returns the directory of the files for the partition key.
@@ -144,12 +161,34 @@ impl PartitionRouter {
     }
 }
 
+/// The partition columns of a batch, prepared for the formatting of their values.
+struct KeyValues {
+    /// The partition columns, with a value in every row.
+    present: RecordBatch,
+    /// The rows of each partition column that have a value,
+    /// or nothing when all rows of the column have a value.
+    nulls: Vec<Option<NullBuffer>>,
+}
+
+impl KeyValues {
+    fn try_new(keys: &RecordBatch) -> Result<Self> {
+        let present = keys
+            .columns()
+            .iter()
+            .map(fill_missing_values)
+            .collect::<Result<Vec<ArrayRef>>>()?;
+        Ok(Self {
+            present: RecordBatch::try_new(keys.schema(), present)?,
+            nulls: keys.columns().iter().map(|x| x.logical_nulls()).collect(),
+        })
+    }
+}
+
 /// Returns the partition column with the default value of its type
 /// in place of each missing value.
 ///
-/// A row without a value is written to the directory of the default value.
-/// The directory cannot be named after the content of the array at such a row,
-/// since that content is arbitrary.
+/// The formatting function reads the content of the array at every row,
+/// and the content of the array at a row without a value is arbitrary.
 fn fill_missing_values(column: &ArrayRef) -> Result<ArrayRef> {
     if column.logical_null_count() == 0 {
         return Ok(Arc::clone(column));

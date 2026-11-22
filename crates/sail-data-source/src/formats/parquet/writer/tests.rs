@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
     Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
     ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
@@ -16,7 +16,9 @@ use datafusion::arrow::array::{
     make_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
-use datafusion::arrow::compute::{SortOptions, can_cast_types, cast, concat, concat_batches, take};
+use datafusion::arrow::compute::{
+    SortOptions, can_cast_types, cast, concat, concat_batches, take, take_record_batch,
+};
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Float16Type, Float32Type, Int32Type, Int64Type,
     IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
@@ -53,7 +55,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_datafusion_err};
 use datafusion_datasource::ListingTableUrl;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -74,6 +76,7 @@ use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
 use crate::listing::commit::{FileWriteCommitExec, manifest_schema};
+use crate::listing::partition::pruned_partition_list;
 
 const WRITE_ID: Uuid = Uuid::from_u128(0x0f1e2d3c_4b5a_4978_8a9b_acbdcedfe0f1);
 
@@ -1154,9 +1157,78 @@ async fn write_batches_with_data_sink(
     read_directories(store.as_ref()).await
 }
 
+/// Returns whether each row of a partition column is in the default partition,
+/// which has the rows without a value and the rows with the empty string.
+fn default_partition_rows(column: &ArrayRef) -> Result<Vec<bool>> {
+    let strings = match column.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(_, _) => {
+            Some(cast(column, &DataType::Utf8)?)
+        }
+        _ => None,
+    };
+    let nulls = column.logical_nulls();
+    Ok((0..column.len())
+        .map(|i| {
+            nulls.as_ref().is_some_and(|x| x.is_null(i))
+                || strings
+                    .as_ref()
+                    .is_some_and(|x| x.as_string::<i32>().value(i).is_empty())
+        })
+        .collect())
+}
+
+/// Returns the directories and their rows that are expected for the batches.
+///
+/// The rows are written with the DataFusion Parquet sink, which names the
+/// directories of the values in the same way. The sink has no default partition,
+/// so each partition column of a row in the default partition is replaced
+/// with a column of strings that has the name of the default partition.
+async fn expected_directories(
+    batches: &[RecordBatch],
+    partition_columns: &[&str],
+) -> Result<DirectoryRows> {
+    let mut patterns: BTreeMap<Vec<bool>, Vec<RecordBatch>> = BTreeMap::new();
+    for batch in batches {
+        let defaults = partition_columns
+            .iter()
+            .map(|name| default_partition_rows(batch.column(batch.schema().index_of(name)?)))
+            .collect::<Result<Vec<_>>>()?;
+        let mut rows: BTreeMap<Vec<bool>, Vec<u32>> = BTreeMap::new();
+        for i in 0..batch.num_rows() {
+            let pattern = defaults.iter().map(|x| x[i]).collect();
+            rows.entry(pattern).or_default().push(i as u32);
+        }
+        for (pattern, rows) in rows {
+            let part = take_record_batch(batch, &UInt32Array::from(rows))?;
+            let mut fields = part.schema().fields().to_vec();
+            let mut columns = part.columns().to_vec();
+            for (name, is_default) in partition_columns.iter().zip(&pattern) {
+                if *is_default {
+                    let i = part.schema().index_of(name)?;
+                    fields[i] = Arc::new(Field::new(*name, DataType::Utf8, true));
+                    columns[i] = Arc::new(StringArray::from(vec![
+                        "__HIVE_DEFAULT_PARTITION__";
+                        part.num_rows()
+                    ]));
+                }
+            }
+            let part = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            patterns.entry(pattern).or_default().push(part);
+        }
+    }
+    let mut directories = DirectoryRows::new();
+    for batches in patterns.values() {
+        for (directory, rows) in write_batches_with_data_sink(batches, partition_columns).await? {
+            assert!(directories.insert(directory, rows).is_none());
+        }
+    }
+    Ok(directories)
+}
+
 /// Writes rows with the partition column `p` and the data column `v`,
 /// and returns the directories of the rows. The directories and their rows
-/// must be the same as the ones that the DataFusion Parquet sink produces.
+/// must be the same as the ones that the DataFusion Parquet sink produces
+/// for the rows that are not in the default partition.
 async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("p", values.data_type().clone(), true),
@@ -1168,13 +1240,7 @@ async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
     let task = partition_task(Arc::clone(&store), 0, &["p"]);
     run_task(task, &schema, vec![batch.clone()]).await?;
     let actual = read_directories(store.as_ref()).await?;
-    // The DataFusion Parquet sink writes a row without a value to the directory
-    // of the first value of the dictionary when the column is a dictionary.
-    let is_dictionary = matches!(batch.column(0).data_type(), DataType::Dictionary(_, _));
-    if !is_dictionary || batch.column(0).logical_null_count() == 0 {
-        let expected = write_with_data_sink(&batch, &["p"]).await?;
-        assert_eq!(actual, expected);
-    }
+    assert_eq!(actual, expected_directories(&[batch], &["p"]).await?);
     Ok(actual.into_keys().collect())
 }
 
@@ -1191,9 +1257,11 @@ async fn test_partition_directory_names() -> Result<()> {
         Some("h\u{e9}llo"),
         Some("a"),
     ]);
+    // The row without a value and the row with the empty string
+    // are in the default partition.
     let expected = vec![
-        "table/p=",
         "table/p=50%25",
+        "table/p=__HIVE_DEFAULT_PARTITION__",
         "table/p=a",
         "table/p=a%2Fb",
         "table/p=h%C3%A9llo",
@@ -1213,7 +1281,11 @@ async fn test_partition_directory_names() -> Result<()> {
     let booleans = BooleanArray::from(vec![Some(true), None, Some(false)]);
     assert_eq!(
         partition_directories(Arc::new(booleans)).await?,
-        vec!["table/p=false", "table/p=true"]
+        vec![
+            "table/p=__HIVE_DEFAULT_PARTITION__",
+            "table/p=false",
+            "table/p=true"
+        ]
     );
 
     let integers = Int64Array::from(vec![Some(1), None, Some(0), Some(-3), Some(100), Some(1)]);
@@ -1226,7 +1298,13 @@ async fn test_partition_directory_names() -> Result<()> {
         let directories = partition_directories(cast(&integers, &data_type)?).await?;
         assert_eq!(
             directories,
-            vec!["table/p=-3", "table/p=0", "table/p=1", "table/p=100"],
+            vec![
+                "table/p=-3",
+                "table/p=0",
+                "table/p=1",
+                "table/p=100",
+                "table/p=__HIVE_DEFAULT_PARTITION__"
+            ],
             "{data_type}"
         );
     }
@@ -1240,7 +1318,12 @@ async fn test_partition_directory_names() -> Result<()> {
         let directories = partition_directories(cast(&integers, &data_type)?).await?;
         assert_eq!(
             directories,
-            vec!["table/p=0", "table/p=1", "table/p=100"],
+            vec![
+                "table/p=0",
+                "table/p=1",
+                "table/p=100",
+                "table/p=__HIVE_DEFAULT_PARTITION__"
+            ],
             "{data_type}"
         );
     }
@@ -1266,6 +1349,7 @@ async fn test_partition_directory_names() -> Result<()> {
                 "table/p=1.5",
                 "table/p=100",
                 "table/p=NaN",
+                "table/p=__HIVE_DEFAULT_PARTITION__",
                 "table/p=inf",
             ],
             "{data_type}"
@@ -1279,6 +1363,7 @@ async fn test_partition_directory_names() -> Result<()> {
             "table/p=1969-12-31",
             "table/p=1970-01-01",
             "table/p=2022-01-08",
+            "table/p=__HIVE_DEFAULT_PARTITION__",
         ]
     );
     // The time of day is dropped by a division that rounds towards zero,
@@ -1286,7 +1371,11 @@ async fn test_partition_directory_names() -> Result<()> {
     let milliseconds = Int64Array::from(vec![Some(0), None, Some(1641600000123), Some(-1)]);
     assert_eq!(
         partition_directories(cast(&milliseconds, &DataType::Date64)?).await?,
-        vec!["table/p=1970-01-01", "table/p=2022-01-08"]
+        vec![
+            "table/p=1970-01-01",
+            "table/p=2022-01-08",
+            "table/p=__HIVE_DEFAULT_PARTITION__"
+        ]
     );
     Ok(())
 }
@@ -1481,19 +1570,6 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             Field::new("p", values.data_type().clone(), true),
             Field::new("v", DataType::Int64, true),
         ]));
-        let is_dictionary = matches!(values.data_type(), DataType::Dictionary(_, _));
-        let default = default_partition_value(values.data_type())?;
-        let default_directory = write_partitioned(
-            &schema,
-            &[RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![default, Arc::new(Int64Array::from(vec![0]))],
-            )?],
-        )
-        .await?
-        .into_keys()
-        .next()
-        .ok_or_else(|| internal_datafusion_err!("missing directory"))?;
         let rows = values.len();
         let reversed = UInt32Array::from_iter_values((0..rows as u32).rev());
         type NullRows = fn(usize) -> bool;
@@ -1543,11 +1619,11 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
                     )?);
                 }
             }
-            // A row without a value is written like a row with the default value,
+            // A row without a value is written to the default partition,
             // whatever the content of the array at the row is.
-            let expected = write_batches_with_data_sink(&filled, &["p"]).await?;
+            let expected = expected_directories(&leftover, &["p"]).await?;
             assert_eq!(
-                write_partitioned(&schema, &filled).await?,
+                write_partitioned(&schema, &leftover).await?,
                 expected,
                 "{message}"
             );
@@ -1556,23 +1632,15 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
                 expected,
                 "{message}"
             );
+            // A row with the default value of the type is written to the directory
+            // of that value, which is the default partition only for the empty string.
             assert_eq!(
-                write_partitioned(&schema, &leftover).await?,
-                expected,
+                write_partitioned(&schema, &filled).await?,
+                expected_directories(&filled, &["p"]).await?,
                 "{message}"
             );
-            // The DataFusion Parquet sink does the same when the array has the default
-            // value at the row, except for a dictionary, where it uses the first value
-            // of the dictionary.
-            if !is_dictionary {
-                assert_eq!(
-                    write_batches_with_data_sink(&zeroed, &["p"]).await?,
-                    expected,
-                    "{message}"
-                );
-            }
             let default_rows = expected
-                .get(&default_directory)
+                .get("table/p=__HIVE_DEFAULT_PARTITION__")
                 .cloned()
                 .unwrap_or_default();
             for id in null_ids {
@@ -1580,7 +1648,7 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
                     default_rows
                         .iter()
                         .any(|row| row.trim_matches(['|', ' ']) == id.to_string()),
-                    "{message}: row {id} is not in {default_directory}"
+                    "{message}: row {id} is not in the default partition"
                 );
             }
             assert!(
@@ -1628,16 +1696,12 @@ async fn test_partition_rows_match_data_sink_for_several_columns() -> Result<()>
             with_null_rows(&column("Float16")?, p_rows)?,
             with_null_rows(&column("Utf8View")?, q_rows)?,
         )?;
-        let filled = batch(
-            with_default_rows(&column("Float16")?, p_rows)?,
-            with_default_rows(&column("Utf8View")?, q_rows)?,
-        )?;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let task = partition_task(Arc::clone(&store), 0, &["r", "p", "q"]);
-        run_task(task, &schema, vec![leftover.clone(), leftover]).await?;
+        run_task(task, &schema, vec![leftover.clone(), leftover.clone()]).await?;
         let actual = read_directories(store.as_ref()).await?;
         let expected =
-            write_batches_with_data_sink(&[filled.clone(), filled], &["r", "p", "q"]).await?;
+            expected_directories(&[leftover.clone(), leftover], &["r", "p", "q"]).await?;
         assert_eq!(actual, expected, "{null_rows:?}");
         assert!(actual.len() >= 3, "{null_rows:?}");
     }
@@ -1767,35 +1831,168 @@ async fn test_partition_single_value_batch() -> Result<()> {
     Ok(())
 }
 
+/// The partition values that the writer task puts in the directory names
+/// are the values that the listing reads from the directory names.
 #[tokio::test]
-async fn test_partition_null_shares_directory_with_default_value() -> Result<()> {
+async fn test_partition_values_are_read_back_from_directories() -> Result<()> {
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("a"),
+        None,
+        Some(""),
+        Some("a/b"),
+        Some("x=y"),
+        Some("50%"),
+        Some("sp ace"),
+        Some("h\u{e9}llo"),
+        Some("it's: {a}[b]^c\\d"),
+        Some("a"),
+    ]));
+    let integers: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(0),
+        None,
+        Some(1),
+        Some(-3),
+        None,
+        Some(0),
+    ]));
+    let mut cases: Vec<ArrayRef> = vec![
+        Arc::new(BooleanArray::from(vec![Some(false), None, Some(true)])),
+        cast(
+            &Int32Array::from(vec![Some(0), None, Some(19000), Some(-1)]),
+            &DataType::Date32,
+        )?,
+        Arc::new(Float64Array::from(vec![Some(0.0), None, Some(1.5)])),
+    ];
+    for data_type in [
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+    ] {
+        cases.push(cast(&strings, &data_type)?);
+    }
+    for data_type in [
+        DataType::Int8,
+        DataType::Int16,
+        DataType::Int32,
+        DataType::Int64,
+    ] {
+        cases.push(cast(&integers, &data_type)?);
+    }
+    for values in cases {
+        let data_type = values.data_type().clone();
+        // The values of a dictionary are read as strings.
+        let (read_type, values_read) = match &data_type {
+            DataType::Dictionary(_, value_type) => {
+                (value_type.as_ref().clone(), cast(&values, value_type)?)
+            }
+            _ => (data_type.clone(), Arc::clone(&values)),
+        };
+        let is_default = default_partition_rows(&values)?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("p", data_type.clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let v: ArrayRef = Arc::new(Int64Array::from_iter_values(0..values.len() as i64));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values, v])?;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let task = partition_task(Arc::clone(&store), 0, &["p"]);
+        run_task(task, &schema, vec![batch.clone()]).await?;
+
+        let state = SessionContext::new().state();
+        let files: Vec<_> = pruned_partition_list(
+            &state,
+            store.as_ref(),
+            &ListingTableUrl::parse("memory:///table/")?,
+            &[],
+            "",
+            &[("p".to_string(), read_type.clone())],
+        )
+        .await?
+        .try_collect()
+        .await?;
+        let mut actual = BTreeMap::new();
+        for file in files {
+            let data = read_bytes(store.as_ref(), file.object_meta.location.as_ref()).await?;
+            let (_, data) = read_parquet(data)?;
+            for id in data.column(0).as_primitive::<Int64Type>().values() {
+                assert!(
+                    actual
+                        .insert(*id as usize, file.partition_values[0].clone())
+                        .is_none()
+                );
+            }
+        }
+        let expected: BTreeMap<_, _> = (0..batch.num_rows())
+            .map(|i| {
+                let value = match is_default[i] {
+                    true => ScalarValue::try_new_null(&read_type)?,
+                    false => ScalarValue::try_from_array(&values_read, i)?,
+                };
+                Ok((i, value))
+            })
+            .collect::<Result<_>>()?;
+        assert_eq!(actual, expected, "{data_type}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_null_and_empty_string_are_in_default_partition() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = Arc::new(Schema::new(vec![
         Field::new("p", DataType::Int32, true),
+        Field::new("q", DataType::Utf8, true),
         Field::new("v", DataType::Int64, true),
     ]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(Int32Array::from(vec![Some(0), None, Some(1), None])),
-            Arc::new(Int64Array::from_iter_values(0..4)),
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                None,
+                None,
+                Some(0),
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some(""),
+                None,
+                None,
+                Some("a"),
+                Some(""),
+            ])),
+            Arc::new(Int64Array::from_iter_values(0..6)),
         ],
     )?;
-    let task = partition_task(Arc::clone(&store), 0, &["p"]);
-    run_task(task, &schema, vec![batch]).await?;
-    let files = list_files(store.as_ref()).await?;
-    // The rows with a null value and with the value 0 are in the same file.
+    let task = partition_task(Arc::clone(&store), 0, &["p", "q"]);
+    run_task(task, &schema, vec![batch.clone(), batch]).await?;
+    let mut rows = vec![];
+    for (file, _) in list_files(store.as_ref()).await? {
+        let (_, data) = read_parquet(read_bytes(store.as_ref(), &file).await?)?;
+        assert_eq!(data.num_columns(), 1);
+        let mut values = data.column(0).as_primitive::<Int64Type>().values().to_vec();
+        values.sort();
+        rows.push((file, values));
+    }
+    // The rows without a value are not in the directory of the value 0, and the rows
+    // without a value and with the empty string are in the same file.
+    let default = "__HIVE_DEFAULT_PARTITION__";
+    let name = format!("part-00000-{WRITE_ID}-c000.parquet");
     assert_eq!(
-        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        rows,
         vec![
-            format!("table/p=0/part-00000-{WRITE_ID}-c000.parquet"),
-            format!("table/p=1/part-00000-{WRITE_ID}-c000.parquet"),
+            (format!("table/p=0/q={default}/{name}"), vec![5, 5]),
+            (format!("table/p=0/q=a/{name}"), vec![0, 0]),
+            (format!("table/p=1/q={default}/{name}"), vec![2, 2]),
+            (
+                format!("table/p={default}/q={default}/{name}"),
+                vec![1, 1, 3, 3]
+            ),
+            (format!("table/p={default}/q=a/{name}"), vec![4, 4]),
         ]
-    );
-    let (_, data) = read_parquet(read_bytes(store.as_ref(), &files[0].0).await?)?;
-    assert_eq!(
-        data.column(0).as_ref(),
-        &Int64Array::from(vec![Some(0), Some(1), Some(3)])
     );
     Ok(())
 }
