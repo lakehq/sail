@@ -6,6 +6,7 @@ pub mod file;
 mod lane;
 mod partition;
 pub mod resources;
+mod schema;
 mod sorting;
 pub mod task;
 

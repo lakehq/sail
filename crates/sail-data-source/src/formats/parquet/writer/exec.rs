@@ -24,6 +24,7 @@ use object_store::path::Path;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::resources::EncodeSettings;
+use crate::formats::parquet::writer::schema::check_file_columns;
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
@@ -113,6 +114,13 @@ impl ParquetWriteExec {
                 return plan_err!("partition column {column} does not exist in schema {schema}");
             }
         }
+        check_file_columns(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !partition_columns.contains(field.name()))
+                .map(|field| field.as_ref()),
+        )?;
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(manifest_schema()),
             // The plan has at least one partition, so that a table is written

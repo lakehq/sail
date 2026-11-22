@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::parquet::file::metadata::SortingColumn;
@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
 use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
+use crate::formats::parquet::writer::schema::check_file_columns;
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WrittenFile, delete_files, manifest_batch};
 use crate::listing::part_file::part_file_name;
@@ -415,24 +416,6 @@ impl DirectoryWriter {
     }
 }
 
-/// Returns whether the data type is or contains a union type,
-/// which is the type that has no Parquet schema in the Arrow writer.
-fn contains_union(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Union(_, _) => true,
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::Map(field, _)
-        | DataType::RunEndEncoded(_, field) => contains_union(field.data_type()),
-        DataType::Struct(fields) => fields.iter().any(|field| contains_union(field.data_type())),
-        DataType::Dictionary(_, value) => contains_union(value),
-        _ => false,
-    }
-}
-
 /// The files that a writer task is writing.
 enum TaskOutput {
     Directory(DirectoryWriter),
@@ -541,6 +524,7 @@ async fn write_files(
         let output = PartitionedWriter::new(router, task.table_path.clone(), task.max_open_files);
         (TaskOutput::Partitioned(Box::new(output)), schema)
     };
+    check_file_columns(schema.fields().iter().map(|field| field.as_ref()))?;
     // The input that waits to be encoded is counted separately from the memory
     // of the encoders, and without a limit, since its size is limited by the
     // read-ahead budget of the task.
@@ -574,16 +558,11 @@ async fn write_files(
         && partition == 0
         && !output.has_files()
         && rows_not_supported.is_none()
-        && !input_schema
-            .fields()
-            .iter()
-            .any(|field| contains_union(field.data_type()))
     {
         // Without partition columns, the first partition always produces a file,
         // so that the schema of the data can be read from the table even when
-        // the result is empty. This is skipped for a schema that the Parquet
-        // writer cannot represent and for a schema without columns, so that
-        // an empty result can still be written.
+        // the result is empty. This is skipped for a schema without columns,
+        // so that an empty result can still be written.
         output.open(&factory)?;
     }
     output.close(&factory, &mut written).await?;

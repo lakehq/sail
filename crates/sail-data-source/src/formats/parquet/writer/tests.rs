@@ -13,10 +13,10 @@ use datafusion::arrow::array::{
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
     ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
     RunArray, StringArray, StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray,
-    make_array,
+    make_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
-use datafusion::arrow::compute::{SortOptions, cast, concat, concat_batches, take};
+use datafusion::arrow::compute::{SortOptions, can_cast_types, cast, concat, concat_batches, take};
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Float16Type, Float32Type, Int32Type, Int64Type,
     IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
@@ -987,7 +987,7 @@ fn reference_file(
     writer.into_inner()
 }
 
-/// The message of a panic, for the types that the Arrow writer does not implement.
+/// The message of a panic.
 fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
     match panic.downcast::<String>() {
         Ok(message) => *message,
@@ -1012,22 +1012,30 @@ async fn test_arrow_types() -> Result<()> {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let task = test_task(Arc::clone(&store), i);
-        let expected = {
-            let options = task.options.clone();
-            let batch = batch.clone();
-            tokio::task::spawn_blocking(move || reference_file(&options, &batch))
-                .await
-                .map_err(|e| panic_message(e.into_panic()))
-        };
-        let actual = {
-            let schema = Arc::clone(&schema);
-            let batch = batch.clone();
-            tokio::spawn(async move { run_task(task, &schema, vec![batch]).await })
-                .await
-                .map_err(|e| panic_message(e.into_panic()))
-        };
+        let task_options = task.options.clone();
+        let actual = run_task(task, &schema, vec![batch.clone()]).await;
+        if matches!(
+            data_type,
+            DataType::Union(_, _) | DataType::Interval(IntervalUnit::MonthDayNano)
+        ) {
+            let Err(actual) = actual else {
+                return Err(internal_datafusion_err!(
+                    "expected an error for {data_type}"
+                ));
+            };
+            assert_eq!(
+                actual.strip_backtrace(),
+                format!(
+                    "This feature is not implemented: Parquet write does not support the data type {data_type} of column c"
+                )
+            );
+            assert_eq!(list_files(store.as_ref()).await?, vec![], "{data_type}");
+            unsupported.push(data_type.to_string());
+            continue;
+        }
+        let expected = reference_file(&task_options, &batch);
         match (expected, actual) {
-            (Ok(Ok(expected)), Ok(Ok(manifest))) => {
+            (Ok(expected), Ok(manifest)) => {
                 let name = file_name(i, 0, ".parquet");
                 assert_eq!(
                     manifest_rows(&manifest)?,
@@ -1052,31 +1060,17 @@ async fn test_arrow_types() -> Result<()> {
                     assert_eq!(&restored, batch.column(0), "{data_type}");
                 }
             }
-            (Ok(Err(expected)), Ok(Err(actual))) => {
-                assert_eq!(
-                    actual.strip_backtrace(),
-                    DataFusionError::from(expected).strip_backtrace(),
-                    "{data_type}"
-                );
-                assert_eq!(list_files(store.as_ref()).await?, vec![], "{data_type}");
-                unsupported.push(data_type.to_string());
-            }
-            (Err(expected), Err(actual)) => {
-                assert_eq!(actual, expected, "{data_type}");
-                assert_eq!(list_files(store.as_ref()).await?, vec![], "{data_type}");
-                unsupported.push(data_type.to_string());
-            }
             (expected, actual) => {
                 return Err(internal_datafusion_err!(
                     "different outcomes for {data_type}: {:?} and {:?}",
-                    expected.map(|x| x.map(|x| x.len())),
-                    actual.map(|x| x.map(|x| x.num_rows()))
+                    expected.map(|x| x.len()),
+                    actual.map(|x| x.num_rows())
                 ));
             }
         }
     }
     // These are the types that the Arrow writer rejects with an error (interval)
-    // or does not implement (union).
+    // or panics for (union).
     assert_eq!(
         unsupported,
         vec![
@@ -2521,7 +2515,7 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_empty_first_partition_with_union_writes_no_file() -> Result<()> {
+async fn test_union_column_is_rejected_without_rows() -> Result<()> {
     let fields = UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int64, true)])?;
     let union = DataType::Union(fields, UnionMode::Sparse);
     for data_type in [
@@ -2534,8 +2528,17 @@ async fn test_empty_first_partition_with_union_writes_no_file() -> Result<()> {
             Field::new("a", DataType::Int64, true),
             Field::new("c", data_type, false),
         ]));
-        let manifest = run_task(test_task(Arc::clone(&store), 0), &schema, vec![]).await?;
-        assert_eq!(manifest_rows(&manifest)?, vec![(0, 0, None, 0, 0)]);
+        for partition in [0, 1] {
+            let task = test_task(Arc::clone(&store), partition);
+            let Err(e) = run_task(task, &schema, vec![]).await else {
+                return Err(internal_datafusion_err!("expected an error"));
+            };
+            assert!(
+                e.to_string()
+                    .contains("Parquet write does not support the data type Union"),
+                "{e}"
+            );
+        }
         assert_eq!(list_files(store.as_ref()).await?, vec![]);
     }
     Ok(())
@@ -2990,6 +2993,34 @@ async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
     Ok(())
 }
 
+/// Writes the batches to a file without a writer task, which rejects the data types
+/// that cannot be encoded before it creates a file.
+async fn write_file_without_task(
+    store: &Arc<dyn ObjectStore>,
+    options: &TableParquetOptions,
+    encode: EncodeSettings,
+    batches: &[RecordBatch],
+) -> Result<()> {
+    let schema = batches[0].schema();
+    let mut options = options.clone();
+    options.arrow_schema(&schema);
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let mut writer = ParquetFileWriter::try_new(
+        Arc::clone(store),
+        Path::from("file.parquet"),
+        schema,
+        WriterPropertiesBuilder::try_from(&options)?.build(),
+        false,
+        10 * 1024 * 1024,
+        test_resources(encode, &pool),
+    )?;
+    for batch in batches {
+        writer.write(batch).await?;
+    }
+    writer.close().await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_parallel_columns_report_encoding_error() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -3011,9 +3042,13 @@ async fn test_parallel_columns_report_encoding_error() -> Result<()> {
         &TableParquetOptions::default(),
         std::slice::from_ref(&batch),
     );
-    let mut task = test_task(Arc::clone(&store), 0);
-    task.encode = fixed_degree(3);
-    let actual = run_task(task, &schema, vec![batch]).await;
+    let actual = write_file_without_task(
+        &store,
+        &TableParquetOptions::default(),
+        fixed_degree(3),
+        &[batch],
+    )
+    .await;
     let (Err(expected), Err(actual)) = (expected, actual) else {
         return Err(internal_datafusion_err!("expected errors"));
     };
@@ -3518,10 +3553,9 @@ async fn test_encoding_reports_error_of_lane() -> Result<()> {
             };
             for encode in encode_cases() {
                 let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-                let mut task = test_task(Arc::clone(&store), 0);
-                task.options = options.clone();
-                task.encode = encode.clone();
-                let Err(actual) = run_task(task, &schema, batches.clone()).await else {
+                let Err(actual) =
+                    write_file_without_task(&store, &options, encode.clone(), &batches).await
+                else {
                     return Err(internal_datafusion_err!("expected an error"));
                 };
                 assert_eq!(
@@ -4323,4 +4357,250 @@ fn test_writer_tasks_share_one_counter_by_default() {
     let second = EncodeSettings::new(0);
     assert_eq!(first.max_degree, 0);
     assert!(Arc::ptr_eq(&first.active_writers, &second.active_writers));
+}
+
+/// Data types that combine the leaf types with the types that have children.
+fn nested_type_cases() -> Result<Vec<DataType>> {
+    let item = |t: DataType| Arc::new(Field::new_list_field(t, true));
+    let dict = |k: DataType, v: DataType| DataType::Dictionary(Box::new(k), Box::new(v));
+    let ree = |k: DataType, v: DataType| {
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", k, false)),
+            Arc::new(Field::new("values", v, true)),
+        )
+    };
+    let st = |t: DataType| DataType::Struct(vec![Field::new("x", t, true)].into());
+    let map = |k: DataType, v: DataType| {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![Field::new("key", k, false), Field::new("value", v, true)].into(),
+                ),
+                false,
+            )),
+            false,
+        )
+    };
+    let union = DataType::Union(
+        UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int64, true)])?,
+        UnionMode::Sparse,
+    );
+    let leaves = vec![
+        DataType::Null,
+        DataType::Boolean,
+        DataType::Int64,
+        DataType::UInt8,
+        DataType::Float16,
+        DataType::Float64,
+        DataType::Decimal32(9, 2),
+        DataType::Decimal32(1, 0),
+        DataType::Decimal64(18, 2),
+        DataType::Decimal128(38, 2),
+        DataType::Decimal256(76, 2),
+        DataType::Date32,
+        DataType::Date64,
+        DataType::Time32(TimeUnit::Second),
+        DataType::Time64(TimeUnit::Nanosecond),
+        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        DataType::Duration(TimeUnit::Millisecond),
+        DataType::Interval(IntervalUnit::YearMonth),
+        DataType::Interval(IntervalUnit::DayTime),
+        DataType::Interval(IntervalUnit::MonthDayNano),
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Binary,
+        DataType::LargeBinary,
+        DataType::BinaryView,
+        DataType::FixedSizeBinary(3),
+        DataType::FixedSizeBinary(0),
+        DataType::Decimal64(1, 0),
+        DataType::Decimal64(5, 2),
+        DataType::Decimal64(9, 2),
+        DataType::Decimal128(1, 0),
+        DataType::Decimal128(5, -2),
+        DataType::Decimal128(18, 2),
+        DataType::Decimal256(1, 0),
+        DataType::Decimal256(9, 2),
+        DataType::Decimal256(18, 2),
+        DataType::Decimal32(2, 2),
+        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Duration(TimeUnit::Second),
+        DataType::UInt64,
+        DataType::Float32,
+        DataType::Int8,
+    ];
+    let mut types = vec![];
+    for t in &leaves {
+        types.push(dict(DataType::Int32, ree(DataType::Int32, t.clone())));
+        types.push(ree(DataType::Int32, dict(DataType::Int32, t.clone())));
+        types.push(dict(DataType::Int32, dict(DataType::Int8, t.clone())));
+        types.push(ree(DataType::Int32, ree(DataType::Int16, t.clone())));
+        types.push(DataType::List(item(DataType::List(item(t.clone())))));
+        types.push(map(t.clone(), DataType::Int64));
+        types.push(DataType::ListView(item(st(t.clone()))));
+        types.push(DataType::LargeList(item(t.clone())));
+        types.push(DataType::FixedSizeList(item(t.clone()), 0));
+    }
+    for t in &leaves {
+        types.push(t.clone());
+        for k in [DataType::Int8, DataType::UInt64, DataType::Int32] {
+            types.push(dict(k, t.clone()));
+        }
+        for k in [DataType::Int16, DataType::Int32, DataType::Int64] {
+            types.push(ree(k, t.clone()));
+        }
+        types.push(DataType::List(item(t.clone())));
+        types.push(DataType::LargeListView(item(t.clone())));
+        types.push(DataType::FixedSizeList(item(t.clone()), 2));
+        types.push(st(t.clone()));
+        types.push(map(DataType::Utf8, t.clone()));
+        types.push(DataType::List(item(dict(DataType::Int32, t.clone()))));
+        types.push(st(ree(DataType::Int32, t.clone())));
+    }
+    for t in [
+        DataType::List(item(DataType::Int64)),
+        st(DataType::Int64),
+        map(DataType::Utf8, DataType::Int64),
+        DataType::Struct(Vec::<Field>::new().into()),
+        union.clone(),
+        DataType::FixedSizeList(item(DataType::Int64), 0),
+    ] {
+        types.push(dict(DataType::Int32, t.clone()));
+        types.push(ree(DataType::Int32, t.clone()));
+        types.push(DataType::List(item(t.clone())));
+        types.push(DataType::ListView(item(t.clone())));
+        types.push(st(t.clone()));
+        types.push(map(DataType::Utf8, t.clone()));
+        types.push(map(t.clone(), DataType::Utf8));
+        types.push(dict(DataType::Int32, dict(DataType::Int32, t.clone())));
+        types.push(ree(DataType::Int32, ree(DataType::Int32, t.clone())));
+        types.push(t);
+    }
+    Ok(types)
+}
+
+/// The data types that the writer rejects are exactly the data types
+/// that the Arrow writer fails or panics for, and a write of such
+/// a data type fails before a file is created.
+#[tokio::test]
+async fn test_arrow_type_support() -> Result<()> {
+    let base = StringArray::from(vec![Some("1"), None, Some("3"), Some("1")]);
+    let mut types = nested_type_cases()?;
+    types.extend(type_cases()?.iter().map(|x| x.data_type().clone()));
+    let (mut supported, mut unsupported) = (0, 0);
+    for data_type in types {
+        let schema = Arc::new(Schema::new(vec![Field::new("c", data_type.clone(), true)]));
+        let expected = {
+            let schema = Arc::clone(&schema);
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![new_null_array(&data_type, 4)])?;
+            tokio::task::spawn_blocking(move || {
+                let mut writer = ArrowWriter::try_new(vec![], schema, None)?;
+                writer.write(&batch)?;
+                writer.into_inner()
+            })
+            .await
+        };
+        let is_supported = matches!(expected, Ok(Ok(_)));
+        let mut inputs = vec![vec![], vec![new_null_array(&data_type, 4)]];
+        if can_cast_types(&DataType::Utf8, &data_type)
+            && let Ok(values) = cast(&base, &data_type)
+        {
+            inputs.push(vec![values]);
+        }
+        for values in inputs {
+            let batches = values
+                .into_iter()
+                .map(|x| RecordBatch::try_new(Arc::clone(&schema), vec![x]))
+                .collect::<Result<Vec<_>, _>>()?;
+            let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let task = test_task(Arc::clone(&store), 0);
+            let actual = {
+                let schema = Arc::clone(&schema);
+                tokio::spawn(async move { run_task(task, &schema, batches).await })
+                    .await
+                    .map_err(|e| {
+                        internal_datafusion_err!(
+                            "panic for {data_type}: {}",
+                            panic_message(e.into_panic())
+                        )
+                    })?
+            };
+            match actual {
+                Ok(manifest) => {
+                    assert!(is_supported, "{data_type}");
+                    let name = file_name(0, 0, ".parquet");
+                    let files = list_files(store.as_ref()).await?;
+                    assert_eq!(files.len(), 1, "{data_type}");
+                    assert_eq!(
+                        manifest_rows(&manifest)?,
+                        vec![(0, 0, Some(name), files[0].1, rows as u64)],
+                        "{data_type}"
+                    );
+                }
+                Err(e) => {
+                    assert!(!is_supported, "{data_type}: {e}");
+                    let e = e.strip_backtrace();
+                    assert!(
+                        e.starts_with(
+                            "This feature is not implemented: Parquet write does not support the data type"
+                        ),
+                        "{data_type}: {e}"
+                    );
+                    assert_eq!(list_files(store.as_ref()).await?, vec![], "{data_type}");
+                }
+            }
+        }
+        if is_supported {
+            supported += 1;
+        } else {
+            unsupported += 1;
+        }
+    }
+    assert!(supported > 500, "{supported}");
+    assert!(unsupported > 100, "{unsupported}");
+    Ok(())
+}
+
+#[test]
+fn test_write_plan_rejects_unsupported_column_types() -> Result<()> {
+    let fields = UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int64, true)])?;
+    let union = DataType::Union(fields, UnionMode::Sparse);
+    for (data_type, message) in [
+        (
+            union.clone(),
+            "Parquet write does not support the data type Union(Sparse, 0: (\"i\": Int64)) of column c",
+        ),
+        (
+            DataType::List(Arc::new(Field::new_list_field(union.clone(), true))),
+            "Parquet write does not support the data type Union(Sparse, 0: (\"i\": Int64)) in column c",
+        ),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            "Parquet write does not support the data type Interval(MonthDayNano) of column c",
+        ),
+        (
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8View)),
+            "Parquet write does not support the data type Dictionary(Int32, Utf8View) of column c",
+        ),
+    ] {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", data_type, true),
+        ]));
+        let Err(e) = write_exec(&[vec![]], &schema, None, false) else {
+            return Err(internal_datafusion_err!("expected an error"));
+        };
+        assert_eq!(
+            e.strip_backtrace(),
+            format!("This feature is not implemented: {message}")
+        );
+    }
+    Ok(())
 }
