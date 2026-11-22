@@ -306,6 +306,50 @@ async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<
     result
 }
 
+/// Removes the objects that the writer tasks of the write have staged for
+/// a rename and that are still in the table directory. These are the files
+/// of writer tasks whose manifests no commit has received, for example
+/// of an earlier attempt of the write. A failure is logged.
+///
+/// Multipart uploads cannot be listed, so the uploads of such writer tasks
+/// stay open. A writer task of a later attempt of the write that has staged
+/// a file already loses the file, and the commit of that attempt fails and
+/// is attempted again.
+async fn remove_staged_leftovers(publisher: &Publisher, table_path: &Path, write_id: Uuid) {
+    if !matches!(publisher, Publisher::Rename { .. }) {
+        return;
+    }
+    let store = publisher.store();
+    let id = write_id.as_hyphenated().to_string();
+    let removed = async {
+        // The staged objects are in the table directory itself.
+        let listing = store.list_with_delimiter(Some(table_path)).await?;
+        let leftovers: Vec<Path> = listing
+            .objects
+            .into_iter()
+            .map(|object| object.location)
+            .filter(|location| {
+                location
+                    .filename()
+                    .is_some_and(|name| is_staged_name(name) && name.contains(&id))
+            })
+            .collect();
+        if !leftovers.is_empty() {
+            log::warn!(
+                "removing {} staged objects of the write {write_id} to {table_path} \
+                that were not reported",
+                leftovers.len(),
+            );
+        }
+        delete_files(store, leftovers).await
+    };
+    if let Err(e) = removed.await {
+        log::warn!(
+            "failed to remove the staged objects of the write {write_id} to {table_path}: {e}"
+        );
+    }
+}
+
 /// How far the commit of a write has come in a session.
 #[derive(Debug, Clone)]
 enum CommitState {
@@ -387,6 +431,12 @@ impl WriteCommitLedger {
         Ok(CommitStart::Publish)
     }
 
+    /// Whether an attempt of the commit of the write has started to publish
+    /// files and has not ended with a known result.
+    fn is_publishing(&self, write_id: Uuid) -> bool {
+        matches!(self.commits().get(&write_id), Some(CommitState::Publishing))
+    }
+
     fn end(&self, write_id: Uuid, state: CommitState) {
         self.commits().insert(write_id, state);
     }
@@ -422,16 +472,34 @@ struct WriteCommit {
     overwrite: bool,
     /// Whether the `_SUCCESS` file is written.
     write_success_file: bool,
+    /// The manifests of the writer tasks, until all of them are read.
+    /// The mutex is never locked. It allows the commit to be used from
+    /// the task that publishes the files.
+    input: Option<Mutex<SendableRecordBatchStream>>,
     received: Vec<StagedFile>,
 }
 
 impl WriteCommit {
-    /// Starts to remove the staged files that were received, if there are any.
+    /// Starts to remove the staged files of the write that are not published:
+    /// the files that the commit has received, the files of the manifests
+    /// that have arrived in the input and that the commit has not read, and
+    /// the staged objects of the write that are in the table directory.
+    /// The writer tasks that are running are stopped when the input is
+    /// dropped, and they remove their files themselves.
+    ///
+    /// The staged objects in the table directory are removed only when
+    /// `leftovers` is set. They must be kept while another attempt of
+    /// the commit can be publishing them.
+    ///
     /// The files are removed by a separate task, which is not canceled when
     /// the commit is.
-    fn start_abort(&mut self) -> Option<JoinHandle<()>> {
-        let files = std::mem::take(&mut self.received);
-        if files.is_empty() {
+    fn start_abort(&mut self, leftovers: bool) -> Option<JoinHandle<()>> {
+        let mut files = std::mem::take(&mut self.received);
+        let mut input = self
+            .input
+            .take()
+            .map(|input| input.into_inner().unwrap_or_else(PoisonError::into_inner));
+        if files.is_empty() && input.is_none() {
             return None;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -444,31 +512,46 @@ impl WriteCommit {
             );
             return None;
         };
-        log::warn!(
-            "removing {} staged files of the write {} to {}, which are not published",
-            files.len(),
-            self.write_id,
-            self.table_path
-        );
         let publisher = self.publisher.clone();
-        Some(runtime.spawn(async move { publisher.abort_all(&files).await }))
+        let table_path = self.table_path.clone();
+        let write_id = self.write_id;
+        Some(runtime.spawn(async move {
+            if let Some(input) = input.as_mut() {
+                // The input is read without waiting for the writer tasks.
+                while let Some(Some(Ok(manifest))) = input.next().now_or_never() {
+                    let _ = Manifests::default().add(&manifest, &mut files);
+                }
+            }
+            drop(input);
+            if !files.is_empty() {
+                log::warn!(
+                    "removing {} staged files of the write {write_id} to {table_path}, \
+                    which are not published",
+                    files.len(),
+                );
+            }
+            publisher.abort_all(&files).await;
+            if leftovers {
+                remove_staged_leftovers(&publisher, &table_path, write_id).await;
+            }
+        }))
     }
 
-    /// Removes the staged files that were received.
-    async fn abort(&mut self) {
-        if let Some(task) = self.start_abort() {
+    /// Removes the staged files of the write that are not published.
+    async fn abort(&mut self, leftovers: bool) {
+        if let Some(task) = self.start_abort(leftovers) {
             // The files are removed whether or not the task is awaited.
             let _ = task.await;
         }
     }
 
     /// Completes the write, and returns the number of rows written.
-    async fn run(mut self, input: SendableRecordBatchStream) -> Result<u64> {
-        let count = match self.read_manifests(input).await {
+    async fn run(mut self) -> Result<u64> {
+        let count = match self.read_manifests().await {
             Ok(count) => count,
             Err(e) => {
-                self.abort().await;
-                self.remove_staged_leftovers().await;
+                let leftovers = !self.ledger.is_publishing(self.write_id);
+                self.abort(leftovers).await;
                 return Err(e);
             }
         };
@@ -478,11 +561,12 @@ impl WriteCommit {
             Ok(CommitStart::Committed(count)) => {
                 // An earlier attempt has committed the write, so the files
                 // of this attempt are not needed.
-                self.abort().await;
+                self.abort(true).await;
                 return Ok(count);
             }
             Err(e) => {
-                self.abort().await;
+                // Another attempt can be publishing its staged files.
+                self.abort(false).await;
                 return Err(e);
             }
         }
@@ -513,69 +597,22 @@ impl WriteCommit {
         }
     }
 
-    /// Removes the objects that the writer tasks of the write have staged
-    /// for a rename and that are still in the table directory. These are
-    /// the files of writer tasks whose manifests the commit has not received.
-    /// The writer tasks that are running are stopped when the commit fails,
-    /// so their files are not needed. A failure is logged.
-    ///
-    /// Multipart uploads cannot be listed, so the uploads of such writer
-    /// tasks stay open.
-    async fn remove_staged_leftovers(&self) {
-        if !matches!(self.publisher, Publisher::Rename { .. }) {
-            return;
-        }
-        let store = self.publisher.store();
-        let write_id = self.write_id.as_hyphenated().to_string();
-        let removed = async {
-            // The staged objects are in the table directory itself.
-            let listing = store.list_with_delimiter(Some(&self.table_path)).await?;
-            let leftovers: Vec<Path> = listing
-                .objects
-                .into_iter()
-                .map(|object| object.location)
-                .filter(|location| {
-                    location
-                        .filename()
-                        .is_some_and(|name| is_staged_name(name) && name.contains(&write_id))
-                })
-                .collect();
-            if !leftovers.is_empty() {
-                log::warn!(
-                    "removing {} staged objects of the write {} to {} that were not reported",
-                    leftovers.len(),
-                    self.write_id,
-                    self.table_path
-                );
-            }
-            delete_files(store, leftovers).await
-        };
-        if let Err(e) = removed.await {
-            log::warn!(
-                "failed to remove the staged objects of the write {} to {}: {e}",
-                self.write_id,
-                self.table_path
-            );
-        }
-    }
-
     /// Reads the manifests of all writer tasks. Returns the number of rows written.
-    async fn read_manifests(&mut self, mut input: SendableRecordBatchStream) -> Result<u64> {
+    async fn read_manifests(&mut self) -> Result<u64> {
         let mut manifests = Manifests::default();
-        while let Some(manifest) = input.next().await {
-            let added = manifest.and_then(|x| manifests.add(&x, &mut self.received));
-            if let Err(e) = added {
-                // The manifests that have arrived already are taken as well,
-                // so that their files are removed. The writer tasks that are
-                // running are stopped when the input is dropped, and they
-                // remove their files themselves.
-                while let Some(Some(Ok(manifest))) = input.next().now_or_never() {
-                    let _ = Manifests::default().add(&manifest, &mut self.received);
-                }
-                return Err(e);
-            }
+        loop {
+            let Some(input) = self.input.as_mut() else {
+                return internal_err!("the commit has no input");
+            };
+            let input = input.get_mut().unwrap_or_else(PoisonError::into_inner);
+            let Some(manifest) = input.next().await else {
+                break;
+            };
+            manifests.add(&manifest?, &mut self.received)?;
         }
         manifests.validate()?;
+        // The input has ended, so it has no manifest that is not read.
+        self.input = None;
         Ok(manifests.num_rows)
     }
 
@@ -691,8 +728,9 @@ impl WriteCommit {
         let (old_content, had_success_file) = match prepared.await {
             Ok(prepared) => prepared,
             Err(e) => {
+                // This attempt is the only one that can publish files.
                 self.received = files;
-                self.abort().await;
+                self.abort(true).await;
                 return Err(e);
             }
         };
@@ -727,7 +765,7 @@ impl WriteCommit {
         }
         // The writer tasks of an earlier attempt of the write can have staged
         // files that no commit has received.
-        self.remove_staged_leftovers().await;
+        remove_staged_leftovers(&self.publisher, &self.table_path, self.write_id).await;
         Ok(())
     }
 
@@ -800,7 +838,8 @@ impl WriteCommit {
 impl Drop for WriteCommit {
     fn drop(&mut self) {
         // The commit was canceled before it has published the files.
-        self.start_abort();
+        let leftovers = !self.ledger.is_publishing(self.write_id);
+        self.start_abort(leftovers);
     }
 }
 
@@ -1009,12 +1048,12 @@ impl ExecutionPlan for FileWriteCommitExec {
             write_id: self.write_id,
             overwrite: self.overwrite,
             write_success_file: self.write_success_file,
+            input: Some(Mutex::new(self.input.execute(0, context)?)),
             received: vec![],
         };
-        let input = self.input.execute(0, context)?;
         let schema = self.schema();
         let output = stream::once(async move {
-            let count = commit.run(input).await?;
+            let count = commit.run().await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -1113,10 +1152,13 @@ mod tests {
                 write_id: WRITE_ID,
                 overwrite,
                 write_success_file: self.success_file,
+                input: Some(Mutex::new(Box::pin(RecordBatchStreamAdapter::new(
+                    manifest_schema(),
+                    manifests,
+                )))),
                 received: vec![],
             };
-            let input = Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
-            commit.run(input)
+            commit.run()
         }
 
         async fn commit(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
@@ -1475,6 +1517,23 @@ mod tests {
                 write.requests(),
                 vec![write.abort_request("table/a.parquet")]
             );
+        }
+        Ok(())
+    }
+
+    /// The manifests are in the input of the commit when the commit is
+    /// canceled before it has read them.
+    #[tokio::test]
+    async fn test_canceled_commit_removes_files_of_manifests_that_it_has_not_read() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&b])];
+            drop(write.commit_future(manifests, false));
+            write.store.wait_for(&["table/old.parquet"]).await?;
+            assert_eq!(write.store.count(mode.publish_request()), 0);
         }
         Ok(())
     }
