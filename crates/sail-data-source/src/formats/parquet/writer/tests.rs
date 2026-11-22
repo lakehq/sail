@@ -2421,6 +2421,71 @@ fn reference_file_of_batches(
     Ok(writer.into_inner()?)
 }
 
+/// Returns the file that a writer task must write for the batches,
+/// whichever way the task encodes the file.
+///
+/// This is the file of the Arrow writer, unless the size of a row group
+/// is limited in bytes. The encoder ends such row groups at the rows where
+/// the Arrow writer of version 60.2.0 ends them, which are other rows than
+/// the ones of the Arrow version in use. The expected file is then the file
+/// of a task that encodes all columns itself.
+async fn expected_file(options: &TableParquetOptions, batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    // TODO: Uncomment after Arrow 60.2.0, and remove the rest of the function.
+    // reference_file_of_batches(options, batches)
+    if options.global.max_row_group_bytes.is_none() {
+        return reference_file_of_batches(options, batches);
+    }
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = test_task(Arc::clone(&store), 0);
+    task.options = options.clone();
+    task.encode = fixed_degree(1);
+    run_task(task, &batches[0].schema(), batches.to_vec()).await?;
+    let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+    Ok(data.to_vec())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
+    // The size of the encoded data follows the number of rows
+    // without dictionaries and with small pages.
+    let mut options = TableParquetOptions::default();
+    options.global.dictionary_enabled = Some(false);
+    options.global.data_pagesize_limit = 512;
+    options.global.data_page_row_count_limit = 16;
+    options.global.max_row_group_bytes = Some("9000".parse()?);
+    // The first batch alone is larger than the limit.
+    let batches = vec![all_types_batch(78)?, all_types_batch(25)?];
+    let schema = batches[0].schema();
+    let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
+    let expected = expected_file(&options, &batches).await?;
+    let (metadata, data) = read_parquet(Bytes::from(expected.clone()))?;
+    assert_eq!(data.num_rows(), rows);
+    let row_groups: Vec<_> = metadata
+        .row_groups()
+        .iter()
+        .map(|x| x.num_rows() as usize)
+        .collect();
+    assert_eq!(row_groups.iter().sum::<usize>(), rows);
+    // A row group receives one row before the size of its rows is known,
+    // and it then ends where the limit is expected to be reached,
+    // so the first row group ends inside the first batch.
+    assert!(row_groups.len() > 2, "{row_groups:?}");
+    assert!(row_groups[0] > 1, "{row_groups:?}");
+    assert!(row_groups[0] < batches[0].num_rows() / 2, "{row_groups:?}");
+    // The file is the same when the columns are encoded by other tasks.
+    let name = file_name(0, 0, ".parquet");
+    for encode in encode_cases() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.options = options.clone();
+        task.encode = encode.clone();
+        run_task(task, &schema, batches.clone()).await?;
+        let data = read_bytes(store.as_ref(), &name).await?;
+        assert!(data == expected, "{encode:?}");
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_parallel_columns_write_the_same_file() -> Result<()> {
     // The batches have different sizes, so that row groups end inside batches,
@@ -2447,7 +2512,7 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
     plain.global.bloom_filter_on_write = true;
 
     for (i, options) in [by_rows, by_bytes, plain].into_iter().enumerate() {
-        let expected = reference_file_of_batches(&options, &batches)?;
+        let expected = expected_file(&options, &batches).await?;
         for encode in encode_cases() {
             let lanes = format!("{encode:?}");
             let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -2599,7 +2664,7 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
 
     let mut row_groups = vec![];
     for (i, (options, expected_row_groups)) in cases.into_iter().enumerate() {
-        let expected = reference_file_of_batches(&options, &batches)?;
+        let expected = expected_file(&options, &batches).await?;
         let name = file_name(0, 0, ".parquet");
         // The file is the same when the columns are encoded by other tasks.
         for encode in encode_cases() {
@@ -2758,7 +2823,7 @@ async fn check_encoding_with_random_settings(
     } else {
         encode
     };
-    let expected = reference_file_of_batches(&options, &batches)?;
+    let expected = expected_file(&options, &batches).await?;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut task = test_task(Arc::clone(&store), 0);
     task.options = options;
@@ -2970,6 +3035,35 @@ fn test_logical_size_of_arrays() -> Result<()> {
         None,
     )?;
     assert_eq!(logical_size(&nested.slice(10, 20)), 160 + 20 * 16 + 10 * 30);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_encoding_reports_batch_with_other_columns() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Int64, true),
+    ]));
+    let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::clone(&integers), Arc::clone(&integers)],
+    )?;
+    // The second batch does not have the columns of the schema of the input.
+    let other = RecordBatch::try_new(int_schema(), vec![integers])?;
+    for encode in encode_cases() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.encode = encode.clone();
+        let result = run_task(task, &schema, vec![batch.clone(), other.clone()]).await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains(
+                "Incompatible schema: writer has 2 top-level fields but batch has 1 columns"
+            )),
+            "{encode:?} {result:?}"
+        );
+        assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    }
     Ok(())
 }
 

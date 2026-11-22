@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{FieldRef, SchemaRef};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowRowGroupWriterFactory, ArrowWriterOptions,
@@ -15,7 +15,6 @@ use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion_datasource::write::SharedBuffer;
-use futures::future::BoxFuture;
 use object_store::buffered::BufWriter;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
@@ -44,6 +43,9 @@ const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 /// Each column writer receives the same data in the same order in all cases,
 /// so the content of the file does not depend on how the file is encoded,
 /// and it is the same as the content that [`ArrowWriter`] produces.
+/// The row groups end at the rows where the writer of Arrow 60.2.0 ends them.
+/// Earlier versions end the row groups at other rows when the size of a row
+/// group is limited in bytes.
 pub(super) struct ColumnEncoder {
     writer: SerializedFileWriter<SharedBuffer>,
     /// The encoded data that has not been handed to the upload.
@@ -191,7 +193,7 @@ impl ColumnEncoder {
 
     // SPDX-SnippetBegin
     // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/59.2.0/parquet/src/arrow/arrow_writer/mod.rs#L347-L431
+    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L342-L447
     /// Encodes the provided [`RecordBatch`]
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_row_count`]
@@ -202,14 +204,19 @@ impl ColumnEncoder {
     /// If one limit is set, that limit is respected.
     /// If both limits are set, the lower bound (whichever triggers first) is respected.
     ///
-    /// This will fail if the `batch`'s schema does not match the writer's schema.
-    #[expect(clippy::collapsible_if)]
-    fn write<'a>(&'a mut self, batch: &'a RecordBatch) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            if batch.num_rows() == 0 {
-                return Ok(());
-            }
+    /// This will fail if the `batch`'s schema does not match the writer's schema,
+    /// or if a logical null is reachable at a position the writer schema declares
+    /// non-nullable.
+    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
 
+        // Rows not yet handed to a row group writer. Splitting iterates here instead of
+        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
+        let mut remaining = batch.clone();
+
+        loop {
             let in_progress = match &mut self.in_progress {
                 Some(in_progress) => in_progress,
                 x => {
@@ -221,63 +228,78 @@ impl ColumnEncoder {
                                 self.writer.flushed_row_groups().len() + self.sealed.len(),
                             )?,
                             &self.schema,
+                            &self.leaf_counts,
                         )
                         .with_lanes(
                             assign_lanes(&self.column_weights, plan.lanes),
-                            &self.leaf_counts,
                             &self.resources,
                         ),
                     )
                 }
             };
+            let buffered_rows = in_progress.buffered_rows;
 
-            if let Some(max_rows) = self.max_row_group_row_count {
-                if in_progress.buffered_rows + batch.num_rows() > max_rows {
-                    let to_write = max_rows - in_progress.buffered_rows;
-                    let a = batch.slice(0, to_write);
-                    let b = batch.slice(to_write, batch.num_rows() - to_write);
-                    self.write(&a).await?;
-                    return self.write(&b).await;
+            // Leading rows of `remaining` that still fit in the current row group, when the
+            // rest has to go to a later one.
+            let mut split_at = match self.max_row_group_row_count {
+                Some(max_rows) if buffered_rows + remaining.num_rows() > max_rows => {
+                    Some(max_rows - buffered_rows)
                 }
-            }
+                _ => None,
+            };
 
             // Check byte limit: if we have buffered data, use measured average row size
-            // to split batch proactively before exceeding byte limit
-            if let Some(max_bytes) = self.max_row_group_bytes {
-                if in_progress.buffered_rows > 0 {
-                    let current_bytes = in_progress.get_estimated_total_bytes();
+            // to split batch proactively before exceeding byte limit. Both limits apply to
+            // the same rows, so measure against whatever the row limit already trimmed
+            // `remaining` down to; otherwise the row limit would always win.
+            let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
 
-                    if current_bytes >= max_bytes {
-                        self.flush().await?;
-                        return self.write(batch).await;
-                    }
+            if self.max_row_group_bytes.is_some() && buffered_rows == 0 {
+                // There is no row size to extrapolate from yet: write a single row first,
+                // so that the byte limit also applies to the rest of the batch instead of
+                // letting a batch larger than the limit fill the row group on its own.
+                if candidate_rows > 1 {
+                    split_at = Some(1);
+                }
+            } else if let Some(max_bytes) = self.max_row_group_bytes {
+                let current_bytes = in_progress.get_estimated_total_bytes();
 
-                    if let Some(avg_row_bytes) = current_bytes
-                        .checked_div(in_progress.buffered_rows)
-                        .filter(|avg_row_bytes| *avg_row_bytes > 0)
-                    {
-                        // At this point, `current_bytes < max_bytes` (checked above)
-                        let remaining_bytes = max_bytes - current_bytes;
-                        let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+                if current_bytes >= max_bytes {
+                    self.flush().await?;
+                    continue;
+                }
 
-                        if batch.num_rows() > rows_that_fit {
-                            if rows_that_fit > 0 {
-                                let a = batch.slice(0, rows_that_fit);
-                                let b =
-                                    batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                                self.write(&a).await?;
-                                return self.write(&b).await;
-                            } else {
-                                self.flush().await?;
-                                return self.write(batch).await;
-                            }
+                let avg_row_bytes = current_bytes / buffered_rows;
+                if let Some(rows_that_fit) = (max_bytes - current_bytes).checked_div(avg_row_bytes)
+                {
+                    // At this point, `current_bytes < max_bytes` (checked above)
+                    if candidate_rows > rows_that_fit {
+                        if rows_that_fit > 0 {
+                            split_at = Some(rows_that_fit);
+                        } else {
+                            self.flush().await?;
+                            continue;
                         }
                     }
                 }
             }
 
+            let rest = split_at.map(|to_write| {
+                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
+                remaining = remaining.slice(0, to_write);
+                rest
+            });
+
+            let in_progress = self
+                .in_progress
+                .as_mut()
+                .ok_or_else(|| ParquetError::General("missing row group writer".to_string()))?;
             in_progress
-                .write(batch, &self.resources, self.max_row_group_bytes.is_some())
+                .write(
+                    &remaining,
+                    &self.resources,
+                    self.max_row_group_bytes.is_some(),
+                )
                 .await?;
 
             let should_flush = self
@@ -290,8 +312,12 @@ impl ColumnEncoder {
             if should_flush {
                 self.flush().await?
             }
-            Ok(())
-        })
+
+            match rest {
+                Some(rest) => remaining = rest,
+                None => return Ok(()),
+            }
+        }
     }
     // SPDX-SnippetEnd
 
@@ -366,7 +392,7 @@ impl ColumnEncoder {
 
     // SPDX-SnippetBegin
     // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/59.2.0/parquet/src/arrow/arrow_writer/mod.rs#L446-L463
+    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L462-L477
     /// Flushes all buffered rows into a new row group
     ///
     /// Note the underlying writer is not flushed with this call.
@@ -438,7 +464,7 @@ async fn upload_buffer(
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/59.2.0/parquet/src/arrow/arrow_writer/mod.rs#L1204-L1269
+// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L1330-L1441
 /// Encodes [`RecordBatch`] to a parquet row group
 ///
 /// Note: this structure is created by [`ArrowRowGroupWriterFactory`] internally used to
@@ -448,6 +474,8 @@ async fn upload_buffer(
 struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
+    /// The number of leaf columns of each top-level column.
+    leaf_counts: Arc<[usize]>,
     buffered_rows: usize,
     /// The lanes that have the writers when the columns are encoded by other tasks.
     lanes: Vec<Lane>,
@@ -457,10 +485,11 @@ struct ArrowRowGroupWriter {
 }
 
 impl ArrowRowGroupWriter {
-    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
+    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef, leaf_counts: &Arc<[usize]>) -> Self {
         Self {
             writers,
             schema: arrow.clone(),
+            leaf_counts: Arc::clone(leaf_counts),
             buffered_rows: 0,
             lanes: vec![],
             lanes_estimated_bytes: 0,
@@ -473,16 +502,26 @@ impl ArrowRowGroupWriter {
         resources: &EncodeResources,
         report_estimated_bytes: bool,
     ) -> Result<()> {
+        self.validate_batch_shape(batch)?;
         self.buffered_rows += batch.num_rows();
         if !self.lanes.is_empty() {
             return self
                 .write_to_lanes(batch, resources, report_estimated_bytes)
                 .await;
         }
+
         let _timer = resources.elapsed_compute().timer();
         let mut writers = self.writers.iter_mut();
-        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
-            for leaf in compute_leaves(field.as_ref(), column)? {
+        for ((field, column), expected) in self
+            .schema
+            .fields()
+            .iter()
+            .zip(batch.columns())
+            .zip(self.leaf_counts.iter())
+        {
+            let leaves = compute_leaves(field.as_ref(), column)?;
+            Self::validate_leaf_count(field, *expected, leaves.len())?;
+            for leaf in leaves {
                 writers
                     .next()
                     .ok_or_else(|| {
@@ -490,6 +529,35 @@ impl ArrowRowGroupWriter {
                     })?
                     .write(&leaf)?;
             }
+        }
+        Ok(())
+    }
+
+    fn validate_batch_shape(&self, batch: &RecordBatch) -> Result<()> {
+        if batch.num_columns() != self.schema.fields().len() {
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible schema: writer has {} top-level fields but batch has {} columns",
+                self.schema.fields().len(),
+                batch.num_columns()
+            )));
+        }
+        let leaves: usize = self.leaf_counts.iter().sum();
+        if self.lanes.is_empty() && self.writers.len() != leaves {
+            return Err(ParquetError::General(format!(
+                "Arrow row-group writer has {} column writers for {} planned leaves",
+                self.writers.len(),
+                leaves
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_leaf_count(field: &FieldRef, expected: usize, actual: usize) -> Result<()> {
+        if actual != expected {
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible schema: field '{}' produced {actual} leaf columns but writer expects {expected}",
+                field.name()
+            )));
         }
         Ok(())
     }
@@ -515,17 +583,13 @@ impl ArrowRowGroupWriter {
 impl ArrowRowGroupWriter {
     /// Moves the column writers to lanes, each of which is encoded by one task.
     /// The writer task keeps the column writers when there are no lanes.
-    fn with_lanes(
-        mut self,
-        lanes: Vec<Vec<usize>>,
-        leaf_counts: &[usize],
-        resources: &EncodeResources,
-    ) -> Self {
+    fn with_lanes(mut self, lanes: Vec<Vec<usize>>, resources: &EncodeResources) -> Self {
         if lanes.is_empty() {
             return self;
         }
         let mut writers = std::mem::take(&mut self.writers).into_iter();
-        let mut writers: Vec<Vec<ArrowColumnWriter>> = leaf_counts
+        let mut writers: Vec<Vec<ArrowColumnWriter>> = self
+            .leaf_counts
             .iter()
             .map(|leaves| writers.by_ref().take(*leaves).collect())
             .collect();
