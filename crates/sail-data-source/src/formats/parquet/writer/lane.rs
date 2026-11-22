@@ -35,6 +35,15 @@ pub(super) struct LaneOutput {
     pub reservation: MemoryReservation,
 }
 
+/// Tells the task of a lane to stop when the lane is dropped.
+struct LaneStop(Arc<AtomicBool>);
+
+impl Drop for LaneStop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
 /// Marks the lane as ended when the task of the lane ends in any way.
 struct LaneEnd(Arc<AtomicBool>);
 
@@ -50,7 +59,7 @@ impl Drop for LaneEnd {
 /// a queue, so each column writer sees the same data in the same order as it
 /// would without lanes. The task reserves the memory of its column writers
 /// itself, since the writer task does not wait for the lane. The task is
-/// canceled when the lane is dropped.
+/// canceled when the lane is dropped, and it does not encode more input then.
 pub(super) struct Lane {
     /// The indices of the columns in the schema, in increasing order.
     columns: Vec<usize>,
@@ -59,6 +68,7 @@ pub(super) struct Lane {
     task: SpawnedTask<Result<LaneOutput>>,
     /// Whether the task has ended.
     ended: Arc<AtomicBool>,
+    _stop: LaneStop,
 }
 
 impl Lane {
@@ -73,11 +83,13 @@ impl Lane {
     ) -> Self {
         let (queue, inputs) = mpsc::unbounded_channel();
         let ended = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::new(AtomicBool::new(false));
         let task = SpawnedTask::spawn(encode_lane(
             fields,
             writers,
             inputs,
             reservation,
+            Arc::clone(&stopped),
             LaneEnd(Arc::clone(&ended)),
             elapsed_compute,
         ));
@@ -86,6 +98,7 @@ impl Lane {
             queue: Some(queue),
             task,
             ended,
+            _stop: LaneStop(stopped),
         }
     }
 
@@ -138,21 +151,34 @@ impl Lane {
     }
 }
 
-#[expect(clippy::unwrap_used)]
 async fn encode_lane(
     fields: Vec<FieldRef>,
     mut writers: Vec<ArrowColumnWriter>,
     mut inputs: mpsc::UnboundedReceiver<LaneInput>,
     reservation: MemoryReservation,
+    stopped: Arc<AtomicBool>,
     _end: LaneEnd,
     elapsed_compute: Time,
 ) -> Result<LaneOutput> {
     while let Some(input) = inputs.recv().await {
+        // A task that is canceled keeps running until it has to wait, which can
+        // be after many inputs when the queue is long. The lane has been dropped
+        // in that case, and the remaining input is not encoded.
+        if stopped.load(Ordering::Acquire) {
+            return Err(ParquetError::General(
+                "the column encoder has been dropped".to_string(),
+            ));
+        }
         let _timer = elapsed_compute.timer();
         let mut lane_writers = writers.iter_mut();
         for (field, column) in fields.iter().zip(&input.columns) {
             for leaf in compute_leaves(field.as_ref(), column)? {
-                lane_writers.next().unwrap().write(&leaf)?;
+                lane_writers
+                    .next()
+                    .ok_or_else(|| {
+                        ParquetError::General("missing column writer for leaf column".to_string())
+                    })?
+                    .write(&leaf)?;
             }
         }
         reserve(&reservation, writers.iter().map(|x| x.memory_size()).sum())?;
@@ -191,14 +217,14 @@ fn reserve(reservation: &MemoryReservation, size: usize) -> Result<()> {
 /// Returns the indices of the columns of each lane in increasing order.
 pub(super) fn assign_lanes(weights: &[usize], lanes: usize) -> Vec<Vec<usize>> {
     let mut assigned: Vec<(usize, Vec<usize>)> = (0..lanes).map(|_| (0, vec![])).collect();
-    let mut columns: Vec<usize> = (0..weights.len()).collect();
-    columns.sort_by_key(|&column| std::cmp::Reverse(weights[column]));
-    for column in columns {
+    let mut columns: Vec<(usize, usize)> = weights.iter().copied().enumerate().collect();
+    columns.sort_by_key(|&(_, column_weight)| std::cmp::Reverse(column_weight));
+    for (column, column_weight) in columns {
         if let Some((weight, lane)) = assigned
             .iter_mut()
             .min_by_key(|(weight, lane)| (*weight, lane.len()))
         {
-            *weight += weights[column];
+            *weight += column_weight;
             lane.push(column);
         }
     }
@@ -227,8 +253,10 @@ pub(super) fn logical_size(array: &dyn Array) -> usize {
 /// which the size of a slice of the array data does not include.
 fn view_data_size(data: &ArrayData) -> usize {
     let own = match data.data_type() {
-        DataType::Utf8View | DataType::BinaryView => data.buffer::<u128>(0)[..data.len()]
+        DataType::Utf8View | DataType::BinaryView => data
+            .buffer::<u128>(0)
             .iter()
+            .take(data.len())
             .map(|view| *view as u32 as usize)
             .filter(|length| *length > 12)
             .sum(),

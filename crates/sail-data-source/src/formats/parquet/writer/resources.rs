@@ -43,12 +43,14 @@ impl Drop for ActiveWriter {
 /// How the files of a writer task are encoded.
 #[derive(Debug, Clone)]
 pub struct EncodeSettings {
-    /// The number of threads that the task may keep busy with encoding.
-    /// The files are encoded by the writer task itself when this is one.
-    /// When this is not set, the threads are divided among the active writer
-    /// tasks each time a row group starts to receive rows, so a task uses
-    /// more threads after other tasks have ended.
-    pub degree: Option<usize>,
+    /// The largest number of threads that the task may keep busy with encoding,
+    /// or zero when there is no limit. The files are encoded by the writer task
+    /// itself when this is one.
+    ///
+    /// The threads are divided among the active writer tasks each time a row
+    /// group starts to receive rows, so a task uses more threads after other
+    /// tasks have ended.
+    pub max_degree: usize,
     /// The number of threads that the active writer tasks share.
     /// This is the number of worker threads of the runtime when it is not set.
     pub threads: Option<usize>,
@@ -66,23 +68,12 @@ pub struct EncodeSettings {
 }
 
 impl EncodeSettings {
-    /// The task shares the threads of the runtime with
-    /// the other active writer tasks in this process.
-    pub fn automatic() -> Self {
+    /// The task shares the threads of the runtime with the other active
+    /// writer tasks in this process, and it keeps at most the given number
+    /// of threads busy with encoding. Zero means that there is no limit.
+    pub fn new(max_degree: usize) -> Self {
         Self {
-            degree: None,
-            threads: None,
-            active_writers: Arc::clone(&ACTIVE_WRITERS),
-            lanes: None,
-            window: None,
-            read_ahead_bytes: None,
-        }
-    }
-
-    /// The task keeps the given number of threads busy with encoding.
-    pub fn fixed(degree: usize) -> Self {
-        Self {
-            degree: Some(degree),
+            max_degree,
             threads: None,
             active_writers: Arc::clone(&ACTIVE_WRITERS),
             lanes: None,
@@ -154,10 +145,12 @@ impl EncodeResources {
 
     /// The number of threads that the task may keep busy with encoding at this time.
     fn task_degree(&self) -> usize {
-        self.settings.degree.unwrap_or_else(|| {
-            let active_writers = self.settings.active_writers.load(Ordering::Relaxed);
-            self.threads / active_writers.max(1)
-        })
+        let active_writers = self.settings.active_writers.load(Ordering::Relaxed);
+        let degree = self.threads / active_writers.max(1);
+        match self.settings.max_degree {
+            0 => degree,
+            max_degree => degree.min(max_degree),
+        }
     }
 
     /// Changes the read-ahead budget to the budget for the degree of the task.

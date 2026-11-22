@@ -260,11 +260,11 @@ impl ExecutionPlan for ParquetWriteExec {
             buffer_size: execution.objectstore_writer_buffer_size,
             max_rows_per_file: execution.soft_max_rows_per_output_file.get(),
             max_open_files: MAX_OPEN_FILES_PER_TASK,
-            encode: if self.options.global.allow_single_file_parallelism {
-                EncodeSettings::automatic()
+            encode: EncodeSettings::new(if self.options.global.allow_single_file_parallelism {
+                0
             } else {
-                EncodeSettings::fixed(1)
-            },
+                1
+            }),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());

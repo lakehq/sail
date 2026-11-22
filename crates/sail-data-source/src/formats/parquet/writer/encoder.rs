@@ -99,7 +99,10 @@ impl ColumnEncoder {
         let (writer, row_group_writer_factory) = writer.into_serialized_writer()?;
         let mut leaf_counts = vec![0; schema.fields().len()];
         for leaf in 0..writer.schema_descr().num_columns() {
-            leaf_counts[writer.schema_descr().get_column_root_idx(leaf)] += 1;
+            let column = writer.schema_descr().get_column_root_idx(leaf);
+            if let Some(count) = leaf_counts.get_mut(column) {
+                *count += 1;
+            }
         }
         Ok(Self {
             writer,
@@ -334,7 +337,14 @@ impl ColumnEncoder {
                     reservations.push(output.reservation);
                     let mut chunks = output.chunks.into_iter();
                     for column in lane_columns {
-                        columns[column] = chunks.by_ref().take(self.leaf_counts[column]).collect();
+                        let (Some(leaves), Some(column)) =
+                            (self.leaf_counts.get(column), columns.get_mut(column))
+                        else {
+                            return Err(ParquetError::General(format!(
+                                "a column encoder has completed column {column}, which is not in the file"
+                            )));
+                        };
+                        *column = chunks.by_ref().take(*leaves).collect();
                     }
                 }
                 columns.into_iter().flatten().collect()
@@ -457,7 +467,6 @@ impl ArrowRowGroupWriter {
         }
     }
 
-    #[expect(clippy::unwrap_used)]
     async fn write(
         &mut self,
         batch: &RecordBatch,
@@ -474,7 +483,12 @@ impl ArrowRowGroupWriter {
         let mut writers = self.writers.iter_mut();
         for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
             for leaf in compute_leaves(field.as_ref(), column)? {
-                writers.next().unwrap().write(&leaf)?;
+                writers
+                    .next()
+                    .ok_or_else(|| {
+                        ParquetError::General("missing column writer for leaf column".to_string())
+                    })?
+                    .write(&leaf)?;
             }
         }
         Ok(())
@@ -520,11 +534,12 @@ impl ArrowRowGroupWriter {
             .map(|columns| {
                 let fields = columns
                     .iter()
-                    .map(|&column| Arc::clone(&self.schema.fields()[column]))
+                    .filter_map(|&column| self.schema.fields().get(column).cloned())
                     .collect();
                 let writers = columns
                     .iter()
-                    .flat_map(|&column| std::mem::take(&mut writers[column]))
+                    .filter_map(|&column| writers.get_mut(column).map(std::mem::take))
+                    .flatten()
                     .collect();
                 Lane::spawn(
                     columns,
@@ -552,11 +567,15 @@ impl ArrowRowGroupWriter {
     ) -> Result<()> {
         let mut reports = vec![];
         for lane in &mut self.lanes {
-            let columns: Vec<ArrayRef> = lane
+            let columns = lane
                 .columns()
                 .iter()
-                .map(|&column| Arc::clone(batch.column(column)))
-                .collect();
+                .map(|&column| {
+                    batch.columns().get(column).cloned().ok_or_else(|| {
+                        ParquetError::General(format!("the batch does not have column {column}"))
+                    })
+                })
+                .collect::<Result<Vec<ArrayRef>>>()?;
             let bytes = columns.iter().map(|x| logical_size(x.as_ref())).sum();
             let admission = resources.admit(bytes).await?;
             let encoded = if report_estimated_bytes {

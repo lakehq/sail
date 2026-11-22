@@ -26,7 +26,7 @@ use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -87,7 +87,7 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         buffer_size: 10 * 1024 * 1024,
         max_rows_per_file: 50_000_000,
         max_open_files: 100,
-        encode: EncodeSettings::fixed(1),
+        encode: fixed_degree(1),
     }
 }
 
@@ -101,6 +101,16 @@ fn test_resources(settings: EncodeSettings, pool: &Arc<dyn MemoryPool>) -> Arc<E
     ))
 }
 
+/// Settings for a task that always keeps the given number of threads busy
+/// with encoding, since it does not share the threads with other tasks.
+fn fixed_degree(degree: usize) -> EncodeSettings {
+    EncodeSettings {
+        threads: Some(degree),
+        active_writers: Arc::new(AtomicUsize::new(0)),
+        ..EncodeSettings::new(0)
+    }
+}
+
 fn encode_settings(
     degree: usize,
     lanes: Option<usize>,
@@ -111,16 +121,13 @@ fn encode_settings(
         lanes,
         window,
         read_ahead_bytes,
-        ..EncodeSettings::fixed(degree)
+        ..fixed_degree(degree)
     }
 }
 
 /// The ways to encode a file that must all give the same file.
 fn encode_cases() -> Vec<EncodeSettings> {
-    let mut cases: Vec<_> = [1, 2, 3, 8, 64]
-        .into_iter()
-        .map(EncodeSettings::fixed)
-        .collect();
+    let mut cases: Vec<_> = [1, 2, 3, 8, 64].into_iter().map(fixed_degree).collect();
     // One lane with several row groups at the same time.
     cases.push(encode_settings(8, Some(1), Some(4), None));
     // Several lanes with one row group at a time.
@@ -2011,7 +2018,7 @@ async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
     let schema = partitioned_schema();
     let rows: Vec<(i64, i32, &str)> = (0..5000).map(|i| (i, (i % 2) as i32, "x")).collect();
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
-    task.encode = EncodeSettings::fixed(4);
+    task.encode = fixed_degree(4);
     task.max_rows_per_file = 2000;
     task.options.global.max_row_group_size = 1500;
     let manifest = run_task(task, &schema, vec![partitioned_batch(&rows)?]).await?;
@@ -2057,7 +2064,7 @@ async fn test_parallel_columns_report_encoding_error() -> Result<()> {
         std::slice::from_ref(&batch),
     );
     let mut task = test_task(Arc::clone(&store), 0);
-    task.encode = EncodeSettings::fixed(3);
+    task.encode = fixed_degree(3);
     let actual = run_task(task, &schema, vec![batch]).await;
     let (Err(expected), Err(actual)) = (expected, actual) else {
         return Err(internal_datafusion_err!("expected errors"));
@@ -2080,7 +2087,7 @@ async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut task = test_task(Arc::clone(&store), 0);
     task.options = options;
-    task.encode = EncodeSettings::fixed(8);
+    task.encode = fixed_degree(8);
     run_task(task, &schema, batches).await?;
     let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
     assert!(data == expected);
@@ -2208,7 +2215,7 @@ async fn test_file_writer_memory_size() -> Result<()> {
         props,
         false,
         10 * 1024 * 1024,
-        test_resources(EncodeSettings::fixed(1), &pool),
+        test_resources(fixed_degree(1), &pool),
     )?;
     assert_eq!(writer.memory_size(), 0);
     assert!(!writer.write(&int_batch(&schema, 0..199_999)?).await?);
@@ -2552,34 +2559,71 @@ async fn test_encoding_reports_error_of_lane() -> Result<()> {
     Ok(())
 }
 
+/// A memory pool that panics the first time that memory is returned to it.
+#[derive(Debug, Default)]
+struct PanickingPool {
+    panicked: std::sync::atomic::AtomicBool,
+}
+
+impl std::fmt::Display for PanickingPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PanickingPool")
+    }
+}
+
+impl MemoryPool for PanickingPool {
+    fn name(&self) -> &str {
+        "PanickingPool"
+    }
+
+    fn grow(&self, _reservation: &MemoryReservation, _additional: usize) {}
+
+    fn shrink(&self, _reservation: &MemoryReservation, shrink: usize) {
+        if !self.panicked.swap(true, Ordering::SeqCst) {
+            // The index is out of bounds, which panics.
+            let values: [u8; 0] = [];
+            std::hint::black_box(values[std::hint::black_box(shrink)]);
+        }
+    }
+
+    fn try_grow(&self, _reservation: &MemoryReservation, _additional: usize) -> Result<()> {
+        Ok(())
+    }
+
+    fn reserved(&self) -> usize {
+        0
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_lane_reports_panic_of_its_task() -> Result<()> {
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(EncodeSettings::fixed(2), &pool);
-    let field = Arc::new(Field::new("a", DataType::Int64, true));
     let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
-    // The task of the lane panics when it receives input,
-    // since the lane has a column without a column writer.
+    // The task of the lane panics when it has encoded its first input,
+    // which is when the input is no longer counted as waiting.
     let spawn = || {
-        Lane::spawn(
-            vec![0],
-            vec![Arc::clone(&field)],
+        let pool: Arc<dyn MemoryPool> = Arc::new(PanickingPool::default());
+        let resources = test_resources(fixed_degree(2), &pool);
+        let lane = Lane::spawn(
+            vec![],
+            vec![],
             vec![],
             resources.new_reservation(),
             Time::new(),
-        )
+        );
+        (lane, resources)
     };
-    let input = |encoded| async {
+    let input = |resources: Arc<EncodeResources>, encoded| async move {
         Ok::<_, DataFusionError>(LaneInput {
-            columns: vec![Arc::clone(&column)],
+            columns: vec![],
             encoded,
             admission: resources.admit(80).await?,
         })
     };
 
     // The panic is reported when the lane is given more input.
-    let mut lane = spawn();
-    lane.send(input(None).await?).await?;
+    let (mut lane, resources) = spawn();
+    lane.send(input(Arc::clone(&resources), None).await?)
+        .await?;
     for _ in 0..500 {
         if lane.has_ended() {
             break;
@@ -2587,31 +2631,115 @@ async fn test_lane_reports_panic_of_its_task() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(lane.has_ended());
-    let Err(error) = lane.send(input(None).await?).await else {
+    let Err(error) = lane.send(input(Arc::clone(&resources), None).await?).await else {
         return Err(internal_datafusion_err!("expected an error"));
     };
     assert!(error.to_string().contains("panicked"), "{error}");
+    assert_eq!(resources.waiting_input_size(), 0);
 
     // The panic is reported when the lane is asked for the size of its encoded data.
-    let mut lane = spawn();
+    // The size is sent before the panic, so the lane is given a second input.
+    let (mut lane, resources) = spawn();
+    lane.send(input(Arc::clone(&resources), None).await?)
+        .await?;
     let (encoded, report) = tokio::sync::oneshot::channel();
-    lane.send(input(Some(encoded)).await?).await?;
+    let _ = lane
+        .send(input(Arc::clone(&resources), Some(encoded)).await?)
+        .await;
     assert!(report.await.is_err());
     let error = lane.failure().await;
     assert!(error.to_string().contains("panicked"), "{error}");
 
     // The panic is reported when the columns of the lane are requested.
-    let mut lane = spawn();
-    lane.send(input(None).await?).await?;
+    let (mut lane, resources) = spawn();
+    lane.send(input(Arc::clone(&resources), None).await?)
+        .await?;
     lane.seal();
     let Err(error) = lane.join().await else {
         return Err(internal_datafusion_err!("expected an error"));
     };
     assert!(error.to_string().contains("panicked"), "{error}");
-
-    // The input of the lanes is not counted as waiting after the panics.
-    assert_eq!(resources.waiting_input_size(), 0);
     assert_eq!(Arc::strong_count(&column), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_dropped_lane_does_not_encode_its_queue() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let schema = int_schema();
+    let (_, factory) =
+        ArrowWriter::try_new(vec![], Arc::clone(&schema), None)?.into_serialized_writer()?;
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let resources = test_resources(fixed_degree(2), &pool);
+    let mut lane = Lane::spawn(
+        vec![0],
+        schema.fields().to_vec(),
+        factory.create_column_writers(0)?,
+        resources.new_reservation(),
+        Time::new(),
+    );
+    // The queue has input that takes much longer to encode than the test takes
+    // to drop the lane. The task of the lane is running when the lane is dropped.
+    let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..500_000));
+    let mut reports = vec![];
+    for _ in 0..100 {
+        let (encoded, report) = tokio::sync::oneshot::channel();
+        reports.push(report);
+        lane.send(LaneInput {
+            columns: vec![Arc::clone(&column)],
+            encoded: Some(encoded),
+            admission: resources.admit(1024).await?,
+        })
+        .await?;
+    }
+    match reports.remove(0).await {
+        Ok(_) => {}
+        Err(_) => return Err(internal_datafusion_err!("the first input must be encoded")),
+    }
+    drop(lane);
+    wait_for_tasks(tasks).await?;
+    let mut encoded = 0;
+    for report in reports {
+        if report.await.is_ok() {
+            encoded += 1;
+        }
+    }
+    // The task ends after the input that it was encoding when the lane was dropped.
+    assert!(encoded < 50, "{encoded} inputs were encoded");
+    assert_eq!(Arc::strong_count(&column), 1);
+    assert_eq!(resources.waiting_input_size(), 0);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_degree_is_limited_by_settings() -> Result<()> {
+    let batch = all_types_batch(15)?;
+    let schema = batch.schema();
+    let mut options = TableParquetOptions::default();
+    options.arrow_schema(&schema);
+    for (max_degree, lanes) in [(0, 8), (20, 8), (3, 3), (1, 0)] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let settings = EncodeSettings {
+            max_degree,
+            ..fixed_degree(8)
+        };
+        let mut writer = ParquetFileWriter::try_new(
+            Arc::clone(&store),
+            Path::from("file.parquet"),
+            Arc::clone(&schema),
+            WriterPropertiesBuilder::try_from(&options)?.build(),
+            false,
+            10 * 1024 * 1024,
+            test_resources(settings, &pool),
+        )?;
+        writer.write(&batch).await?;
+        assert_eq!(writer.lanes(), lanes, "limit {max_degree}");
+        writer.close().await?;
+    }
     Ok(())
 }
 
@@ -2744,7 +2872,7 @@ async fn test_canceled_task_with_lanes_deletes_file_that_completes_later() -> Re
     );
     let mut task = test_task(Arc::clone(&store), 0);
     task.options.global.max_row_group_size = 5;
-    task.encode = EncodeSettings::fixed(8);
+    task.encode = fixed_degree(8);
     let mut stream = Box::pin(write_stream(task, input));
 
     // The task is canceled while the request that makes its file visible is running.
@@ -2865,7 +2993,7 @@ fn shared_settings(threads: usize, active_writers: &Arc<AtomicUsize>) -> EncodeS
     EncodeSettings {
         threads: Some(threads),
         active_writers: Arc::clone(active_writers),
-        ..EncodeSettings::automatic()
+        ..EncodeSettings::new(0)
     }
 }
 
@@ -2940,7 +3068,7 @@ async fn test_degree_is_divided_among_open_files_of_task() -> Result<()> {
     options.arrow_schema(&schema);
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(EncodeSettings::fixed(8), &pool);
+    let resources = test_resources(fixed_degree(8), &pool);
     let open = |name: &str| {
         ParquetFileWriter::try_new(
             Arc::clone(&store),
@@ -3055,8 +3183,8 @@ async fn test_active_writers_are_counted_until_the_task_ends() -> Result<()> {
 
 #[test]
 fn test_writer_tasks_share_one_counter_by_default() {
-    let first = EncodeSettings::automatic();
-    let second = EncodeSettings::automatic();
-    assert!(first.degree.is_none());
+    let first = EncodeSettings::new(0);
+    let second = EncodeSettings::new(0);
+    assert_eq!(first.max_degree, 0);
     assert!(Arc::ptr_eq(&first.active_writers, &second.active_writers));
 }

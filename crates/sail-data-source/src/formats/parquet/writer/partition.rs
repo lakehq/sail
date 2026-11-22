@@ -17,7 +17,7 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array, as_uint8_array, as_uint16_array,
     as_uint32_array, as_uint64_array,
 };
-use datafusion_common::{Result, exec_datafusion_err, not_impl_err, plan_err};
+use datafusion_common::{Result, exec_datafusion_err, internal_err, not_impl_err, plan_err};
 use object_store::path::Path;
 
 use crate::formats::parquet::writer::task::{DirectoryWriter, FileFactory};
@@ -139,7 +139,6 @@ impl PartitionRouter {
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/datasource/src/write/demux.rs#L373-L541
-#[expect(clippy::unwrap_used)]
 fn compute_partition_keys_by_row<'a>(
     rb: &'a RecordBatch,
     partition_by: &'a [(String, DataType)],
@@ -195,7 +194,12 @@ fn compute_partition_keys_by_row<'a>(
                 for i in 0..rb.num_rows() {
                     let date =
                         NaiveDate::from_num_days_from_ce_opt(EPOCH_DAYS_FROM_CE + array.value(i))
-                            .unwrap()
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "the date of a hive partition is out of range: {}",
+                                    array.value(i)
+                                )
+                            })?
                             .format(format)
                             .to_string();
                     partition_values.push(Cow::from(date));
@@ -209,7 +213,12 @@ fn compute_partition_keys_by_row<'a>(
                     let date = NaiveDate::from_num_days_from_ce_opt(
                         EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
                     )
-                    .unwrap()
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "the date of a hive partition is out of range: {}",
+                            array.value(i)
+                        )
+                    })?
                     .format(format)
                     .to_string();
                     partition_values.push(Cow::from(date));
@@ -292,7 +301,12 @@ fn compute_partition_keys_by_row<'a>(
                             partition_values.push(Cow::from(array.value(i)));
                         }
                     },
-                    _ => unreachable!(),
+                    _ => {
+                        return internal_err!(
+                            "the hive partition column with datatype {} is not a dictionary array",
+                            dtype
+                        );
+                    }
                 )
             }
             _ => {
