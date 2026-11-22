@@ -273,3 +273,32 @@ def test_write_loads_the_target_table_once_to_plan_the_statement(spark, recordin
             assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_metadata_table_shares_the_load_of_its_table(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.inspected"
+    load = (f"{NAMESPACE}/tables/inspected", 200, None)
+    # The name of a metadata table is looked up as a table and as a view first.
+    missing = [
+        (f"{NAMESPACE}\x1finspected/tables/snapshots", 404, None),
+        (f"{NAMESPACE}\x1finspected/views/snapshots", 404, None),
+    ]
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1), (2)")
+        # The metadata table and the table, under another name, share one load of the table.
+        for sql, expected in [
+            (f"SELECT count(*) AS n FROM {name}.snapshots s CROSS JOIN sail.{name} t", [*missing, load]),
+            (f"SELECT count(*) AS n FROM sail.{name} t CROSS JOIN {name}.snapshots s", [load, *missing]),
+            (
+                f"SELECT count(*) AS n FROM {name}.snapshots s CROSS JOIN {name}.snapshots r CROSS JOIN {name} t",
+                [*missing, load, *missing],
+            ),
+        ]:
+            start = len(records)
+            assert [row.n for row in spark.sql(sql).collect()] == [2], sql
+            assert _requests(records, start) == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

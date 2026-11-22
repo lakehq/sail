@@ -56,17 +56,27 @@ mod tests {
     fn create_session_with_catalog(
         catalog: Arc<dyn CatalogProvider>,
     ) -> Result<SessionContext, Box<dyn std::error::Error>> {
+        create_session_with_catalogs(catalog, vec![])
+    }
+
+    /// Creates a session with the default catalog `sail` and more catalogs by name.
+    fn create_session_with_catalogs(
+        catalog: Arc<dyn CatalogProvider>,
+        others: Vec<(String, Arc<dyn CatalogProvider>)>,
+    ) -> Result<SessionContext, Box<dyn std::error::Error>> {
         let mut state = SessionStateBuilder::new()
             .with_query_planner(crate::planner::new_query_planner())
             .build();
+        let mut catalogs = HashMap::from([
+            ("sail".to_string(), catalog),
+            (
+                SYSTEM_CATALOG_NAME.to_string(),
+                Arc::new(SystemCatalogProvider) as Arc<dyn CatalogProvider>,
+            ),
+        ]);
+        catalogs.extend(others);
         let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([
-                ("sail".to_string(), catalog),
-                (
-                    SYSTEM_CATALOG_NAME.to_string(),
-                    Arc::new(SystemCatalogProvider) as Arc<dyn CatalogProvider>,
-                ),
-            ]),
+            catalogs,
             default_catalog: "sail".to_string(),
             default_database: vec!["default".to_string()],
             global_temporary_database: vec!["global_temp".to_string()],
@@ -313,7 +323,9 @@ mod tests {
         use sail_common_datafusion::extension::SessionExtensionAccessor;
 
         /// A memory catalog that returns the properties of a table in a different order
-        /// on each lookup, as catalogs that build them from unordered maps can do.
+        /// on each lookup, as catalogs that build them from unordered maps can do. It
+        /// also ignores the letter case of table names, as the Hive Metastore does, so
+        /// that one query can look up one table twice, under two names.
         struct PermutingCatalogProvider {
             inner: MemoryCatalogProvider,
             lookups: AtomicUsize,
@@ -377,7 +389,8 @@ mod tests {
                 database: &Namespace,
                 table: &str,
             ) -> CatalogResult<TableStatus> {
-                let mut status = self.inner.get_table(database, table).await?;
+                let table = table.to_lowercase();
+                let mut status = self.inner.get_table(database, &table).await?;
                 if let TableKind::Table { properties, .. } = &mut status.kind
                     && !properties.is_empty()
                 {
@@ -493,14 +506,24 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         session.execute_logical_plan(plan).await?.collect().await?;
 
+        // Names that differ in letter case are looked up separately, and the catalog
+        // returns the same table for both, with the properties in two orders.
+        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM T)";
+        let plan = from_ast_statement(parse_one_statement(sql)?)?;
+        let lookups = catalog.lookups.load(Ordering::SeqCst);
+        resolver.resolve_named_plan(plan).await?;
+        let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
+        assert_eq!(lookups, 2);
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+
+        // Names that differ in how they are qualified are looked up once.
         let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t)";
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let lookups = catalog.lookups.load(Ordering::SeqCst);
         resolver.resolve_named_plan(plan).await?;
         let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
-        // Both names are the same table, which is looked up once.
         assert_eq!(lookups, 1);
-        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
         Ok(())
     }
 

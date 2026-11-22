@@ -34,7 +34,7 @@ use sail_plan::resolver::PlanResolver;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 
-use super::{create_memory_catalog, create_session_with_catalog};
+use super::{create_memory_catalog, create_session_with_catalogs};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -336,6 +336,8 @@ impl Resolution {
 struct Fixture {
     session: SessionContext,
     catalog: Arc<SnapshotCatalogProvider>,
+    /// The catalog `second`, which is not the default catalog.
+    second: Arc<SnapshotCatalogProvider>,
     source: Arc<RecordingDataSource>,
 }
 
@@ -347,8 +349,22 @@ impl Fixture {
             loads: AtomicUsize::new(0),
             requests: Mutex::new(vec![]),
         });
-        let session =
-            create_session_with_catalog(Arc::clone(&catalog) as Arc<dyn CatalogProvider>)?;
+        let second = Arc::new(SnapshotCatalogProvider {
+            inner: MemoryCatalogProvider::new(
+                "second".to_string(),
+                vec![Arc::from("default")].try_into()?,
+                None,
+            ),
+            loads: AtomicUsize::new(0),
+            requests: Mutex::new(vec![]),
+        });
+        let session = create_session_with_catalogs(
+            Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
+            vec![(
+                "second".to_string(),
+                Arc::clone(&second) as Arc<dyn CatalogProvider>,
+            )],
+        )?;
         let source = RecordingDataSource::new("iceberg");
         session
             .extension::<DataSourceRegistry>()?
@@ -356,6 +372,7 @@ impl Fixture {
         let fixture = Self {
             session,
             catalog,
+            second,
             source,
         };
         fixture.create_table(&["t"], &["k", "v"]).await?;
@@ -839,6 +856,145 @@ async fn test_missing_tables_are_reported_as_before() -> TestResult {
             assert_eq!(resolution.loads, loads, "{sql}");
         }
     }
+    Ok(())
+}
+
+/// Runs a test on a thread with a larger stack. The plan resolver futures of queries
+/// over several views need more than the default test thread stack in debug builds.
+fn run_on_large_stack<F>(test: fn() -> F) -> Result<(), String>
+where
+    F: Future<Output = TestResult> + 'static,
+{
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?
+                .block_on(test())
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|e| e.to_string())?
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e))
+}
+
+#[test]
+fn test_view_spellings_share_one_catalog_lookup() -> Result<(), String> {
+    run_on_large_stack(view_spellings_share_one_catalog_lookup)
+}
+
+async fn view_spellings_share_one_catalog_lookup() -> TestResult {
+    let fixture = Fixture::try_new(&["CREATE VIEW tv AS SELECT * FROM default.t"]).await?;
+    for sql in [
+        "SELECT * FROM tv a JOIN default.tv b ON a.k = b.k JOIN sail.default.tv c ON a.k = c.k",
+        "SELECT (SELECT max(v) FROM sail.default.tv), (SELECT max(v) FROM `tv`), \
+            (SELECT max(v) FROM sail.default.t)",
+    ] {
+        let resolution = fixture.resolve(sql).await?;
+        // The view is looked up as a table first, and then as a view.
+        assert_eq!(
+            resolution.requests,
+            ["table tv", "view tv", "table t"],
+            "{sql}"
+        );
+        resolution.expect(1, 1, sql);
+    }
+    Ok(())
+}
+
+#[test]
+fn test_nested_views_share_the_catalog_lookups_of_the_query() -> Result<(), String> {
+    run_on_large_stack(nested_views_share_the_catalog_lookups_of_the_query)
+}
+
+async fn nested_views_share_the_catalog_lookups_of_the_query() -> TestResult {
+    let fixture = Fixture::try_new(&[
+        "CREATE VIEW inner_view AS SELECT * FROM default.t",
+        "CREATE VIEW outer_view AS SELECT * FROM sail.default.inner_view",
+    ])
+    .await?;
+    let sql = "SELECT (SELECT max(v) FROM outer_view), (SELECT max(v) FROM default.inner_view), \
+        (SELECT max(v) FROM t), (SELECT max(v) FROM default.outer_view)";
+    let resolution = fixture.resolve(sql).await?;
+    assert_eq!(
+        resolution.requests,
+        [
+            "table outer_view",
+            "view outer_view",
+            "table inner_view",
+            "view inner_view",
+            "table t"
+        ]
+    );
+    resolution.expect(1, 1, sql);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cte_is_not_merged_with_the_table_of_the_same_name() -> TestResult {
+    // The CTE has the column `x`, and the table has the columns `k` and `v`.
+    let fixture = Fixture::try_new(&[]).await?;
+    for (sql, loads) in [
+        ("WITH t AS (SELECT 1L AS x) SELECT max(x) FROM t", 0),
+        (
+            "WITH t AS (SELECT 1L AS x) \
+                SELECT (SELECT max(x) FROM t), (SELECT max(v) FROM default.t)",
+            1,
+        ),
+        (
+            "WITH t AS (SELECT 1L AS x) \
+                SELECT (SELECT max(v) FROM sail.default.t), (SELECT max(x) FROM t), \
+                (SELECT max(v) FROM default.t)",
+            1,
+        ),
+        // The CTE reads the table of its own name under another spelling.
+        (
+            "WITH t AS (SELECT k AS x FROM default.t) \
+                SELECT * FROM t a JOIN sail.default.t b ON a.x = b.k",
+            1,
+        ),
+    ] {
+        fixture.resolve(sql).await?.expect(loads, loads, sql);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tables_of_the_same_name_in_two_catalogs_are_not_merged() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    fixture
+        .create_table(&["second", "default", "t"], &["k", "w"])
+        .await?;
+    let second_loads = || fixture.second.loads.load(Ordering::SeqCst);
+    // The columns `v` and `w` tell the two tables apart.
+    let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM second.default.t), \
+        (SELECT max(v) FROM sail.default.t), (SELECT max(w) FROM `second`.`default`.t)";
+    let before = second_loads();
+    fixture.resolve(sql).await?.expect(1, 2, sql);
+    assert_eq!(second_loads() - before, 1, "{sql}");
+    // The bare name and the name with a database follow the current catalog.
+    fixture.execute("USE CATALOG second").await?;
+    let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(w) FROM default.t), \
+        (SELECT max(w) FROM second.default.t), (SELECT max(v) FROM sail.default.t)";
+    let before = second_loads();
+    fixture.resolve(sql).await?.expect(1, 2, sql);
+    assert_eq!(second_loads() - before, 1, "{sql}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_spellings_in_a_nested_database_share_one_catalog_load() -> TestResult {
+    let fixture = Fixture::try_new(&["CREATE DATABASE a", "CREATE DATABASE a.b"]).await?;
+    fixture.create_table(&["a", "b", "t"], &["k", "w"]).await?;
+    let sql = "SELECT (SELECT max(w) FROM a.b.t), (SELECT max(w) FROM `a`.`b`.`t`), \
+        (SELECT max(v) FROM t)";
+    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.execute("USE DATABASE a.b").await?;
+    let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(w) FROM a.b.t), \
+        (SELECT max(w) FROM `t`), (SELECT max(v) FROM sail.default.t)";
+    fixture.resolve(sql).await?.expect(2, 2, sql);
     Ok(())
 }
 
