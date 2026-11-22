@@ -658,6 +658,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -1266,6 +1269,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -1872,6 +1878,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -2760,6 +2769,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -3502,6 +3514,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -4042,6 +4057,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -4552,6 +4570,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5106,6 +5127,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5709,6 +5733,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -6245,6 +6272,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -6757,6 +6787,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -7335,6 +7368,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -7897,6 +7933,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -8440,6 +8479,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -8968,6 +9010,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -9523,6 +9568,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -10147,6 +10195,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -10724,6 +10775,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -11277,6 +11331,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -11806,6 +11863,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -12301,6 +12361,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -12818,6 +12881,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -13351,6 +13417,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -13900,6 +13969,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepExplicitPartitions:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
