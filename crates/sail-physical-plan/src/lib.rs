@@ -5,6 +5,7 @@ pub mod catalog_command;
 pub mod coalesce;
 pub mod data_source;
 pub mod identity_generate;
+pub mod key_distribution;
 pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
