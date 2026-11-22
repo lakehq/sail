@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use object_store::multipart::{MultipartStore, PartId};
 use object_store::path::Path;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
 };
 use tokio::sync::OnceCell;
 use tonic::codegen::Bytes;
@@ -201,6 +202,57 @@ where
             .get_or_try_init()
             .await?
             .rename_opts(from, to, options)
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<S, F, Fut> MultipartStore for LazyObjectStore<S, F>
+where
+    S: MultipartStore,
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<S>> + Send,
+{
+    async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
+        self.inner
+            .get_or_try_init()
+            .await?
+            .create_multipart(path)
+            .await
+    }
+
+    async fn put_part(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        part_idx: usize,
+        data: PutPayload,
+    ) -> Result<PartId> {
+        self.inner
+            .get_or_try_init()
+            .await?
+            .put_part(path, id, part_idx, data)
+            .await
+    }
+
+    async fn complete_multipart(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.inner
+            .get_or_try_init()
+            .await?
+            .complete_multipart(path, id, parts)
+            .await
+    }
+
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
+        self.inner
+            .get_or_try_init()
+            .await?
+            .abort_multipart(path, id)
             .await
     }
 }

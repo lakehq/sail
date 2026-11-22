@@ -20,6 +20,7 @@ use sail_common::config::{
     AppConfig, CacheType, FairMemoryPoolConfig, GreedyMemoryPoolConfig, MemoryPoolConfig,
 };
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::session::multipart::MultipartStoreProvider;
 use sail_object_store::DynamicObjectStoreRegistry;
 
 pub struct RuntimeEnvFactory {
@@ -41,11 +42,24 @@ impl RuntimeEnvFactory {
         }
     }
 
-    pub fn create<M>(&mut self, mutator: M) -> Result<Arc<RuntimeEnv>>
+    /// Creates the runtime environment of a session, and the session extension
+    /// that gives the multipart upload interface of the object stores of
+    /// the runtime environment. A session that writes files or that completes
+    /// a write must have the extension.
+    pub fn create<M>(
+        &mut self,
+        mutator: M,
+    ) -> Result<(Arc<RuntimeEnv>, Arc<MultipartStoreProvider>)>
     where
         M: FnOnce(RuntimeEnvBuilder) -> Result<RuntimeEnvBuilder>,
     {
-        let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
+        let registry = Arc::new(DynamicObjectStoreRegistry::new(self.runtime.clone()));
+        let multipart = {
+            let registry = Arc::clone(&registry);
+            Arc::new(MultipartStoreProvider::new(move |url| {
+                registry.multipart_store(url)
+            }))
+        };
         let cache_config = CacheManagerConfig::default()
             .with_file_statistics_cache(self.create_file_statistics_cache())
             .with_list_files_cache(self.create_file_listing_cache())
@@ -63,12 +77,12 @@ impl RuntimeEnvFactory {
             CacheType::Global | CacheType::Session => cache_config,
         };
         let builder = RuntimeEnvBuilder::default()
-            .with_object_store_registry(Arc::new(registry))
+            .with_object_store_registry(registry)
             .with_cache_manager(cache_config)
             .with_memory_pool(self.create_memory_pool())
             .with_disk_manager_builder(self.create_disk_manager_builder());
         let builder = mutator(builder)?;
-        Ok(Arc::new(builder.build()?))
+        Ok((Arc::new(builder.build()?), multipart))
     }
 
     fn create_memory_pool(&self) -> Arc<dyn MemoryPool> {
