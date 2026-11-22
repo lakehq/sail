@@ -143,7 +143,7 @@ def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_p
     read_df = spark.read.parquet(path)
     assert sample_df.count() == read_df.count()
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
-    assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.zst.parquet"))) > 0
+    assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.zstd.parquet"))) > 0
 
     # Test reading a compressed Parquet file written by Pandas.
     path = tmp_path / "parquet_compressed_gzip_pandas_1"

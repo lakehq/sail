@@ -1575,6 +1575,146 @@ mod tests {
         assert_eq!(ordering_column.index(), 0);
     }
 
+    /// Plans and runs a Parquet write of a range with two partitions to an
+    /// in-memory object store. Returns the plan text and the files written.
+    async fn write_range_to_parquet(
+        sort: Option<spec::SortDirection>,
+        mode: spec::SaveMode,
+        store: Arc<InMemory>,
+    ) -> datafusion_common::Result<(String, Vec<String>)> {
+        use futures::TryStreamExt;
+        use object_store::ObjectStore;
+
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        let object_store_url =
+            datafusion::execution::object_store::ObjectStoreUrl::parse("memory://")?;
+        runtime_env.register_object_store(object_store_url.as_ref(), store.clone());
+        let registry = Arc::new(sail_common_datafusion::datasource::DataSourceRegistry::new());
+        registry.register_data_source(Arc::new(
+            sail_data_source::formats::parquet::ParquetDataSource::default(),
+        ))?;
+        let config = SessionConfig::new().with_extension(registry);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let mut input = spec::QueryPlan::new(spec::QueryNode::Range(spec::Range {
+            start: Some(0),
+            end: 10,
+            step: 1,
+            num_partitions: Some(2),
+        }));
+        if let Some(direction) = sort {
+            input = spec::QueryPlan::new(spec::QueryNode::Sort {
+                input: Box::new(input),
+                order: vec![spec::SortOrder {
+                    child: Box::new(spec::Expr::UnresolvedAttribute {
+                        name: spec::ObjectName::bare("id"),
+                        plan_id: None,
+                        is_metadata_column: false,
+                    }),
+                    direction,
+                    null_ordering: spec::NullOrdering::Unspecified,
+                }],
+                is_global: true,
+            });
+        }
+        let command = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
+            spec::Write {
+                input: Box::new(input),
+                source: Some("parquet".to_string()),
+                save_type: spec::SaveType::Path("memory:///table".to_string()),
+                mode: Some(mode),
+                sort_columns: vec![],
+                partitioning_columns: vec![],
+                clustering_columns: vec![],
+                bucket_by: None,
+                options: vec![],
+            },
+        )));
+        let (physical, _) =
+            sail_plan::resolve_and_execute_plan(&context, Arc::new(PlanConfig::default()), command)
+                .await
+                .map_err(|error| internal_datafusion_err!("{error}"))?;
+        let display = displayable(physical.as_ref()).indent(true).to_string();
+        collect(physical, context.task_ctx()).await?;
+        let mut files: Vec<String> = store
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await?;
+        files.sort();
+        Ok((display, files))
+    }
+
+    #[tokio::test]
+    async fn parquet_write_keeps_input_partitions_and_commits() -> datafusion_common::Result<()> {
+        let store = Arc::new(InMemory::new());
+        let (display, files) =
+            write_range_to_parquet(None, spec::SaveMode::Append, store.clone()).await?;
+        assert!(display.contains("FileWriteCommitExec"), "{display}");
+        assert!(display.contains("CoalescePartitionsExec"), "{display}");
+        assert!(display.contains("ParquetWriteExec"), "{display}");
+        assert!(!display.contains("DataSinkExec"), "{display}");
+        assert!(!display.contains("RepartitionExec"), "{display}");
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert_eq!(files[0], "table/_SUCCESS");
+        assert!(files[1].starts_with("table/part-00000-"), "{files:?}");
+        assert!(files[2].starts_with("table/part-00001-"), "{files:?}");
+        assert!(files[1].ends_with("-c000.zstd.parquet"), "{files:?}");
+        // All files of a write have the same identifier.
+        let id = |file: &str| file["table/part-00000-".len()..][..36].to_string();
+        assert_eq!(id(&files[1]), id(&files[2]));
+
+        // Another write to the same path replaces the files.
+        let (display, overwritten) =
+            write_range_to_parquet(None, spec::SaveMode::Overwrite, store.clone()).await?;
+        assert!(display.contains("FileDeleteExec"), "{display}");
+        assert_eq!(overwritten.len(), 3, "{overwritten:?}");
+        assert_eq!(overwritten[0], "table/_SUCCESS");
+        assert_ne!(id(&overwritten[1]), id(&files[1]));
+        assert_eq!(id(&overwritten[1]), id(&overwritten[2]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_write_keeps_the_sort_of_the_query() -> datafusion_common::Result<()> {
+        for mode in [spec::SaveMode::Append, spec::SaveMode::Overwrite] {
+            let store = Arc::new(InMemory::new());
+            let (display, files) =
+                write_range_to_parquet(Some(spec::SortDirection::Descending), mode, store.clone())
+                    .await?;
+            assert!(display.contains("Sort"), "{display}");
+            // The sorted rows are a single partition, which is written in order.
+            assert_eq!(files.len(), 2, "{files:?} {display}");
+            assert_eq!(files[0], "table/_SUCCESS");
+            assert!(files[1].starts_with("table/part-00000-"), "{files:?}");
+            let data = {
+                use object_store::ObjectStoreExt;
+                store
+                    .get(&object_store::path::Path::from(files[1].as_str()))
+                    .await?
+                    .bytes()
+                    .await?
+            };
+            let reader =
+                datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                    data,
+                )?
+                .build()?;
+            let mut values: Vec<i64> = vec![];
+            for batch in reader {
+                let batch = batch?;
+                values.extend(batch.column(0).as_primitive::<Int64Type>().values().iter());
+            }
+            assert_eq!(values, (0..10).rev().collect::<Vec<i64>>());
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn checkpoint_command_optimizer_coalesces_writer_before_commit()
     -> datafusion_common::Result<()> {
