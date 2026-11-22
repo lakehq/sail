@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod commit;
 pub mod delete;
 pub mod input_files;
 pub mod part_file;
