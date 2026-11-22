@@ -103,6 +103,15 @@ impl ParquetFileWriter {
         self.rows
     }
 
+    /// The number of tasks that encode the row group that receives rows.
+    #[cfg(test)]
+    pub fn lanes(&self) -> usize {
+        match &self.inner {
+            FileEncoder::Arrow(_) => 0,
+            FileEncoder::Columns(writer) => writer.lanes(),
+        }
+    }
+
     /// The number of row groups that are being encoded.
     #[cfg(test)]
     pub fn row_groups_in_flight(&self) -> usize {

@@ -121,18 +121,6 @@ impl ParquetWriteExec {
         }
     }
 
-    /// The number of threads that a writer task may keep busy with encoding.
-    /// The writer partitions run at the same time, so the cores are divided
-    /// among the partitions.
-    fn degree(&self) -> usize {
-        if !self.options.global.allow_single_file_parallelism {
-            return 1;
-        }
-        let cores = std::thread::available_parallelism().map_or(1, |x| x.get());
-        let partitions = self.properties.output_partitioning().partition_count();
-        (cores / partitions.max(1)).max(1)
-    }
-
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -272,7 +260,11 @@ impl ExecutionPlan for ParquetWriteExec {
             buffer_size: execution.objectstore_writer_buffer_size,
             max_rows_per_file: execution.soft_max_rows_per_output_file.get(),
             max_open_files: MAX_OPEN_FILES_PER_TASK,
-            encode: EncodeSettings::new(self.degree()),
+            encode: if self.options.global.allow_single_file_parallelism {
+                EncodeSettings::automatic()
+            } else {
+                EncodeSettings::fixed(1)
+            },
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());

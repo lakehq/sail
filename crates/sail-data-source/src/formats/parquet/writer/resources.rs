@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::parquet::errors::{ParquetError, Result};
@@ -18,12 +19,41 @@ const WINDOW_MULTIPLIER: usize = 1;
 /// The number of bytes that one permit of the read-ahead budget stands for.
 const BYTES_PER_PERMIT: usize = 1024;
 
+/// The number of writer tasks in this process that are reading their input.
+/// The writer tasks share the threads of the runtime, whichever query
+/// the tasks belong to.
+static ACTIVE_WRITERS: LazyLock<Arc<AtomicUsize>> = LazyLock::new(|| Arc::new(AtomicUsize::new(0)));
+
+/// A writer task that is counted as active until this is dropped.
+pub(super) struct ActiveWriter(Arc<AtomicUsize>);
+
+impl ActiveWriter {
+    pub fn new(active_writers: &Arc<AtomicUsize>) -> Self {
+        active_writers.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::clone(active_writers))
+    }
+}
+
+impl Drop for ActiveWriter {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// How the files of a writer task are encoded.
 #[derive(Debug, Clone)]
 pub struct EncodeSettings {
     /// The number of threads that the task may keep busy with encoding.
     /// The files are encoded by the writer task itself when this is one.
-    pub degree: usize,
+    /// When this is not set, the threads are divided among the active writer
+    /// tasks each time a row group starts to receive rows, so a task uses
+    /// more threads after other tasks have ended.
+    pub degree: Option<usize>,
+    /// The number of threads that the active writer tasks share.
+    /// This is the number of worker threads of the runtime when it is not set.
+    pub threads: Option<usize>,
+    /// The number of active writer tasks that share the threads.
+    pub active_writers: Arc<AtomicUsize>,
     /// The number of lanes of a row group.
     /// This is derived from the degree when it is not set.
     pub lanes: Option<usize>,
@@ -36,9 +66,25 @@ pub struct EncodeSettings {
 }
 
 impl EncodeSettings {
-    pub fn new(degree: usize) -> Self {
+    /// The task shares the threads of the runtime with
+    /// the other active writer tasks in this process.
+    pub fn automatic() -> Self {
         Self {
-            degree,
+            degree: None,
+            threads: None,
+            active_writers: Arc::clone(&ACTIVE_WRITERS),
+            lanes: None,
+            window: None,
+            read_ahead_bytes: None,
+        }
+    }
+
+    /// The task keeps the given number of threads busy with encoding.
+    pub fn fixed(degree: usize) -> Self {
+        Self {
+            degree: Some(degree),
+            threads: None,
+            active_writers: Arc::clone(&ACTIVE_WRITERS),
             lanes: None,
             window: None,
             read_ahead_bytes: None,
@@ -59,9 +105,14 @@ pub(super) struct RowGroupPlan {
 /// What a writer task may spend on encoding. This is shared by the files of the task.
 pub struct EncodeResources {
     settings: EncodeSettings,
+    /// The number of threads that the active writer tasks share.
+    threads: usize,
+    /// The number of files of the task that are being encoded.
+    open_files: AtomicUsize,
     /// The size of the input that may wait to be encoded, in permits.
+    /// Only the writer task takes permits and changes the number of permits.
     read_ahead: Arc<Semaphore>,
-    read_ahead_permits: usize,
+    read_ahead_permits: AtomicUsize,
     /// The memory of the input that waits to be encoded.
     reservation: Arc<MemoryReservation>,
     elapsed_compute: Time,
@@ -76,22 +127,68 @@ impl EncodeResources {
         reservation: MemoryReservation,
         elapsed_compute: Time,
     ) -> Self {
-        let bytes = settings
-            .read_ahead_bytes
-            .unwrap_or_else(|| settings.degree.saturating_mul(READ_AHEAD_BYTES_PER_DEGREE));
-        let permits = bytes.div_ceil(BYTES_PER_PERMIT).clamp(1, u32::MAX as usize);
+        let threads = settings.threads.unwrap_or_else(|| {
+            tokio::runtime::Handle::try_current().map_or(1, |x| x.metrics().num_workers())
+        });
+        let permits = read_ahead_permits(
+            settings
+                .read_ahead_bytes
+                .unwrap_or(READ_AHEAD_BYTES_PER_DEGREE),
+        );
         Self {
             settings,
+            threads,
+            open_files: AtomicUsize::new(0),
             read_ahead: Arc::new(Semaphore::new(permits)),
-            read_ahead_permits: permits,
+            read_ahead_permits: AtomicUsize::new(permits),
             reservation: Arc::new(reservation),
             elapsed_compute,
         }
     }
 
+    /// Counts a file of the task as being encoded until the returned value is dropped.
+    pub(super) fn open_file(self: &Arc<Self>) -> OpenFile {
+        self.open_files.fetch_add(1, Ordering::Relaxed);
+        OpenFile(Arc::clone(self))
+    }
+
+    /// The number of threads that the task may keep busy with encoding at this time.
+    fn task_degree(&self) -> usize {
+        self.settings.degree.unwrap_or_else(|| {
+            let active_writers = self.settings.active_writers.load(Ordering::Relaxed);
+            self.threads / active_writers.max(1)
+        })
+    }
+
+    /// Changes the read-ahead budget to the budget for the degree of the task.
+    /// Permits that are in use are not taken away, so the budget can stay
+    /// higher until the next change.
+    fn set_read_ahead(&self, degree: usize) {
+        if self.settings.read_ahead_bytes.is_some() {
+            return;
+        }
+        let target = read_ahead_permits(degree.max(1).saturating_mul(READ_AHEAD_BYTES_PER_DEGREE));
+        let current = self.read_ahead_permits.load(Ordering::Relaxed);
+        if target > current {
+            self.read_ahead.add_permits(target - current);
+            self.read_ahead_permits.store(target, Ordering::Relaxed);
+        } else if target < current {
+            let removed = self.read_ahead.forget_permits(current - target);
+            self.read_ahead_permits
+                .store(current - removed, Ordering::Relaxed);
+        }
+    }
+
     /// Decides how a row group that is about to receive rows is encoded.
+    ///
+    /// The degree of the task is divided among the files of the task that are
+    /// being encoded. The files that are already open keep their lanes until
+    /// their next row group, so more threads than the degree can be busy for
+    /// a short time after a file is opened or another writer task has started.
     pub(super) fn plan_row_group(&self, columns: usize) -> RowGroupPlan {
-        let degree = self.settings.degree;
+        let degree = self.task_degree();
+        self.set_read_ahead(degree);
+        let degree = degree / self.open_files.load(Ordering::Relaxed).max(1);
         if degree <= 1 || columns == 0 {
             return RowGroupPlan {
                 lanes: 0,
@@ -116,7 +213,7 @@ impl EncodeResources {
     pub(super) async fn admit(&self, bytes: usize) -> Result<Admission> {
         let permits = bytes
             .div_ceil(BYTES_PER_PERMIT)
-            .min(self.read_ahead_permits);
+            .min(self.read_ahead_permits.load(Ordering::Relaxed));
         let permit = Arc::clone(&self.read_ahead)
             .acquire_many_owned(permits as u32)
             .await
@@ -134,6 +231,12 @@ impl EncodeResources {
         self.reservation.new_empty()
     }
 
+    /// The size of the read-ahead budget.
+    #[cfg(test)]
+    pub(super) fn read_ahead_size(&self) -> usize {
+        self.read_ahead_permits.load(Ordering::Relaxed) * BYTES_PER_PERMIT
+    }
+
     /// The size of the input that waits to be encoded.
     #[cfg(test)]
     pub(super) fn waiting_input_size(&self) -> usize {
@@ -143,6 +246,20 @@ impl EncodeResources {
     /// The time that the task has spent on encoding.
     pub(super) fn elapsed_compute(&self) -> &Time {
         &self.elapsed_compute
+    }
+}
+
+/// The number of permits for a read-ahead budget of the given size.
+fn read_ahead_permits(bytes: usize) -> usize {
+    bytes.div_ceil(BYTES_PER_PERMIT).clamp(1, u32::MAX as usize)
+}
+
+/// A file of a writer task that is counted as being encoded until this is dropped.
+pub(super) struct OpenFile(Arc<EncodeResources>);
+
+impl Drop for OpenFile {
+    fn drop(&mut self) {
+        self.0.open_files.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

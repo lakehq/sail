@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
-use crate::formats::parquet::writer::resources::{EncodeResources, EncodeSettings};
+use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WrittenFile, delete_files, manifest_batch};
 use crate::listing::part_file::part_file_name;
@@ -472,6 +472,9 @@ async fn write_files(
     reservation: MemoryReservation,
     metrics: ParquetWriteMetrics,
 ) -> Result<RecordBatch> {
+    // The task shares the threads with the other writer tasks from here on,
+    // until it has written its files, has failed, or is canceled.
+    let _active_writer = ActiveWriter::new(&task.encode.active_writers);
     let partition = task.partition;
     let partitions = task.partitions;
     let attempt = task.attempt;

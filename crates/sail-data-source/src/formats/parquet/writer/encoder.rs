@@ -21,7 +21,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::formats::parquet::writer::lane::{Lane, LaneInput, assign_lanes, logical_size};
-use crate::formats::parquet::writer::resources::EncodeResources;
+use crate::formats::parquet::writer::resources::{EncodeResources, OpenFile};
 
 /// The size of the encoded data of a file that is kept in memory
 /// before the data is handed to the upload.
@@ -69,6 +69,7 @@ pub(super) struct ColumnEncoder {
     /// that was last added to the file, or the number of leaf columns before that.
     column_weights: Vec<usize>,
     resources: Arc<EncodeResources>,
+    _open_file: OpenFile,
 }
 
 /// A row group that has all its rows.
@@ -114,6 +115,7 @@ impl ColumnEncoder {
             max_row_group_bytes,
             column_weights: leaf_counts.clone(),
             leaf_counts: leaf_counts.into(),
+            _open_file: resources.open_file(),
             resources,
         })
     }
@@ -121,6 +123,12 @@ impl ColumnEncoder {
     /// The number of row groups that have all their rows.
     pub fn row_groups(&self) -> usize {
         self.writer.flushed_row_groups().len() + self.sealed.len()
+    }
+
+    /// The number of lanes of the row group that receives rows.
+    #[cfg(test)]
+    pub fn lanes(&self) -> usize {
+        self.in_progress.as_ref().map_or(0, |x| x.lanes.len())
     }
 
     /// The number of row groups that are being encoded,
