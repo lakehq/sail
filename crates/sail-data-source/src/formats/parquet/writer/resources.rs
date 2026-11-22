@@ -1,243 +1,220 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, OnceLock};
 
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::physical_plan::metrics::Time;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// The size of the input that may wait to be encoded, for each unit of the degree.
-const READ_AHEAD_BYTES_PER_DEGREE: usize = 16 * 1024 * 1024;
-
-/// The number of row groups that are encoded at the same time for each
-/// set of lanes that the degree has room for, in addition to the row group
-/// that receives rows.
+/// The size of the input that the jobs of a row group receive at a time.
 ///
-/// A file with few columns has few lanes for each row group, so its row groups
-/// must overlap for the encoding to use the degree. The value comes from
-/// measurement: writes of tables with few columns were faster with 3 than
-/// with 1 or 2, and writes of tables with many columns did not change.
-const WINDOW_MULTIPLIER: usize = 3;
+/// A job encodes the values of one column for a whole slab before its thread
+/// encodes another column, which is faster than encoding the columns batch
+/// by batch, and more so the more values of a column a slab has. Measured with
+/// 48 files that were written at the same time on 48 threads with Zstandard:
+/// a table with 16 columns took the same time with slabs of 16 to 128 MiB,
+/// and a table with 121 columns took 8.26 s with 16 MiB, 7.6 s with 32 MiB,
+/// 7.05 s with 64 MiB and 6.85 s with 128 MiB. This is the smallest of these
+/// sizes that is within 3% of the best time for both tables.
+const SLAB_BYTES: usize = 64 * 1024 * 1024;
 
-/// The number of bytes that one permit of the read-ahead budget stands for.
-const BYTES_PER_PERMIT: usize = 1024;
+/// The number of slabs in the encode budget for each thread of the runtime:
+/// one slab that the thread is encoding and one slab that is waiting for it.
+/// Measured in the same way: with one, two and three slabs for each thread,
+/// the table with 16 columns took 6.42 s, 6.43 s and 6.41 s, and the table
+/// with 121 columns took 7.25 s, 6.93 s and 6.90 s.
+const SLABS_PER_THREAD: usize = 2;
 
-/// The number of writer tasks in this process that are reading their input.
-/// The writer tasks share the threads of the runtime, whichever query
-/// the tasks belong to.
-static ACTIVE_WRITERS: LazyLock<Arc<AtomicUsize>> = LazyLock::new(|| Arc::new(AtomicUsize::new(0)));
+/// The number of jobs that encode at the same time for each thread of the runtime.
+///
+/// A file has a job for each of its columns, so the files of a process can
+/// have many more jobs than the runtime has threads, and a task of the runtime
+/// then runs once in the time that all these jobs take for a time slice.
+/// Measured with 48 files of 121 columns that were written at the same time
+/// on 48 threads, as the time of the write and the delay of a timer of 1 ms
+/// on the same runtime at the 99th percentile: 7.05 s and 592 ms without
+/// a limit, and 6.69 s and 32 ms with one job for each thread. A job passes
+/// its turn to the next job of its column. Without that, the write took
+/// 7.74 s with one job and 7.79 s with two jobs for each thread.
+const JOBS_PER_THREAD: usize = 1;
 
-/// A writer task that is counted as active until this is dropped.
-pub(super) struct ActiveWriter(Arc<AtomicUsize>);
+/// The memory that the Parquet files of this process may use for their input
+/// and for their row groups that are encoded and not in a file.
+///
+/// The budget counts the rows that a file has received and not encoded,
+/// and the encoded data of a row group from the time when the row group
+/// has all its rows until the row group is in the file. A file that cannot
+/// take from the budget encodes its rows without keeping them, so no file
+/// waits for another file.
+#[derive(Debug)]
+pub struct EncodeBudget {
+    capacity: usize,
+    /// The size of the input that the jobs of a row group receive at a time.
+    slab_bytes: usize,
+    used: AtomicUsize,
+    /// The jobs of all files that may encode at the same time.
+    jobs: Arc<Semaphore>,
+}
 
-impl ActiveWriter {
-    pub fn new(active_writers: &Arc<AtomicUsize>) -> Self {
-        active_writers.fetch_add(1, Ordering::Relaxed);
-        Self(Arc::clone(active_writers))
+static PROCESS_BUDGET: OnceLock<Arc<EncodeBudget>> = OnceLock::new();
+
+/// The number of worker threads of the runtime of the caller.
+fn runtime_threads() -> usize {
+    tokio::runtime::Handle::try_current()
+        .map(|x| x.metrics().num_workers())
+        .or_else(|_| std::thread::available_parallelism().map(|x| x.get()))
+        .unwrap_or(1)
+        .max(1)
+}
+
+impl EncodeBudget {
+    /// Creates a budget of the given size for files whose jobs run
+    /// on the runtime of the caller.
+    pub fn new(capacity: usize) -> Arc<Self> {
+        Self::with_slab_bytes(capacity, SLAB_BYTES)
+    }
+
+    /// Creates a budget for files whose jobs receive input of the given size at a time.
+    pub(super) fn with_slab_bytes(capacity: usize, slab_bytes: usize) -> Arc<Self> {
+        let jobs = runtime_threads()
+            .saturating_mul(JOBS_PER_THREAD)
+            .min(Semaphore::MAX_PERMITS);
+        Arc::new(Self {
+            capacity,
+            slab_bytes,
+            used: AtomicUsize::new(0),
+            jobs: Arc::new(Semaphore::new(jobs)),
+        })
+    }
+
+    /// The budget that all files of this process share. Its size follows from
+    /// the number of worker threads of the runtime that calls this first.
+    pub fn of_process() -> Arc<Self> {
+        Arc::clone(PROCESS_BUDGET.get_or_init(|| {
+            Self::new(
+                runtime_threads()
+                    .saturating_mul(SLABS_PER_THREAD)
+                    .saturating_mul(SLAB_BYTES),
+            )
+        }))
+    }
+
+    /// The size of the budget.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// The size of the input that the jobs of a row group receive at a time.
+    pub(super) fn slab_bytes(&self) -> usize {
+        self.slab_bytes
+    }
+
+    /// The part of the budget that is in use. This can be more than the size
+    /// of the budget, since encoded row groups are always counted.
+    pub fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    /// Takes the bytes from the budget if the budget has them.
+    fn try_take(&self, bytes: usize) -> bool {
+        self.used
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes).filter(|x| *x <= self.capacity)
+            })
+            .is_ok()
+    }
+
+    fn take(&self, bytes: usize) {
+        self.used.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn give(&self, bytes: usize) {
+        self.used.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
 
-impl Drop for ActiveWriter {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// How the files of a writer task are encoded.
-#[derive(Debug, Clone)]
-pub struct EncodeSettings {
-    /// The largest number of threads that the task may keep busy with encoding,
-    /// or zero when there is no limit. The files are encoded by the writer task
-    /// itself when this is one.
-    ///
-    /// The threads are divided among the active writer tasks each time a row
-    /// group starts to receive rows, so a task uses more threads after other
-    /// tasks have ended.
-    pub max_degree: usize,
-    /// The number of threads that the active writer tasks share.
-    /// This is the number of worker threads of the runtime when it is not set.
-    pub threads: Option<usize>,
-    /// The number of active writer tasks that share the threads.
-    pub active_writers: Arc<AtomicUsize>,
-    /// The number of lanes of a row group.
-    /// This is derived from the degree when it is not set.
-    pub lanes: Option<usize>,
-    /// The number of row groups of a file that are encoded at the same time.
-    /// This is derived from the degree when it is not set.
-    pub window: Option<usize>,
-    /// The size of the input that may wait to be encoded.
-    /// This is derived from the degree when it is not set.
-    pub read_ahead_bytes: Option<usize>,
-}
-
-impl EncodeSettings {
-    /// The task shares the threads of the runtime with the other active
-    /// writer tasks in this process, and it keeps at most the given number
-    /// of threads busy with encoding. Zero means that there is no limit.
-    pub fn new(max_degree: usize) -> Self {
-        Self {
-            max_degree,
-            threads: None,
-            active_writers: Arc::clone(&ACTIVE_WRITERS),
-            lanes: None,
-            window: None,
-            read_ahead_bytes: None,
-        }
-    }
-}
-
-/// How a row group is encoded.
-pub(super) struct RowGroupPlan {
-    /// The number of tasks that encode the columns of the row group.
-    /// The writer task encodes the columns itself when this is zero.
-    pub lanes: usize,
-    /// The number of row groups of the file that are encoded at the same time,
-    /// including this row group.
-    pub window: usize,
-}
-
-/// What a writer task may spend on encoding. This is shared by the files of the task.
+/// What the files of a writer task share for encoding.
 pub struct EncodeResources {
-    settings: EncodeSettings,
-    /// The number of threads that the active writer tasks share.
-    threads: usize,
-    /// The number of files of the task that are being encoded.
-    open_files: AtomicUsize,
-    /// The size of the input that may wait to be encoded, in permits.
-    /// Only the writer task takes permits and changes the number of permits.
-    read_ahead: Arc<Semaphore>,
-    read_ahead_permits: AtomicUsize,
-    /// The memory of the input that waits to be encoded.
+    budget: Arc<EncodeBudget>,
+    /// The memory that the files of the task have taken from the budget.
     reservation: Arc<MemoryReservation>,
     elapsed_compute: Time,
 }
 
 impl EncodeResources {
-    /// Creates the resources of a writer task.
-    /// The reservation is used for the input that waits to be encoded.
-    /// The lanes reserve their memory with the same memory consumer.
+    /// Creates the resources of a writer task. The reservation shows
+    /// the memory pool what the files of the task have taken from the budget.
     pub fn new(
-        settings: EncodeSettings,
+        budget: Arc<EncodeBudget>,
         reservation: MemoryReservation,
         elapsed_compute: Time,
     ) -> Self {
-        let threads = settings.threads.unwrap_or_else(|| {
-            tokio::runtime::Handle::try_current().map_or(1, |x| x.metrics().num_workers())
-        });
-        let permits = read_ahead_permits(
-            settings
-                .read_ahead_bytes
-                .unwrap_or(READ_AHEAD_BYTES_PER_DEGREE),
-        );
         Self {
-            settings,
-            threads,
-            open_files: AtomicUsize::new(0),
-            read_ahead: Arc::new(Semaphore::new(permits)),
-            read_ahead_permits: AtomicUsize::new(permits),
+            budget,
             reservation: Arc::new(reservation),
             elapsed_compute,
         }
     }
 
-    /// Counts a file of the task as being encoded until the returned value is dropped.
-    pub(super) fn open_file(self: &Arc<Self>) -> OpenFile {
-        self.open_files.fetch_add(1, Ordering::Relaxed);
-        OpenFile(Arc::clone(self))
+    /// Takes the bytes from the budget and from the memory pool,
+    /// or returns nothing if either does not have them.
+    pub(super) fn try_charge(&self, bytes: usize) -> Option<Charge> {
+        if !self.budget.try_take(bytes) {
+            return None;
+        }
+        if self.reservation.try_grow(bytes).is_err() {
+            self.budget.give(bytes);
+            return None;
+        }
+        Some(self.charged(bytes))
     }
 
-    /// The number of threads that the task may keep busy with encoding at this time.
-    fn task_degree(&self) -> usize {
-        let active_writers = self.settings.active_writers.load(Ordering::Relaxed);
-        let degree = self.threads / active_writers.max(1);
-        match self.settings.max_degree {
-            0 => degree,
-            max_degree => degree.min(max_degree),
-        }
-    }
-
-    /// Changes the read-ahead budget to the budget for the degree of the task.
-    /// Permits that are in use are not taken away, so the budget can stay
-    /// higher until the next change.
-    fn set_read_ahead(&self, degree: usize) {
-        if self.settings.read_ahead_bytes.is_some() {
-            return;
-        }
-        let target = read_ahead_permits(degree.max(1).saturating_mul(READ_AHEAD_BYTES_PER_DEGREE));
-        let current = self.read_ahead_permits.load(Ordering::Relaxed);
-        if target > current {
-            self.read_ahead.add_permits(target - current);
-            self.read_ahead_permits.store(target, Ordering::Relaxed);
-        } else if target < current {
-            let removed = self.read_ahead.forget_permits(current - target);
-            self.read_ahead_permits
-                .store(current - removed, Ordering::Relaxed);
-        }
-    }
-
-    /// Decides how a row group that is about to receive rows is encoded.
-    ///
-    /// The degree of the task is divided among the files of the task that are
-    /// being encoded. The files that are already open keep their lanes until
-    /// their next row group, so more threads than the degree can be busy for
-    /// a short time after a file is opened or another writer task has started.
-    pub(super) fn plan_row_group(&self, columns: usize) -> RowGroupPlan {
-        let degree = self.task_degree();
-        self.set_read_ahead(degree);
-        let degree = degree / self.open_files.load(Ordering::Relaxed).max(1);
-        if degree <= 1 || columns == 0 {
-            return RowGroupPlan {
-                lanes: 0,
-                window: 1,
-            };
-        }
-        let lanes = self.settings.lanes.unwrap_or(degree).clamp(1, columns);
-        let window = self
-            .settings
-            .window
-            .unwrap_or(WINDOW_MULTIPLIER * degree.div_ceil(lanes) + 1)
-            .max(1);
-        RowGroupPlan { lanes, window }
-    }
-
-    /// Waits until input of the given size may be added to the input
-    /// that waits to be encoded. The input is counted until the returned
-    /// value is dropped.
-    ///
-    /// Input that is larger than the whole budget is admitted when no other
-    /// input is waiting, so that the write always makes progress.
-    pub(super) async fn admit(&self, bytes: usize) -> Result<Admission> {
-        let permits = bytes
-            .div_ceil(BYTES_PER_PERMIT)
-            .min(self.read_ahead_permits.load(Ordering::Relaxed));
-        let permit = Arc::clone(&self.read_ahead)
-            .acquire_many_owned(permits as u32)
-            .await
-            .map_err(|e| ParquetError::External(Box::new(e)))?;
+    /// Takes the bytes from the budget and from the memory pool
+    /// whether they have them or not.
+    pub(super) fn charge(&self, bytes: usize) -> Charge {
+        self.budget.take(bytes);
         self.reservation.grow(bytes);
-        Ok(Admission {
+        self.charged(bytes)
+    }
+
+    fn charged(&self, bytes: usize) -> Charge {
+        Charge {
             bytes,
+            budget: Some(Arc::clone(&self.budget)),
             reservation: Arc::clone(&self.reservation),
-            _permit: permit,
-        })
+        }
     }
 
-    /// Creates a reservation for the memory of a lane.
-    pub(super) fn new_reservation(&self) -> MemoryReservation {
-        self.reservation.new_empty()
+    /// Returns a charge for memory that is taken from the memory pool only,
+    /// whether the memory pool has it or not.
+    pub(super) fn charge_outside_budget(&self) -> Charge {
+        Charge {
+            bytes: 0,
+            budget: None,
+            reservation: Arc::clone(&self.reservation),
+        }
     }
 
-    /// The size of the read-ahead budget.
+    /// The size of the input that the jobs of a row group receive at a time.
+    pub(super) fn slab_bytes(&self) -> usize {
+        self.budget.slab_bytes()
+    }
+
+    /// Waits until a job may encode. The job may encode until the returned
+    /// value is dropped. A job must not wait for anything but its turn
+    /// on a thread while it has the value.
+    pub(super) async fn job(&self) -> Result<OwnedSemaphorePermit> {
+        Arc::clone(&self.budget.jobs)
+            .acquire_owned()
+            .await
+            .map_err(|e| ParquetError::External(Box::new(e)))
+    }
+
+    /// The memory that the files of the task have taken from the budget.
     #[cfg(test)]
-    pub(super) fn read_ahead_size(&self) -> usize {
-        self.read_ahead_permits.load(Ordering::Relaxed) * BYTES_PER_PERMIT
-    }
-
-    /// The size of the input that waits to be encoded.
-    #[cfg(test)]
-    pub(super) fn waiting_input_size(&self) -> usize {
+    pub(super) fn charged_size(&self) -> usize {
         self.reservation.size()
     }
 
@@ -247,30 +224,50 @@ impl EncodeResources {
     }
 }
 
-/// The number of permits for a read-ahead budget of the given size.
-fn read_ahead_permits(bytes: usize) -> usize {
-    bytes.div_ceil(BYTES_PER_PERMIT).clamp(1, u32::MAX as usize)
+/// Memory that is taken from the memory pool, and from the budget
+/// unless the memory is counted outside the budget, until this is dropped.
+pub(super) struct Charge {
+    bytes: usize,
+    budget: Option<Arc<EncodeBudget>>,
+    reservation: Arc<MemoryReservation>,
 }
 
-/// A file of a writer task that is counted as being encoded until this is dropped.
-pub(super) struct OpenFile(Arc<EncodeResources>);
+impl Charge {
+    /// Moves the memory of the other charge of the same kind to this charge.
+    pub fn merge(&mut self, mut other: Charge) {
+        self.bytes += std::mem::take(&mut other.bytes);
+    }
 
-impl Drop for OpenFile {
-    fn drop(&mut self) {
-        self.0.open_files.fetch_sub(1, Ordering::Relaxed);
+    /// Moves at most the given number of bytes to a new charge.
+    pub fn split(&mut self, bytes: usize) -> Charge {
+        let bytes = bytes.min(self.bytes);
+        self.bytes -= bytes;
+        Charge {
+            bytes,
+            budget: self.budget.clone(),
+            reservation: Arc::clone(&self.reservation),
+        }
+    }
+
+    /// Changes the size of the memory, whether the memory is available or not.
+    pub fn resize(&mut self, bytes: usize) {
+        if bytes > self.bytes {
+            if let Some(budget) = &self.budget {
+                budget.take(bytes - self.bytes);
+            }
+            self.reservation.grow(bytes - self.bytes);
+        } else if bytes < self.bytes {
+            if let Some(budget) = &self.budget {
+                budget.give(self.bytes - bytes);
+            }
+            self.reservation.shrink(self.bytes - bytes);
+        }
+        self.bytes = bytes;
     }
 }
 
-/// Input that waits to be encoded and is counted in the read-ahead budget
-/// and in the memory reservation of the writer task.
-pub(super) struct Admission {
-    bytes: usize,
-    reservation: Arc<MemoryReservation>,
-    _permit: OwnedSemaphorePermit,
-}
-
-impl Drop for Admission {
+impl Drop for Charge {
     fn drop(&mut self) {
-        self.reservation.shrink(self.bytes);
+        self.resize(0);
     }
 }

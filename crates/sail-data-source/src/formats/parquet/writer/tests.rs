@@ -14,7 +14,7 @@ use datafusion::arrow::array::{
     RunArray, StringArray, StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray,
     make_array, new_null_array,
 };
-use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
+use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{
     SortOptions, can_cast_types, cast, concat, concat_batches, take, take_record_batch,
 };
@@ -74,10 +74,10 @@ use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
+use crate::formats::parquet::writer::encoder::logical_size;
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::file::ParquetFileWriter;
-use crate::formats::parquet::writer::lane::{Lane, LaneInput, logical_size};
-use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
+use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
@@ -107,56 +107,52 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         max_file_size: 0,
         max_open_files: 100,
         context: Arc::new(TaskContext::default()),
-        encode: fixed_degree(1),
+        budget: EncodeBudget::new(TEST_BUDGET),
     }
 }
 
+/// The size of the encode budget of a test task, which has room for the rows of a test.
+const TEST_BUDGET: usize = 64 * 1024 * 1024;
+
 /// The resources of a writer task for a file writer that is used without a task.
-/// The memory pool counts only the input that waits to be encoded.
-fn test_resources(settings: EncodeSettings, pool: &Arc<dyn MemoryPool>) -> Arc<EncodeResources> {
+/// The memory pool counts only the memory that the file takes from the budget.
+fn test_resources(budget: Arc<EncodeBudget>, pool: &Arc<dyn MemoryPool>) -> Arc<EncodeResources> {
     Arc::new(EncodeResources::new(
-        settings,
+        budget,
         MemoryConsumer::new("test").register(pool),
         Time::new(),
     ))
 }
 
-/// Settings for a task that always keeps the given number of threads busy
-/// with encoding, since it does not share the threads with other tasks.
-fn fixed_degree(degree: usize) -> EncodeSettings {
-    EncodeSettings {
-        threads: Some(degree),
-        active_writers: Arc::new(AtomicUsize::new(0)),
-        ..EncodeSettings::new(0)
-    }
+/// The largest size of the values of a batch.
+fn largest_batch(batches: &[RecordBatch]) -> usize {
+    let size = |batch: &RecordBatch| -> usize {
+        batch
+            .columns()
+            .iter()
+            .map(|x| logical_size(x.as_ref()))
+            .sum()
+    };
+    batches.iter().map(size).max().unwrap_or(0).max(1)
 }
 
-fn encode_settings(
-    degree: usize,
-    lanes: Option<usize>,
-    window: Option<usize>,
-    read_ahead_bytes: Option<usize>,
-) -> EncodeSettings {
-    EncodeSettings {
-        lanes,
-        window,
-        read_ahead_bytes,
-        ..fixed_degree(degree)
-    }
-}
-
-/// The ways to encode a file that must all give the same file.
-fn encode_cases() -> Vec<EncodeSettings> {
-    let mut cases: Vec<_> = [1, 2, 3, 8, 64].into_iter().map(fixed_degree).collect();
-    // One lane with several row groups at the same time.
-    cases.push(encode_settings(8, Some(1), Some(4), None));
-    // Several lanes with one row group at a time.
-    cases.push(encode_settings(8, Some(5), Some(1), None));
-    // More lanes than columns in most files,
-    // and a read-ahead budget that is smaller than any input.
-    cases.push(encode_settings(4, Some(1000), Some(2), Some(1)));
-    cases.push(encode_settings(3, None, Some(3), Some(64 * 1024)));
-    cases
+/// The budgets with which a writer task must write the same files for the batches.
+/// No slab is smaller than a batch, so that no batch is divided.
+fn budget_cases(batches: &[RecordBatch]) -> Vec<Arc<EncodeBudget>> {
+    let batch = largest_batch(batches);
+    vec![
+        // The rows of a row group are one slab.
+        EncodeBudget::new(TEST_BUDGET),
+        // A slab has one or two batches.
+        EncodeBudget::with_slab_bytes(TEST_BUDGET, batch),
+        EncodeBudget::with_slab_bytes(TEST_BUDGET, 4 * batch),
+        // The writer task encodes all rows itself.
+        EncodeBudget::with_slab_bytes(0, batch),
+        // The writer task encodes the largest batches itself.
+        EncodeBudget::with_slab_bytes(batch / 2, batch),
+        // The writer task waits for the jobs of its file.
+        EncodeBudget::with_slab_bytes(3 * batch, batch),
+    ]
 }
 
 fn test_stream(schema: &SchemaRef, batches: Vec<RecordBatch>) -> SendableRecordBatchStream {
@@ -4110,6 +4106,9 @@ fn large_file_task(store: &Arc<FaultStore>, mode: Mode) -> ParquetWriteTask {
     task.publisher = store.publisher(mode);
     task.buffer_size = 256 * 1024;
     task.options.global.max_row_group_size = 20_000;
+    // The task encodes the rows itself, so that the parts of a file are uploaded
+    // while the task reads its input, whether the jobs of the file have run or not.
+    task.budget = EncodeBudget::new(0);
     task
 }
 
@@ -4150,10 +4149,18 @@ async fn test_task_that_fails_or_is_canceled_at_any_stage_leaves_nothing() -> Re
                         "{case}"
                     );
                 } else {
-                    // The task is canceled when it has read its input.
-                    let waiting =
-                        tokio::time::timeout(std::time::Duration::from_millis(50), stream.next());
-                    assert!(waiting.await.is_err(), "{case}");
+                    // The task is canceled when it has read its input, which is
+                    // after it has started to upload the parts of its file.
+                    for _ in 0..200 {
+                        let waiting = tokio::time::timeout(
+                            std::time::Duration::from_millis(50),
+                            stream.next(),
+                        );
+                        assert!(waiting.await.is_err(), "{case}");
+                        if !parts || store.count(part_request(mode)) > 0 {
+                            break;
+                        }
+                    }
                     let files = match mode {
                         Mode::Rename => staged,
                         // The upload of the file that receives rows is open.
@@ -4382,6 +4389,10 @@ async fn test_partitioned_task_counts_the_memory_of_files_that_are_being_complet
         let gate = store.hold_at("PART", "p=0/");
         let (mut task, input) = input(&store);
         task.publisher = store.publisher(Mode::Multipart);
+        // The encoded data of a file that waits for the object store is counted,
+        // and it has the size of the values when it is not compressed.
+        task.options.global.dictionary_enabled = Some(false);
+        task.options.global.compression = Some("uncompressed".to_string());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let metrics = ExecutionPlanMetricsSet::new();
         let mut stream = Box::pin(write_partition(
@@ -4534,29 +4545,6 @@ fn reference_file_of_batches(
     Ok(writer.into_inner()?)
 }
 
-/// Returns the file that a writer task must write for the batches,
-/// whichever way the task encodes the file.
-///
-/// This is the file of the Arrow writer, unless the size of a row group
-/// is limited in bytes. The encoder ends such row groups at the rows where
-/// the Arrow writer of version 60.2.0 ends them, which are other rows than
-/// the ones of the Arrow version in use. The expected file is then the file
-/// of a task that encodes all columns itself.
-async fn expected_file(options: &TableParquetOptions, batches: &[RecordBatch]) -> Result<Vec<u8>> {
-    // TODO: Uncomment after Arrow 60.2.0, and remove the rest of the function.
-    // reference_file_of_batches(options, batches)
-    if options.global.max_row_group_bytes.is_none() {
-        return reference_file_of_batches(options, batches);
-    }
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut task = test_task(Arc::clone(&store), 0);
-    task.options = options.clone();
-    task.encode = fixed_degree(1);
-    run_task(task, &batches[0].schema(), batches.to_vec()).await?;
-    let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
-    Ok(data.to_vec())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
     // The size of the encoded data follows the number of rows
@@ -4570,9 +4558,18 @@ async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
     let batches = vec![all_types_batch(78)?, all_types_batch(25)?];
     let schema = batches[0].schema();
     let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
-    let expected = expected_file(&options, &batches).await?;
-    let (metadata, data) = read_parquet(Bytes::from(expected.clone()))?;
-    assert_eq!(data.num_rows(), rows);
+    let name = file_name(0, 0, ".parquet");
+    let mut files = vec![];
+    for budget in budget_cases(&batches) {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.options = options.clone();
+        task.budget = budget;
+        run_task(task, &schema, batches.clone()).await?;
+        files.push(read_bytes(store.as_ref(), &name).await?);
+    }
+    let (metadata, data) = read_parquet(files[0].clone())?;
+    assert!(data == read_back(&batches)?);
     let row_groups: Vec<_> = metadata
         .row_groups()
         .iter()
@@ -4585,24 +4582,58 @@ async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
     assert!(row_groups.len() > 2, "{row_groups:?}");
     assert!(row_groups[0] > 1, "{row_groups:?}");
     assert!(row_groups[0] < batches[0].num_rows() / 2, "{row_groups:?}");
-    // The file is the same when the columns are encoded by other tasks.
-    let name = file_name(0, 0, ".parquet");
-    for encode in encode_cases() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let mut task = test_task(Arc::clone(&store), 0);
-        task.options = options.clone();
-        task.encode = encode.clone();
-        run_task(task, &schema, batches.clone()).await?;
-        let data = read_bytes(store.as_ref(), &name).await?;
-        assert!(data == expected, "{encode:?}");
+    // The rows at which the row groups end do not depend on the budget.
+    for file in &files[1..] {
+        assert!(file == &files[0]);
     }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_parallel_columns_write_the_same_file() -> Result<()> {
-    // The batches have different sizes, so that row groups end inside batches,
-    // and so that some parts of the batches are below the size for parallel encoding.
+async fn test_row_group_byte_limit_is_the_size_of_the_encoded_rows() -> Result<()> {
+    // The rows have the same size, and the encoded data is not compressed,
+    // so the size of a row group in the file is the size that the limit is for.
+    let schema = three_int_schema();
+    let source = three_int_batch(0..100_000)?;
+    let batches: Vec<_> = (0..100).map(|i| source.slice(i * 1000, 1000)).collect();
+    let mut sizes = vec![];
+    for limit in [64 * 1024, 256 * 1024, 100 * 1024 * 1024] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.options.global.dictionary_enabled = Some(false);
+        task.options.global.compression = Some("uncompressed".to_string());
+        task.options.global.data_pagesize_limit = 4096;
+        task.options.global.max_row_group_bytes = Some(limit.to_string().parse()?);
+        run_task(task, &schema, batches.clone()).await?;
+        let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+        let (metadata, data) = read_parquet(data)?;
+        assert_eq!(data, source);
+        let row_groups: Vec<_> = metadata
+            .row_groups()
+            .iter()
+            .map(|x| x.compressed_size() as usize)
+            .collect();
+        // Each row group but the last has the size of the limit. A row group
+        // ends at the row with which it is expected to reach the limit,
+        // and the pages that are not full are counted without their headers.
+        if let Some((_, full)) = row_groups.split_last() {
+            for size in full {
+                assert!(*size >= limit * 9 / 10, "{limit} {row_groups:?}");
+                assert!(*size <= limit * 11 / 10, "{limit} {row_groups:?}");
+            }
+        }
+        sizes.push(row_groups);
+    }
+    // The values have 2.4 MB.
+    assert!(sizes[0].len() > 30, "{sizes:?}");
+    assert!(sizes[1].len() > 8 && sizes[1].len() < 12, "{sizes:?}");
+    assert_eq!(sizes[2].len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_jobs_write_the_file_of_the_arrow_writer() -> Result<()> {
+    // The batches have different sizes, so that row groups end inside batches.
     let batches = vec![
         all_types_batch(600)?,
         all_types_batch(1)?,
@@ -4616,22 +4647,22 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
     by_rows.global.max_row_group_size = 3000;
     by_rows.global.data_pagesize_limit = 512;
     by_rows.global.data_page_row_count_limit = 64;
-    let mut by_bytes = TableParquetOptions::default();
-    by_bytes.global.max_row_group_bytes = Some("65536".parse()?);
-    by_bytes.global.compression = Some("snappy".to_string());
+    let mut small = TableParquetOptions::default();
+    small.global.max_row_group_size = 700;
+    small.global.compression = Some("snappy".to_string());
     let mut plain = TableParquetOptions::default();
     plain.global.dictionary_enabled = Some(false);
     plain.global.writer_version = "2.0".parse()?;
     plain.global.bloom_filter_on_write = true;
 
-    for (i, options) in [by_rows, by_bytes, plain].into_iter().enumerate() {
-        let expected = expected_file(&options, &batches).await?;
-        for encode in encode_cases() {
-            let lanes = format!("{encode:?}");
+    for (i, options) in [by_rows, small, plain].into_iter().enumerate() {
+        let expected = reference_file_of_batches(&options, &batches)?;
+        for budget in budget_cases(&batches) {
+            let case = format!("options {i} {budget:?}");
             let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
             let mut task = test_task(Arc::clone(&store), 0);
             task.options = options.clone();
-            task.encode = encode;
+            task.budget = budget;
             // The upload buffer is small, so that the file is uploaded in parts.
             task.buffer_size = 64 * 1024;
             let manifest = run_task(task, &schema, batches.clone()).await?;
@@ -4639,15 +4670,15 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
             assert_eq!(
                 manifest_rows(&manifest)?,
                 vec![(0, Some(name.clone()), expected.len() as u64, rows as u64)],
-                "options {i} lanes {lanes}"
+                "{case}"
             );
             let data = read_bytes(store.as_ref(), &name).await?;
-            assert!(data == expected, "options {i} lanes {lanes}");
+            assert!(data == expected, "{case}");
             let (metadata, _) = read_parquet(data)?;
             if i == 0 {
                 assert_eq!(metadata.num_row_groups(), rows.div_ceil(3000));
             } else if i == 1 {
-                assert!(metadata.num_row_groups() > 1);
+                assert_eq!(metadata.num_row_groups(), rows.div_ceil(700));
             }
         }
     }
@@ -4655,12 +4686,11 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
+async fn test_jobs_with_row_limit_and_partitions() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = partitioned_schema();
     let rows: Vec<(i64, i32, &str)> = (0..5000).map(|i| (i, (i % 2) as i32, "x")).collect();
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
-    task.encode = fixed_degree(4);
     task.max_records_per_file = 2000;
     task.options.global.max_row_group_size = 1500;
     let manifest = run_task(task, &schema, vec![partitioned_batch(&rows)?]).await?;
@@ -4686,12 +4716,19 @@ async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
     Ok(())
 }
 
+/// The rows that are read from a file of the batches. The data types of some
+/// columns of the batches are read as other data types.
+fn read_back(batches: &[RecordBatch]) -> Result<RecordBatch> {
+    let file = reference_file_of_batches(&TableParquetOptions::default(), batches)?;
+    Ok(read_parquet(Bytes::from(file))?.1)
+}
+
 /// Writes the batches to a file without a writer task, which rejects the data types
 /// that cannot be encoded before it creates a file.
 async fn write_file_without_task(
     store: &Arc<dyn ObjectStore>,
     options: &TableParquetOptions,
-    encode: EncodeSettings,
+    budget: Arc<EncodeBudget>,
     batches: &[RecordBatch],
 ) -> Result<()> {
     let schema = batches[0].schema();
@@ -4705,7 +4742,7 @@ async fn write_file_without_task(
         WriterPropertiesBuilder::try_from(&options)?.build(),
         false,
         10 * 1024 * 1024,
-        test_resources(encode, &pool),
+        test_resources(budget, &pool),
     )?;
     for batch in batches {
         writer.write(batch).await?;
@@ -4714,9 +4751,8 @@ async fn write_file_without_task(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_parallel_columns_report_encoding_error() -> Result<()> {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+/// A batch with a column in the middle that the Arrow writer cannot encode.
+fn batch_with_column_that_is_not_encoded() -> Result<RecordBatch> {
     let intervals: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
             IntervalMonthDayNano::new(1, 2, 3);
             2000
@@ -4727,32 +4763,56 @@ async fn test_parallel_columns_report_encoding_error() -> Result<()> {
         Field::new("c", DataType::Int64, true),
     ]));
     let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
+    Ok(RecordBatch::try_new(
+        schema,
         vec![Arc::clone(&integers), intervals, integers],
-    )?;
-    let expected = reference_file_of_batches(
-        &TableParquetOptions::default(),
-        std::slice::from_ref(&batch),
-    );
-    let actual = write_file_without_task(
-        &store,
-        &TableParquetOptions::default(),
-        fixed_degree(3),
-        &[batch],
-    )
-    .await;
-    let (Err(expected), Err(actual)) = (expected, actual) else {
-        return Err(internal_datafusion_err!("expected errors"));
-    };
-    assert_eq!(actual.strip_backtrace(), expected.strip_backtrace());
-    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    )?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_encoding_reports_error_of_job() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let batch = batch_with_column_that_is_not_encoded()?;
+    for byte_limit in [false, true] {
+        let mut options = TableParquetOptions::default();
+        options.global.max_row_group_size = 1500;
+        if byte_limit {
+            options.global.max_row_group_bytes = Some("65536".parse()?);
+        }
+        // The error is found when the row group is added to the file,
+        // when the size of the encoded rows is needed, when the writer
+        // encodes the rows itself, or when the file is completed.
+        for batches in [1, 20] {
+            let batches = vec![batch.clone(); batches];
+            let Err(expected) = reference_file_of_batches(&options, &batches) else {
+                return Err(internal_datafusion_err!("expected an error"));
+            };
+            for budget in budget_cases(&batches) {
+                let case = format!("{budget:?}");
+                let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+                let Err(actual) = write_file_without_task(&store, &options, budget, &batches).await
+                else {
+                    return Err(internal_datafusion_err!("expected an error"));
+                };
+                assert_eq!(
+                    actual.strip_backtrace(),
+                    expected.strip_backtrace(),
+                    "{case}"
+                );
+                assert_eq!(list_files(store.as_ref()).await?, vec![]);
+                // The jobs of the other columns end with the file.
+                wait_for_tasks(tasks).await?;
+            }
+        }
+    }
     Ok(())
 }
 
 #[tokio::test]
-async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
-    // Content-defined chunking is not available for parallel columns,
+async fn test_jobs_are_not_used_with_content_defined_chunking() -> Result<()> {
+    // Content-defined chunking keeps state across the row groups of a column,
     // so the columns are encoded in order and the option keeps its effect.
     let batches = vec![all_types_batch(600)?, all_types_batch(600)?];
     let schema = batches[0].schema();
@@ -4763,7 +4823,6 @@ async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut task = test_task(Arc::clone(&store), 0);
     task.options = options;
-    task.encode = fixed_degree(8);
     run_task(task, &schema, batches).await?;
     let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
     assert!(data == expected);
@@ -4771,7 +4830,7 @@ async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_columns_in_order_write_the_same_file() -> Result<()> {
+async fn test_row_groups_end_where_the_options_say() -> Result<()> {
     // The batches have 4, 100, 8, 0 and 200 rows, so that row groups end
     // before, at and inside the batches for the row limits below.
     let batches = vec![
@@ -4783,6 +4842,7 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
     ];
     let schema = batches[0].schema();
     let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
+    let input = read_back(&batches)?;
 
     let mut cases = vec![];
     for limit in [1, 4, 7, 100, 104, 312, 1024 * 1024] {
@@ -4811,30 +4871,34 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
 
     let mut row_groups = vec![];
     for (i, (options, expected_row_groups)) in cases.into_iter().enumerate() {
-        let expected = expected_file(&options, &batches).await?;
         let name = file_name(0, 0, ".parquet");
-        // The file is the same when the columns are encoded by other tasks.
-        for encode in encode_cases() {
+        let mut files = vec![];
+        for budget in budget_cases(&batches) {
             let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
             let mut task = test_task(Arc::clone(&store), 0);
             task.options = options.clone();
-            task.encode = encode.clone();
-            run_task(task, &schema, batches.clone()).await?;
+            task.budget = budget;
+            let manifest = run_task(task, &schema, batches.clone()).await?;
             let data = read_bytes(store.as_ref(), &name).await?;
-            assert!(data == expected, "case {i} {encode:?}");
+            assert_eq!(
+                manifest_rows(&manifest)?,
+                vec![(0, Some(name.clone()), data.len() as u64, rows as u64)],
+                "case {i}"
+            );
+            files.push(data);
         }
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let mut task = test_task(Arc::clone(&store), 0);
-        task.options = options;
-        let manifest = run_task(task, &schema, batches.clone()).await?;
-        assert_eq!(
-            manifest_rows(&manifest)?,
-            vec![(0, Some(name.clone()), expected.len() as u64, rows as u64)],
-            "case {i}"
-        );
-        let data = read_bytes(store.as_ref(), &name).await?;
-        assert!(data == expected, "case {i}");
-        let (metadata, _) = read_parquet(data)?;
+        // The file does not depend on the budget.
+        for file in &files[1..] {
+            assert!(file == &files[0], "case {i}");
+        }
+        // The file is the file of the Arrow writer when the size
+        // of a row group is not limited in bytes.
+        if options.global.max_row_group_bytes.is_none() {
+            let expected = reference_file_of_batches(&options, &batches)?;
+            assert!(files[0] == expected, "case {i}");
+        }
+        let (metadata, data) = read_parquet(files[0].clone())?;
+        assert!(data == input, "case {i}");
         if let Some(expected_row_groups) = expected_row_groups {
             assert_eq!(metadata.num_row_groups(), expected_row_groups, "case {i}");
         }
@@ -4850,18 +4914,28 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
     assert!(row_groups[7].len() > row_groups[8].len(), "{row_groups:?}");
     assert!(row_groups[8].len() > 1, "{row_groups:?}");
     assert_eq!(row_groups[9], vec![rows]);
-    let ends_of_batches = [4, 104, 112, 312];
+    // Row groups end inside batches, which end at the rows 4, 104, 112 and 312.
     for case in [7, 8] {
+        let mut end = 0;
+        let ends: Vec<_> = row_groups[case]
+            .iter()
+            .map(|x| {
+                end += x;
+                end
+            })
+            .collect();
         assert!(
-            !ends_of_batches.contains(&row_groups[case][0]),
+            ends.iter().any(|x| ![4, 104, 112, 312].contains(x)),
             "{row_groups:?}"
         );
     }
+    // No row group has more rows than the row limit when both limits are set.
+    assert!(row_groups[10].iter().all(|x| *x <= 100), "{row_groups:?}");
     Ok(())
 }
 
 #[tokio::test]
-async fn test_columns_in_order_write_the_same_file_without_rows() -> Result<()> {
+async fn test_file_without_rows_is_the_file_of_the_arrow_writer() -> Result<()> {
     let schema = all_types_batch(1)?.schema();
     let options = TableParquetOptions::default();
     let expected = reference_file_of_batches(&options, &[RecordBatch::new_empty(schema.clone())])?;
@@ -4872,7 +4946,24 @@ async fn test_columns_in_order_write_the_same_file_without_rows() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test]
+/// Waits until the row groups of the file that have all their rows are in the file.
+async fn wait_for_row_groups(writer: &mut ParquetFileWriter, schema: &SchemaRef) -> Result<()> {
+    for _ in 0..500 {
+        // The row groups that are completed are added to the file when a batch is written.
+        writer
+            .write(&RecordBatch::new_empty(Arc::clone(schema)))
+            .await?;
+        if writer.row_groups_in_flight() == 0 {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    Err(internal_datafusion_err!(
+        "the row groups are not in the file"
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_file_writer_memory_size() -> Result<()> {
     const PART_SIZE: usize = 256 * 1024;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -4885,6 +4976,8 @@ async fn test_file_writer_memory_size() -> Result<()> {
         .set_compression(Compression::UNCOMPRESSED)
         .set_max_row_group_row_count(Some(200_000))
         .build();
+    let budget = EncodeBudget::new(TEST_BUDGET);
+    let resources = test_resources(Arc::clone(&budget), &pool);
     let mut writer = file_writer(
         store,
         Path::from("file.parquet"),
@@ -4892,16 +4985,59 @@ async fn test_file_writer_memory_size() -> Result<()> {
         props,
         false,
         PART_SIZE,
-        test_resources(fixed_degree(1), &pool),
+        Arc::clone(&resources),
     )?;
     assert_eq!(writer.memory_size(), 0);
+    // The rows of a row group that are not encoded are taken from the budget,
+    // and the memory pool is told about them.
     assert!(!writer.write(&int_batch(&schema, 0..199_999)?).await?);
-    assert!(writer.memory_size() > 1_500_000);
+    assert_eq!(writer.memory_size(), 0);
+    assert_eq!(budget.used(), 199_999 * 8);
+    assert_eq!(resources.charged_size(), 199_999 * 8);
+    assert_eq!(pool.reserved(), 199_999 * 8);
     assert!(writer.write(&int_batch(&schema, 0..1)?).await?);
-    // The data that is handed to the upload is counted until its part is stored.
-    assert!(writer.memory_size() <= 1024 * 1024 + PART_SIZE);
+    // The row group is in the budget until it is in the file. After that
+    // the memory pool has the encoded data that is not stored. The file keeps
+    // less encoded data than it hands to the upload at a time, and the data
+    // that is handed to the upload is counted until its part is stored.
+    wait_for_row_groups(&mut writer, &schema).await?;
+    assert_eq!(budget.used(), 0);
+    assert_eq!(writer.memory_size(), 0);
+    assert!(pool.reserved() > 0);
+    assert!(pool.reserved() <= 1024 * 1024 + PART_SIZE);
     let file = writer.close().await?;
     assert_eq!(file.num_rows, 200_000);
+    assert!(file.size > 1_600_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_file_writer_counts_the_column_writers_that_have_rows() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let schema = int_schema();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_compression(Compression::UNCOMPRESSED)
+        .build();
+    // The file has no budget, so the writer encodes the rows itself,
+    // and the encoded rows are the memory of the file.
+    let budget = EncodeBudget::new(0);
+    let mut writer = file_writer(
+        store,
+        Path::from("file.parquet"),
+        Arc::clone(&schema),
+        props,
+        false,
+        10 * 1024 * 1024,
+        test_resources(Arc::clone(&budget), &pool),
+    )?;
+    writer.write(&int_batch(&schema, 0..100_000)?).await?;
+    assert!(writer.memory_size() >= 800_000);
+    assert_eq!(budget.used(), 0);
+    assert_eq!(pool.reserved(), 0);
+    let file = writer.close().await?;
+    assert_eq!(file.num_rows, 100_000);
     Ok(())
 }
 
@@ -4910,16 +5046,15 @@ struct TestRng(u64);
 
 impl TestRng {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut x = self.0;
-        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        x ^ (x >> 31)
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
     }
 
-    /// A number that is less than the limit.
     fn below(&mut self, limit: usize) -> usize {
-        (self.next() % limit as u64) as usize
+        (self.next() % limit.max(1) as u64) as usize
     }
 
     fn choose<T: Copy>(&mut self, values: &[T]) -> T {
@@ -4927,12 +5062,13 @@ impl TestRng {
     }
 }
 
-/// Writes a file with batches, options and settings that are derived from the seed,
-/// and compares the file with the file of the Arrow writer.
+/// Writes a file with batches, options and a budget that are derived from the seed.
+/// The file must be the file of the Arrow writer, or the file of a writer
+/// without a budget when the size of a row group is limited in bytes.
 async fn check_encoding_with_random_settings(
     source: RecordBatch,
     seed: u64,
-    active_writers: Arc<AtomicUsize>,
+    shared: Arc<EncodeBudget>,
 ) -> Result<()> {
     let mut rng = TestRng(seed);
     // The batches are slices of one batch, as the batches of a query often are.
@@ -4958,44 +5094,52 @@ async fn check_encoding_with_random_settings(
         options.global.writer_version = "2.0".parse()?;
         options.global.bloom_filter_on_write = true;
     }
-    let lanes = 1 + rng.below(50);
-    let window = 1 + rng.below(5);
-    let encode = encode_settings(
-        1 + rng.below(9),
-        rng.choose(&[None, Some(lanes)]),
-        rng.choose(&[None, Some(window)]),
-        rng.choose(&[None, Some(1), Some(1024), Some(64 * 1024)]),
-    );
-    let encode = if rng.below(3) == 0 {
-        // The degree of the task follows the number of tasks of the test that are running.
-        shared_settings(64, &active_writers)
+    // A slab has at least the size of the largest batch, so that no batch is divided.
+    let slab = largest_batch(&batches) * rng.choose(&[1, 3, 50]);
+    let capacity = rng.choose(&[0, 1, 1000, 30_000, 1_000_000, TEST_BUDGET]);
+    let budget = if rng.below(3) == 0 {
+        // The budget is shared with the other files of the test.
+        shared
     } else {
-        encode
+        EncodeBudget::with_slab_bytes(capacity, slab)
     };
-    let expected = expected_file(&options, &batches).await?;
+    let case = format!("seed {seed} {budget:?}");
+    let name = file_name(0, 0, ".parquet");
+    let expected = if options.global.max_row_group_bytes.is_none() {
+        reference_file_of_batches(&options, &batches)?
+    } else {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.options = options.clone();
+        task.budget = EncodeBudget::new(0);
+        run_task(task, &source.schema(), batches.clone()).await?;
+        read_bytes(store.as_ref(), &name).await?.to_vec()
+    };
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut task = test_task(Arc::clone(&store), 0);
     task.options = options;
-    task.encode = encode.clone();
+    task.budget = budget;
     task.buffer_size = rng.choose(&[64 * 1024, 10 * 1024 * 1024]);
     run_task(task, &source.schema(), batches).await?;
-    let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
-    assert!(data == expected, "seed {seed} {encode:?}");
+    let data = read_bytes(store.as_ref(), &name).await?;
+    assert!(data == expected, "{case}");
+    let (_, data) = read_parquet(data)?;
+    assert!(data == read_back(std::slice::from_ref(&source))?, "{case}");
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_encoding_with_random_settings_writes_the_same_file() -> Result<()> {
     let source = all_types_batch(100)?;
-    // The files are written at the same time, so that the lanes of the files
-    // share the threads of the runtime.
-    let active_writers = Arc::new(AtomicUsize::new(0));
+    // The files are written at the same time, so that their jobs share the threads
+    // of the runtime, and some of the files share a budget that is too small for them.
+    let shared = EncodeBudget::with_slab_bytes(200_000, 100_000);
     let tasks: Vec<_> = (0..200)
         .map(|seed| {
             tokio::spawn(check_encoding_with_random_settings(
                 source.clone(),
                 seed,
-                Arc::clone(&active_writers),
+                Arc::clone(&shared),
             ))
         })
         .collect();
@@ -5003,19 +5147,19 @@ async fn test_encoding_with_random_settings_writes_the_same_file() -> Result<()>
         task.await
             .map_err(|e| DataFusionError::External(Box::new(e)))??;
     }
-    assert_eq!(active_writers.load(Ordering::SeqCst), 0);
+    assert_eq!(shared.used(), 0);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_encoding_writes_the_same_files_with_file_row_limit() -> Result<()> {
+async fn test_budget_does_not_change_the_files_of_a_file_row_limit() -> Result<()> {
     let batches = vec![all_types_batch(700)?, all_types_batch(550)?];
     let schema = batches[0].schema();
     let mut outputs = vec![];
-    for encode in encode_cases() {
+    for budget in budget_cases(&batches) {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let mut task = test_task(Arc::clone(&store), 0);
-        task.encode = encode;
+        task.budget = budget;
         task.max_records_per_file = 1000;
         task.options.global.max_row_group_size = 300;
         let manifest = run_task(task, &schema, batches.clone()).await?;
@@ -5052,24 +5196,25 @@ fn three_int_batch(values: std::ops::Range<i64>) -> Result<RecordBatch> {
     )?)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_row_groups_in_flight_and_waiting_input_are_limited() -> Result<()> {
+#[tokio::test]
+async fn test_budget_limits_the_rows_that_are_not_encoded() -> Result<()> {
+    // The runtime of the test has one thread, so the jobs run only when
+    // the writer waits for them. A batch has 888 bytes of values.
     let schema = three_int_schema();
-    let batches = (0..100)
-        .map(|i| three_int_batch(i * 37..(i + 1) * 37))
-        .collect::<Result<Vec<_>>>()?;
+    // The batches have the same values, so the encoded rows are small.
+    let batches = vec![three_int_batch(0..37)?; 100];
+    let input: usize = batches.len() * 888;
     let mut options = TableParquetOptions::default();
-    options.global.max_row_group_size = 100;
+    options.global.max_row_group_size = 1000;
     let expected = reference_file_of_batches(&options, &batches)?;
     options.arrow_schema(&schema);
-    // The second budget is smaller than the columns of one lane for one batch.
-    for (window, read_ahead_bytes) in [(1, 64 * 1024), (2, 100), (3, 4096), (5, 1024 * 1024)] {
+    // The first budget is smaller than a batch.
+    for (capacity, slab) in [(100, 4096), (2000, 888), (5000, 2000), (20_000, 10_000)] {
+        let case = format!("budget {capacity} slab {slab}");
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let resources = test_resources(
-            encode_settings(4, Some(2), Some(window), Some(read_ahead_bytes)),
-            &pool,
-        );
+        let budget = EncodeBudget::with_slab_bytes(capacity, slab);
+        let resources = test_resources(Arc::clone(&budget), &pool);
         let mut writer = file_writer(
             Arc::clone(&store),
             Path::from("file.parquet"),
@@ -5079,27 +5224,31 @@ async fn test_row_groups_in_flight_and_waiting_input_are_limited() -> Result<()>
             10 * 1024 * 1024,
             Arc::clone(&resources),
         )?;
-        // A lane has at most two of the three columns.
-        let largest_input = 2 * 37 * 8;
-        let limit = read_ahead_bytes.next_multiple_of(1024).max(largest_input);
-        let mut most_row_groups = 0;
+        let mut most = 0;
         for batch in &batches {
             writer.write(batch).await?;
-            most_row_groups = most_row_groups.max(writer.row_groups_in_flight());
-            assert!(resources.waiting_input_size() <= limit, "window {window}");
+            most = most.max(budget.used());
+            // The memory pool has what the file has taken from the budget,
+            // and the encoded data that is not stored.
+            assert!(resources.charged_size() >= budget.used(), "{case}");
+            assert_eq!(pool.reserved(), resources.charged_size(), "{case}");
         }
-        assert!(most_row_groups <= window, "window {window}");
+        // The budget has the rows that are not encoded, which do not exceed it,
+        // and the row groups that are encoded and not in the file, which are
+        // smaller than the file. Without the budget it would have all rows.
+        assert!(most <= capacity + expected.len(), "{case} {most}");
+        assert!(capacity + expected.len() < input / 2, "{case}");
         writer.close().await?;
-        assert_eq!(resources.waiting_input_size(), 0);
-        assert_eq!(pool.reserved(), 0);
+        assert_eq!(budget.used(), 0, "{case}");
+        assert_eq!(pool.reserved(), 0, "{case}");
         let data = read_bytes(store.as_ref(), "file.parquet").await?;
-        assert!(data == expected, "window {window}");
+        assert!(data == expected, "{case}");
     }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_waiting_input_is_counted_by_the_size_of_its_values() -> Result<()> {
+async fn test_rows_are_counted_by_the_size_of_their_values() -> Result<()> {
     // The batches are slices of large arrays, and the strings are views of one buffer.
     let rows = 100_000;
     let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..rows));
@@ -5120,11 +5269,10 @@ async fn test_waiting_input_is_counted_by_the_size_of_its_values() -> Result<()>
     let expected = reference_file_of_batches(&options, &batches)?;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let read_ahead_bytes = 256 * 1024;
-    let resources = test_resources(
-        encode_settings(4, None, None, Some(read_ahead_bytes)),
-        &pool,
-    );
+    // The values of a batch have 8 KB of integers and 64 KB of strings,
+    // and the buffers of a batch have more than 4 MB.
+    let budget = EncodeBudget::with_slab_bytes(1024 * 1024, 256 * 1024);
+    let resources = test_resources(Arc::clone(&budget), &pool);
     let mut options = options.clone();
     options.arrow_schema(&schema);
     let mut writer = file_writer(
@@ -5136,13 +5284,14 @@ async fn test_waiting_input_is_counted_by_the_size_of_its_values() -> Result<()>
         10 * 1024 * 1024,
         Arc::clone(&resources),
     )?;
-    for batch in &batches {
+    writer.write(&batches[0]).await?;
+    assert_eq!(budget.used(), 1000 * 8 + 1000 * 16 + 1000 * 48);
+    for batch in &batches[1..] {
         writer.write(batch).await?;
-        // The input of a batch is 8 KB of integers and 62 KB of strings,
-        // so the input of several batches fits in the budget.
-        assert!(resources.waiting_input_size() <= read_ahead_bytes);
+        assert!(budget.used() <= 1024 * 1024 + expected.len());
     }
     writer.close().await?;
+    assert_eq!(budget.used(), 0);
     assert_eq!(pool.reserved(), 0);
     let data = read_bytes(store.as_ref(), "file.parquet").await?;
     assert!(data == expected);
@@ -5180,10 +5329,42 @@ fn test_logical_size_of_arrays() -> Result<()> {
     ];
     let nested = StructArray::try_new(
         fields.into(),
-        vec![Arc::new(integers) as ArrayRef, Arc::new(views) as ArrayRef],
+        vec![
+            Arc::new(integers.clone()) as ArrayRef,
+            Arc::new(views) as ArrayRef,
+        ],
         None,
     )?;
     assert_eq!(logical_size(&nested.slice(10, 20)), 160 + 20 * 16 + 10 * 30);
+
+    // The values of a list are counted for the rows of the array.
+    // Each list has three values, and a list has an offset of 4 bytes.
+    let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(3, 300));
+    let values: ArrayRef = Arc::new(integers.slice(0, 900));
+    let lists = ListArray::try_new(Arc::clone(&field), offsets, values, None)?;
+    assert_eq!(logical_size(&lists), 301 * 4 + 900 * 8);
+    assert_eq!(logical_size(&lists.slice(10, 20)), 21 * 4 + 60 * 8);
+    // The lists of a list are counted for the rows of the array as well.
+    let outer = Arc::new(Field::new_list_field(lists.data_type().clone(), true));
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(2, 150));
+    let nested = ListArray::try_new(outer, offsets, Arc::new(lists), None)?;
+    assert_eq!(
+        logical_size(&nested.slice(10, 20)),
+        21 * 4 + 41 * 4 + 120 * 8
+    );
+
+    // The entries of a map are counted for the rows of the array.
+    let mut maps = MapBuilder::new(None, Int64Builder::new(), Int64Builder::new());
+    for i in 0..100 {
+        for j in 0..5 {
+            maps.keys().append_value(i);
+            maps.values().append_value(j);
+        }
+        maps.append(true)?;
+    }
+    let maps = maps.finish();
+    assert_eq!(logical_size(&maps.slice(10, 20)), 21 * 4 + 100 * 16);
     Ok(())
 }
 
@@ -5200,67 +5381,19 @@ async fn test_encoding_reports_batch_with_other_columns() -> Result<()> {
     )?;
     // The second batch does not have the columns of the schema of the input.
     let other = RecordBatch::try_new(int_schema(), vec![integers])?;
-    for encode in encode_cases() {
+    for budget in budget_cases(std::slice::from_ref(&batch)) {
+        let case = format!("{budget:?}");
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let mut task = test_task(Arc::clone(&store), 0);
-        task.encode = encode.clone();
+        task.budget = budget;
         let result = run_task(task, &schema, vec![batch.clone(), other.clone()]).await;
         assert!(
             matches!(&result, Err(e) if e.to_string().contains(
                 "Incompatible schema: writer has 2 top-level fields but batch has 1 columns"
             )),
-            "{encode:?} {result:?}"
+            "{case} {result:?}"
         );
         assert_eq!(list_files(store.as_ref()).await?, vec![]);
-    }
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_encoding_reports_error_of_lane() -> Result<()> {
-    let intervals: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
-            IntervalMonthDayNano::new(1, 2, 3);
-            2000
-        ]));
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", intervals.data_type().clone(), true),
-        Field::new("c", DataType::Int64, true),
-    ]));
-    let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::clone(&integers), intervals, integers],
-    )?;
-    for byte_limit in [false, true] {
-        let mut options = TableParquetOptions::default();
-        options.global.max_row_group_size = 1500;
-        if byte_limit {
-            options.global.max_row_group_bytes = Some("65536".parse()?);
-        }
-        // The error is found when the lane is given its second input,
-        // when the lane is asked for the size of its encoded data,
-        // or when the file is completed.
-        for batches in [1, 20] {
-            let batches = vec![batch.clone(); batches];
-            let Err(expected) = reference_file_of_batches(&options, &batches) else {
-                return Err(internal_datafusion_err!("expected an error"));
-            };
-            for encode in encode_cases() {
-                let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-                let Err(actual) =
-                    write_file_without_task(&store, &options, encode.clone(), &batches).await
-                else {
-                    return Err(internal_datafusion_err!("expected an error"));
-                };
-                assert_eq!(
-                    actual.strip_backtrace(),
-                    expected.strip_backtrace(),
-                    "{encode:?}"
-                );
-                assert_eq!(list_files(store.as_ref()).await?, vec![]);
-            }
-        }
     }
     Ok(())
 }
@@ -5301,309 +5434,61 @@ impl MemoryPool for PanickingPool {
     }
 }
 
-/// Lets the task of the lane run until it has ended.
-/// The test must run on a single thread, so that the task runs only here.
-async fn run_lane_to_its_end(lane: &Lane) {
-    for _ in 0..1000 {
-        if lane.has_ended() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert!(lane.has_ended());
-}
-
-/// Asks a lane that has reported its failure for its failure again,
-/// in every way that the lane can be asked.
-async fn check_failure_is_reported_again(
-    mut lane: Lane,
-    input: LaneInput,
-    expected: &str,
-) -> Result<()> {
-    for _ in 0..2 {
-        let error = lane.failure().await;
-        assert!(error.to_string().contains(expected), "{error}");
-    }
-    let Err(error) = lane.send(input).await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(error.to_string().contains(expected), "{error}");
-    let error = lane.failure().await;
-    assert!(error.to_string().contains(expected), "{error}");
-    lane.seal();
-    let Err(error) = lane.join().await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(error.to_string().contains(expected), "{error}");
-    Ok(())
-}
-
-// The test runs on a single thread, so that the task of a lane
-// runs only while the test waits.
-#[tokio::test]
-async fn test_lane_reports_panic_of_its_task() -> Result<()> {
-    use datafusion::parquet::errors::ParquetError;
-
-    // The task of the lane panics when it has encoded its first input,
-    // which is when the input is no longer counted as waiting.
-    let spawn = || {
-        let pool: Arc<dyn MemoryPool> = Arc::new(PanickingPool::default());
-        let resources = test_resources(fixed_degree(2), &pool);
-        let lane = Lane::spawn(
-            vec![],
-            vec![],
-            vec![],
-            resources.new_reservation(),
-            Time::new(),
-        );
-        (lane, resources)
-    };
-    let input = |resources: Arc<EncodeResources>, encoded| async move {
-        Ok::<_, DataFusionError>(LaneInput {
-            columns: vec![],
-            encoded,
-            admission: resources.admit(80).await?,
-        })
-    };
-
-    // The panic is reported when the lane is given more input
-    // after its task has ended.
-    let (mut lane, resources) = spawn();
-    lane.send(input(Arc::clone(&resources), None).await?)
-        .await?;
-    assert!(!lane.has_ended());
-    run_lane_to_its_end(&lane).await;
-    let Err(error) = lane.send(input(Arc::clone(&resources), None).await?).await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(matches!(error, ParquetError::External(_)), "{error:?}");
-    assert!(error.to_string().contains("panicked"), "{error}");
-    assert_eq!(resources.waiting_input_size(), 0);
-    let more = input(Arc::clone(&resources), None).await?;
-    check_failure_is_reported_again(lane, more, "panicked").await?;
-    assert_eq!(resources.waiting_input_size(), 0);
-
-    // The panic is reported when the lane is asked for the size of its encoded data.
-    // The size is sent before the panic, so the lane is given a second input.
-    // The task ends after it has been given the second input.
-    let (mut lane, resources) = spawn();
-    lane.send(input(Arc::clone(&resources), None).await?)
-        .await?;
-    let (encoded, report) = tokio::sync::oneshot::channel();
-    lane.send(input(Arc::clone(&resources), Some(encoded)).await?)
-        .await?;
-    assert!(!lane.has_ended());
-    assert!(report.await.is_err());
-    assert!(lane.has_ended());
-    let error = lane.failure().await;
-    assert!(matches!(error, ParquetError::External(_)), "{error:?}");
-    assert!(error.to_string().contains("panicked"), "{error}");
-    let more = input(Arc::clone(&resources), None).await?;
-    check_failure_is_reported_again(lane, more, "panicked").await?;
-    assert_eq!(resources.waiting_input_size(), 0);
-
-    // The same, when the task ends before it is given the second input.
-    // The second input is not accepted then, which is not the report of the panic
-    // for a caller that asks for the size of the encoded data.
-    let (mut lane, resources) = spawn();
-    lane.send(input(Arc::clone(&resources), None).await?)
-        .await?;
-    run_lane_to_its_end(&lane).await;
-    let (encoded, report) = tokio::sync::oneshot::channel();
-    let _ = lane
-        .send(input(Arc::clone(&resources), Some(encoded)).await?)
-        .await;
-    assert!(report.await.is_err());
-    let error = lane.failure().await;
-    assert!(error.to_string().contains("panicked"), "{error}");
-    assert_eq!(resources.waiting_input_size(), 0);
-
-    // The panic is reported when the columns of the lane are requested,
-    // before and after the task has ended.
-    for ended in [false, true] {
-        let (mut lane, resources) = spawn();
-        lane.send(input(Arc::clone(&resources), None).await?)
-            .await?;
-        lane.seal();
-        if ended {
-            run_lane_to_its_end(&lane).await;
-        }
-        assert_eq!(lane.has_ended(), ended);
-        let Err(error) = lane.join().await else {
-            return Err(internal_datafusion_err!("expected an error"));
-        };
-        assert!(matches!(error, ParquetError::External(_)), "{error:?}");
-        assert!(error.to_string().contains("panicked"), "{error}");
-        assert_eq!(resources.waiting_input_size(), 0);
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_lane_reports_error_of_its_task_to_every_request() -> Result<()> {
-    use datafusion::parquet::errors::ParquetError;
-
-    let schema = int_schema();
-    let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(fixed_degree(2), &pool);
-    // The lane has no writer for its column, so its task fails at the first input.
-    let spawn = || {
-        Lane::spawn(
-            vec![0],
-            schema.fields().to_vec(),
-            vec![],
-            resources.new_reservation(),
-            Time::new(),
-        )
-    };
-    let input = || async {
-        Ok::<_, DataFusionError>(LaneInput {
-            columns: vec![Arc::clone(&column)],
-            encoded: None,
-            admission: resources.admit(80).await?,
-        })
-    };
-    let expected = "missing column writer for leaf column";
-    let is_error_of_task =
-        |error: &ParquetError| matches!(error, ParquetError::General(x) if x == expected);
-
-    // The error is first reported when the lane is given more input.
-    let mut lane = spawn();
-    lane.send(input().await?).await?;
-    run_lane_to_its_end(&lane).await;
-    let Err(error) = lane.send(input().await?).await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(is_error_of_task(&error), "{error:?}");
-    check_failure_is_reported_again(lane, input().await?, expected).await?;
-
-    // The error is first reported when the lane is asked for its failure,
-    // before and after its task has ended.
-    for ended in [false, true] {
-        let mut lane = spawn();
-        lane.send(input().await?).await?;
-        if ended {
-            run_lane_to_its_end(&lane).await;
-        }
-        assert_eq!(lane.has_ended(), ended);
-        let error = lane.failure().await;
-        assert!(is_error_of_task(&error), "{error:?}");
-        check_failure_is_reported_again(lane, input().await?, expected).await?;
-    }
-
-    // The error is first reported when the columns of the lane are requested.
-    let mut lane = spawn();
-    lane.send(input().await?).await?;
-    lane.seal();
-    let Err(error) = lane.join().await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(is_error_of_task(&error), "{error:?}");
-
-    // A lane that is asked for its failure after its task has completed
-    // the columns reports that each time.
-    let mut lane = Lane::spawn(
-        vec![],
-        vec![],
-        vec![],
-        resources.new_reservation(),
-        Time::new(),
-    );
-    lane.seal();
-    run_lane_to_its_end(&lane).await;
-    let expected = "the task of a column encoder has ended before its input";
-    let Err(error) = lane.send(input().await?).await else {
-        return Err(internal_datafusion_err!("expected an error"));
-    };
-    assert!(
-        matches!(&error, ParquetError::General(x) if x == expected),
-        "{error:?}"
-    );
-    check_failure_is_reported_again(lane, input().await?, expected).await?;
-
-    assert_eq!(Arc::strong_count(&column), 1);
-    assert_eq!(resources.waiting_input_size(), 0);
-    assert_eq!(pool.reserved(), 0);
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_dropped_lane_does_not_encode_its_queue() -> Result<()> {
+async fn test_encoding_reports_panic_of_job() -> Result<()> {
     let tasks = tokio::runtime::Handle::current()
         .metrics()
         .num_alive_tasks();
-    let schema = int_schema();
-    let (_, factory) =
-        ArrowWriter::try_new(vec![], Arc::clone(&schema), None)?.into_serialized_writer()?;
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(fixed_degree(2), &pool);
-    let mut lane = Lane::spawn(
-        vec![0],
-        schema.fields().to_vec(),
-        factory.create_column_writers(0)?,
-        resources.new_reservation(),
-        Time::new(),
-    );
-    // The queue has input that takes much longer to encode than the test takes
-    // to drop the lane. The task of the lane is running when the lane is dropped.
-    let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..500_000));
-    let mut reports = vec![];
-    for _ in 0..100 {
-        let (encoded, report) = tokio::sync::oneshot::channel();
-        reports.push(report);
-        lane.send(LaneInput {
-            columns: vec![Arc::clone(&column)],
-            encoded: Some(encoded),
-            admission: resources.admit(1024).await?,
-        })
-        .await?;
-    }
-    match reports.remove(0).await {
-        Ok(_) => {}
-        Err(_) => return Err(internal_datafusion_err!("the first input must be encoded")),
-    }
-    drop(lane);
-    wait_for_tasks(tasks).await?;
-    let mut encoded = 0;
-    for report in reports {
-        if report.await.is_ok() {
-            encoded += 1;
-        }
-    }
-    // The task ends after the input that it was encoding when the lane was dropped.
-    assert!(encoded < 50, "{encoded} inputs were encoded");
-    assert_eq!(Arc::strong_count(&column), 1);
-    assert_eq!(resources.waiting_input_size(), 0);
-    assert_eq!(pool.reserved(), 0);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_degree_is_limited_by_settings() -> Result<()> {
-    let batch = all_types_batch(15)?;
-    let schema = batch.schema();
-    let mut options = TableParquetOptions::default();
-    options.arrow_schema(&schema);
-    for (max_degree, lanes) in [(0, 8), (20, 8), (3, 3), (1, 0)] {
+    let schema = three_int_schema();
+    // The job of a column panics when it has encoded its rows,
+    // which is when it returns the rows to the budget.
+    for (row_groups, byte_limit) in [(1, false), (5, false), (1, true)] {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let settings = EncodeSettings {
-            max_degree,
-            ..fixed_degree(8)
-        };
+        let pool: Arc<dyn MemoryPool> = Arc::new(PanickingPool::default());
+        let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(1000));
+        if byte_limit {
+            props = props.set_max_row_group_bytes(Some(1024 * 1024));
+        }
         let mut writer = file_writer(
             Arc::clone(&store),
             Path::from("file.parquet"),
             Arc::clone(&schema),
-            WriterPropertiesBuilder::try_from(&options)?.build(),
+            props.build(),
             false,
             10 * 1024 * 1024,
-            test_resources(settings, &pool),
+            test_resources(EncodeBudget::new(TEST_BUDGET), &pool),
         )?;
-        writer.write(&batch).await?;
-        assert_eq!(writer.lanes(), lanes, "limit {max_degree}");
-        writer.close().await?;
+        // The panic is reported when a row group is added to the file while
+        // the file receives rows, when the size of the encoded rows is needed,
+        // or when the file is completed.
+        let mut result = Ok(());
+        for i in 0..row_groups {
+            let written = writer
+                .write(&three_int_batch(i * 1000..(i + 1) * 1000)?)
+                .await;
+            if let Err(e) = written {
+                result = Err(e);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let result = match result {
+            Ok(()) => writer.close().await.map(|_| ()),
+            Err(e) => {
+                drop(writer);
+                Err(e)
+            }
+        };
+        let Err(e) = result else {
+            return Err(internal_datafusion_err!("expected an error"));
+        };
+        assert!(
+            e.to_string()
+                .contains("the column encoder has panicked: index out of bounds"),
+            "{e}"
+        );
+        wait_for_tasks(tasks).await?;
+        assert_eq!(list_files(store.as_ref()).await?, vec![]);
     }
     Ok(())
 }
@@ -5623,7 +5508,7 @@ async fn wait_for_tasks(tasks: usize) -> Result<()> {
     ))
 }
 
-async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
+async fn check_dropped_file_writer_ends_its_jobs() -> Result<()> {
     let tasks = tokio::runtime::Handle::current()
         .metrics()
         .num_alive_tasks();
@@ -5637,10 +5522,11 @@ async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
             Arc::clone(&column),
         ],
     )?;
-    for byte_limit in [false, true] {
+    for (byte_limit, slab) in [(false, 64 * 1024), (false, TEST_BUDGET), (true, 64 * 1024)] {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let resources = test_resources(encode_settings(4, None, Some(4), None), &pool);
+        let budget = EncodeBudget::with_slab_bytes(TEST_BUDGET, slab);
+        let resources = test_resources(Arc::clone(&budget), &pool);
         let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(10_000));
         if byte_limit {
             props = props.set_max_row_group_bytes(Some(1024 * 1024 * 1024));
@@ -5654,10 +5540,12 @@ async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
             10 * 1024 * 1024,
             Arc::clone(&resources),
         )?;
-        // The third row group is receiving rows when the writer is dropped.
+        // The third row group is receiving rows when the writer is dropped,
+        // and it has rows that no job has received.
         for _ in 0..25 {
             writer.write(&batch).await?;
         }
+        assert!(writer.row_groups_in_flight() > 0);
         drop(writer);
         for _ in 0..500 {
             if Arc::strong_count(&column) == 4 {
@@ -5667,8 +5555,9 @@ async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
         }
         // The batch has the remaining references.
         assert_eq!(Arc::strong_count(&column), 4);
-        assert_eq!(resources.waiting_input_size(), 0);
         wait_for_tasks(tasks).await?;
+        assert_eq!(budget.used(), 0);
+        assert_eq!(resources.charged_size(), 0);
         assert_eq!(pool.reserved(), 0);
         assert_eq!(list_files(store.as_ref()).await?, vec![]);
     }
@@ -5676,33 +5565,78 @@ async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_dropped_file_writer_releases_waiting_input() -> Result<()> {
-    // The lanes do not run before the writer is dropped unless the writer waits,
+async fn test_dropped_file_writer_ends_its_jobs() -> Result<()> {
+    // The jobs do not run before the writer is dropped unless the writer waits,
     // since the runtime of the test has one thread.
-    check_dropped_file_writer_releases_waiting_input().await
+    check_dropped_file_writer_ends_its_jobs().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_dropped_file_writer_releases_waiting_input_with_running_lanes() -> Result<()> {
-    check_dropped_file_writer_releases_waiting_input().await
+async fn test_dropped_file_writer_ends_its_running_jobs() -> Result<()> {
+    check_dropped_file_writer_ends_its_jobs().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_canceled_task_with_lanes_removes_staged_files_and_ends_tasks() -> Result<()> {
+async fn test_dropped_file_writer_stops_a_job_that_is_encoding() -> Result<()> {
     let tasks = tokio::runtime::Handle::current()
         .metrics()
         .num_alive_tasks();
-    for encode in encode_cases() {
+    // The row group has 1.6 GB of values in 400 batches of the same arrays,
+    // which take many seconds to encode. The job of the column is encoding
+    // when the writer is dropped, and it stops at the next batch instead of
+    // encoding the rest of its rows.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+    let strings: ArrayRef = Arc::new(StringArray::from_iter_values(
+        (0..20_000).map(|i| format!("{i:0200}")),
+    ));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![strings])?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let budget = EncodeBudget::with_slab_bytes(usize::MAX, usize::MAX);
+    let mut writer = file_writer(
+        Arc::clone(&store),
+        Path::from("file.parquet"),
+        Arc::clone(&schema),
+        WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100_000_000))
+            .set_compression(Compression::ZSTD(Default::default()))
+            .build(),
+        false,
+        10 * 1024 * 1024,
+        test_resources(Arc::clone(&budget), &pool),
+    )?;
+    for _ in 0..400 {
+        writer.write(&batch).await?;
+    }
+    let closing = tokio::spawn(async move { writer.close().await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!closing.is_finished());
+    let start = std::time::Instant::now();
+    closing.abort();
+    wait_for_tasks(tasks).await?;
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(budget.used(), 0);
+    assert_eq!(pool.reserved(), 0);
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_canceled_task_with_jobs_removes_staged_files_and_ends_tasks() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let schema = int_schema();
+    // The input does not end, so the task waits for more data after it
+    // has staged its first file, with row groups of the second file
+    // that are not in the file yet.
+    let mut batches = seven_row_batches(&schema, 3)?;
+    batches.push(int_batch(&schema, 21..23)?);
+    for budget in budget_cases(&batches) {
         let store = FaultStore::new();
-        let schema = int_schema();
-        // The input does not end, so the task waits for more data after it
-        // has staged its first file, with row groups of the second file
-        // that are not in the file yet.
-        let mut batches = seven_row_batches(&schema, 3)?;
-        batches.push(int_batch(&schema, 21..23)?);
-        let input = task_input(&schema, batches, false);
+        let input = task_input(&schema, batches.clone(), false);
         let mut task = fault_task(&store, Mode::Rename);
-        task.encode = encode;
+        task.budget = Arc::clone(&budget);
         let mut stream = Box::pin(write_stream(task, input));
         let waiting = tokio::time::timeout(std::time::Duration::from_millis(100), stream.next());
         assert!(waiting.await.is_err());
@@ -5710,12 +5644,13 @@ async fn test_canceled_task_with_lanes_removes_staged_files_and_ends_tasks() -> 
         drop(stream);
         store.wait_for(&[]).await?;
         wait_for_tasks(tasks).await?;
+        assert_eq!(budget.used(), 0);
     }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_canceled_task_with_lanes_removes_file_that_is_staged_later() -> Result<()> {
+async fn test_canceled_task_with_jobs_removes_file_that_is_staged_later() -> Result<()> {
     let store = FaultStore::new();
     let gate = store.hold("PUT");
     let schema = int_schema();
@@ -5725,7 +5660,6 @@ async fn test_canceled_task_with_lanes_removes_file_that_is_staged_later() -> Re
     );
     let mut task = fault_task(&store, Mode::Rename);
     task.max_records_per_file = 0;
-    task.encode = fixed_degree(8);
     let mut stream = Box::pin(write_stream(task, input));
 
     // The task is canceled while the request that stores its file is running.
@@ -5754,9 +5688,8 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new_with_prefix(directory.path())?);
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    // The window is larger than the number of row groups of the test,
-    // so the writer never waits for a row group because of the window.
-    let resources = test_resources(encode_settings(4, None, Some(100), None), &pool);
+    let budget = EncodeBudget::new(TEST_BUDGET);
+    let resources = test_resources(Arc::clone(&budget), &pool);
     // A row group has 2.4 MB of values, and the parts of the upload have 64 KiB.
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
@@ -5781,7 +5714,7 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
     };
     // The first two row groups have all their rows, and the third row group has one row.
     writer.write(&three_int_batch(0..200_001)?).await?;
-    // The input is slow from here on. A batch arrives after the lanes have
+    // The input is slow from here on. A batch arrives after the jobs have
     // completed the row groups, and the row groups are added to the file
     // and uploaded when the batch is written, although the row group that
     // receives rows is far from complete.
@@ -5792,6 +5725,9 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
         batches += 1;
         assert!(batches < 100);
     }
+    // The row groups that are in the file are not in the budget,
+    // which has the rows of the third row group.
+    assert_eq!(budget.used(), (1 + batches) * 24);
     // The uploaded parts are complete when the next part is accepted, so wait for them.
     for _ in 0..500 {
         if uploaded()? > 4_000_000 {
@@ -5801,7 +5737,7 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
     }
     assert!(uploaded()? > 4_000_000);
     let file = writer.close().await?;
-    assert_eq!(file.num_rows, 200_001 + batches);
+    assert_eq!(file.num_rows as usize, 200_001 + batches);
     Ok(())
 }
 
@@ -5812,7 +5748,8 @@ async fn test_task_does_not_poll_slow_input_while_waiting() -> Result<()> {
     let mut options = TableParquetOptions::default();
     options.global.max_row_group_size = 300;
     let expected = reference_file_of_batches(&options, &batches)?;
-    for encode in encode_cases() {
+    for budget in budget_cases(&batches) {
+        let case = format!("{budget:?}");
         let polls = Arc::new(AtomicUsize::new(0));
         let mut slow = Box::pin(futures::stream::iter(batches.clone()).then(|batch| async {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -5829,259 +5766,180 @@ async fn test_task_does_not_poll_slow_input_while_waiting() -> Result<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let mut task = test_task(Arc::clone(&store), 0);
         task.options = options.clone();
-        task.encode = encode.clone();
+        task.budget = budget;
         let publisher = task.publisher.clone();
         let manifest = read_manifest(write_stream(task, input)).await?;
         publish_manifest(&publisher, &manifest).await?;
         let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
-        assert!(data == expected, "{encode:?}");
+        assert!(data == expected, "{case}");
         // The input is polled when a batch is requested and when the batch is ready.
         let polls = polls.load(Ordering::SeqCst);
-        assert!(polls <= 2 * batches.len() + 1, "{polls} polls {encode:?}");
+        assert!(polls <= 2 * batches.len() + 1, "{polls} polls {case}");
     }
     Ok(())
 }
 
-/// Settings for a task that shares the given number of threads
-/// with the writer tasks that the counter has.
-fn shared_settings(threads: usize, active_writers: &Arc<AtomicUsize>) -> EncodeSettings {
-    EncodeSettings {
-        threads: Some(threads),
-        active_writers: Arc::clone(active_writers),
-        ..EncodeSettings::new(0)
-    }
-}
-
-#[tokio::test]
-async fn test_task_is_active_from_its_first_rows() -> Result<()> {
-    let schema = int_schema();
-    let active_writers = Arc::new(AtomicUsize::new(0));
-    // The number of active writer tasks when the task asks for each batch of its input.
-    let observed = Arc::new(std::sync::Mutex::new(vec![]));
-    let batches = vec![
-        RecordBatch::new_empty(Arc::clone(&schema)),
-        int_batch(&schema, 0..3)?,
-        int_batch(&schema, 3..5)?,
-    ];
-    let input = {
-        let active_writers = Arc::clone(&active_writers);
-        let observed = Arc::clone(&observed);
-        futures::stream::iter(batches).map(move |batch| {
-            if let Ok(mut observed) = observed.lock() {
-                observed.push(active_writers.load(Ordering::SeqCst));
-            }
-            Ok(batch)
-        })
-    };
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut task = test_task(store, 0);
-    task.encode = shared_settings(4, &active_writers);
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let metrics = ExecutionPlanMetricsSet::new();
-    read_manifest(write_partition(
-        task,
-        Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), input)),
-        MemoryConsumer::new("test").register(&pool),
-        ParquetWriteMetrics::new(&metrics, 0),
-    ))
-    .await?;
-    // The task is not active before it has rows, and it is not active after it has ended.
-    let observed = observed.lock().map(|x| x.clone()).unwrap_or_default();
-    assert_eq!(observed, vec![0, 0, 1]);
-    assert_eq!(active_writers.load(Ordering::SeqCst), 0);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_degree_follows_active_writers_at_each_row_group() -> Result<()> {
-    const MB: usize = 1024 * 1024;
-    // A batch has 60 rows and more columns than the task has threads.
-    let batch = all_types_batch(15)?;
-    let schema = batch.schema();
+/// Writes the same rows to many files that share a budget, a batch to each file
+/// in turn, as a task does for the directories of a partitioned table.
+async fn check_many_files_share_a_budget(
+    files: usize,
+    budget: Arc<EncodeBudget>,
+    pool: Arc<dyn MemoryPool>,
+) -> Result<()> {
+    let schema = three_int_schema();
+    let batches = (0..20)
+        .map(|i| three_int_batch(i * 37..(i + 1) * 37))
+        .collect::<Result<Vec<_>>>()?;
     let mut options = TableParquetOptions::default();
-    options.global.max_row_group_size = 100;
-    let expected = reference_file_of_batches(&options, &vec![batch.clone(); 7])?;
+    options.global.max_row_group_size = 300;
+    let expected = reference_file_of_batches(&options, &batches)?;
     options.arrow_schema(&schema);
-
-    let active_writers = Arc::new(AtomicUsize::new(0));
-    let _this = ActiveWriter::new(&active_writers);
-    let mut others: Vec<_> = (0..3).map(|_| ActiveWriter::new(&active_writers)).collect();
+    let props = WriterPropertiesBuilder::try_from(&options)?.build();
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(shared_settings(8, &active_writers), &pool);
-    let mut writer = file_writer(
-        Arc::clone(&store),
-        Path::from("file.parquet"),
-        Arc::clone(&schema),
-        WriterPropertiesBuilder::try_from(&options)?.build(),
-        false,
-        10 * 1024 * 1024,
-        Arc::clone(&resources),
-    )?;
-    // Four writer tasks share eight threads.
-    writer.write(&batch).await?;
-    assert_eq!(writer.lanes(), 2);
-    assert_eq!(resources.read_ahead_size(), 2 * 16 * MB);
-    // Two of the other tasks end. The second row group starts with this batch.
-    others.truncate(1);
-    writer.write(&batch).await?;
-    assert_eq!(writer.lanes(), 4);
-    assert_eq!(resources.read_ahead_size(), 4 * 16 * MB);
-    // The last of the other tasks ends, which has no effect on the second row group.
-    others.clear();
-    writer.write(&batch).await?;
-    assert_eq!(writer.lanes(), 4);
-    // The third row group starts with this batch.
-    writer.write(&batch).await?;
-    assert_eq!(writer.lanes(), 8);
-    assert_eq!(resources.read_ahead_size(), 8 * 16 * MB);
-    // More tasks start than there are threads. The third row group ends with this batch.
-    others.extend((0..20).map(|_| ActiveWriter::new(&active_writers)));
-    writer.write(&batch).await?;
-    // The writer encodes the columns of the fourth row group itself.
-    writer.write(&batch).await?;
-    assert_eq!(writer.lanes(), 0);
-    assert!(writer.row_groups_in_flight() >= 1);
-    // The budget does not fall below the budget for one thread, and the part
-    // of the budget that is in use is not taken away.
-    assert!(resources.read_ahead_size() >= 16 * MB);
-    assert!(resources.read_ahead_size() <= 8 * 16 * MB);
-    writer.write(&batch).await?;
-    writer.close().await?;
-    assert_eq!(pool.reserved(), 0);
-    let data = read_bytes(store.as_ref(), "file.parquet").await?;
-    assert!(data == expected);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_degree_is_divided_among_open_files_of_task() -> Result<()> {
-    let batch = all_types_batch(15)?;
-    let schema = batch.schema();
-    let mut options = TableParquetOptions::default();
-    options.global.max_row_group_size = 100;
-    options.arrow_schema(&schema);
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let resources = test_resources(fixed_degree(8), &pool);
-    let open = |name: &str| {
-        file_writer(
+    let resources = test_resources(Arc::clone(&budget), &pool);
+    let mut writers = vec![];
+    for i in 0..files {
+        writers.push(file_writer(
             Arc::clone(&store),
-            Path::from(name),
+            Path::from(format!("file-{i}.parquet")),
             Arc::clone(&schema),
-            WriterPropertiesBuilder::try_from(&options)?.build(),
+            props.clone(),
             false,
             10 * 1024 * 1024,
             Arc::clone(&resources),
-        )
-    };
-    let mut first = open("first.parquet")?;
-    first.write(&batch).await?;
-    assert_eq!(first.lanes(), 8);
-    let mut second = open("second.parquet")?;
-    second.write(&batch).await?;
-    assert_eq!(second.lanes(), 4);
-    // The first file has its lanes until its next row group.
-    assert_eq!(first.lanes(), 8);
-    first.write(&batch).await?;
-    assert_eq!(first.lanes(), 4);
-    second.close().await?;
-    first.write(&batch).await?;
-    assert_eq!(first.lanes(), 4);
-    first.write(&batch).await?;
-    assert_eq!(first.lanes(), 8);
-    first.close().await?;
+        )?);
+    }
+    let rows = budget.capacity() + files * expected.len();
+    for batch in &batches {
+        for writer in &mut writers {
+            writer.write(batch).await?;
+        }
+        // The budget has at most its size in rows, and the row groups
+        // that are encoded and not in a file.
+        assert!(budget.used() <= rows, "{budget:?}");
+    }
+    for writer in writers {
+        writer.close().await?;
+    }
+    assert_eq!(pool.reserved(), 0);
+    for i in [0, files / 2, files - 1] {
+        let data = read_bytes(store.as_ref(), &format!("file-{i}.parquet")).await?;
+        assert!(data == expected, "file {i} {budget:?}");
+    }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_active_writers_are_counted_until_the_task_ends() -> Result<()> {
-    let active_writers = Arc::new(AtomicUsize::new(0));
-    let count = || active_writers.load(Ordering::SeqCst);
-    let schema = int_schema();
-    let task = |store: &Arc<dyn ObjectStore>| {
-        let mut task = two_file_task(Arc::clone(store));
-        task.encode = shared_settings(4, &active_writers);
-        task
-    };
-    let batches = |schema: &SchemaRef| {
-        vec![
-            int_batch(schema, 0..7),
-            int_batch(schema, 7..14),
-            int_batch(schema, 14..21),
-        ]
-    };
-
-    // The task writes its files.
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let input = test_stream(
-        &schema,
-        batches(&schema).into_iter().collect::<Result<_>>()?,
-    );
-    read_manifest(write_stream(task(&store), input)).await?;
-    assert_eq!(count(), 0);
-
-    // The input of the task fails.
-    let mut failing = batches(&schema);
-    failing.push(Err(internal_datafusion_err!("input failure")));
-    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-        Arc::clone(&schema),
-        futures::stream::iter(failing),
-    ));
-    assert!(
-        read_manifest(write_stream(task(&store), input))
+async fn test_many_files_share_a_small_budget() -> Result<()> {
+    // The rows of a file have 17,760 bytes. No file waits for the budget,
+    // so the files are written whatever the files that received rows
+    // before them have taken, and whether they are written by one task
+    // or by several tasks at the same time.
+    for capacity in [0, 100, 20_000, 1_000_000] {
+        let budget = EncodeBudget::with_slab_bytes(capacity, 4096);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let write = check_many_files_share_a_budget(1000, Arc::clone(&budget), pool);
+        tokio::time::timeout(std::time::Duration::from_secs(120), write)
             .await
-            .is_err()
-    );
-    assert_eq!(count(), 0);
+            .map_err(|e| DataFusionError::External(Box::new(e)))??;
+        assert_eq!(budget.used(), 0);
 
-    // A lane of the task fails.
-    let intervals: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
-        IntervalMonthDayNano::new(1, 2, 3);
-        20
-    ]));
-    let interval_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", intervals.data_type().clone(), true),
-    ]));
-    let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..20));
-    let batch = RecordBatch::try_new(Arc::clone(&interval_schema), vec![integers, intervals])?;
-    let input = test_stream(&interval_schema, vec![batch.clone(), batch]);
-    assert!(
-        read_manifest(write_stream(task(&store), input))
-            .await
-            .is_err()
-    );
-    assert_eq!(count(), 0);
-
-    // The tasks are canceled while they wait for input.
-    let mut streams = vec![];
-    for i in 0..3 {
-        let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            futures::stream::iter(batches(&schema)).chain(futures::stream::pending()),
-        ));
-        let mut stream = Box::pin(write_stream(task(&store), input));
-        // A task is counted when it starts to read its input.
-        assert_eq!(count(), i);
-        let waiting = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next());
-        assert!(waiting.await.is_err());
-        assert_eq!(count(), i + 1);
-        streams.push(stream);
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+                tokio::spawn(tokio::time::timeout(
+                    std::time::Duration::from_secs(120),
+                    check_many_files_share_a_budget(125, Arc::clone(&budget), pool),
+                ))
+            })
+            .collect();
+        for task in tasks {
+            task.await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .map_err(|e| DataFusionError::External(Box::new(e)))??;
+        }
+        assert_eq!(budget.used(), 0);
     }
-    streams.pop();
-    assert_eq!(count(), 2);
-    drop(streams);
-    assert_eq!(count(), 0);
     Ok(())
 }
 
-#[test]
-fn test_writer_tasks_share_one_counter_by_default() {
-    let first = EncodeSettings::new(0);
-    let second = EncodeSettings::new(0);
-    assert_eq!(first.max_degree, 0);
-    assert!(Arc::ptr_eq(&first.active_writers, &second.active_writers));
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_memory_pool_without_room_slows_the_files_instead_of_failing() -> Result<()> {
+    // The rows of a file have 17,760 bytes and the pool has room for 3,000,
+    // so the files keep few rows for the jobs and the writer encodes the rest.
+    let budget = EncodeBudget::with_slab_bytes(TEST_BUDGET, 4096);
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(3000));
+    check_many_files_share_a_budget(20, Arc::clone(&budget), Arc::clone(&pool)).await?;
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_batch_that_is_larger_than_a_slab_is_divided() -> Result<()> {
+    let schema = three_int_schema();
+    // The batch has 2.4 MB of values, which is more than a slab and more than a row group.
+    let batch = three_int_batch(0..100_000)?;
+    for (capacity, slab, row_group) in [
+        (TEST_BUDGET, 100_000, 1024 * 1024),
+        (TEST_BUDGET, 100_000, 30_000),
+        (150_000, 100_000, 30_000),
+        (TEST_BUDGET, 1000, 30_000),
+        (0, 100_000, 30_000),
+    ] {
+        let case = format!("budget {capacity} slab {slab} row group {row_group}");
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let budget = EncodeBudget::with_slab_bytes(capacity, slab);
+        let mut writer = file_writer(
+            Arc::clone(&store),
+            Path::from("file.parquet"),
+            Arc::clone(&schema),
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(row_group))
+                .build(),
+            false,
+            10 * 1024 * 1024,
+            test_resources(Arc::clone(&budget), &pool),
+        )?;
+        writer.write(&batch).await?;
+        let file = writer.close().await?;
+        assert_eq!(file.num_rows, 100_000, "{case}");
+        assert_eq!(budget.used(), 0, "{case}");
+        let (metadata, data) = read_parquet(read_bytes(store.as_ref(), "file.parquet").await?)?;
+        assert_eq!(data, batch, "{case}");
+        let row_groups: Vec<_> = metadata.row_groups().iter().map(|x| x.num_rows()).collect();
+        let expected = match row_group {
+            30_000 => vec![30_000, 30_000, 30_000, 10_000],
+            _ => vec![100_000],
+        };
+        assert_eq!(row_groups, expected, "{case}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_file_size_limit_waits_for_the_first_row_group() -> Result<()> {
+    // The values of a row group have 80 KB and are not compressed, so the size
+    // of a row group in the file is known. The writer has many row groups
+    // that are not in the file when it checks the size of the file, and it
+    // waits for the first of them, so that no file is much larger than the limit.
+    let schema = int_schema();
+    let batches: Vec<_> = (0..40)
+        .map(|i| int_batch(&schema, i * 10_000..(i + 1) * 10_000))
+        .collect::<Result<_>>()?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = test_task(Arc::clone(&store), 0);
+    task.options.global.max_row_group_size = 10_000;
+    task.options.global.dictionary_enabled = Some(false);
+    task.options.global.compression = Some("uncompressed".to_string());
+    task.max_file_size = 400_000;
+    let manifest = manifest_rows(&run_task(task, &schema, batches).await?)?;
+    let rows: Vec<_> = manifest.iter().map(|x| x.3).collect();
+    assert_eq!(rows, vec![50_000; 8], "{manifest:?}");
+    for file in &manifest {
+        assert!(file.2 >= 400_000 && file.2 < 420_000, "{manifest:?}");
+    }
+    Ok(())
 }
 
 /// Data types that combine the leaf types with the types that have children.

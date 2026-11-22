@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
-use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
+use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::schema::check_file_columns;
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WriteCancellation, manifest_batch};
@@ -73,8 +73,9 @@ pub struct ParquetWriteTask {
     /// The context of the task, which has the memory pool and the temporary files
     /// for the rows that are sorted.
     pub context: Arc<TaskContext>,
-    /// How the files of the task are encoded.
-    pub encode: EncodeSettings,
+    /// The memory that the files of the task share with the other files
+    /// of the process for the rows that are not encoded.
+    pub budget: Arc<EncodeBudget>,
 }
 
 /// The metrics of one Parquet writer task.
@@ -414,9 +415,7 @@ impl DirectoryWriter {
                 && writer.rows() >= factory.max_records_per_file)
                 || (flushed
                     && factory.max_file_size > 0
-                    && writer
-                        .expected_size()
-                        .is_some_and(|size| size >= factory.max_file_size));
+                    && writer.reaches_size(factory.max_file_size).await?);
             if full {
                 // The file is completed while the next file receives rows, so that
                 // the task does not stop reading its input until the row groups
@@ -587,7 +586,6 @@ async fn write_files(
     reservation: MemoryReservation,
     metrics: ParquetWriteMetrics,
 ) -> Result<RecordBatch> {
-    let active_writers = Arc::clone(&task.encode.active_writers);
     let partition = task.partition;
     let partitions = task.partitions;
     let input_schema = input.schema();
@@ -610,11 +608,11 @@ async fn write_files(
     // The plan has checked the columns. They are checked here as well,
     // since a task can be created without the plan.
     check_file_columns(schema.fields().iter().map(|field| field.as_ref()))?;
-    // The input that waits to be encoded is counted separately from the memory
-    // of the encoders, and without a limit, since its size is limited by the
-    // read-ahead budget of the task.
+    // The memory that the files take from the encode budget, and the encoded data
+    // that the object store has not stored, are counted separately from
+    // the memory of the encoders.
     let resources = Arc::new(EncodeResources::new(
-        task.encode.clone(),
+        Arc::clone(&task.budget),
         reservation.new_empty(),
         metrics.elapsed_compute.clone(),
     ));
@@ -629,15 +627,10 @@ async fn write_files(
     };
     let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
-    // The task shares the threads with the other writer tasks from its first rows on,
-    // until it has written its files, has failed, or is canceled. A task without rows
-    // encodes nothing, so it does not take threads from the tasks that have rows.
-    let mut active_writer = None;
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
             continue;
         }
-        active_writer.get_or_insert_with(|| ActiveWriter::new(&active_writers));
         if let Some(message) = rows_not_supported {
             return exec_err!("{message}");
         }

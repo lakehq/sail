@@ -3,7 +3,6 @@
 mod encoder;
 pub mod exec;
 pub mod file;
-mod lane;
 mod partition;
 pub mod resources;
 mod schema;

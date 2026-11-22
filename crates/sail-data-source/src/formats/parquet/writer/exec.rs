@@ -23,7 +23,7 @@ use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use object_store::path::Path;
 use uuid::Uuid;
 
-use crate::formats::parquet::writer::resources::EncodeSettings;
+use crate::formats::parquet::writer::resources::EncodeBudget;
 use crate::formats::parquet::writer::schema::check_file_columns;
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
@@ -342,7 +342,7 @@ impl ExecutionPlan for ParquetWriteExec {
             max_file_size,
             max_open_files: self.max_open_files_per_task.get(),
             context: Arc::clone(&context),
-            encode: EncodeSettings::new(self.encoding_parallelism),
+            budget: EncodeBudget::of_process(),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());

@@ -37,7 +37,7 @@ pub struct ParquetFileWriter {
 enum FileEncoder {
     /// Encodes the file with content-defined chunking.
     Arrow(Box<AsyncArrowWriter<StagedUpload>>),
-    /// Encodes the columns of the file in the writer task or in other tasks.
+    /// Encodes the columns of the file in jobs.
     Columns(Box<ColumnEncoder>),
 }
 
@@ -108,14 +108,17 @@ impl ParquetFileWriter {
         self.rows
     }
 
-    /// The size in bytes that the file is expected to have with the rows written
-    /// to it so far. The size is not known before the file has a row group.
+    /// Returns whether the file is expected to have at least the given size in bytes
+    /// with the rows written to it so far.
     ///
-    /// The row groups that are being encoded are expected to have the same size
-    /// for each row as the row groups that are in the file. The result depends
-    /// on how many row groups have been encoded when this is called.
-    pub fn expected_size(&self) -> Option<u64> {
-        let (bytes, rows) = match &self.inner {
+    /// The rows that are not in a row group of the file are expected to have
+    /// the same size for each row as the row groups that are in the file,
+    /// so the result depends on how many row groups have been encoded when
+    /// this is called. The size is not known before the file has a row group.
+    /// This waits for the first row group once the rows that the file has
+    /// received have the given size before they are encoded.
+    pub async fn reaches_size(&mut self, size: u64) -> Result<bool> {
+        let (bytes, rows) = match &mut self.inner {
             FileEncoder::Arrow(writer) => (
                 writer.bytes_written(),
                 writer
@@ -124,22 +127,21 @@ impl ParquetFileWriter {
                     .map(|x| x.num_rows())
                     .sum::<i64>(),
             ),
-            FileEncoder::Columns(writer) => writer.written(),
+            FileEncoder::Columns(writer) => {
+                if writer.input_bytes() >= size {
+                    writer.wait_for_row_group().await?;
+                }
+                writer.written()
+            }
         };
-        let rows = u64::try_from(rows).ok().filter(|rows| *rows > 0)?;
-        Some((bytes as u128 * self.rows as u128 / rows as u128).min(u64::MAX as u128) as u64)
+        let Some(rows) = u64::try_from(rows).ok().filter(|rows| *rows > 0) else {
+            return Ok(false);
+        };
+        let expected = bytes as u128 * self.rows as u128 / rows as u128;
+        Ok(expected >= size as u128)
     }
 
-    /// The number of tasks that encode the row group that receives rows.
-    #[cfg(test)]
-    pub fn lanes(&self) -> usize {
-        match &self.inner {
-            FileEncoder::Arrow(_) => 0,
-            FileEncoder::Columns(writer) => writer.lanes(),
-        }
-    }
-
-    /// The number of row groups that are being encoded.
+    /// The number of row groups that have rows and are not in the file.
     #[cfg(test)]
     pub fn row_groups_in_flight(&self) -> usize {
         match &self.inner {
@@ -148,14 +150,22 @@ impl ParquetFileWriter {
         }
     }
 
-    /// The memory used by the data that the object store has not stored.
-    /// This does not include the input that waits to be encoded.
+    /// The memory of the file that is not in the memory pool.
+    ///
+    /// For a file that is encoded with content-defined chunking, this is
+    /// the memory of the data that the object store has not stored.
+    /// Otherwise it is the memory of the column writers, since the file
+    /// counts the rest in the memory pool itself: the rows that are not
+    /// encoded and the row groups that are encoded and not in the file,
+    /// which are taken from the encode budget, and the encoded data that
+    /// the object store has not stored.
     pub fn memory_size(&self) -> usize {
-        let encoding = match &self.inner {
-            FileEncoder::Arrow(writer) => writer.memory_size(),
+        match &self.inner {
+            FileEncoder::Arrow(writer) => {
+                writer.memory_size() + self.uploading.load(Ordering::Relaxed)
+            }
             FileEncoder::Columns(writer) => writer.memory_size(),
-        };
-        encoding + self.uploading.load(Ordering::Relaxed)
+        }
     }
 
     /// Writes the remaining data and the footer, and uploads what remains.

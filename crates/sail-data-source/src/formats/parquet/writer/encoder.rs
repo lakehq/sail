@@ -2,10 +2,15 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::{FieldRef, SchemaRef};
+use datafusion::arrow::array::{
+    Array, ArrayData, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait, RecordBatch,
+};
+use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::datatypes::{DataType, FieldRef, SchemaRef};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowRowGroupWriterFactory, ArrowWriterOptions,
@@ -15,69 +20,237 @@ use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion_datasource::write::SharedBuffer;
-use tokio::sync::oneshot;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::task::JoinHandle;
 
-use crate::formats::parquet::writer::lane::{Lane, LaneInput, assign_lanes, logical_size};
-use crate::formats::parquet::writer::resources::{EncodeResources, OpenFile};
+use crate::formats::parquet::writer::resources::{Charge, EncodeResources};
 use crate::listing::staging::{Publish, StagedUpload, upload_error};
 
 /// The size of the encoded data of a file that is kept in memory
 /// before the data is handed to the upload.
 const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 
+/// The time for which a task encodes or copies data before it lets the other
+/// tasks of the runtime run.
+///
+/// The jobs run on the threads of the runtime, where a task that does not
+/// yield delays every other task. Measured with 48 files of 16 columns that
+/// were written at the same time on 48 threads, as the time of the write and
+/// the delay of a timer of 1 ms on the same runtime at the 99th percentile:
+/// 6.32 s and 88 ms without yielding, 6.37 s and 52 ms with 20 ms,
+/// 6.43 s and 27 ms with 10 ms, 6.58 s and 10 ms with 5 ms, and 7.05 s and
+/// 4.5 ms with 1 ms. With the jobs on the threads for blocking tasks instead,
+/// the write took 6.56 s, the timer was 486 ms late, and the process used
+/// 1.8 times the memory.
+const TIME_SLICE: Duration = Duration::from_millis(10);
+
 /// Encodes a Parquet file.
 ///
-/// The writer task either encodes the columns of a row group itself, one after
-/// another, or it divides the columns into lanes. Each lane is a task that
-/// encodes its columns from a queue, so the writer task does not wait for
-/// the columns of a batch before it accepts the next batch. When a row group
-/// has all its rows, the writer task continues with the next row group while
-/// the lanes of the previous row groups complete their columns. The row groups
-/// are added to the file in order as they are completed.
+/// The writer task divides its input into row groups, and it collects the rows
+/// of a row group in slabs. It starts one job for each top-level column
+/// of a slab. The job of a column continues with the column writers of the job
+/// of the same column for the slab before it, and the job of the last slab
+/// of a row group completes the column. The writer task does not wait for
+/// the jobs, so the jobs of several slabs and row groups run at the same time
+/// on the threads of the runtime. The row groups are added to the file
+/// in order as they are completed.
 ///
-/// The input that waits in the queues is limited by the read-ahead budget of
-/// the writer task, and the number of row groups that are encoded at the same
-/// time is limited by the window of the file.
+/// The rows that are kept for the jobs are taken from the encode budget that
+/// all files of the process share, and so are the row groups that are encoded
+/// and not in the file. When the budget is exhausted, the writer task waits
+/// for the jobs of its own file. When its file has no jobs, it encodes
+/// the rows itself and adds their row group to the file before it continues.
+/// It never waits for another file, so the files of a process cannot block
+/// each other, whatever the files that do not receive rows have taken.
 ///
-/// Each column writer receives the same data in the same order in all cases,
-/// so the content of the file does not depend on how the file is encoded,
-/// and it is the same as the content that [`ArrowWriter`] produces.
-/// The row groups end at the rows where the writer of Arrow 60.2.0 ends them.
-/// Earlier versions end the row groups at other rows when the size of a row
-/// group is limited in bytes.
+/// The writer task waits for the jobs of each slab when the size of a row
+/// group is limited in bytes, since the size of the encoded rows is known
+/// only then.
+///
+/// Each column writer receives the same arrays in the same order as it does
+/// in [`ArrowWriter`], so the file has the same content as the file that
+/// [`ArrowWriter`] writes, unless the size of a row group is limited in bytes
+/// or a batch is larger than a slab.
 pub(super) struct ColumnEncoder {
     writer: SerializedFileWriter<SharedBuffer>,
     /// The encoded data that has not been handed to the upload.
     buffer: SharedBuffer,
     upload: StagedUpload,
+    /// The size of the data that is handed to the upload and not stored.
+    uploading: Arc<AtomicUsize>,
+    /// The encoded data that the object store has not stored, in the memory pool.
+    /// The task does not wait for the data of the files that it completes,
+    /// so the data is counted here and not with the memory of the file.
+    unstored: Charge,
     /// The maximum size of the data that is handed to the upload at a time.
     upload_chunk_size: usize,
     schema: SchemaRef,
-    /// The row group that receives rows.
-    in_progress: Option<ArrowRowGroupWriter>,
+    /// The rows of the row group that receives rows which no job has received.
+    pending: Slab,
+    /// The row group that receives rows, once it has column writers.
+    open: Option<RowGroup>,
     /// The row groups that have all their rows and are not in the file, in file order.
-    sealed: VecDeque<SealedRowGroup>,
-    /// The number of row groups that are encoded at the same time,
-    /// as decided for the row group that receives rows.
-    window: usize,
+    sealed: VecDeque<RowGroup>,
+    /// The number of row groups that have received column writers.
+    started: usize,
     row_group_writer_factory: ArrowRowGroupWriterFactory,
-    max_row_group_row_count: Option<usize>,
+    max_row_group_row_count: usize,
     max_row_group_bytes: Option<usize>,
+    /// The rows that the row group that receives rows takes before the size
+    /// of its encoded rows is needed again, when the size of a row group
+    /// is limited in bytes.
+    measured: Option<MeasuredRows>,
     /// The number of leaf columns of each top-level column.
-    leaf_counts: Arc<[usize]>,
-    /// The weight of each top-level column for dividing the columns into lanes.
-    /// This is the size of the encoded data of the column in the row group
-    /// that was last added to the file, or the number of leaf columns before that.
-    column_weights: Vec<usize>,
+    leaf_counts: Vec<usize>,
+    /// The size of the rows that the file has received.
+    input_bytes: u64,
     resources: Arc<EncodeResources>,
-    _open_file: OpenFile,
+    /// Tells the jobs to stop. This is set when the encoder is dropped.
+    stop: Arc<AtomicBool>,
+    /// The time since which the writer task has encoded or copied data
+    /// without letting other tasks run.
+    slice: TimeSlice,
 }
 
-/// A row group that has all its rows.
-enum SealedRowGroup {
-    Encoded(Vec<ArrowColumnChunk>),
-    /// The lanes are encoding the input in their queues.
-    Encoding(Vec<Lane>),
+/// The time for which a task has encoded or copied data without letting
+/// the other tasks of the runtime run.
+struct TimeSlice(Instant);
+
+impl TimeSlice {
+    fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    /// Lets the other tasks of the runtime run if the time slice has ended.
+    async fn end(&mut self) {
+        if self.0.elapsed() >= TIME_SLICE {
+            tokio::task::yield_now().await;
+            self.0 = Instant::now();
+        }
+    }
+}
+
+/// The rows that a row group takes without waiting for the size of its encoded rows.
+struct MeasuredRows {
+    rows: usize,
+    /// Whether the row group is expected to reach the limit on its size with the rows.
+    last: bool,
+}
+
+/// Rows of a row group that are handed to the jobs together.
+#[derive(Default)]
+struct Slab {
+    batches: Vec<RecordBatch>,
+    rows: usize,
+    /// The size of the values of each top-level column.
+    column_bytes: Vec<usize>,
+    charge: Option<Charge>,
+}
+
+impl Slab {
+    fn bytes(&self) -> usize {
+        self.column_bytes.iter().sum()
+    }
+}
+
+/// A row group that has column writers.
+struct RowGroup {
+    /// The state of each top-level column.
+    columns: Vec<ColumnState>,
+    /// The memory of the column writers of each top-level column,
+    /// as of the last slab that the column has encoded.
+    memory: Arc<[AtomicUsize]>,
+    /// The number of rows that the columns have received.
+    rows: usize,
+}
+
+/// The leaf columns of a top-level column of a row group.
+enum ColumnState {
+    /// The column writers have encoded all rows that they have received.
+    Idle(Vec<ArrowColumnWriter>),
+    /// The last job of the column.
+    Running(Job),
+}
+
+/// What the job of a column returns.
+enum ColumnOutput {
+    /// The column writers, when the row group receives more rows, and the turn
+    /// of the job to encode, when the next job of the column has started.
+    Open(Vec<ArrowColumnWriter>, Option<OwnedSemaphorePermit>),
+    /// The encoded leaf columns, and their size in the budget
+    /// until the row group is in the file.
+    Closed(Vec<ArrowColumnChunk>, Charge),
+}
+
+/// A task that is canceled when this is dropped.
+struct Job {
+    task: JoinHandle<Result<ColumnOutput>>,
+    /// Whether the next job of the column has started.
+    followed: Arc<AtomicBool>,
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Job {
+    async fn join(mut self) -> Result<ColumnOutput> {
+        match (&mut self.task).await {
+            Ok(output) => output,
+            Err(e) => Err(ParquetError::General(match e.try_into_panic() {
+                Ok(panic) => {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .map(|x| x.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    format!("the column encoder has panicked: {message}")
+                }
+                Err(_) => "the column encoder has been canceled".to_string(),
+            })),
+        }
+    }
+}
+
+impl ColumnState {
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle(_))
+    }
+
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Idle(_) => true,
+            Self::Running(job) => job.task.is_finished(),
+        }
+    }
+
+    /// The column writers, after the jobs of the column have ended,
+    /// and the turn to encode that the last job has passed on.
+    async fn writers(self) -> Result<(Vec<ArrowColumnWriter>, Option<OwnedSemaphorePermit>)> {
+        match self {
+            Self::Idle(writers) => Ok((writers, None)),
+            Self::Running(job) => match job.join().await? {
+                ColumnOutput::Open(writers, turn) => Ok((writers, turn)),
+                ColumnOutput::Closed(..) => Err(ParquetError::General(
+                    "the column of a row group that receives rows is completed".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+/// What the job of a column needs in addition to its input.
+struct JobContext {
+    resources: Arc<EncodeResources>,
+    stop: Arc<AtomicBool>,
+    /// The memory of the column writers of each top-level column of the row group.
+    memory: Arc<[AtomicUsize]>,
+    /// The index of the top-level column of the job.
+    index: usize,
+    /// Whether the next job of the column has started.
+    followed: Arc<AtomicBool>,
 }
 
 impl ColumnEncoder {
@@ -89,7 +262,7 @@ impl ColumnEncoder {
         skip_arrow_metadata: bool,
         resources: Arc<EncodeResources>,
     ) -> Result<Self> {
-        let max_row_group_row_count = props.max_row_group_row_count();
+        let max_row_group_row_count = props.max_row_group_row_count().unwrap_or(usize::MAX);
         let max_row_group_bytes = props.max_row_group_bytes();
         let buffer = SharedBuffer::new(UPLOAD_THRESHOLD);
         let options = ArrowWriterOptions::new()
@@ -108,19 +281,24 @@ impl ColumnEncoder {
         Ok(Self {
             writer,
             buffer,
+            uploading: upload.buffered(),
             upload,
+            unstored: resources.charge_outside_budget(),
             upload_chunk_size: upload_chunk_size.max(1),
             schema,
-            in_progress: None,
+            pending: Slab::default(),
+            open: None,
             sealed: VecDeque::new(),
-            window: 1,
+            started: 0,
             row_group_writer_factory,
-            max_row_group_row_count,
+            max_row_group_row_count: max_row_group_row_count.max(1),
             max_row_group_bytes,
-            column_weights: leaf_counts.clone(),
-            leaf_counts: leaf_counts.into(),
-            _open_file: resources.open_file(),
+            measured: None,
+            leaf_counts,
+            input_bytes: 0,
             resources,
+            stop: Arc::new(AtomicBool::new(false)),
+            slice: TimeSlice::start(),
         })
     }
 
@@ -135,218 +313,425 @@ impl ColumnEncoder {
         (self.writer.bytes_written(), rows)
     }
 
+    /// The size of the rows that the file has received.
+    pub fn input_bytes(&self) -> u64 {
+        self.input_bytes
+    }
+
     /// The number of row groups that have all their rows.
     pub fn row_groups(&self) -> usize {
         self.writer.flushed_row_groups().len() + self.sealed.len()
     }
 
-    /// The number of lanes of the row group that receives rows.
-    #[cfg(test)]
-    pub fn lanes(&self) -> usize {
-        self.in_progress.as_ref().map_or(0, |x| x.lanes.len())
-    }
-
-    /// The number of row groups that are being encoded,
-    /// including the row group that receives rows.
+    /// The number of row groups that have rows and are not in the file.
     #[cfg(test)]
     pub fn row_groups_in_flight(&self) -> usize {
-        self.sealed.len() + usize::from(self.in_progress.is_some())
+        self.sealed.len() + usize::from(self.open.is_some() || self.pending.rows > 0)
     }
 
-    /// The memory used by the data that has not been handed to the upload.
-    /// This does not include the memory that the lanes reserve themselves,
-    /// and the input that waits to be encoded.
+    /// The memory used by the column writers. This does not include the memory
+    /// that is taken from the encode budget, and the encoded data that
+    /// the object store has not stored, which are in the memory pool already.
     pub fn memory_size(&self) -> usize {
-        let in_progress: usize = match &self.in_progress {
-            Some(in_progress) => in_progress.writers.iter().map(|x| x.memory_size()).sum(),
-            None => 0,
-        };
-        let sealed: usize = self
-            .sealed
+        self.open
             .iter()
-            .map(|row_group| match row_group {
-                SealedRowGroup::Encoded(chunks) => chunks
-                    .iter()
-                    .map(|chunk| chunk.close().bytes_written as usize)
-                    .sum(),
-                SealedRowGroup::Encoding(_) => 0,
-            })
-            .sum();
+            .chain(&self.sealed)
+            .flat_map(|x| x.memory.iter())
+            .map(|x| x.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    /// Counts the encoded data that the object store has not stored.
+    /// The data that the object store stores later is counted until this is called again.
+    fn count_unstored(&mut self) {
         let buffered = self.buffer.buffer.try_lock().map_or(0, |x| x.len());
-        in_progress + sealed + buffered
+        self.unstored
+            .resize(buffered + self.uploading.load(Ordering::Relaxed));
     }
 
     /// Writes a batch to the file.
     pub async fn write_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.slice = TimeSlice::start();
         // The row groups that have been completed since the last batch are added
         // to the file here, so that they do not wait for the next row group
         // to have all its rows.
         self.append_completed().await?;
-        self.write(batch).await
-    }
-
-    /// Writes the remaining data and the footer, and uploads what remains.
-    /// Returns the size of the file and how the file is published.
-    pub async fn finish(&mut self) -> Result<(usize, Publish)> {
-        self.flush().await?;
-        while !self.sealed.is_empty() {
-            self.append_next().await?;
+        if batch.num_columns() != self.schema.fields().len() {
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible schema: writer has {} top-level fields but batch has {} columns",
+                self.schema.fields().len(),
+                batch.num_columns()
+            )));
         }
-        self.writer.finish()?;
-        upload_buffer(&self.buffer, &mut self.upload, self.upload_chunk_size, 0).await?;
-        let publish = self.upload.finish().await.map_err(upload_error)?;
-        Ok((self.writer.bytes_written(), publish))
-    }
-
-    // SPDX-SnippetBegin
-    // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L342-L447
-    /// Encodes the provided [`RecordBatch`]
-    ///
-    /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_row_count`]
-    /// rows or [`WriterProperties::max_row_group_bytes`] bytes, the contents of `batch` will be
-    /// written to one or more row groups such that limits are respected.
-    ///
-    /// If both limits are `None`, all data is written to a single row group.
-    /// If one limit is set, that limit is respected.
-    /// If both limits are set, the lower bound (whichever triggers first) is respected.
-    ///
-    /// This will fail if the `batch`'s schema does not match the writer's schema,
-    /// or if a logical null is reachable at a position the writer schema declares
-    /// non-nullable.
-    async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-
-        // Rows not yet handed to a row group writer. Splitting iterates here instead of
-        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
-        let mut remaining = batch.clone();
-
-        loop {
-            let in_progress = match &mut self.in_progress {
-                Some(in_progress) => in_progress,
-                x => {
-                    let plan = self.resources.plan_row_group(self.schema.fields().len());
-                    self.window = plan.window;
-                    x.insert(
-                        ArrowRowGroupWriter::new(
-                            self.row_group_writer_factory.create_column_writers(
-                                self.writer.flushed_row_groups().len() + self.sealed.len(),
-                            )?,
-                            &self.schema,
-                            &self.leaf_counts,
-                        )
-                        .with_lanes(
-                            assign_lanes(&self.column_weights, plan.lanes),
-                            &self.resources,
-                        ),
-                    )
-                }
-            };
-            let buffered_rows = in_progress.buffered_rows;
-
-            // Leading rows of `remaining` that still fit in the current row group, when the
-            // rest has to go to a later one.
-            let mut split_at = match self.max_row_group_row_count {
-                Some(max_rows) if buffered_rows + remaining.num_rows() > max_rows => {
-                    Some(max_rows - buffered_rows)
-                }
-                _ => None,
-            };
-
-            // Check byte limit: if we have buffered data, use measured average row size
-            // to split batch proactively before exceeding byte limit. Both limits apply to
-            // the same rows, so measure against whatever the row limit already trimmed
-            // `remaining` down to; otherwise the row limit would always win.
-            let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
-
-            if self.max_row_group_bytes.is_some() && buffered_rows == 0 {
-                // There is no row size to extrapolate from yet: write a single row first,
-                // so that the byte limit also applies to the rest of the batch instead of
-                // letting a batch larger than the limit fill the row group on its own.
-                if candidate_rows > 1 {
-                    split_at = Some(1);
-                }
-            } else if let Some(max_bytes) = self.max_row_group_bytes {
-                let current_bytes = in_progress.get_estimated_total_bytes();
-
-                if current_bytes >= max_bytes {
-                    self.flush().await?;
+        let mut rest = batch.clone();
+        while rest.num_rows() > 0 {
+            let mut rows = rest.num_rows().min(self.row_group_room());
+            if let Some(max_bytes) = self.max_row_group_bytes {
+                let (measured, last) = self
+                    .measured
+                    .as_ref()
+                    .map_or((0, false), |x| (x.rows, x.last));
+                let measured = if measured > 0 {
+                    measured
+                } else if last {
+                    self.seal()?;
                     continue;
-                }
-
-                let avg_row_bytes = current_bytes / buffered_rows;
-                if let Some(rows_that_fit) = (max_bytes - current_bytes).checked_div(avg_row_bytes)
-                {
-                    // At this point, `current_bytes < max_bytes` (checked above)
-                    if candidate_rows > rows_that_fit {
-                        if rows_that_fit > 0 {
-                            split_at = Some(rows_that_fit);
-                        } else {
-                            self.flush().await?;
+                } else {
+                    match self.measure(max_bytes).await? {
+                        Some(measured) => self.measured.insert(measured).rows,
+                        None => {
+                            self.seal()?;
                             continue;
                         }
                     }
+                };
+                rows = rows.min(measured);
+            }
+            let piece = rest.slice(0, rows);
+            let column_bytes: Vec<usize> = piece
+                .columns()
+                .iter()
+                .map(|x| logical_size(x.as_ref()))
+                .collect();
+            // A batch that is larger than a slab is divided, so that a job
+            // does not encode more than a slab at a time.
+            let bytes: usize = column_bytes.iter().sum();
+            let slab_bytes = self.resources.slab_bytes();
+            let (piece, column_bytes) = if bytes > slab_bytes && rows > 1 {
+                rows = (rows as u128 * slab_bytes as u128 / bytes as u128).max(1) as usize;
+                let piece = rest.slice(0, rows);
+                let column_bytes = piece
+                    .columns()
+                    .iter()
+                    .map(|x| logical_size(x.as_ref()))
+                    .collect();
+                (piece, column_bytes)
+            } else {
+                (piece, column_bytes)
+            };
+            rest = rest.slice(rows, rest.num_rows() - rows);
+            if let Some(measured) = &mut self.measured {
+                measured.rows = measured.rows.saturating_sub(rows);
+            }
+            self.add(piece, column_bytes).await?;
+        }
+        Ok(())
+    }
+
+    /// The number of rows that the row group that receives rows can still take.
+    fn row_group_room(&self) -> usize {
+        let rows = self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows;
+        self.max_row_group_row_count.saturating_sub(rows).max(1)
+    }
+
+    /// Returns the rows that the row group that receives rows takes next when
+    /// the size of a row group is limited in bytes, or nothing when the row
+    /// group has reached the limit.
+    ///
+    /// The size of the encoded rows is known only after they are encoded,
+    /// so this waits for the jobs of the row group. The row group takes one
+    /// row first. After that it takes as many rows as are expected to fit
+    /// from the average size of its rows so far, and at most as many rows
+    /// as it has, so that the average is never used for more rows than it
+    /// was measured with. The row group ends without another measurement
+    /// when it has taken the rows that are expected to fit.
+    async fn measure(&mut self, max_bytes: usize) -> Result<Option<MeasuredRows>> {
+        self.submit(false)?;
+        self.join_open().await?;
+        let Some(open) = &self.open else {
+            return Ok(Some(MeasuredRows {
+                rows: 1,
+                last: false,
+            }));
+        };
+        let estimated: usize = open
+            .columns
+            .iter()
+            .map(|column| match column {
+                ColumnState::Idle(writers) => writers
+                    .iter()
+                    .map(|x| x.get_estimated_total_bytes())
+                    .sum::<usize>(),
+                ColumnState::Running(_) => 0,
+            })
+            .sum();
+        if estimated >= max_bytes {
+            return Ok(None);
+        }
+        let fit = match estimated / open.rows.max(1) {
+            0 => usize::MAX,
+            row_bytes => (max_bytes - estimated) / row_bytes,
+        };
+        Ok((fit > 0).then_some(MeasuredRows {
+            rows: fit.min(open.rows),
+            last: fit <= open.rows,
+        }))
+    }
+
+    /// Adds rows to the row group that receives rows.
+    async fn add(&mut self, piece: RecordBatch, column_bytes: Vec<usize>) -> Result<()> {
+        let bytes: usize = column_bytes.iter().sum();
+        self.input_bytes += bytes as u64;
+        loop {
+            if let Some(charge) = self.resources.try_charge(bytes) {
+                self.pending.rows += piece.num_rows();
+                if self.pending.column_bytes.is_empty() {
+                    self.pending.column_bytes = column_bytes;
+                } else {
+                    for (total, bytes) in self.pending.column_bytes.iter_mut().zip(column_bytes) {
+                        *total += bytes;
+                    }
                 }
+                match &mut self.pending.charge {
+                    Some(total) => total.merge(charge),
+                    total @ None => *total = Some(charge),
+                }
+                self.pending.batches.push(piece);
+                break;
             }
-
-            let rest = split_at.map(|to_write| {
-                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
-                remaining = remaining.slice(0, to_write);
-                rest
-            });
-
-            let in_progress = self
-                .in_progress
-                .as_mut()
-                .ok_or_else(|| ParquetError::General("missing row group writer".to_string()))?;
-            in_progress
-                .write(
-                    &remaining,
-                    &self.resources,
-                    self.max_row_group_bytes.is_some(),
-                )
-                .await?;
-
-            let should_flush = self
-                .max_row_group_row_count
-                .is_some_and(|max| in_progress.buffered_rows >= max)
-                || self
-                    .max_row_group_bytes
-                    .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
-
-            if should_flush {
-                self.flush().await?
+            // The budget is exhausted. The rows wait for the jobs of this file,
+            // which return what they have taken from the budget.
+            if !self.release().await? {
+                // The file has nothing in the budget, so the rows are encoded here,
+                // and their row group is added to the file before more rows are.
+                self.encode(&piece)?;
+                if self.is_full() {
+                    self.complete().await?;
+                }
+                self.slice.end().await;
+                return Ok(());
             }
+        }
+        if self.is_full() {
+            self.seal()?;
+        } else if self.pending.bytes() >= self.resources.slab_bytes() {
+            self.submit(false)?;
+        }
+        Ok(())
+    }
 
-            match rest {
-                Some(rest) => remaining = rest,
-                None => return Ok(()),
+    /// Whether the row group that receives rows has all its rows.
+    fn is_full(&self) -> bool {
+        let rows = self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows;
+        rows >= self.max_row_group_row_count
+    }
+
+    /// Makes the file return a part of what it has taken from the budget,
+    /// and waits for that. Returns whether the file had anything in the budget.
+    async fn release(&mut self) -> Result<bool> {
+        if self.pending.rows > 0 {
+            self.submit(false)?;
+            return Ok(true);
+        }
+        if !self.sealed.is_empty() {
+            self.append_next().await?;
+            return Ok(true);
+        }
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|x| !x.columns.iter().all(|x| x.is_idle()))
+        {
+            self.join_open().await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Returns the row group that receives rows, with column writers.
+    fn open(&mut self) -> Result<&mut RowGroup> {
+        match &mut self.open {
+            Some(open) => Ok(open),
+            open @ None => {
+                let mut writers = self
+                    .row_group_writer_factory
+                    .create_column_writers(self.started)?
+                    .into_iter();
+                self.started += 1;
+                let columns: Vec<_> = self
+                    .leaf_counts
+                    .iter()
+                    .map(|leaves| ColumnState::Idle(writers.by_ref().take(*leaves).collect()))
+                    .collect();
+                let memory = columns.iter().map(|_| AtomicUsize::new(0)).collect();
+                Ok(open.insert(RowGroup {
+                    columns,
+                    memory,
+                    rows: 0,
+                }))
             }
         }
     }
-    // SPDX-SnippetEnd
+
+    /// Encodes rows in the writer task. The columns of the row group
+    /// that receives rows must have no jobs.
+    fn encode(&mut self, piece: &RecordBatch) -> Result<()> {
+        let elapsed_compute = self.resources.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
+        let schema = Arc::clone(&self.schema);
+        let open = self.open()?;
+        for (((field, array), column), memory) in schema
+            .fields()
+            .iter()
+            .zip(piece.columns())
+            .zip(&mut open.columns)
+            .zip(open.memory.iter())
+        {
+            let ColumnState::Idle(writers) = column else {
+                return Err(ParquetError::General(
+                    "the column of a row group has a job".to_string(),
+                ));
+            };
+            encode_array(field, array, writers)?;
+            memory.store(
+                writers.iter().map(|x| x.memory_size()).sum(),
+                Ordering::Relaxed,
+            );
+        }
+        open.rows += piece.num_rows();
+        Ok(())
+    }
+
+    /// Completes the row group that receives rows in the writer task, and adds
+    /// the row group to the file. The columns of the row group must have no jobs,
+    /// and the row groups before it must be in the file.
+    async fn complete(&mut self) -> Result<()> {
+        self.measured = None;
+        let Some(open) = self.open.take() else {
+            return Ok(());
+        };
+        let mut chunks = vec![];
+        {
+            let _timer = self.resources.elapsed_compute().timer();
+            for column in open.columns {
+                let ColumnState::Idle(writers) = column else {
+                    return Err(ParquetError::General(
+                        "the column of a row group has a job".to_string(),
+                    ));
+                };
+                for writer in writers {
+                    chunks.push(writer.close()?);
+                }
+            }
+        }
+        self.append(chunks).await
+    }
+
+    /// Starts the jobs for the rows of the row group that no job has received.
+    /// The jobs complete the columns of the row group if these are its last rows.
+    fn submit(&mut self, last: bool) -> Result<()> {
+        if self.pending.rows == 0 && !last {
+            return Ok(());
+        }
+        let slab = std::mem::take(&mut self.pending);
+        let resources = Arc::clone(&self.resources);
+        let stop = Arc::clone(&self.stop);
+        let schema = Arc::clone(&self.schema);
+        let open = self.open()?;
+        open.rows += slab.rows;
+        let mut charge = slab.charge;
+        let mut column_bytes = slab.column_bytes.into_iter();
+        let columns = std::mem::take(&mut open.columns);
+        for (index, (field, column)) in schema.fields().iter().zip(columns).enumerate() {
+            let arrays: Vec<ArrayRef> = slab
+                .batches
+                .iter()
+                .filter_map(|x| x.columns().get(index).cloned())
+                .collect();
+            let charge = charge
+                .as_mut()
+                .map(|x| x.split(column_bytes.next().unwrap_or(0)));
+            if let ColumnState::Running(job) = &column {
+                job.followed.store(true, Ordering::Release);
+            }
+            let followed = Arc::new(AtomicBool::new(false));
+            let context = JobContext {
+                resources: Arc::clone(&resources),
+                stop: Arc::clone(&stop),
+                memory: Arc::clone(&open.memory),
+                index,
+                followed: Arc::clone(&followed),
+            };
+            let job = encode_column(column, Arc::clone(field), arrays, charge, last, context);
+            open.columns.push(ColumnState::Running(Job {
+                task: tokio::spawn(job),
+                followed,
+            }));
+        }
+        Ok(())
+    }
 
     /// Ends the row group that receives rows. The row group is added to the file
     /// when its columns are completed and all row groups before it are in the file.
-    /// This waits for row groups to be completed only as far as the window requires.
-    async fn flush(&mut self) -> Result<()> {
-        let in_progress = match self.in_progress.take() {
-            Some(in_progress) => in_progress,
-            None => return Ok(()),
+    fn seal(&mut self) -> Result<()> {
+        self.measured = None;
+        if self.open.is_none() && self.pending.rows == 0 {
+            return Ok(());
+        }
+        self.submit(true)?;
+        if let Some(open) = self.open.take() {
+            self.sealed.push_back(open);
+        }
+        Ok(())
+    }
+
+    /// Waits for the jobs of the row group that receives rows.
+    async fn join_open(&mut self) -> Result<()> {
+        let Some(open) = &mut self.open else {
+            return Ok(());
         };
-        self.sealed.push_back(in_progress.seal(&self.resources)?);
-        self.append_completed().await?;
-        while self.sealed.len() >= self.window {
+        if open.columns.iter().all(|x| x.is_idle()) {
+            return Ok(());
+        }
+        let mut columns = Vec::with_capacity(open.columns.len());
+        for column in std::mem::take(&mut open.columns) {
+            let (writers, _) = column.writers().await?;
+            columns.push(ColumnState::Idle(writers));
+        }
+        open.columns = columns;
+        Ok(())
+    }
+
+    /// Waits for the first row group to be in the file if the file has
+    /// row groups that have all their rows.
+    pub async fn wait_for_row_group(&mut self) -> Result<()> {
+        self.slice = TimeSlice::start();
+        if self.writer.flushed_row_groups().is_empty() {
             self.append_next().await?;
         }
         Ok(())
     }
 
-    /// Adds the row groups to the file that can be added without waiting for a lane.
+    /// Writes the remaining data and the footer, and uploads what remains.
+    /// Returns the size of the file and how the file is published.
+    pub async fn finish(&mut self) -> Result<(usize, Publish)> {
+        self.slice = TimeSlice::start();
+        self.seal()?;
+        self.append_all().await?;
+        self.writer.finish()?;
+        upload_buffer(&self.buffer, &mut self.upload, self.upload_chunk_size, 0).await?;
+        self.count_unstored();
+        let publish = self.upload.finish().await.map_err(upload_error)?;
+        self.count_unstored();
+        Ok((self.writer.bytes_written(), publish))
+    }
+
+    /// Adds the row groups that have all their rows to the file,
+    /// after waiting for their columns to be completed.
+    async fn append_all(&mut self) -> Result<()> {
+        while !self.sealed.is_empty() {
+            self.append_next().await?;
+        }
+        Ok(())
+    }
+
+    /// Adds the row groups to the file that can be added without waiting for a job.
     async fn append_completed(&mut self) -> Result<()> {
-        while self.sealed.front().is_some_and(|x| x.is_completed()) {
+        while self
+            .sealed
+            .front()
+            .is_some_and(|x| x.columns.iter().all(|x| x.is_finished()))
+        {
             self.append_next().await?;
         }
         Ok(())
@@ -355,56 +740,38 @@ impl ColumnEncoder {
     /// Adds the first of the row groups that are not in the file to the file,
     /// after waiting for its columns to be completed.
     async fn append_next(&mut self) -> Result<()> {
-        // The lanes keep their memory reserved until the row group is in the file.
-        let mut reservations = vec![];
-        let chunks = match self.sealed.pop_front() {
-            Some(SealedRowGroup::Encoded(chunks)) => chunks,
-            Some(SealedRowGroup::Encoding(lanes)) => {
-                // The lanes have the columns in any order,
-                // and the file has the columns in the order of the schema.
-                let mut columns: Vec<Vec<ArrowColumnChunk>> =
-                    self.leaf_counts.iter().map(|_| vec![]).collect();
-                for lane in lanes {
-                    let lane_columns = lane.columns().to_vec();
-                    let output = lane.join().await?;
-                    reservations.push(output.reservation);
-                    let mut chunks = output.chunks.into_iter();
-                    for column in lane_columns {
-                        let (Some(leaves), Some(column)) =
-                            (self.leaf_counts.get(column), columns.get_mut(column))
-                        else {
-                            return Err(ParquetError::General(format!(
-                                "a column encoder has completed column {column}, which is not in the file"
-                            )));
-                        };
-                        *column = chunks.by_ref().take(*leaves).collect();
-                    }
-                }
-                columns.into_iter().flatten().collect()
-            }
-            None => return Ok(()),
+        let Some(row_group) = self.sealed.pop_front() else {
+            return Ok(());
         };
-        {
-            let mut sizes = chunks
-                .iter()
-                .map(|chunk| chunk.close().bytes_written as usize);
-            for (weight, leaves) in self.column_weights.iter_mut().zip(self.leaf_counts.iter()) {
-                *weight = sizes.by_ref().take(*leaves).sum();
+        let mut chunks = vec![];
+        // The encoded columns stay in the budget until they are in the file.
+        let mut charges = vec![];
+        for column in row_group.columns {
+            let ColumnState::Running(job) = column else {
+                return Err(ParquetError::General(
+                    "the column of a row group that has all its rows is not completed".to_string(),
+                ));
+            };
+            match job.join().await? {
+                ColumnOutput::Closed(column_chunks, charge) => {
+                    chunks.extend(column_chunks);
+                    charges.push(charge);
+                }
+                ColumnOutput::Open(..) => {
+                    return Err(ParquetError::General(
+                        "the column of a row group that has all its rows is not completed"
+                            .to_string(),
+                    ));
+                }
             }
         }
-        self.append_row_group(chunks).await?;
-        drop(reservations);
+        self.append(chunks).await?;
+        drop(charges);
         Ok(())
     }
 
-    // SPDX-SnippetBegin
-    // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L462-L477
-    /// Flushes all buffered rows into a new row group
-    ///
-    /// Note the underlying writer is not flushed with this call.
-    /// If this is a desired behavior, please call [`ArrowWriter::sync`].
-    async fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+    /// Adds the columns of a row group to the file.
+    async fn append(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
             {
@@ -418,21 +785,104 @@ impl ColumnEncoder {
                 UPLOAD_THRESHOLD,
             )
             .await?;
+            // The columns of a large row group take long to copy.
+            self.slice.end().await;
         }
         row_group_writer.close()?;
+        self.count_unstored();
         Ok(())
     }
-    // SPDX-SnippetEnd
 }
 
-impl SealedRowGroup {
-    /// Whether the columns of the row group can be added to the file without waiting.
-    fn is_completed(&self) -> bool {
-        match self {
-            Self::Encoded(_) => true,
-            Self::Encoding(lanes) => lanes.iter().all(|x| x.has_ended()),
-        }
+impl Drop for ColumnEncoder {
+    fn drop(&mut self) {
+        // A job that is canceled keeps running until it lets other tasks run,
+        // so it is told to stop as well.
+        self.stop.store(true, Ordering::Release);
     }
+}
+
+/// Encodes the arrays of a top-level column of a slab with the column writers
+/// of the jobs before it.
+async fn encode_column(
+    column: ColumnState,
+    field: FieldRef,
+    arrays: Vec<ArrayRef>,
+    charge: Option<Charge>,
+    last: bool,
+    context: JobContext,
+) -> Result<ColumnOutput> {
+    // The job continues in the turn of the job of the column before it,
+    // if that job has passed its turn on. The columns of a slab are small
+    // in a table with many columns, and the next slab of a column is encoded
+    // fastest right after the slab before it, on the same thread.
+    let (mut writers, turn) = column.writers().await?;
+    let turn = match turn {
+        Some(turn) => turn,
+        None => context.resources.job().await?,
+    };
+    let mut slice = TimeSlice::start();
+    for array in arrays {
+        if context.stop.load(Ordering::Acquire) {
+            return Err(ParquetError::General(
+                "the file writer has been dropped".to_string(),
+            ));
+        }
+        {
+            let _timer = context.resources.elapsed_compute().timer();
+            encode_array(&field, &array, &mut writers)?;
+        }
+        // The array is no longer kept for the job.
+        drop(array);
+        slice.end().await;
+    }
+    let report = |size: usize| {
+        if let Some(memory) = context.memory.get(context.index) {
+            memory.store(size, Ordering::Relaxed);
+        }
+    };
+    if !last {
+        report(writers.iter().map(|x| x.memory_size()).sum());
+        drop(charge);
+        let turn = context.followed.load(Ordering::Acquire).then_some(turn);
+        return Ok(ColumnOutput::Open(writers, turn));
+    }
+    let chunks = {
+        let _timer = context.resources.elapsed_compute().timer();
+        writers
+            .into_iter()
+            .map(|writer| writer.close())
+            .collect::<Result<Vec<_>>>()?
+    };
+    let size = chunks
+        .iter()
+        .map(|chunk| chunk.close().bytes_written as usize)
+        .sum();
+    let encoded = context.resources.charge(size);
+    report(0);
+    drop(charge);
+    Ok(ColumnOutput::Closed(chunks, encoded))
+}
+
+/// Writes the leaf columns of an array of a top-level column to their column writers.
+fn encode_array(
+    field: &FieldRef,
+    array: &ArrayRef,
+    writers: &mut [ArrowColumnWriter],
+) -> Result<()> {
+    let leaves = compute_leaves(field.as_ref(), array)?;
+    if leaves.len() != writers.len() {
+        return Err(ParquetError::ArrowError(format!(
+            "Incompatible schema: field '{}' produced {} leaf columns but writer expects {}",
+            field.name(),
+            leaves.len(),
+            writers.len()
+        )));
+    }
+    for (writer, leaf) in writers.iter_mut().zip(&leaves) {
+        writer.write(leaf)?;
+    }
+    Ok(())
 }
 
 /// Hands the encoded data to the upload if the size of the data exceeds the threshold.
@@ -469,224 +919,66 @@ async fn upload_buffer(
     Ok(())
 }
 
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/60.2.0/parquet/src/arrow/arrow_writer/mod.rs#L1330-L1441
-/// Encodes [`RecordBatch`] to a parquet row group
+/// The size of the values that the array refers to.
 ///
-/// Note: this structure is created by [`ArrowRowGroupWriterFactory`] internally used to
-/// create [`ArrowRowGroupWriter`]s, but it is not exposed publicly.
-///
-/// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
-struct ArrowRowGroupWriter {
-    writers: Vec<ArrowColumnWriter>,
-    schema: SchemaRef,
-    /// The number of leaf columns of each top-level column.
-    leaf_counts: Arc<[usize]>,
-    buffered_rows: usize,
-    /// The lanes that have the writers when the columns are encoded by other tasks.
-    lanes: Vec<Lane>,
-    /// The estimated size of the encoded data of the lanes
-    /// when the lanes report it for each part of a batch.
-    lanes_estimated_bytes: usize,
-}
-
-impl ArrowRowGroupWriter {
-    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef, leaf_counts: &Arc<[usize]>) -> Self {
-        Self {
-            writers,
-            schema: arrow.clone(),
-            leaf_counts: Arc::clone(leaf_counts),
-            buffered_rows: 0,
-            lanes: vec![],
-            lanes_estimated_bytes: 0,
+/// This is not the size of the buffers of the array, since an array can be
+/// a slice of buffers that are much larger and that are shared with other arrays.
+/// The values of a list or a map are counted for the rows of the array only.
+pub(super) fn logical_size(array: &dyn Array) -> usize {
+    let nulls = array.nulls().map_or(0, |_| array.len().div_ceil(8));
+    match array.data_type() {
+        DataType::List(_) => list_size(array.as_list::<i32>()) + nulls,
+        DataType::LargeList(_) => list_size(array.as_list::<i64>()) + nulls,
+        DataType::Map(_, _) => {
+            let map = array.as_map();
+            let (start, end) = offset_range(map.offsets());
+            let entries = map.entries().slice(start, end - start);
+            size_of_val(map.offsets().inner().as_ref()) + logical_size(&entries) + nulls
         }
-    }
-
-    async fn write(
-        &mut self,
-        batch: &RecordBatch,
-        resources: &EncodeResources,
-        report_estimated_bytes: bool,
-    ) -> Result<()> {
-        self.validate_batch_shape(batch)?;
-        self.buffered_rows += batch.num_rows();
-        if !self.lanes.is_empty() {
-            return self
-                .write_to_lanes(batch, resources, report_estimated_bytes)
-                .await;
-        }
-
-        let _timer = resources.elapsed_compute().timer();
-        let mut writers = self.writers.iter_mut();
-        for ((field, column), expected) in self
-            .schema
-            .fields()
-            .iter()
-            .zip(batch.columns())
-            .zip(self.leaf_counts.iter())
-        {
-            let leaves = compute_leaves(field.as_ref(), column)?;
-            Self::validate_leaf_count(field, *expected, leaves.len())?;
-            for leaf in leaves {
-                writers
-                    .next()
-                    .ok_or_else(|| {
-                        ParquetError::General("missing column writer for leaf column".to_string())
-                    })?
-                    .write(&leaf)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_batch_shape(&self, batch: &RecordBatch) -> Result<()> {
-        if batch.num_columns() != self.schema.fields().len() {
-            return Err(ParquetError::ArrowError(format!(
-                "Incompatible schema: writer has {} top-level fields but batch has {} columns",
-                self.schema.fields().len(),
-                batch.num_columns()
-            )));
-        }
-        let leaves: usize = self.leaf_counts.iter().sum();
-        if self.lanes.is_empty() && self.writers.len() != leaves {
-            return Err(ParquetError::General(format!(
-                "Arrow row-group writer has {} column writers for {} planned leaves",
-                self.writers.len(),
-                leaves
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_leaf_count(field: &FieldRef, expected: usize, actual: usize) -> Result<()> {
-        if actual != expected {
-            return Err(ParquetError::ArrowError(format!(
-                "Incompatible schema: field '{}' produced {actual} leaf columns but writer expects {expected}",
-                field.name()
-            )));
-        }
-        Ok(())
-    }
-
-    /// Returns the estimated total encoded bytes for this row group
-    fn get_estimated_total_bytes(&self) -> usize {
-        self.writers
-            .iter()
-            .map(|x| x.get_estimated_total_bytes())
-            .sum::<usize>()
-            + self.lanes_estimated_bytes
-    }
-
-    fn close(self) -> Result<Vec<ArrowColumnChunk>> {
-        self.writers
-            .into_iter()
-            .map(|writer| writer.close())
-            .collect()
-    }
-}
-// SPDX-SnippetEnd
-
-impl ArrowRowGroupWriter {
-    /// Moves the column writers to lanes, each of which is encoded by one task.
-    /// The writer task keeps the column writers when there are no lanes.
-    fn with_lanes(mut self, lanes: Vec<Vec<usize>>, resources: &EncodeResources) -> Self {
-        if lanes.is_empty() {
-            return self;
-        }
-        let mut writers = std::mem::take(&mut self.writers).into_iter();
-        let mut writers: Vec<Vec<ArrowColumnWriter>> = self
-            .leaf_counts
-            .iter()
-            .map(|leaves| writers.by_ref().take(*leaves).collect())
-            .collect();
-        self.lanes = lanes
-            .into_iter()
-            .map(|columns| {
-                let fields = columns
-                    .iter()
-                    .filter_map(|&column| self.schema.fields().get(column).cloned())
-                    .collect();
-                let writers = columns
-                    .iter()
-                    .filter_map(|&column| writers.get_mut(column).map(std::mem::take))
-                    .flatten()
-                    .collect();
-                Lane::spawn(
-                    columns,
-                    fields,
-                    writers,
-                    resources.new_reservation(),
-                    resources.elapsed_compute().clone(),
-                )
-            })
-            .collect();
-        self
-    }
-
-    /// Adds the columns of the batch to the queues of the lanes.
-    ///
-    /// This waits while the input that waits to be encoded exceeds the read-ahead
-    /// budget. It waits for the lanes to encode the batch only when the lanes
-    /// report the estimated size of the encoded data, which is needed when
-    /// the size of a row group is limited in bytes.
-    async fn write_to_lanes(
-        &mut self,
-        batch: &RecordBatch,
-        resources: &EncodeResources,
-        report_estimated_bytes: bool,
-    ) -> Result<()> {
-        let mut reports = vec![];
-        for lane in &mut self.lanes {
-            let columns = lane
-                .columns()
+        DataType::Struct(_) => {
+            let columns = array.as_struct().columns();
+            columns
                 .iter()
-                .map(|&column| {
-                    batch.columns().get(column).cloned().ok_or_else(|| {
-                        ParquetError::General(format!("the batch does not have column {column}"))
-                    })
-                })
-                .collect::<Result<Vec<ArrayRef>>>()?;
-            let bytes = columns.iter().map(|x| logical_size(x.as_ref())).sum();
-            let admission = resources.admit(bytes).await?;
-            let encoded = if report_estimated_bytes {
-                let (encoded, report) = oneshot::channel();
-                reports.push(report);
-                Some(encoded)
-            } else {
-                None
-            };
-            lane.send(LaneInput {
-                columns,
-                encoded,
-                admission,
-            })
-            .await?;
+                .map(|x| logical_size(x.as_ref()))
+                .sum::<usize>()
+                + nulls
         }
-        if report_estimated_bytes {
-            let mut estimated_bytes = 0;
-            for (lane, report) in self.lanes.iter_mut().zip(reports) {
-                match report.await {
-                    Ok(bytes) => estimated_bytes += bytes,
-                    Err(_) => return Err(lane.failure().await),
-                }
+        _ => {
+            let data = array.to_data();
+            match data.get_slice_memory_size() {
+                Ok(size) => size + view_data_size(&data),
+                Err(_) => array.get_array_memory_size(),
             }
-            self.lanes_estimated_bytes = estimated_bytes;
         }
-        Ok(())
     }
+}
 
-    /// Ends the row group. The writer task completes the columns here
-    /// when it has the column writers, and the lanes complete their columns
-    /// after they have encoded the input in their queues.
-    fn seal(mut self, resources: &EncodeResources) -> Result<SealedRowGroup> {
-        if self.lanes.is_empty() {
-            let _timer = resources.elapsed_compute().timer();
-            return Ok(SealedRowGroup::Encoded(self.close()?));
-        }
-        for lane in &mut self.lanes {
-            lane.seal();
-        }
-        Ok(SealedRowGroup::Encoding(self.lanes))
-    }
+fn list_size<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> usize {
+    let (start, end) = offset_range(list.offsets());
+    let values = list.values().slice(start, end - start);
+    size_of_val(list.offsets().inner().as_ref()) + logical_size(values.as_ref())
+}
+
+/// The range of the values of a list array in the array of its values.
+fn offset_range<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().map_or(0, |x| x.as_usize());
+    let end = offsets.last().map_or(start, |x| x.as_usize());
+    (start, end.max(start))
+}
+
+/// The size of the values of view arrays that are stored outside the views,
+/// which the size of a slice of the array data does not include.
+fn view_data_size(data: &ArrayData) -> usize {
+    let own = match data.data_type() {
+        DataType::Utf8View | DataType::BinaryView => data
+            .buffer::<u128>(0)
+            .iter()
+            .take(data.len())
+            .map(|view| *view as u32 as usize)
+            .filter(|length| *length > 12)
+            .sum(),
+        _ => 0,
+    };
+    let children: usize = data.child_data().iter().map(view_data_size).sum();
+    own + children
 }
