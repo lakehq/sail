@@ -4,6 +4,7 @@ pub mod commit;
 pub mod delete;
 pub mod input_files;
 pub mod part_file;
+pub mod partition;
 pub mod planner;
 pub mod source;
 pub mod table;

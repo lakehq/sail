@@ -388,13 +388,13 @@ pub fn can_be_evaluated_for_partition_pruning(
 mod tests {
     use std::collections::HashMap;
 
-    use datafusion::datasource::listing::helpers::pruned_partition_list;
     use datafusion::prelude::SessionContext;
     use object_store::PutPayload;
     use object_store::memory::InMemory;
     use sail_cache::scope::scoped_listing_url;
 
     use super::*;
+    use crate::listing::partition::pruned_partition_list;
 
     #[test]
     fn test_partition_pruning_function_volatility() {

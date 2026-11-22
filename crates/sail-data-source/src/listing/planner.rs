@@ -9,7 +9,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
@@ -40,6 +39,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use uuid::Uuid;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::{pruned_partition_list, with_statistics};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -417,9 +417,7 @@ async fn list_files_for_scan<'a>(
                     None,
                 )
             };
-            Ok(part_file
-                .with_statistics(statistics)
-                .with_ordering(ordering))
+            Ok(with_statistics(part_file, statistics).with_ordering(ordering))
         })
         .boxed()
         .buffer_unordered(meta_fetch_concurrency);

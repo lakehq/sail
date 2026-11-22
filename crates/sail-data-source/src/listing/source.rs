@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -267,11 +267,20 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
                 let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, true)))
                     .collect();
                 (schema, partition_fields)
             }
         };
+        // A partition column is nullable whatever the schema of the user says,
+        // since the directory of the default partition is read as NULL.
+        let partition_fields: Vec<FieldRef> = partition_fields
+            .into_iter()
+            .map(|field| match field.is_nullable() {
+                true => field,
+                false => Arc::new(field.as_ref().clone().with_nullable(true)),
+            })
+            .collect();
 
         validate_partitions(&sampled_files, &partition_fields)?;
 
