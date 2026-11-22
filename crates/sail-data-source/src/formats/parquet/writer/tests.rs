@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
-    Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray,
+    FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
     ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
     RunArray, StringArray, StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray,
@@ -5965,9 +5965,73 @@ fn nested_type_cases() -> Result<Vec<DataType>> {
     Ok(types)
 }
 
+/// Returns whether the data type is or contains a dictionary
+/// whose values are binary values of a fixed size.
+fn has_dictionary_of_fixed_size_binary(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(_, value) => {
+            matches!(value.as_ref(), DataType::FixedSizeBinary(_))
+                || has_dictionary_of_fixed_size_binary(value)
+        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _)
+        | DataType::RunEndEncoded(_, field) => {
+            has_dictionary_of_fixed_size_binary(field.data_type())
+        }
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| has_dictionary_of_fixed_size_binary(field.data_type())),
+        _ => false,
+    }
+}
+
+/// The Arrow writer writes the binary values of a dictionary with their lengths
+/// to a Parquet column of values of a fixed size, so the file has other values
+/// for every reader that does not take the data type from the Arrow schema.
+/// The writer therefore rejects the data type. When this test fails after an
+/// upgrade of the `parquet` crate, the Arrow writer writes the values correctly
+/// and the data type can be accepted.
+#[test]
+fn test_dictionary_of_fixed_size_binary_is_written_wrong_by_arrow_writer() -> Result<()> {
+    let values =
+        FixedSizeBinaryArray::try_from_iter([b"abc".to_vec(), b"xyz".to_vec()].into_iter())?;
+    let keys = Int32Array::from(vec![Some(0), None, Some(1), Some(0)]);
+    let column: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+    let expected = cast(&column, &DataType::FixedSizeBinary(3))?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c",
+        column.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+    let mut writer = ArrowWriter::try_new(vec![], Arc::clone(&schema), None)?;
+    writer.write(&batch)?;
+    let data = Bytes::from(writer.into_inner()?);
+    let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)?;
+    let batches = reader.build()?.collect::<Result<Vec<_>, _>>()?;
+    let actual = concat_batches(&batches[0].schema(), &batches)?;
+    assert_eq!(actual.column(0).data_type(), &DataType::FixedSizeBinary(3));
+    assert_ne!(actual.column(0).to_data(), expected.to_data());
+
+    let Err(e) = write_exec(&[vec![]], &schema, None, false) else {
+        return Err(internal_datafusion_err!("expected an error"));
+    };
+    assert_eq!(
+        e.strip_backtrace(),
+        "This feature is not implemented: Parquet write does not support the data type \
+         Dictionary(Int32, FixedSizeBinary(3)) of column c"
+    );
+    Ok(())
+}
+
 /// The data types that the writer rejects are exactly the data types
-/// that the Arrow writer fails or panics for, and a write of such
-/// a data type fails before a file is created.
+/// that the Arrow writer fails or panics for or writes a wrong file for,
+/// and a write of such a data type fails before a file is created.
 #[tokio::test]
 async fn test_arrow_type_support() -> Result<()> {
     let base = StringArray::from(vec![Some("1"), None, Some("3"), Some("1")]);
@@ -5987,7 +6051,10 @@ async fn test_arrow_type_support() -> Result<()> {
             })
             .await
         };
-        let is_supported = matches!(expected, Ok(Ok(_)));
+        // The Arrow writer writes a wrong file for a dictionary of binary values
+        // of a fixed size, which the writer rejects as well.
+        let is_supported =
+            matches!(expected, Ok(Ok(_))) && !has_dictionary_of_fixed_size_binary(&data_type);
         let mut inputs = vec![vec![], vec![new_null_array(&data_type, 4)]];
         if can_cast_types(&DataType::Utf8, &data_type)
             && let Ok(values) = cast(&base, &data_type)

@@ -29,6 +29,13 @@ pub(super) fn check_file_columns<'a>(columns: impl IntoIterator<Item = &'a Field
 
 /// Returns the data type that cannot be written to a Parquet file,
 /// if the data type is or contains one.
+///
+/// These are the data types that the Arrow writer of the `parquet` crate in
+/// version 59.2.0 fails or panics for, or writes a wrong file for. Later versions
+/// write a 32-bit decimal with a precision of one, and dictionaries of binary
+/// values of a fixed size and of nested values, so the data types are to be
+/// compared with the Arrow writer again when the crate is upgraded.
+/// The tests fail when the Arrow writer and this function disagree.
 fn find_unsupported_type(data_type: &DataType) -> Option<&DataType> {
     let unsupported = match data_type {
         DataType::Union(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => true,
@@ -68,9 +75,11 @@ fn find_unsupported_type(data_type: &DataType) -> Option<&DataType> {
         // The values of a dictionary are written only when they are a single
         // column of the file that is not encoded in another way.
         DataType::Dictionary(_, value) => match value.as_ref() {
-            // The binary values of a dictionary are written as byte arrays,
-            // which can be empty.
-            DataType::FixedSizeBinary(_) => false,
+            // The Arrow writer writes the binary values of a dictionary with their
+            // lengths to a column of values without lengths. Only a reader that
+            // takes the data type from the Arrow schema in the file reads the
+            // values that were written, and other readers fail or return other values.
+            DataType::FixedSizeBinary(_) => true,
             DataType::Utf8View
             | DataType::BinaryView
             | DataType::Dictionary(_, _)
