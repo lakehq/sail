@@ -79,12 +79,14 @@ impl PlanResolver<'_> {
                 read_type,
                 is_streaming: _,
             } => match read_type {
+                // A read has a large future, which the recursion of this function must not
+                // hold on the stack.
                 spec::ReadType::NamedTable(table) => {
-                    self.resolve_query_read_named_table(*table, state).await?
+                    Box::pin(self.resolve_query_read_named_table(*table, state)).await?
                 }
                 spec::ReadType::Udtf(udtf) => self.resolve_query_read_udtf(*udtf, state).await?,
                 spec::ReadType::DataSource(source) => {
-                    self.resolve_query_read_data_source(*source, state).await?
+                    Box::pin(self.resolve_query_read_data_source(*source, state)).await?
                 }
                 spec::ReadType::DynamicTable(table) => {
                     self.resolve_query_read_dynamic_table(*table, state).await?
