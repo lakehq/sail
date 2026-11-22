@@ -1064,6 +1064,8 @@ message ParquetWriteExecNode {
   uint64 encoding_parallelism = 10;
   uint64 max_open_files_per_task = 11;
   bytes schema = 12;
+  uint64 max_records_per_file = 13;
+  uint64 max_file_size = 14;
 }
 
 message FileWriteCommitExecNode {

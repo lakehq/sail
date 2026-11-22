@@ -31,6 +31,9 @@ impl WriteFormat for ParquetWriteFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let encoding_parallelism = self.options.encoding_parallelism;
         let max_open_files_per_task = self.options.max_open_files_per_task;
+        // A limit on the rows of a file that is not positive means that there is no limit.
+        let max_records_per_file = u64::try_from(self.options.max_records_per_file).unwrap_or(0);
+        let max_file_size = self.options.max_file_size;
         let options = self
             .options
             .clone()
@@ -61,19 +64,22 @@ impl WriteFormat for ParquetWriteFormat {
             Some(sort_order) => (Some(LexOrdering::from(sort_order)), true),
             None => (sorted_input_ordering(&input), false),
         };
-        let writer = Arc::new(ParquetWriteExec::try_new(
-            input,
-            sink.object_store_url.clone(),
-            table_path.clone(),
-            write_id,
-            partition_columns,
-            options,
-            file_suffix,
-            ordering,
-            write_sorting_columns,
-            encoding_parallelism,
-            max_open_files_per_task,
-        )?);
+        let writer = Arc::new(
+            ParquetWriteExec::try_new(
+                input,
+                sink.object_store_url.clone(),
+                table_path.clone(),
+                write_id,
+                partition_columns,
+                options,
+                file_suffix,
+                ordering,
+                write_sorting_columns,
+                encoding_parallelism,
+                max_open_files_per_task,
+            )?
+            .with_file_limits(max_records_per_file, max_file_size),
+        );
         Ok(Arc::new(
             FileWriteCommitExec::new(writer, sink.object_store_url, table_path, write_id)
                 .with_overwrite(overwrite),

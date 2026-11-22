@@ -125,6 +125,17 @@ impl ColumnEncoder {
         })
     }
 
+    /// The size in bytes and the number of rows of the row groups in the file.
+    pub fn written(&self) -> (usize, i64) {
+        let rows = self
+            .writer
+            .flushed_row_groups()
+            .iter()
+            .map(|x| x.num_rows())
+            .sum();
+        (self.writer.bytes_written(), rows)
+    }
+
     /// The number of row groups that have all their rows.
     pub fn row_groups(&self) -> usize {
         self.writer.flushed_row_groups().len() + self.sealed.len()

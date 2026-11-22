@@ -103,6 +103,28 @@ impl ParquetFileWriter {
         self.rows
     }
 
+    /// The size in bytes that the file is expected to have with the rows written
+    /// to it so far. The size is not known before the file has a row group.
+    ///
+    /// The row groups that are being encoded are expected to have the same size
+    /// for each row as the row groups that are in the file. The result depends
+    /// on how many row groups have been encoded when this is called.
+    pub fn expected_size(&self) -> Option<u64> {
+        let (bytes, rows) = match &self.inner {
+            FileEncoder::Arrow(writer) => (
+                writer.bytes_written(),
+                writer
+                    .flushed_row_groups()
+                    .iter()
+                    .map(|x| x.num_rows())
+                    .sum::<i64>(),
+            ),
+            FileEncoder::Columns(writer) => writer.written(),
+        };
+        let rows = u64::try_from(rows).ok().filter(|rows| *rows > 0)?;
+        Some((bytes as u128 * self.rows as u128 / rows as u128).min(u64::MAX as u128) as u64)
+    }
+
     /// The number of tasks that encode the row group that receives rows.
     #[cfg(test)]
     pub fn lanes(&self) -> usize {

@@ -637,6 +637,8 @@ pub struct ParquetConfig {
     pub bloom_filter_ndv: Option<u64>,
     pub encoding_parallelism: usize,
     pub max_open_files_per_task: NonZeroUsize,
+    pub max_records_per_file: i64,
+    pub max_file_size: u64,
     pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,

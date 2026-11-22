@@ -1494,6 +1494,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 encoding_parallelism,
                 max_open_files_per_task,
                 schema,
+                max_records_per_file,
+                max_file_size,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1534,7 +1536,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         encoding_parallelism as usize,
                         max_open_files_per_task,
                     )?
-                    .with_schema(Arc::new(try_decode_schema(&schema)?)),
+                    .with_schema(Arc::new(try_decode_schema(&schema)?))
+                    .with_file_limits(max_records_per_file, max_file_size),
                 ))
             }
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -3780,6 +3783,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 encoding_parallelism: write.encoding_parallelism() as u64,
                 max_open_files_per_task: write.max_open_files_per_task().get() as u64,
                 schema: try_encode_schema(write.data_schema().as_ref())?,
+                max_records_per_file: write.max_records_per_file(),
+                max_file_size: write.max_file_size(),
             })
         } else if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -9925,6 +9930,7 @@ mod tests {
                 encoding_parallelism,
                 max_open_files_per_task,
             )?
+            .with_file_limits(encoding_parallelism as u64 * 1000, u64::MAX - 7)
             .with_attempt(2);
             let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
@@ -9943,6 +9949,11 @@ mod tests {
             assert_eq!(decoded.write_sorting_columns(), write_sorting_columns);
             assert_eq!(decoded.encoding_parallelism(), encoding_parallelism);
             assert_eq!(decoded.max_open_files_per_task(), max_open_files_per_task);
+            assert_eq!(
+                decoded.max_records_per_file(),
+                encoding_parallelism as u64 * 1000
+            );
+            assert_eq!(decoded.max_file_size(), u64::MAX - 7);
             assert_eq!(decoded.required_input_ordering(), required_ordering);
             assert_eq!(decoded.input().schema(), schema);
             assert_eq!(

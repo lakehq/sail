@@ -817,6 +817,30 @@
     The content of the files does not depend on this option.
   experimental: true
 
+- key: parquet.max_records_per_file
+  type: number
+  default: "0"
+  description: |
+    (Writing) The maximum number of rows in each Parquet file.
+    When a file has this number of rows, the write task continues with a new file.
+    A write task writes one partition of the data.
+    If the value is `0` or negative, there is no limit,
+    and each write task writes one file for each directory.
+  experimental: true
+
+- key: parquet.max_file_size
+  type: number
+  default: "0"
+  description: |
+    (Writing) The target maximum size in bytes of each Parquet file.
+    When the size of a file is expected to reach this value at the end of a row group,
+    the write task continues with a new file.
+    A file can be larger than this value by about the size of one row group,
+    and the row group at which a file ends can differ between runs of the same write.
+    If the value is `0`, there is no limit.
+    This limit applies together with `parquet.max_records_per_file`, whichever is reached first.
+  experimental: true
+
 - key: parquet.max_open_files_per_task
   type: number
   default: "100"

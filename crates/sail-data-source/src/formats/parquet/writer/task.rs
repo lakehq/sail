@@ -56,10 +56,13 @@ pub struct ParquetWriteTask {
     pub sorting: Option<LexOrdering>,
     /// The capacity of the upload buffer of each file.
     pub buffer_size: usize,
-    /// The number of rows after which the task continues with a new file.
-    /// The limit is checked when a row group is completed,
-    /// so a file can have more rows than this.
-    pub max_rows_per_file: usize,
+    /// The maximum number of rows in each file, or zero when there is no limit.
+    /// The task continues with a new file when a file has this number of rows.
+    pub max_records_per_file: u64,
+    /// The size in bytes at which the task continues with a new file,
+    /// or zero when there is no limit. The size is checked when a row group
+    /// has all its rows, so a file can be larger than this.
+    pub max_file_size: u64,
     /// The number of files that the task keeps open at the same time
     /// when the data has partition columns.
     pub max_open_files: usize,
@@ -198,7 +201,8 @@ pub(super) struct FileFactory {
     props: WriterProperties,
     skip_arrow_metadata: bool,
     buffer_size: usize,
-    max_rows_per_file: u64,
+    max_records_per_file: u64,
+    max_file_size: u64,
     resources: Arc<EncodeResources>,
 }
 
@@ -245,7 +249,8 @@ impl FileFactory {
             props: builder.build(),
             skip_arrow_metadata,
             buffer_size: task.buffer_size,
-            max_rows_per_file: task.max_rows_per_file as u64,
+            max_records_per_file: task.max_records_per_file,
+            max_file_size: task.max_file_size,
             resources,
         })
     }
@@ -331,21 +336,48 @@ impl DirectoryWriter {
         batch: &RecordBatch,
         written: &mut Vec<WrittenFile>,
     ) -> Result<()> {
-        let writer = self.open(factory)?;
-        let flushed = writer.write(batch).await?;
-        if flushed && writer.rows() >= factory.max_rows_per_file {
-            // The file is completed while the next file receives rows, so that
-            // the task does not stop reading its input until the row groups
-            // of the file are encoded. Only one file is completed at a time.
-            self.wait_for_closing(written).await?;
-            if let Some(writer) = self.writer.take() {
-                self.closing = Some(ClosingFile {
-                    memory_size: writer.memory_size(),
-                    task: factory.files.start_close(*writer),
-                });
+        let mut batch = batch.clone();
+        loop {
+            let writer = self.open(factory)?;
+            // The rows that the file cannot take are written to the next file,
+            // so that no file has more rows than the limit.
+            let rest = match factory.max_records_per_file {
+                0 => None,
+                limit => {
+                    let room = limit.saturating_sub(writer.rows());
+                    ((batch.num_rows() as u64) > room).then(|| {
+                        let room = room as usize;
+                        let rest = batch.slice(room, batch.num_rows() - room);
+                        batch = batch.slice(0, room);
+                        rest
+                    })
+                }
+            };
+            let flushed = writer.write(&batch).await?;
+            let full = (factory.max_records_per_file > 0
+                && writer.rows() >= factory.max_records_per_file)
+                || (flushed
+                    && factory.max_file_size > 0
+                    && writer
+                        .expected_size()
+                        .is_some_and(|size| size >= factory.max_file_size));
+            if full {
+                // The file is completed while the next file receives rows, so that
+                // the task does not stop reading its input until the row groups
+                // of the file are encoded. Only one file is completed at a time.
+                self.wait_for_closing(written).await?;
+                if let Some(writer) = self.writer.take() {
+                    self.closing = Some(ClosingFile {
+                        memory_size: writer.memory_size(),
+                        task: factory.files.start_close(*writer),
+                    });
+                }
+            }
+            match rest {
+                Some(rest) => batch = rest,
+                None => return Ok(()),
             }
         }
-        Ok(())
     }
 
     /// Whether the directory has received a file.

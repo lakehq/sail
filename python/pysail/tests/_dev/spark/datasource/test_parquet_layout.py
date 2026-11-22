@@ -92,6 +92,17 @@ def test_parquet_overwrite_leaves_only_the_new_write(spark, tmp_path):
     assert sorted(r.id for r in spark.read.parquet(str(path)).collect()) == list(range(10, 20))
 
 
+def test_parquet_max_records_per_file(spark, tmp_path):
+    path = tmp_path / "records"
+    spark.range(0, 5, 1, 1).write.option("maxRecordsPerFile", 2).parquet(str(path))
+    files = data_files(path)
+    assert [pq.read_metadata(path / f).num_rows for f in files] == [2, 2, 1]
+    assert [_PART_FILE_RE.match(f.name).group("counter") for f in files] == ["000", "001", "002"]
+    assert len(write_ids(path)) == 1
+    assert_success_marker(path)
+    assert sorted(r.id for r in spark.read.parquet(str(path)).collect()) == list(range(5))
+
+
 def test_parquet_partitioned_write_layout(spark, tmp_path):
     path = tmp_path / "partitioned"
     df = spark.range(0, 20, 1, 2).withColumn("k", F.col("id") % 2)

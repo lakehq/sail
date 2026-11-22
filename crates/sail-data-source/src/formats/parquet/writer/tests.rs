@@ -90,7 +90,8 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         options: TableParquetOptions::default(),
         sorting: None,
         buffer_size: 10 * 1024 * 1024,
-        max_rows_per_file: 50_000_000,
+        max_records_per_file: 0,
+        max_file_size: 0,
         max_open_files: 100,
         encode: fixed_degree(1),
     }
@@ -313,7 +314,7 @@ async fn test_row_limit_starts_new_file() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = int_schema();
     let mut task = test_task(Arc::clone(&store), 1);
-    task.max_rows_per_file = 10;
+    task.max_records_per_file = 10;
     task.options.global.max_row_group_size = 5;
     let batches = vec![
         int_batch(&schema, 0..7)?,
@@ -324,20 +325,121 @@ async fn test_row_limit_starts_new_file() -> Result<()> {
     let files = list_files(store.as_ref()).await?;
     let first = file_name(1, 0, ".parquet");
     let second = file_name(1, 1, ".parquet");
-    // The limit is checked when a row group is completed,
-    // so the first file ends with the batch that reaches the limit.
+    let third = file_name(1, 2, ".parquet");
+    // No file has more rows than the limit. The batch with which a file
+    // reaches the limit is divided, and its other rows are in the next file.
     assert_eq!(
         manifest_rows(&manifest)?,
         vec![
-            (1, 0, Some(first.clone()), files[0].1, 14),
-            (1, 0, Some(second.clone()), files[1].1, 7),
+            (1, 0, Some(first.clone()), files[0].1, 10),
+            (1, 0, Some(second.clone()), files[1].1, 10),
+            (1, 0, Some(third.clone()), files[2].1, 1),
         ]
     );
     let (metadata, data) = read_parquet(read_bytes(store.as_ref(), &first).await?)?;
-    assert_eq!(data, int_batch(&schema, 0..14)?);
-    assert_eq!(metadata.num_row_groups(), 3);
+    assert_eq!(data, int_batch(&schema, 0..10)?);
+    assert_eq!(metadata.num_row_groups(), 2);
     let (_, data) = read_parquet(read_bytes(store.as_ref(), &second).await?)?;
-    assert_eq!(data, int_batch(&schema, 14..21)?);
+    assert_eq!(data, int_batch(&schema, 10..20)?);
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &third).await?)?;
+    assert_eq!(data, int_batch(&schema, 20..21)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_row_limit_divides_batches() -> Result<()> {
+    let schema = int_schema();
+    let batches = vec![
+        int_batch(&schema, 0..8192)?,
+        int_batch(&schema, 8192..16384)?,
+    ];
+    // (the limit, the number of rows in each file)
+    for (limit, expected) in [
+        (1000, [vec![1000; 16], vec![384]].concat()),
+        (8192, vec![8192, 8192]),
+        (16384, vec![16384]),
+        (20000, vec![16384]),
+        // The rows of a file are not limited.
+        (0, vec![16384]),
+    ] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.max_records_per_file = limit;
+        task.options.global.max_row_group_size = 100;
+        let manifest = manifest_rows(&run_task(task, &schema, batches.clone()).await?)?;
+        let rows: Vec<_> = manifest.iter().map(|x| x.4).collect();
+        assert_eq!(rows, expected, "limit {limit}");
+        // The files have the rows in the order of the input,
+        // and the files are in that order by their names.
+        let mut start = 0;
+        for (counter, file) in manifest.iter().enumerate() {
+            let name = file_name(0, counter, ".parquet");
+            assert_eq!(file.2.as_ref(), Some(&name));
+            let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
+            let end = start + file.4 as i64;
+            assert_eq!(data, int_batch(&schema, start..end)?);
+            start = end;
+        }
+        assert_eq!(list_files(store.as_ref()).await?.len(), expected.len());
+    }
+
+    // A file can have a single row.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = test_task(Arc::clone(&store), 0);
+    task.max_records_per_file = 1;
+    let manifest = run_task(task, &schema, vec![int_batch(&schema, 0..3)?]).await?;
+    let rows: Vec<_> = manifest_rows(&manifest)?.iter().map(|x| x.4).collect();
+    assert_eq!(rows, vec![1, 1, 1]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_file_size_limit_starts_new_file() -> Result<()> {
+    let schema = int_schema();
+    let batches: Vec<_> = (0..40)
+        .map(|i| int_batch(&schema, i * 1000..(i + 1) * 1000))
+        .collect::<Result<_>>()?;
+    for chunking in [false, true] {
+        // The size of a file without a limit, and the size of a row group in it.
+        let new_task = |store: &Arc<dyn ObjectStore>| {
+            let mut task = test_task(Arc::clone(store), 0);
+            task.options.global.max_row_group_size = 1000;
+            task.options.global.dictionary_enabled = Some(false);
+            task.options.global.compression = Some("uncompressed".to_string());
+            task.options.global.content_defined_chunking.enabled = chunking;
+            task
+        };
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        run_task(new_task(&store), &schema, batches.clone()).await?;
+        let files = list_files(store.as_ref()).await?;
+        assert_eq!(files.len(), 1);
+        let row_group = files[0].1 / 40;
+
+        // A file ends at the row group with which it is expected to have the size.
+        let limit = 10 * row_group;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = new_task(&store);
+        task.max_file_size = limit;
+        let manifest = manifest_rows(&run_task(task, &schema, batches.clone()).await?)?;
+        assert!(manifest.len() > 1, "{manifest:?}");
+        let mut start = 0;
+        for (counter, file) in manifest.iter().enumerate() {
+            let name = file_name(0, counter, ".parquet");
+            assert_eq!(file.2.as_ref(), Some(&name));
+            // The row group at which a file ends depends on the row groups
+            // that are in the file when the size is checked.
+            assert_eq!(file.4 % 1000, 0);
+            if counter + 1 < manifest.len() {
+                assert!(file.3 + 2 * row_group >= limit, "{chunking} {manifest:?}");
+            }
+            assert!(file.3 <= limit + 2 * row_group, "{chunking} {manifest:?}");
+            let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
+            let end = start + file.4 as i64;
+            assert_eq!(data, int_batch(&schema, start..end)?);
+            start = end;
+        }
+        assert_eq!(start, 40_000);
+    }
     Ok(())
 }
 
@@ -346,7 +448,7 @@ async fn test_row_limit_at_end_of_input() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = int_schema();
     let mut task = test_task(Arc::clone(&store), 0);
-    task.max_rows_per_file = 10;
+    task.max_records_per_file = 10;
     task.options.global.max_row_group_size = 5;
     let manifest = run_task(task, &schema, vec![int_batch(&schema, 0..10)?]).await?;
     let files = list_files(store.as_ref()).await?;
@@ -1756,7 +1858,7 @@ async fn test_partition_row_limit_starts_new_file() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = partitioned_schema();
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
-    task.max_rows_per_file = 2;
+    task.max_records_per_file = 2;
     task.options.global.max_row_group_size = 2;
     let batches = vec![
         partitioned_batch(&[(1, 1, "x"), (2, 1, "x"), (3, 2, "x")])?,
@@ -2315,6 +2417,48 @@ async fn test_write_plan_writes_planned_schema() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_file_size_is_limited_by_upload_parts() {
+    use crate::formats::parquet::writer::exec::effective_max_file_size;
+
+    // A file of this size has nine tenths of the parts that an upload can have.
+    let buffer_size = 10 * 1024 * 1024;
+    assert_eq!(effective_max_file_size(0, buffer_size), 94_371_840_000);
+    assert_eq!(effective_max_file_size(5, buffer_size), 5);
+    assert_eq!(
+        effective_max_file_size(u64::MAX, buffer_size),
+        94_371_840_000
+    );
+    assert_eq!(effective_max_file_size(0, 1024), 9_216_000);
+    assert_eq!(effective_max_file_size(0, usize::MAX), u64::MAX / 10 * 9);
+}
+
+#[tokio::test]
+async fn test_write_plan_passes_file_limits() -> Result<()> {
+    let schema = int_schema();
+    let partitions = vec![vec![int_batch(&schema, 0..5)?]];
+    for (max_records_per_file, max_file_size, files) in [(0, 0, 1), (2, 0, 3), (0, 1, 1)] {
+        let (ctx, store) = memory_context()?;
+        let writer = Arc::new(
+            write_exec(&partitions, &schema, None, false)?
+                .with_file_limits(max_records_per_file, max_file_size),
+        );
+        // The limits are kept when the plan is rewritten.
+        let input = Arc::clone(writer.input());
+        let writer = writer.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let limits = writer
+            .downcast_ref::<ParquetWriteExec>()
+            .map(|x| (x.max_records_per_file(), x.max_file_size()));
+        assert_eq!(limits, Some((max_records_per_file, max_file_size)));
+        collect(writer, ctx.task_ctx()).await?;
+        assert_eq!(list_files(store.as_ref()).await?.len(), files);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_write_plan_passes_task_limits() -> Result<()> {
     let schema = partitioned_schema();
@@ -2443,7 +2587,8 @@ async fn wait_for_files(store: &dyn ObjectStore, expected: &[String]) -> Result<
 /// A task whose first file is complete after the second batch.
 fn two_file_task(store: Arc<dyn ObjectStore>) -> ParquetWriteTask {
     let mut task = test_task(store, 0);
-    task.max_rows_per_file = 10;
+    // The tests write batches of seven rows.
+    task.max_records_per_file = 14;
     task.options.global.max_row_group_size = 5;
     task
 }
@@ -2820,21 +2965,23 @@ async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
     let rows: Vec<(i64, i32, &str)> = (0..5000).map(|i| (i, (i % 2) as i32, "x")).collect();
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
     task.encode = fixed_degree(4);
-    task.max_rows_per_file = 2000;
+    task.max_records_per_file = 2000;
     task.options.global.max_row_group_size = 1500;
     let manifest = run_task(task, &schema, vec![partitioned_batch(&rows)?]).await?;
     let mut manifest = manifest_rows(&manifest)?;
     manifest.sort();
     let files = list_files(store.as_ref()).await?;
-    // Each directory has 2500 rows. A file is completed at the end of
-    // the row group that reaches the row limit of the file.
+    // Each directory has 2500 rows, and the row limit applies to
+    // the files of each directory.
     let name =
         |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
     assert_eq!(
         manifest,
         vec![
-            (0, 0, Some(name(0, 0)), files[0].1, 2500),
-            (0, 0, Some(name(1, 0)), files[1].1, 2500),
+            (0, 0, Some(name(0, 0)), files[0].1, 2000),
+            (0, 0, Some(name(0, 1)), files[1].1, 500),
+            (0, 0, Some(name(1, 0)), files[2].1, 2000),
+            (0, 0, Some(name(1, 1)), files[3].1, 500),
         ]
     );
     let directories = read_directories(store.as_ref()).await?;
@@ -3139,7 +3286,7 @@ async fn test_encoding_writes_the_same_files_with_file_row_limit() -> Result<()>
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let mut task = test_task(Arc::clone(&store), 0);
         task.encode = encode;
-        task.max_rows_per_file = 1000;
+        task.max_records_per_file = 1000;
         task.options.global.max_row_group_size = 300;
         let manifest = run_task(task, &schema, batches.clone()).await?;
         let mut files = vec![];
@@ -3149,10 +3296,10 @@ async fn test_encoding_writes_the_same_files_with_file_row_limit() -> Result<()>
         }
         outputs.push((manifest_rows(&manifest)?, files));
     }
-    // A file is completed after the batch with which the file reaches 1000 rows,
+    // A file is completed when it has 1000 rows,
     // and the next file receives rows while the file is completed.
     let rows: Vec<_> = outputs[0].0.iter().map(|x| x.4).collect();
-    assert_eq!(rows, vec![2800, 2200]);
+    assert_eq!(rows, vec![1000; 5]);
     for output in &outputs[1..] {
         assert!(output == &outputs[0]);
     }

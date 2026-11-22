@@ -116,6 +116,8 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             bloom_filter_ndv: Some(self.global.bloom_filter_ndv),
             encoding_parallelism: None,
             max_open_files_per_task: None,
+            max_records_per_file: None,
+            max_file_size: None,
             content_defined_chunking_enabled: Some(self.global.content_defined_chunking.enabled),
             content_defined_chunking_min_chunk_size: Some(
                 self.global.content_defined_chunking.min_chunk_size,
@@ -150,6 +152,8 @@ impl ParquetWriteOptions {
             bloom_filter_ndv,
             encoding_parallelism: _,
             max_open_files_per_task: _,
+            max_records_per_file: _,
+            max_file_size: _,
             content_defined_chunking_enabled,
             content_defined_chunking_min_chunk_size,
             content_defined_chunking_max_chunk_size,
@@ -315,6 +319,8 @@ impl ResolveOptions for ParquetWriteOptions {
         partial.merge(ParquetWritePartialOptions {
             encoding_parallelism: Some(config.encoding_parallelism()),
             max_open_files_per_task: Some(config.max_open_files_per_task()),
+            max_records_per_file: Some(config.max_records_per_file()),
+            max_file_size: Some(config.max_file_size()),
             ..Default::default()
         });
         for layer in options {
@@ -353,6 +359,60 @@ mod tests {
             max_open_files_per_task,
         )));
         Ok(SessionContext::new_with_config(config))
+    }
+
+    #[test]
+    fn test_resolve_parquet_file_limits() -> datafusion_common::Result<()> {
+        let config = SessionConfig::new().with_extension(Arc::new(
+            ParquetWriteConfig::new(0, NonZeroUsize::MIN).with_file_limits(5, 6),
+        ));
+        let state = SessionContext::new_with_config(config).state();
+        let resolve = |layers| ParquetWriteOptions::resolve(&state, layers);
+
+        // The values of the session are used when the write does not set the options.
+        let options = resolve(vec![])?;
+        assert_eq!(options.max_records_per_file, 5);
+        assert_eq!(options.max_file_size, 6);
+
+        let options = resolve(vec![option_list(&[
+            ("maxRecordsPerFile", "1000"),
+            ("maxFileSize", "4294967296"),
+        ])])?;
+        assert_eq!(options.max_records_per_file, 1000);
+        assert_eq!(options.max_file_size, 4294967296);
+
+        // A table can have the limits as properties, and an option of the write
+        // is used before the property of the table.
+        let properties = OptionLayer::TablePropertyList {
+            items: vec![
+                ("option.max_records_per_file".to_string(), "7".to_string()),
+                ("option.max_file_size".to_string(), "8".to_string()),
+            ],
+        };
+        let options = resolve(vec![properties.clone()])?;
+        assert_eq!(options.max_records_per_file, 7);
+        assert_eq!(options.max_file_size, 8);
+        let options = resolve(vec![properties, option_list(&[("max_file_size", "0")])])?;
+        assert_eq!(options.max_records_per_file, 7);
+        assert_eq!(options.max_file_size, 0);
+
+        // A limit on the rows that is not positive means that there is no limit.
+        let options = resolve(vec![option_list(&[("max_records_per_file", "-1")])])?;
+        assert_eq!(options.max_records_per_file, -1);
+
+        for (key, value) in [
+            ("max_records_per_file", "1.5"),
+            ("max_records_per_file", "many"),
+            ("max_file_size", "-1"),
+            ("max_file_size", "1.5"),
+        ] {
+            let result = resolve(vec![option_list(&[(key, value)])]);
+            assert!(
+                matches!(&result, Err(e) if e.to_string() == format!("invalid option: {key}: {value}")),
+                "{result:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

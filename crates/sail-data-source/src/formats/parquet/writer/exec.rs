@@ -32,8 +32,24 @@ use crate::listing::commit::manifest_schema;
 /// The capacity in bytes of the upload buffer of each file.
 const UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
 
-/// The number of rows after which a task continues with a new file.
-const MAX_ROWS_PER_FILE: usize = 50_000_000;
+/// The largest number of parts of a multipart upload that object stores accept.
+/// This is the limit of Amazon S3 and Google Cloud Storage.
+const MAX_UPLOAD_PARTS: u64 = 10_000;
+
+/// Returns the size in bytes at which a task continues with a new file.
+///
+/// A file is uploaded in parts of the size of the upload buffer, and an upload
+/// fails when it has more parts than the object store accepts. A task therefore
+/// continues with a new file before a file has that many parts, also when
+/// the size of the files is not limited. The size leaves room for the row groups
+/// that are being encoded when the size of the file is checked.
+pub(super) fn effective_max_file_size(max_file_size: u64, buffer_size: usize) -> u64 {
+    let upload_limit = (buffer_size as u64).saturating_mul(MAX_UPLOAD_PARTS) / 10 * 9;
+    match max_file_size {
+        0 => upload_limit,
+        size => size.min(upload_limit),
+    }
+}
 
 /// Writes each input partition to Parquet files in a table directory.
 ///
@@ -56,6 +72,10 @@ pub struct ParquetWriteExec {
     write_sorting_columns: bool,
     encoding_parallelism: usize,
     max_open_files_per_task: NonZeroUsize,
+    /// The maximum number of rows in each file, or zero when there is no limit.
+    max_records_per_file: u64,
+    /// The target maximum size in bytes of each file, or zero when there is no limit.
+    max_file_size: u64,
     attempt: usize,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
@@ -114,6 +134,8 @@ impl ParquetWriteExec {
             write_sorting_columns,
             encoding_parallelism,
             max_open_files_per_task,
+            max_records_per_file: 0,
+            max_file_size: 0,
             attempt: 0,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -137,6 +159,8 @@ impl ParquetWriteExec {
             write_sorting_columns: self.write_sorting_columns,
             encoding_parallelism: self.encoding_parallelism,
             max_open_files_per_task: self.max_open_files_per_task,
+            max_records_per_file: self.max_records_per_file,
+            max_file_size: self.max_file_size,
             attempt,
             properties: Arc::clone(&self.properties),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -148,6 +172,22 @@ impl ParquetWriteExec {
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = schema;
         self
+    }
+
+    /// Returns the plan with the given limits on the rows and the size in bytes
+    /// of each file. A limit of zero means that there is no limit.
+    pub fn with_file_limits(mut self, max_records_per_file: u64, max_file_size: u64) -> Self {
+        self.max_records_per_file = max_records_per_file;
+        self.max_file_size = max_file_size;
+        self
+    }
+
+    pub fn max_records_per_file(&self) -> u64 {
+        self.max_records_per_file
+    }
+
+    pub fn max_file_size(&self) -> u64 {
+        self.max_file_size
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -276,6 +316,7 @@ impl ExecutionPlan for ParquetWriteExec {
         )?;
         Ok(Arc::new(
             plan.with_schema(Arc::clone(&self.schema))
+                .with_file_limits(self.max_records_per_file, self.max_file_size)
                 .with_attempt(self.attempt),
         ))
     }
@@ -309,7 +350,8 @@ impl ExecutionPlan for ParquetWriteExec {
             options: self.options.clone(),
             sorting: self.ordering.clone().filter(|_| self.write_sorting_columns),
             buffer_size: UPLOAD_BUFFER_SIZE,
-            max_rows_per_file: MAX_ROWS_PER_FILE,
+            max_records_per_file: self.max_records_per_file,
+            max_file_size: effective_max_file_size(self.max_file_size, UPLOAD_BUFFER_SIZE),
             max_open_files: self.max_open_files_per_task.get(),
             encode: EncodeSettings::new(self.encoding_parallelism),
         };
