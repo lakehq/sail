@@ -27,10 +27,12 @@ const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 /// since the cost of starting the tasks would exceed the benefit.
 const MIN_ROWS_FOR_LANES: usize = 1024;
 
-/// Encodes a Parquet file with the columns of each batch encoded in parallel.
+/// Encodes a Parquet file, with the columns of each batch encoded in parallel
+/// when there is more than one lane.
 ///
 /// The columns of a batch are divided into lanes, and each lane is encoded by
-/// one task. All tasks are joined before the next batch is accepted. Each
+/// one task. All tasks are joined before the next batch is accepted. With one
+/// lane, the columns are encoded one after another without other tasks. Each
 /// column receives the same data in the same order regardless of the number
 /// of lanes, so the content of the file does not depend on it, and it is the
 /// same as the content that [`ArrowWriter`] produces.
@@ -346,6 +348,7 @@ impl ArrowRowGroupWriter {
         }
     }
 
+    #[expect(clippy::unwrap_used)]
     async fn write(
         &mut self,
         batch: &RecordBatch,
@@ -353,6 +356,20 @@ impl ArrowRowGroupWriter {
         lanes: usize,
     ) -> Result<()> {
         self.buffered_rows += batch.num_rows();
+        let lanes = if batch.num_rows() < MIN_ROWS_FOR_LANES {
+            1
+        } else {
+            lanes.clamp(1, batch.num_columns().max(1))
+        };
+        if lanes == 1 {
+            let mut writers = self.writers.iter_mut();
+            for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
+                for leaf in compute_leaves(field.as_ref(), column)? {
+                    writers.next().unwrap().write(&leaf)?;
+                }
+            }
+            return Ok(());
+        }
         let mut writers = std::mem::take(&mut self.writers).into_iter();
         let mut columns = Vec::with_capacity(batch.num_columns());
         for (index, (field, column)) in self.schema.fields().iter().zip(batch.columns()).enumerate()
@@ -365,11 +382,6 @@ impl ArrowRowGroupWriter {
                 writers: writers.by_ref().take(leaves).collect(),
             });
         }
-        let lanes = if batch.num_rows() < MIN_ROWS_FOR_LANES {
-            1
-        } else {
-            lanes.clamp(1, columns.len().max(1))
-        };
         let mut lanes = assign_lanes(columns, lanes).into_iter();
         let first = lanes.next().unwrap_or_default();
         let tasks: Vec<_> = lanes

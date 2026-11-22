@@ -35,7 +35,7 @@ use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::metadata::{ParquetMetaData, SortingColumn};
-use datafusion::parquet::file::properties::WriterPropertiesBuilder;
+use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use datafusion::physical_expr::Distribution;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -61,6 +61,7 @@ use object_store::{
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
+use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
@@ -2038,5 +2039,127 @@ async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
     run_task(task, &schema, batches).await?;
     let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
     assert!(data == expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_columns_in_order_write_the_same_file() -> Result<()> {
+    // The batches have 4, 100, 8, 0 and 200 rows, so that row groups end
+    // before, at and inside the batches for the row limits below.
+    let batches = vec![
+        all_types_batch(1)?,
+        all_types_batch(25)?,
+        all_types_batch(2)?,
+        all_types_batch(0)?,
+        all_types_batch(50)?,
+    ];
+    let schema = batches[0].schema();
+    let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
+
+    let mut cases = vec![];
+    for limit in [1, 4, 7, 100, 104, 312, 1024 * 1024] {
+        let mut options = TableParquetOptions::default();
+        options.global.max_row_group_size = limit;
+        cases.push((options, Some(rows.div_ceil(limit))));
+    }
+    // The first two limits are below the size of the encoded rows of the batches,
+    // so row groups end inside batches.
+    for limit in ["9000", "24000", "1073741824"] {
+        let mut options = TableParquetOptions::default();
+        // The size of the encoded data follows the number of rows
+        // without dictionaries and with small pages.
+        options.global.dictionary_enabled = Some(false);
+        options.global.data_pagesize_limit = 512;
+        options.global.write_batch_size = 16;
+        options.global.max_row_group_bytes = Some(limit.parse()?);
+        cases.push((options, None));
+    }
+    let mut both = TableParquetOptions::default();
+    both.global.max_row_group_size = 100;
+    both.global.max_row_group_bytes = Some("65536".parse()?);
+    both.global.writer_version = "2.0".parse()?;
+    both.global.bloom_filter_on_write = true;
+    cases.push((both, None));
+
+    let mut row_groups = vec![];
+    for (i, (options, expected_row_groups)) in cases.into_iter().enumerate() {
+        let expected = reference_file_of_batches(&options, &batches)?;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.options = options;
+        let manifest = run_task(task, &schema, batches.clone()).await?;
+        let name = file_name(0, 0, ".parquet");
+        assert_eq!(
+            manifest_rows(&manifest)?,
+            vec![(0, 0, Some(name.clone()), expected.len() as u64, rows as u64)],
+            "case {i}"
+        );
+        let data = read_bytes(store.as_ref(), &name).await?;
+        assert!(data == expected, "case {i}");
+        let (metadata, _) = read_parquet(data)?;
+        if let Some(expected_row_groups) = expected_row_groups {
+            assert_eq!(metadata.num_row_groups(), expected_row_groups, "case {i}");
+        }
+        row_groups.push(
+            metadata
+                .row_groups()
+                .iter()
+                .map(|x| x.num_rows() as usize)
+                .collect::<Vec<_>>(),
+        );
+    }
+    // The byte limits give fewer row groups as they increase.
+    assert!(row_groups[7].len() > row_groups[8].len(), "{row_groups:?}");
+    assert!(row_groups[8].len() > 1, "{row_groups:?}");
+    assert_eq!(row_groups[9], vec![rows]);
+    let ends_of_batches = [4, 104, 112, 312];
+    for case in [7, 8] {
+        assert!(
+            !ends_of_batches.contains(&row_groups[case][0]),
+            "{row_groups:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_columns_in_order_write_the_same_file_without_rows() -> Result<()> {
+    let schema = all_types_batch(1)?.schema();
+    let options = TableParquetOptions::default();
+    let expected = reference_file_of_batches(&options, &[RecordBatch::new_empty(schema.clone())])?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    run_task(test_task(Arc::clone(&store), 0), &schema, vec![]).await?;
+    let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+    assert!(data == expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_file_writer_memory_size() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = int_schema();
+    // A row group has 1.6 MB of values, which exceeds the size of the encoded data
+    // that the writer keeps before the data is handed to the upload.
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_max_row_group_row_count(Some(200_000))
+        .build();
+    let mut writer = ParquetFileWriter::try_new(
+        store,
+        Path::from("file.parquet"),
+        Arc::clone(&schema),
+        props,
+        false,
+        10 * 1024 * 1024,
+        1,
+    )?;
+    assert_eq!(writer.memory_size(), 0);
+    assert!(!writer.write(&int_batch(&schema, 0..199_999)?).await?);
+    assert!(writer.memory_size() > 1_500_000);
+    assert!(writer.write(&int_batch(&schema, 0..1)?).await?);
+    assert!(writer.memory_size() <= 1024 * 1024);
+    let file = writer.close().await?;
+    assert_eq!(file.num_rows, 200_000);
     Ok(())
 }

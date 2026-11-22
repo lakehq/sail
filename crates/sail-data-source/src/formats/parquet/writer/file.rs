@@ -31,9 +31,9 @@ pub struct ParquetFileWriter {
 }
 
 enum FileEncoder {
-    /// Encodes the columns of the file one after another.
+    /// Encodes the file with content-defined chunking.
     Arrow(Box<AsyncArrowWriter<BufWriter>>),
-    /// Encodes the columns of the file in parallel.
+    /// Encodes the columns of the file one after another or in parallel.
     Columns(Box<ColumnEncoder>),
 }
 
@@ -50,8 +50,8 @@ impl ParquetFileWriter {
         let writer = BufWriter::with_capacity(store, location.clone(), buffer_size)
             .with_max_concurrency(MAX_UPLOAD_CONCURRENCY);
         // Content-defined chunking keeps state across the row groups of a column,
-        // which is only available in the writer that encodes the columns in order.
-        let inner = if lanes > 1 && props.content_defined_chunking().is_none() {
+        // which is only available in the Arrow writer.
+        let inner = if props.content_defined_chunking().is_none() {
             FileEncoder::Columns(Box::new(ColumnEncoder::try_new(
                 writer,
                 buffer_size,
