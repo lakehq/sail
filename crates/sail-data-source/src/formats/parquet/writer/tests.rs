@@ -11,8 +11,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
     Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
-    ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RunArray, StringArray,
-    StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray, make_array,
+    ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
+    RunArray, StringArray, StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray,
+    make_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{SortOptions, cast, concat_batches, take};
@@ -1939,6 +1940,106 @@ fn test_write_plan_validation() -> Result<()> {
     assert!(
         matches!(&result, Err(e) if e.to_string().contains("partition column missing does not exist"))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_plan_requires_column_in_files() -> Result<()> {
+    // The files would have no columns, and a Parquet file without columns has no rows.
+    // The plan is rejected for any number of rows and partitions, before a file is written.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Utf8, true),
+    ]));
+    let batch = |rows: std::ops::Range<i64>| -> Result<RecordBatch> {
+        let b: StringArray = rows.clone().map(|x| Some(format!("b{}", x % 2))).collect();
+        Ok(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values(rows)), Arc::new(b)],
+        )?)
+    };
+    let empty = Arc::new(Schema::empty());
+    let without_columns = RecordBatch::try_new_with_options(
+        Arc::clone(&empty),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(3)),
+    )?;
+    for (partitions, schema, partition_columns, message) in [
+        (
+            vec![vec![batch(0..1)?]],
+            Arc::clone(&schema),
+            vec!["a", "b"],
+            "Parquet write does not support data whose columns are all partition columns",
+        ),
+        (
+            vec![
+                vec![batch(0..4)?, batch(4..9)?],
+                vec![],
+                vec![batch(9..10)?],
+            ],
+            Arc::clone(&schema),
+            vec!["b", "a"],
+            "Parquet write does not support data whose columns are all partition columns",
+        ),
+        (
+            vec![vec![], vec![]],
+            Arc::clone(&schema),
+            vec!["a", "b"],
+            "Parquet write does not support data whose columns are all partition columns",
+        ),
+        (
+            vec![vec![without_columns]],
+            Arc::clone(&empty),
+            vec![],
+            "Parquet write does not support data without columns",
+        ),
+        (
+            vec![vec![]],
+            Arc::clone(&empty),
+            vec![],
+            "Parquet write does not support data without columns",
+        ),
+    ] {
+        let result = ParquetWriteExec::try_new(
+            MemorySourceConfig::try_new_exec(&partitions, schema, None)?,
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+            partition_columns.iter().map(|x| x.to_string()).collect(),
+            TableParquetOptions::default(),
+            ".parquet".to_string(),
+            None,
+            false,
+            0,
+            NonZeroUsize::MIN,
+        );
+        assert!(
+            matches!(&result, Err(DataFusionError::Plan(e)) if e.contains(message)),
+            "{result:?}"
+        );
+    }
+
+    // One column that is not a partition column is enough.
+    let (ctx, store) = memory_context()?;
+    let writer = Arc::new(ParquetWriteExec::try_new(
+        MemorySourceConfig::try_new_exec(&[vec![batch(0..3)?]], Arc::clone(&schema), None)?,
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+        vec!["a".to_string()],
+        TableParquetOptions::default(),
+        ".parquet".to_string(),
+        None,
+        false,
+        0,
+        NonZeroUsize::MIN,
+    )?);
+    let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
+    assert_eq!(count_value(&output)?, vec![3]);
+    let files = list_files(store.as_ref()).await?;
+    let files: Vec<_> = files.iter().map(|(path, _)| path.as_str()).collect();
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
+    assert_eq!(files, vec!["table/_SUCCESS", &name(0), &name(1), &name(2)]);
     Ok(())
 }
 

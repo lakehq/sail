@@ -88,6 +88,21 @@ impl ParquetWriteExec {
                 return plan_err!("partition column {column} does not exist in schema {schema}");
             }
         }
+        // A Parquet file takes its number of rows from its columns,
+        // so the rows of data without columns would be lost.
+        if schema
+            .fields()
+            .iter()
+            .all(|field| partition_columns.contains(field.name()))
+        {
+            return if partition_columns.is_empty() {
+                plan_err!("Parquet write does not support data without columns")
+            } else {
+                plan_err!(
+                    "Parquet write does not support data whose columns are all partition columns"
+                )
+            };
+        }
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(manifest_schema()),
             // The plan has at least one partition, so that a table is written

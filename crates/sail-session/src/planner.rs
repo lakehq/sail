@@ -1580,6 +1580,7 @@ mod tests {
     async fn write_range_to_parquet(
         sort: Option<spec::SortDirection>,
         mode: spec::SaveMode,
+        partition_by: &[&str],
         store: Arc<InMemory>,
     ) -> datafusion_common::Result<(String, Vec<String>)> {
         use futures::TryStreamExt;
@@ -1636,7 +1637,14 @@ mod tests {
                 save_type: spec::SaveType::Path("memory:///table".to_string()),
                 mode: Some(mode),
                 sort_columns: vec![],
-                partitioning_columns: vec![],
+                partitioning_columns: partition_by
+                    .iter()
+                    .map(|name| spec::Expr::UnresolvedAttribute {
+                        name: spec::ObjectName::bare(*name),
+                        plan_id: None,
+                        is_metadata_column: false,
+                    })
+                    .collect(),
                 clustering_columns: vec![],
                 bucket_by: None,
                 options: vec![],
@@ -1661,7 +1669,7 @@ mod tests {
     async fn parquet_write_keeps_input_partitions_and_commits() -> datafusion_common::Result<()> {
         let store = Arc::new(InMemory::new());
         let (display, files) =
-            write_range_to_parquet(None, spec::SaveMode::Append, store.clone()).await?;
+            write_range_to_parquet(None, spec::SaveMode::Append, &[], store.clone()).await?;
         assert!(display.contains("FileWriteCommitExec"), "{display}");
         assert!(display.contains("CoalescePartitionsExec"), "{display}");
         assert!(display.contains("ParquetWriteExec"), "{display}");
@@ -1678,7 +1686,7 @@ mod tests {
 
         // Another write to the same path replaces the files.
         let (display, overwritten) =
-            write_range_to_parquet(None, spec::SaveMode::Overwrite, store.clone()).await?;
+            write_range_to_parquet(None, spec::SaveMode::Overwrite, &[], store.clone()).await?;
         assert!(display.contains("FileDeleteExec"), "{display}");
         assert_eq!(overwritten.len(), 3, "{overwritten:?}");
         assert_eq!(overwritten[0], "table/_SUCCESS");
@@ -1688,12 +1696,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_write_fails_before_files_change_when_all_columns_are_partition_columns()
+    -> datafusion_common::Result<()> {
+        use futures::TryStreamExt;
+        use object_store::ObjectStore;
+
+        let store = Arc::new(InMemory::new());
+        let (_, files) =
+            write_range_to_parquet(None, spec::SaveMode::Append, &[], store.clone()).await?;
+        assert_eq!(files.len(), 3, "{files:?}");
+        for mode in [spec::SaveMode::Overwrite, spec::SaveMode::Append] {
+            let result = write_range_to_parquet(None, mode, &["id"], store.clone()).await;
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains(
+                    "Parquet write does not support data whose columns are all partition columns"
+                )),
+                "{result:?}"
+            );
+            // The files of the table are neither deleted nor added to.
+            let mut remaining: Vec<String> = store
+                .list(None)
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect()
+                .await?;
+            remaining.sort();
+            assert_eq!(remaining, files);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_write_keeps_the_sort_of_the_query() -> datafusion_common::Result<()> {
         for mode in [spec::SaveMode::Append, spec::SaveMode::Overwrite] {
             let store = Arc::new(InMemory::new());
-            let (display, files) =
-                write_range_to_parquet(Some(spec::SortDirection::Descending), mode, store.clone())
-                    .await?;
+            let (display, files) = write_range_to_parquet(
+                Some(spec::SortDirection::Descending),
+                mode,
+                &[],
+                store.clone(),
+            )
+            .await?;
             assert!(display.contains("Sort"), "{display}");
             // The sorted rows are a single partition, which is written in order.
             assert_eq!(files.len(), 2, "{files:?} {display}");
