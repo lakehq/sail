@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::physical_plan::metrics::Time;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -138,6 +138,8 @@ impl EncodeBudget {
 /// What the files of a writer task share for encoding.
 pub struct EncodeResources {
     budget: Arc<EncodeBudget>,
+    /// The memory pool of the reservation.
+    pool: Arc<dyn MemoryPool>,
     /// The memory that the files of the task have taken from the budget.
     reservation: Arc<MemoryReservation>,
     elapsed_compute: Time,
@@ -148,11 +150,13 @@ impl EncodeResources {
     /// the memory pool what the files of the task have taken from the budget.
     pub fn new(
         budget: Arc<EncodeBudget>,
+        pool: &Arc<dyn MemoryPool>,
         reservation: MemoryReservation,
         elapsed_compute: Time,
     ) -> Self {
         Self {
             budget,
+            pool: Arc::clone(pool),
             reservation: Arc::new(reservation),
             elapsed_compute,
         }
@@ -160,7 +164,19 @@ impl EncodeResources {
 
     /// Takes the bytes from the budget and from the memory pool,
     /// or returns nothing if either does not have them.
+    ///
+    /// A memory pool with a limit has the bytes only while it is less than
+    /// half full. A write can do without the rows that it keeps for the jobs,
+    /// since the writer task then encodes them itself, and it cannot do
+    /// without the memory of its column writers. So the rows that are kept
+    /// leave half of the pool to the memory that fails a query when the pool
+    /// does not have it.
     pub(super) fn try_charge(&self, bytes: usize) -> Option<Charge> {
+        if let MemoryLimit::Finite(limit) = self.pool.memory_limit()
+            && self.pool.reserved().saturating_add(bytes) > limit / 2
+        {
+            return None;
+        }
         if !self.budget.try_take(bytes) {
             return None;
         }

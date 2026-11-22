@@ -613,6 +613,7 @@ async fn write_files(
     // the memory of the encoders.
     let resources = Arc::new(EncodeResources::new(
         Arc::clone(&task.budget),
+        task.context.memory_pool(),
         reservation.new_empty(),
         metrics.elapsed_compute.clone(),
     ));
