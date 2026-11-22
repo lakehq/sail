@@ -323,9 +323,7 @@ mod tests {
         use sail_common_datafusion::extension::SessionExtensionAccessor;
 
         /// A memory catalog that returns the properties of a table in a different order
-        /// on each lookup, as catalogs that build them from unordered maps can do. It
-        /// also ignores the letter case of table names, as the Hive Metastore does, so
-        /// that one query can look up one table twice, under two names.
+        /// on each lookup, as catalogs that build them from unordered maps can do.
         struct PermutingCatalogProvider {
             inner: MemoryCatalogProvider,
             lookups: AtomicUsize,
@@ -389,8 +387,7 @@ mod tests {
                 database: &Namespace,
                 table: &str,
             ) -> CatalogResult<TableStatus> {
-                let table = table.to_lowercase();
-                let mut status = self.inner.get_table(database, &table).await?;
+                let mut status = self.inner.get_table(database, table).await?;
                 if let TableKind::Table { properties, .. } = &mut status.kind
                     && !properties.is_empty()
                 {
@@ -491,8 +488,14 @@ mod tests {
             inner: create_memory_catalog()?,
             lookups: AtomicUsize::new(0),
         });
-        let session =
-            create_session_with_catalog(Arc::clone(&catalog) as Arc<dyn CatalogProvider>)?;
+        // The catalog has two names, so that one query can look up one table twice.
+        let session = create_session_with_catalogs(
+            Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
+            vec![(
+                "other".to_string(),
+                Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
+            )],
+        )?;
         let source = Arc::new(CountingDataSource {
             calls: AtomicUsize::new(0),
         });
@@ -506,9 +509,9 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         session.execute_logical_plan(plan).await?.collect().await?;
 
-        // Names that differ in letter case are looked up separately, and the catalog
-        // returns the same table for both, with the properties in two orders.
-        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM T)";
+        // Each name of the catalog looks the table up, and the catalog returns the
+        // same table for both, with the properties in two orders.
+        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM other.default.t)";
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let lookups = catalog.lookups.load(Ordering::SeqCst);
         resolver.resolve_named_plan(plan).await?;

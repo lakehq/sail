@@ -44,12 +44,40 @@ const SNAPSHOT: &str = "snapshot";
 /// property from each load, as a catalog does when the table changes between loads.
 struct SnapshotCatalogProvider {
     inner: MemoryCatalogProvider,
+    names: TableNames,
     loads: AtomicUsize,
     /// The table and view requests, whether they found something or not.
     requests: Mutex<Vec<String>>,
 }
 
+/// How a catalog finds a table and which name it returns for the table.
+#[derive(Clone, Copy)]
+enum TableNames {
+    /// Table names match exactly.
+    Exact,
+    /// The catalog ignores the letter case of table names and returns the name that
+    /// the table was created with, as the Hive Metastore does.
+    IgnoreCase,
+    /// The catalog ignores the letter case of table names and returns the name that
+    /// it was asked for.
+    IgnoreCaseAndEcho,
+    /// Table and view names match exactly, and the catalog returns them in lowercase.
+    ReturnLowercase,
+    /// A database name of one part is in the database `main`, and the catalog returns
+    /// the database with `main`, as Unity Catalog does with its default catalog.
+    DefaultMain,
+}
+
 impl SnapshotCatalogProvider {
+    fn new(inner: MemoryCatalogProvider, names: TableNames) -> Self {
+        Self {
+            inner,
+            names,
+            loads: AtomicUsize::new(0),
+            requests: Mutex::new(vec![]),
+        }
+    }
+
     fn record(&self, kind: &str, name: &str) {
         if let Ok(mut requests) = self.requests.lock() {
             requests.push(format!("{kind} {name}"));
@@ -112,7 +140,34 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.record("table", table);
-        let mut status = self.inner.get_table(database, table).await?;
+        let mut status = match self.names {
+            TableNames::Exact => self.inner.get_table(database, table).await?,
+            TableNames::IgnoreCase => {
+                self.inner
+                    .get_table(database, &table.to_lowercase())
+                    .await?
+            }
+            TableNames::IgnoreCaseAndEcho => {
+                let mut status = self
+                    .inner
+                    .get_table(database, &table.to_lowercase())
+                    .await?;
+                status.name = table.to_string();
+                status
+            }
+            TableNames::ReturnLowercase => {
+                let mut status = self.inner.get_table(database, table).await?;
+                status.name = table.to_lowercase();
+                status
+            }
+            TableNames::DefaultMain => match Vec::<String>::from(database.clone()).as_slice() {
+                [schema] => {
+                    let database = vec![Arc::from("main"), Arc::from(schema.as_str())];
+                    self.inner.get_table(&database.try_into()?, table).await?
+                }
+                _ => self.inner.get_table(database, table).await?,
+            },
+        };
         let load = self.loads.fetch_add(1, Ordering::SeqCst);
         if let TableKind::Table { properties, .. } = &mut status.kind {
             properties.push((SNAPSHOT.to_string(), load.to_string()));
@@ -153,7 +208,11 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         self.record("view", view);
-        self.inner.get_view(database, view).await
+        let mut status = self.inner.get_view(database, view).await?;
+        if matches!(self.names, TableNames::ReturnLowercase) {
+            status.name = view.to_lowercase();
+        }
+        Ok(status)
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -354,20 +413,24 @@ struct Fixture {
 impl Fixture {
     /// Creates a session with the table `sail.default.t (k, v)` and the statements in `setup`.
     async fn try_new(setup: &[&str]) -> TestResult<Self> {
-        let catalog = Arc::new(SnapshotCatalogProvider {
-            inner: create_memory_catalog()?,
-            loads: AtomicUsize::new(0),
-            requests: Mutex::new(vec![]),
-        });
-        let second = Arc::new(SnapshotCatalogProvider {
-            inner: MemoryCatalogProvider::new(
+        Self::try_new_with_names(TableNames::Exact, setup).await
+    }
+
+    /// Creates a session like [`Self::try_new`], with catalogs that find and return
+    /// table names as `names` says.
+    async fn try_new_with_names(names: TableNames, setup: &[&str]) -> TestResult<Self> {
+        let catalog = Arc::new(SnapshotCatalogProvider::new(
+            create_memory_catalog()?,
+            names,
+        ));
+        let second = Arc::new(SnapshotCatalogProvider::new(
+            MemoryCatalogProvider::new(
                 "second".to_string(),
                 vec![Arc::from("default")].try_into()?,
                 None,
             ),
-            loads: AtomicUsize::new(0),
-            requests: Mutex::new(vec![]),
-        });
+            names,
+        ));
         let session = create_session_with_catalogs(
             Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
             vec![(
@@ -393,9 +456,21 @@ impl Fixture {
     }
 
     async fn create_table(&self, table: &[&str], columns: &[&str]) -> TestResult {
+        self.create_table_at(table, columns, "memory:///table")
+            .await
+    }
+
+    async fn create_table_at(
+        &self,
+        table: &[&str],
+        columns: &[&str],
+        location: &str,
+    ) -> TestResult {
+        let mut options = create_table_options(columns, vec![]);
+        options.location = Some(location.to_string());
         self.session
             .extension::<CatalogManager>()?
-            .create_table(table, create_table_options(columns, vec![]))
+            .create_table(table, options)
             .await?;
         Ok(())
     }
@@ -1012,6 +1087,141 @@ async fn test_table_spellings_in_a_nested_database_share_one_catalog_load() -> T
     fixture.execute("USE DATABASE a.b").await?;
     let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(w) FROM a.b.t), \
         (SELECT max(w) FROM `t`), (SELECT max(v) FROM sail.default.t)";
+    fixture.resolve(sql).await?.expect(2, 2, sql);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_names_that_the_catalog_returns_one_table_for_share_the_first_load() -> TestResult {
+    let fixture = Fixture::try_new_with_names(TableNames::IgnoreCase, &[]).await?;
+    // The catalog is asked for each name, and both references use the first answer.
+    for (sql, requests) in [
+        (
+            "SELECT * FROM t a JOIN T b ON a.k = b.k",
+            ["table t", "table T"],
+        ),
+        (
+            "SELECT * FROM T a JOIN default.t b ON a.k = b.k",
+            ["table T", "table t"],
+        ),
+        (
+            "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM sail.default.T), \
+                (SELECT max(v) FROM default.T)",
+            ["table t", "table T"],
+        ),
+    ] {
+        let resolution = fixture.resolve(sql).await?;
+        assert_eq!(resolution.requests, requests.map(str::to_string), "{sql}");
+        resolution.expect(2, 1, sql);
+    }
+    // The names keep their own read options and time travel on the shared load.
+    let sql = "SELECT * FROM t a JOIN T VERSION AS OF 1 b ON a.k = b.k";
+    let sources = fixture.resolve(sql).await?.expect(2, 2, sql);
+    assert_eq!(sources[0].snapshot, sources[1].snapshot, "{sql}");
+    // A write is planned on the first load, and carries the name of that load.
+    for (sql, name) in [
+        ("INSERT INTO T SELECT * FROM t", "t"),
+        ("INSERT INTO t SELECT * FROM T", "T"),
+        ("DELETE FROM T WHERE k IN (SELECT k FROM t)", "T"),
+        (
+            "MERGE INTO t a USING T b ON a.k = b.k WHEN MATCHED THEN DELETE",
+            "t",
+        ),
+    ] {
+        let resolution = fixture.resolve(sql).await?;
+        let writes = resolution.writes.clone();
+        let sources = resolution.expect(2, 1, sql);
+        assert_eq!(writes.len(), 1, "{sql}");
+        assert_eq!(
+            writes[0].snapshot,
+            Some(sources[0].snapshot.clone()),
+            "{sql}"
+        );
+        let name = vec!["sail".to_string(), "default".to_string(), name.to_string()];
+        assert_eq!(writes[0].catalog_table, Some(name.clone()), "{sql}");
+        assert_eq!(sources[0].catalog_table, Some(name), "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_table_with_and_without_the_default_database_part_share_the_first_load() -> TestResult
+{
+    let fixture = Fixture::try_new_with_names(
+        TableNames::DefaultMain,
+        &["CREATE DATABASE main", "CREATE DATABASE main.schema"],
+    )
+    .await?;
+    fixture
+        .create_table(&["main", "schema", "t"], &["k", "w"])
+        .await?;
+    for sql in [
+        "SELECT * FROM schema.t a JOIN main.schema.t b ON a.k = b.k",
+        "SELECT * FROM main.schema.t a JOIN sail.schema.t b ON a.k = b.k",
+        "INSERT INTO main.schema.t SELECT * FROM schema.t",
+    ] {
+        let resolution = fixture.resolve(sql).await?;
+        let writes = resolution.writes.clone();
+        let sources = resolution.expect(2, 1, sql);
+        for write in writes {
+            assert_eq!(write.snapshot, Some(sources[0].snapshot.clone()), "{sql}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_names_that_the_catalog_returns_different_tables_for_are_not_merged() -> TestResult {
+    // The catalog finds one table for both names and returns the name it was asked
+    // for, so nothing tells that the names are one table.
+    let fixture = Fixture::try_new_with_names(TableNames::IgnoreCaseAndEcho, &[]).await?;
+    let sql = "SELECT * FROM t a JOIN T b ON a.k = b.k";
+    let sources = fixture.resolve(sql).await?.expect(2, 2, sql);
+    assert_ne!(sources[0].snapshot, sources[1].snapshot, "{sql}");
+
+    // Two tables whose names differ in letter case.
+    let fixture = Fixture::try_new(&[]).await?;
+    fixture.create_table(&["T"], &["k", "w"]).await?;
+    let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM T)";
+    fixture.resolve(sql).await?.expect(2, 2, sql);
+    let sql = "INSERT INTO T SELECT * FROM t";
+    let resolution = fixture.resolve(sql).await?;
+    let writes = resolution.writes.clone();
+    let sources = resolution.expect(2, 1, sql);
+    assert_ne!(writes[0].snapshot, Some(sources[0].snapshot.clone()));
+
+    // Two tables that the catalog returns one name for, at different locations.
+    let fixture = Fixture::try_new_with_names(TableNames::ReturnLowercase, &[]).await?;
+    fixture
+        .create_table_at(&["T"], &["k", "w"], "memory:///other")
+        .await?;
+    let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM T)";
+    fixture.resolve(sql).await?.expect(2, 2, sql);
+
+    // The same database and table name in two catalogs.
+    let fixture = Fixture::try_new_with_names(TableNames::IgnoreCase, &[]).await?;
+    fixture
+        .create_table(&["second", "default", "t"], &["k", "w"])
+        .await?;
+    let sql = "SELECT (SELECT max(v) FROM T), (SELECT max(w) FROM second.default.t), \
+        (SELECT max(w) FROM second.default.T), (SELECT max(v) FROM t)";
+    let second = fixture.second.loads.load(Ordering::SeqCst);
+    fixture.resolve(sql).await?.expect(2, 2, sql);
+    assert_eq!(fixture.second.loads.load(Ordering::SeqCst) - second, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_view_is_not_merged_with_the_table_that_the_catalog_returns_its_name_for() -> TestResult
+{
+    let fixture = Fixture::try_new_with_names(
+        TableNames::ReturnLowercase,
+        &["CREATE VIEW V AS SELECT k, v AS w FROM t"],
+    )
+    .await?;
+    fixture.create_table(&["v"], &["k", "x"]).await?;
+    // The table `v`, and the view `V` over the table `t`.
+    let sql = "SELECT (SELECT max(x) FROM v), (SELECT max(w) FROM V)";
     fixture.resolve(sql).await?.expect(2, 2, sql);
     Ok(())
 }

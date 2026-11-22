@@ -157,7 +157,8 @@ pub(super) struct PlanResolverState {
     /// The successful catalog table lookups so far, shared by repeated references to
     /// the same table within the query. The key is the fully qualified name of the table
     /// (the catalog, the database, and the table), which is the same for all the ways
-    /// to write the name of the table.
+    /// to write the name of the table. Names that the catalog returned the same table
+    /// for have the same lookup, see [`PlanResolverState::share_catalog_table`].
     catalog_table_lookups: HashMap<Vec<String>, CatalogTableLookup>,
 }
 
@@ -514,6 +515,40 @@ impl PlanResolverState {
 
     pub fn insert_catalog_table_lookup(&mut self, table: Vec<String>, lookup: CatalogTableLookup) {
         self.catalog_table_lookups.insert(table, lookup);
+    }
+
+    /// Stores what the catalog returned for the table `name` and returns the lookup that
+    /// the query uses for it. A catalog can return one table for names that are
+    /// written differently, such as names that differ in letter case in a catalog that
+    /// ignores it. Such a table uses its first lookup in the query, so that all the
+    /// references to the table read the same table metadata. A table is the same as
+    /// an earlier one when both are in the same catalog and the catalog returned the
+    /// same database, name, table ID, and location for both.
+    pub fn share_catalog_table(
+        &mut self,
+        name: Vec<String>,
+        status: TableStatus,
+        resolved: LakehouseResolvedTable,
+    ) -> (TableStatus, LakehouseResolvedTable) {
+        let first =
+            self.catalog_table_lookups
+                .iter()
+                .find_map(|(first_name, lookup)| match lookup {
+                    (first, Some(first_resolved))
+                        if first_name.first() == name.first()
+                            && first.database == status.database
+                            && first.name == status.name
+                            && first_resolved.execution.table_identity
+                                == resolved.execution.table_identity =>
+                    {
+                        Some((first.clone(), first_resolved.clone()))
+                    }
+                    _ => None,
+                });
+        let (status, resolved) = first.unwrap_or((status, resolved));
+        self.catalog_table_lookups
+            .insert(name, (status.clone(), Some(resolved.clone())));
+        (status, resolved)
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.

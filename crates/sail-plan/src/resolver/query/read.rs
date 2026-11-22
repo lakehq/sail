@@ -169,8 +169,16 @@ impl PlanResolver<'_> {
         let lookup = manager
             .get_catalog_lakehouse_table_or_view(&table, Self::catalog_table_lookup_request(&table))
             .await?;
-        state.insert_catalog_table_lookup(table, lookup.clone());
-        Ok(lookup)
+        match lookup {
+            (status, Some(resolved)) => {
+                let (status, resolved) = state.share_catalog_table(table, status, resolved);
+                Ok((status, Some(resolved)))
+            }
+            view => {
+                state.insert_catalog_table_lookup(table, view.clone());
+                Ok(view)
+            }
+        }
     }
 
     /// Looks up a catalog table like [`Self::lookup_catalog_table_or_view`], but without
@@ -190,8 +198,7 @@ impl PlanResolver<'_> {
         let (status, resolved) = manager
             .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
             .await?;
-        state.insert_catalog_table_lookup(table, (status.clone(), Some(resolved.clone())));
-        Ok((status, resolved))
+        Ok(state.share_catalog_table(table, status, resolved))
     }
 
     /// Looks up what a read refers to. A read with a required format reads tables only.
