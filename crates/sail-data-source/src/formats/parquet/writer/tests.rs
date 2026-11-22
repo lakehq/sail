@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -15,10 +16,16 @@ use datafusion::arrow::datatypes::{
     DataType, Field, Int32Type, Int64Type, IntervalDayTime, IntervalMonthDayNano, Schema,
     SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::datasource::sink::DataSink;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
 };
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
@@ -29,8 +36,10 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::prelude::SessionContext;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_datasource::ListingTableUrl;
 use futures::TryStreamExt;
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
@@ -52,10 +61,12 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         partition,
         attempt: 0,
         file_suffix: ".parquet".to_string(),
+        partition_columns: vec![],
         options: TableParquetOptions::default(),
         sorting: None,
         buffer_size: 10 * 1024 * 1024,
         max_rows_per_file: 50_000_000,
+        max_open_files: 100,
     }
 }
 
@@ -822,6 +833,480 @@ async fn test_arrow_types() -> Result<()> {
             "Union(Sparse, 0: (\"i\": Int64), 1: (\"s\": Utf8))",
             "Union(Dense, 0: (\"i\": Int64), 1: (\"s\": Utf8))",
         ]
+    );
+    Ok(())
+}
+
+/// The rows of each directory, where a row is formatted as text and the rows are sorted.
+type DirectoryRows = BTreeMap<String, Vec<String>>;
+
+async fn read_directories(store: &dyn ObjectStore) -> Result<DirectoryRows> {
+    let mut directories = DirectoryRows::new();
+    for (file, _) in list_files(store).await? {
+        let (directory, _) = file
+            .rsplit_once('/')
+            .ok_or_else(|| internal_datafusion_err!("invalid file path: {file}"))?;
+        let (_, data) = read_parquet(read_bytes(store, &file).await?)?;
+        let rows = directories.entry(directory.to_string()).or_default();
+        for line in pretty_format_batches(&[data])?.to_string().lines().skip(3) {
+            if !line.starts_with('+') {
+                rows.push(line.to_string());
+            }
+        }
+        rows.sort();
+    }
+    Ok(directories)
+}
+
+fn partition_task(
+    store: Arc<dyn ObjectStore>,
+    partition: usize,
+    partition_columns: &[&str],
+) -> ParquetWriteTask {
+    let mut task = test_task(store, partition);
+    task.partition_columns = partition_columns.iter().map(|x| x.to_string()).collect();
+    task
+}
+
+/// Writes the batch with the DataFusion Parquet sink, which is how
+/// partitioned data was written before the writer task existed.
+async fn write_with_data_sink(
+    batch: &RecordBatch,
+    partition_columns: &[&str],
+) -> Result<DirectoryRows> {
+    let ctx = SessionContext::new();
+    let store = Arc::new(InMemory::new());
+    let url = ObjectStoreUrl::parse("memory://")?;
+    ctx.register_object_store(url.as_ref(), store.clone());
+    let sink = ParquetSink::new(
+        FileSinkConfig {
+            original_url: "memory:///table/".to_string(),
+            object_store_url: url,
+            file_group: Default::default(),
+            table_paths: vec![ListingTableUrl::parse("memory:///table/")?],
+            output_schema: batch.schema(),
+            table_partition_cols: partition_columns
+                .iter()
+                .map(|x| (x.to_string(), DataType::Null))
+                .collect(),
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".to_string(),
+            file_output_mode: FileOutputMode::Automatic,
+        },
+        TableParquetOptions::default(),
+    );
+    let input = test_stream(&batch.schema(), vec![batch.clone()]);
+    sink.write_all(input, &ctx.task_ctx()).await?;
+    read_directories(store.as_ref()).await
+}
+
+/// Writes rows with the partition column `p` and the data column `v`,
+/// and returns the directories of the rows. The directories and their rows
+/// must be the same as the ones that the DataFusion Parquet sink produces.
+async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", values.data_type().clone(), true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let v: ArrayRef = Arc::new(Int64Array::from_iter_values(0..values.len() as i64));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values, v])?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let task = partition_task(Arc::clone(&store), 0, &["p"]);
+    run_task(task, &schema, vec![batch.clone()]).await?;
+    let actual = read_directories(store.as_ref()).await?;
+    let expected = write_with_data_sink(&batch, &["p"]).await?;
+    assert_eq!(actual, expected);
+    Ok(actual.into_keys().collect())
+}
+
+#[tokio::test]
+async fn test_partition_directory_names() -> Result<()> {
+    let strings = StringArray::from(vec![
+        Some("a"),
+        Some(""),
+        None,
+        Some("a/b"),
+        Some("x=y"),
+        Some("50%"),
+        Some("sp ace"),
+        Some("h\u{e9}llo"),
+        Some("a"),
+    ]);
+    let expected = vec![
+        "table/p=",
+        "table/p=50%25",
+        "table/p=a",
+        "table/p=a%2Fb",
+        "table/p=h%C3%A9llo",
+        "table/p=sp ace",
+        "table/p=x=y",
+    ];
+    for data_type in [
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+    ] {
+        let directories = partition_directories(cast(&strings, &data_type)?).await?;
+        assert_eq!(directories, expected, "{data_type}");
+    }
+
+    let booleans = BooleanArray::from(vec![Some(true), None, Some(false)]);
+    assert_eq!(
+        partition_directories(Arc::new(booleans)).await?,
+        vec!["table/p=false", "table/p=true"]
+    );
+
+    let integers = Int64Array::from(vec![Some(1), None, Some(0), Some(-3), Some(100), Some(1)]);
+    for data_type in [
+        DataType::Int8,
+        DataType::Int16,
+        DataType::Int32,
+        DataType::Int64,
+    ] {
+        let directories = partition_directories(cast(&integers, &data_type)?).await?;
+        assert_eq!(
+            directories,
+            vec!["table/p=-3", "table/p=0", "table/p=1", "table/p=100"],
+            "{data_type}"
+        );
+    }
+    let integers = Int64Array::from(vec![Some(1), None, Some(0), Some(100), Some(1)]);
+    for data_type in [
+        DataType::UInt8,
+        DataType::UInt16,
+        DataType::UInt32,
+        DataType::UInt64,
+    ] {
+        let directories = partition_directories(cast(&integers, &data_type)?).await?;
+        assert_eq!(
+            directories,
+            vec!["table/p=0", "table/p=1", "table/p=100"],
+            "{data_type}"
+        );
+    }
+
+    let floats = Float64Array::from(vec![
+        Some(1.5),
+        None,
+        Some(f64::NAN),
+        Some(0.0),
+        Some(-0.0),
+        Some(f64::INFINITY),
+        Some(f64::NEG_INFINITY),
+        Some(100.0),
+    ]);
+    for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+        let directories = partition_directories(cast(&floats, &data_type)?).await?;
+        assert_eq!(
+            directories,
+            vec![
+                "table/p=-0",
+                "table/p=-inf",
+                "table/p=0",
+                "table/p=1.5",
+                "table/p=100",
+                "table/p=NaN",
+                "table/p=inf",
+            ],
+            "{data_type}"
+        );
+    }
+
+    let days = Int32Array::from(vec![Some(0), None, Some(19000), Some(-1)]);
+    assert_eq!(
+        partition_directories(cast(&days, &DataType::Date32)?).await?,
+        vec![
+            "table/p=1969-12-31",
+            "table/p=1970-01-01",
+            "table/p=2022-01-08",
+        ]
+    );
+    // The time of day is dropped by a division that rounds towards zero,
+    // so the last value is in the directory of the first day.
+    let milliseconds = Int64Array::from(vec![Some(0), None, Some(1641600000123), Some(-1)]);
+    assert_eq!(
+        partition_directories(cast(&milliseconds, &DataType::Date64)?).await?,
+        vec!["table/p=1970-01-01", "table/p=2022-01-08"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_column_type_not_supported() -> Result<()> {
+    let integers = Int64Array::from(vec![Some(1), None]);
+    for data_type in [
+        DataType::Decimal128(10, 2),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Binary,
+    ] {
+        let values = match &data_type {
+            DataType::Binary => Arc::new(BinaryArray::from(vec![Some(&b"a"[..]), None])),
+            _ => cast(&integers, &data_type)?,
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("p", data_type.clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![values, Arc::new(integers.clone())],
+        )?;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let task = partition_task(Arc::clone(&store), 0, &["p"]);
+        let actual = run_task(task, &schema, vec![batch.clone()]).await;
+        let expected = write_with_data_sink(&batch, &["p"]).await;
+        let (Err(actual), Err(expected)) = (actual, expected) else {
+            return Err(internal_datafusion_err!("expected errors for {data_type}"));
+        };
+        assert_eq!(actual.strip_backtrace(), expected.strip_backtrace());
+        assert!(
+            actual.to_string().contains(&format!(
+                "it is not yet supported to write to hive partitions with datatype {data_type}"
+            )),
+            "{actual}"
+        );
+        assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    }
+    Ok(())
+}
+
+fn partitioned_schema() -> SchemaRef {
+    Arc::new(
+        Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("a", DataType::Int32, true),
+            Field::new("w", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ])
+        .with_metadata(HashMap::from([("k".to_string(), "v".to_string())])),
+    )
+}
+
+fn partitioned_batch(rows: &[(i64, i32, &str)]) -> Result<RecordBatch> {
+    let v: Int64Array = rows.iter().map(|x| Some(x.0)).collect();
+    let a: Int32Array = rows.iter().map(|x| Some(x.1)).collect();
+    let w: StringArray = rows.iter().map(|x| Some(format!("w{}", x.0))).collect();
+    let b: StringArray = rows.iter().map(|x| Some(x.2)).collect();
+    Ok(RecordBatch::try_new(
+        partitioned_schema(),
+        vec![Arc::new(v), Arc::new(a), Arc::new(w), Arc::new(b)],
+    )?)
+}
+
+#[tokio::test]
+async fn test_partition_columns_are_not_written() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let batches = vec![
+        partitioned_batch(&[(1, 1, "x"), (2, 2, "x"), (3, 1, "y"), (4, 1, "x")])?,
+        partitioned_batch(&[(5, 1, "x"), (6, 2, "y")])?,
+    ];
+    // The directories follow the order of the partition columns of the task.
+    let task = partition_task(Arc::clone(&store), 4, &["b", "a"]);
+    let manifest = run_task(task, &schema, batches).await?;
+    let files = list_files(store.as_ref()).await?;
+    let name = |directory: &str| format!("table/{directory}/part-00004-{WRITE_ID}-c000.parquet");
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            name("b=x/a=1"),
+            name("b=x/a=2"),
+            name("b=y/a=1"),
+            name("b=y/a=2"),
+        ]
+    );
+    let mut rows = manifest_rows(&manifest)?;
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            (4, 0, Some(name("b=x/a=1")), files[0].1, 3),
+            (4, 0, Some(name("b=x/a=2")), files[1].1, 1),
+            (4, 0, Some(name("b=y/a=1")), files[2].1, 1),
+            (4, 0, Some(name("b=y/a=2")), files[3].1, 1),
+        ]
+    );
+    let file_schema = Arc::new(schema.project(&[0, 2])?);
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &name("b=x/a=1")).await?)?;
+    assert_eq!(data.schema(), file_schema);
+    assert_eq!(
+        data,
+        partitioned_batch(&[(1, 1, "x"), (4, 1, "x"), (5, 1, "x")])?.project(&[0, 2])?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_single_value_batch() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let batch = partitioned_batch(&[(1, 7, "x"), (2, 7, "x"), (3, 7, "x")])?;
+    let task = partition_task(Arc::clone(&store), 0, &["a", "b"]);
+    let manifest = run_task(task, &schema, vec![batch.clone()]).await?;
+    let name = format!("table/a=7/b=x/part-00000-{WRITE_ID}-c000.parquet");
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        manifest_rows(&manifest)?,
+        vec![(0, 0, Some(name.clone()), files[0].1, 3)]
+    );
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
+    assert_eq!(data, batch.project(&[0, 2])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_null_shares_directory_with_default_value() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", DataType::Int32, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(0), None, Some(1), None])),
+            Arc::new(Int64Array::from_iter_values(0..4)),
+        ],
+    )?;
+    let task = partition_task(Arc::clone(&store), 0, &["p"]);
+    run_task(task, &schema, vec![batch]).await?;
+    let files = list_files(store.as_ref()).await?;
+    // The rows with a null value and with the value 0 are in the same file.
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            format!("table/p=0/part-00000-{WRITE_ID}-c000.parquet"),
+            format!("table/p=1/part-00000-{WRITE_ID}-c000.parquet"),
+        ]
+    );
+    let (_, data) = read_parquet(read_bytes(store.as_ref(), &files[0].0).await?)?;
+    assert_eq!(
+        data.column(0).as_ref(),
+        &Int64Array::from(vec![Some(0), Some(1), Some(3)])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_open_file_limit() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let batches = vec![
+        partitioned_batch(&[(1, 1, "x")])?,
+        partitioned_batch(&[(2, 2, "x")])?,
+        partitioned_batch(&[(3, 1, "x")])?,
+        // The file of `a=2` is completed here since it was used least recently.
+        partitioned_batch(&[(4, 3, "x")])?,
+        partitioned_batch(&[(5, 1, "x")])?,
+        // The file of `a=3` is completed here, and `a=2` gets a second file.
+        partitioned_batch(&[(6, 2, "x"), (7, 1, "x")])?,
+    ];
+    let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
+    task.max_open_files = 2;
+    let manifest = run_task(task, &schema, batches).await?;
+    let files = list_files(store.as_ref()).await?;
+    let name =
+        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
+    let mut rows = manifest_rows(&manifest)?;
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            (0, 0, Some(name(1, 0)), files[0].1, 4),
+            (0, 0, Some(name(2, 0)), files[1].1, 1),
+            (0, 0, Some(name(2, 1)), files[2].1, 1),
+            (0, 0, Some(name(3, 0)), files[3].1, 1),
+        ]
+    );
+    assert_eq!(files.len(), 4);
+    let read = |name: String| {
+        let store = Arc::clone(&store);
+        async move {
+            let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
+            let values = datafusion_common::cast::as_int64_array(data.column(0))?;
+            Ok::<_, DataFusionError>(values.values().to_vec())
+        }
+    };
+    assert_eq!(read(name(1, 0)).await?, vec![1, 3, 5, 7]);
+    assert_eq!(read(name(2, 0)).await?, vec![2]);
+    assert_eq!(read(name(2, 1)).await?, vec![6]);
+    assert_eq!(read(name(3, 0)).await?, vec![4]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_row_limit_starts_new_file() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
+    task.max_rows_per_file = 2;
+    task.options.global.max_row_group_size = 2;
+    let batches = vec![
+        partitioned_batch(&[(1, 1, "x"), (2, 1, "x"), (3, 2, "x")])?,
+        partitioned_batch(&[(4, 1, "x"), (5, 2, "x")])?,
+    ];
+    run_task(task, &schema, batches).await?;
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            format!("table/a=1/part-00000-{WRITE_ID}-c000.parquet"),
+            format!("table/a=1/part-00000-{WRITE_ID}-c001.parquet"),
+            format!("table/a=2/part-00000-{WRITE_ID}-c000.parquet"),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_empty_input_writes_no_file() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let task = partition_task(Arc::clone(&store), 0, &["a"]);
+    let manifest = run_task(task, &schema, vec![partitioned_batch(&[])?]).await?;
+    assert_eq!(manifest_rows(&manifest)?, vec![(0, 0, None, 0, 0)]);
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_column_missing() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let task = partition_task(Arc::clone(&store), 0, &["missing"]);
+    let result = run_task(task, &schema, vec![]).await;
+    assert!(
+        matches!(&result, Err(e) if e.to_string().contains("partition column missing does not exist")),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_sorting_columns() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let ordering = LexOrdering::new([
+        PhysicalSortExpr::new_default(Arc::new(Column::new("a", 1))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("w", 2))),
+    ])
+    .ok_or_else(|| internal_datafusion_err!("empty ordering"))?;
+    let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
+    task.sorting = Some(ordering);
+    run_task(task, &schema, vec![partitioned_batch(&[(1, 1, "x")])?]).await?;
+    let files = list_files(store.as_ref()).await?;
+    let (metadata, _) = read_parquet(read_bytes(store.as_ref(), &files[0].0).await?)?;
+    // The partition column is not in the file,
+    // and the index of the other column is the index in the file.
+    assert_eq!(
+        metadata.row_group(0).sorting_columns(),
+        Some(&vec![SortingColumn {
+            column_idx: 1,
+            descending: false,
+            nulls_first: true,
+        }])
     );
     Ok(())
 }

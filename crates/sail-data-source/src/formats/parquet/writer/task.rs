@@ -18,6 +18,7 @@ use object_store::path::Path;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::file::ParquetFileWriter;
+use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WrittenFile, manifest_batch};
 use crate::listing::part_file::part_file_name;
@@ -33,6 +34,9 @@ pub struct ParquetWriteTask {
     pub attempt: usize,
     /// The file name suffix such as `.zstd.parquet`.
     pub file_suffix: String,
+    /// The columns whose values determine the directory of each row.
+    /// These columns are not written to the files.
+    pub partition_columns: Vec<String>,
     pub options: TableParquetOptions,
     /// The ordering of the input to record in the file metadata.
     pub sorting: Option<LexOrdering>,
@@ -42,6 +46,9 @@ pub struct ParquetWriteTask {
     /// The limit is checked when a row group is completed,
     /// so a file can have more rows than this.
     pub max_rows_per_file: usize,
+    /// The number of files that the task keeps open at the same time
+    /// when the data has partition columns.
+    pub max_open_files: usize,
 }
 
 /// The metrics of one Parquet writer task.
@@ -70,7 +77,7 @@ impl ParquetWriteMetrics {
 }
 
 /// Creates the files of a writer task. All files have the same schema.
-struct FileFactory {
+pub(super) struct FileFactory {
     store: Arc<dyn ObjectStore>,
     write_id: Uuid,
     partition: usize,
@@ -149,14 +156,14 @@ fn sorting_columns(
 
 /// Writes the files of a writer task in one directory.
 /// At most one file is open at a time.
-struct DirectoryWriter {
+pub(super) struct DirectoryWriter {
     directory: Path,
-    writer: Option<ParquetFileWriter>,
+    writer: Option<Box<ParquetFileWriter>>,
     next_counter: u32,
 }
 
 impl DirectoryWriter {
-    fn new(directory: Path) -> Self {
+    pub fn new(directory: Path) -> Self {
         Self {
             directory,
             writer: None,
@@ -170,12 +177,12 @@ impl DirectoryWriter {
             writer @ None => {
                 let file = factory.create(&self.directory, self.next_counter)?;
                 self.next_counter += 1;
-                Ok(writer.insert(file))
+                Ok(writer.insert(Box::new(file)))
             }
         }
     }
 
-    async fn write(
+    pub async fn write(
         &mut self,
         factory: &FileFactory,
         batch: &RecordBatch,
@@ -189,15 +196,49 @@ impl DirectoryWriter {
         Ok(())
     }
 
-    fn memory_size(&self) -> usize {
+    pub fn memory_size(&self) -> usize {
         self.writer.as_ref().map_or(0, |x| x.memory_size())
     }
 
-    async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+    pub async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
         if let Some(writer) = self.writer.take() {
             written.push(writer.close().await?);
         }
         Ok(())
+    }
+}
+
+/// The files that a writer task is writing.
+enum TaskOutput {
+    Directory(DirectoryWriter),
+    Partitioned(Box<PartitionedWriter>),
+}
+
+impl TaskOutput {
+    async fn write(
+        &mut self,
+        factory: &FileFactory,
+        batch: &RecordBatch,
+        written: &mut Vec<WrittenFile>,
+    ) -> Result<()> {
+        match self {
+            Self::Directory(x) => x.write(factory, batch, written).await,
+            Self::Partitioned(x) => x.write(factory, batch, written).await,
+        }
+    }
+
+    fn memory_size(&self) -> usize {
+        match self {
+            Self::Directory(x) => x.memory_size(),
+            Self::Partitioned(x) => x.memory_size(),
+        }
+    }
+
+    async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+        match self {
+            Self::Directory(x) => x.close(written).await,
+            Self::Partitioned(x) => x.close(written).await,
+        }
     }
 }
 
@@ -210,9 +251,17 @@ pub async fn write_partition(
 ) -> Result<RecordBatch> {
     let partition = task.partition;
     let attempt = task.attempt;
-    let schema = input.schema();
-    let mut output = DirectoryWriter::new(task.table_path.clone());
-    let factory = FileFactory::try_new(task, &schema, Arc::clone(&schema))?;
+    let input_schema = input.schema();
+    let (mut output, schema) = if task.partition_columns.is_empty() {
+        let output = DirectoryWriter::new(task.table_path.clone());
+        (TaskOutput::Directory(output), Arc::clone(&input_schema))
+    } else {
+        let router = PartitionRouter::try_new(&input_schema, &task.partition_columns)?;
+        let schema = Arc::clone(router.file_schema());
+        let output = PartitionedWriter::new(router, task.table_path.clone(), task.max_open_files);
+        (TaskOutput::Partitioned(Box::new(output)), schema)
+    };
+    let factory = FileFactory::try_new(task, &input_schema, schema)?;
     let mut written = vec![];
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
@@ -222,9 +271,13 @@ pub async fn write_partition(
         output.write(&factory, &batch, &mut written).await?;
         reservation.try_resize(output.memory_size())?;
     }
-    if partition == 0 && written.is_empty() {
-        // The first partition always produces a file, so that the schema of
-        // the data can be read from the table even when the result is empty.
+    if let TaskOutput::Directory(output) = &mut output
+        && partition == 0
+        && written.is_empty()
+    {
+        // Without partition columns, the first partition always produces a file,
+        // so that the schema of the data can be read from the table even when
+        // the result is empty.
         output.open(&factory)?;
     }
     {
