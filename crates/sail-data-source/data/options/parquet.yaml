@@ -575,6 +575,8 @@
     When set, the writer flushes a row group when either this limit or `max_row_group_size` is reached,
     whichever comes first.
     Setting this value to `0` means only the row count limit applies.
+    The size of the rows of a row group is known only after they are encoded,
+    so a file is written with fewer CPU cores when this limit is set.
     Defaults to the Sail configuration option `parquet.max_row_group_bytes`.
   supported: true
   rust_type: "Option<usize>"
