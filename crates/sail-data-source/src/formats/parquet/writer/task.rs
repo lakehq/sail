@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::parquet::file::metadata::SortingColumn;
@@ -29,8 +29,10 @@ pub struct ParquetWriteTask {
     /// The root directory of the table.
     pub table_path: Path,
     pub write_id: Uuid,
-    /// The index of the input partition that the task writes.
+    /// The index of the writer partition of the task.
     pub partition: usize,
+    /// The number of writer partitions.
+    pub partitions: usize,
     pub attempt: usize,
     /// The file name suffix such as `.zstd.parquet`.
     pub file_suffix: String,
@@ -208,6 +210,24 @@ impl DirectoryWriter {
     }
 }
 
+/// Returns whether the data type is or contains a union type,
+/// which is the type that has no Parquet schema in the Arrow writer.
+fn contains_union(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Union(_, _) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _)
+        | DataType::RunEndEncoded(_, field) => contains_union(field.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|field| contains_union(field.data_type())),
+        DataType::Dictionary(_, value) => contains_union(value),
+        _ => false,
+    }
+}
+
 /// The files that a writer task is writing.
 enum TaskOutput {
     Directory(DirectoryWriter),
@@ -250,6 +270,7 @@ pub async fn write_partition(
     metrics: ParquetWriteMetrics,
 ) -> Result<RecordBatch> {
     let partition = task.partition;
+    let partitions = task.partitions;
     let attempt = task.attempt;
     let input_schema = input.schema();
     let (mut output, schema) = if task.partition_columns.is_empty() {
@@ -274,10 +295,15 @@ pub async fn write_partition(
     if let TaskOutput::Directory(output) = &mut output
         && partition == 0
         && written.is_empty()
+        && !input_schema
+            .fields()
+            .iter()
+            .any(|field| contains_union(field.data_type()))
     {
         // Without partition columns, the first partition always produces a file,
         // so that the schema of the data can be read from the table even when
-        // the result is empty.
+        // the result is empty. This is skipped for a schema that the Parquet
+        // writer cannot represent, so that an empty result can still be written.
         output.open(&factory)?;
     }
     {
@@ -288,5 +314,5 @@ pub async fn write_partition(
     for file in &written {
         metrics.record(file);
     }
-    manifest_batch(partition, attempt, &written)
+    manifest_batch(partition, partitions, attempt, &written)
 }

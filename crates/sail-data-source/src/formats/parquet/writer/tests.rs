@@ -68,6 +68,7 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         table_path: Path::from("table"),
         write_id: WRITE_ID,
         partition,
+        partitions: partition + 1,
         attempt: 0,
         file_suffix: ".parquet".to_string(),
         partition_columns: vec![],
@@ -120,10 +121,10 @@ fn manifest_rows(manifest: &RecordBatch) -> Result<Vec<ManifestRow>> {
     use datafusion_common::cast::{as_string_array, as_uint64_array};
 
     let partition = as_uint64_array(manifest.column(0))?;
-    let attempt = as_uint64_array(manifest.column(1))?;
-    let path = as_string_array(manifest.column(2))?;
-    let size = as_uint64_array(manifest.column(3))?;
-    let num_rows = as_uint64_array(manifest.column(4))?;
+    let attempt = as_uint64_array(manifest.column(2))?;
+    let path = as_string_array(manifest.column(3))?;
+    let size = as_uint64_array(manifest.column(4))?;
+    let num_rows = as_uint64_array(manifest.column(5))?;
     Ok((0..manifest.num_rows())
         .map(|i| {
             (
@@ -1568,6 +1569,50 @@ fn test_write_plan_validation() -> Result<()> {
     );
     assert!(
         matches!(&result, Err(e) if e.to_string().contains("partition column missing does not exist"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_empty_first_partition_with_union_writes_no_file() -> Result<()> {
+    let fields = UnionFields::try_new(vec![0], vec![Field::new("i", DataType::Int64, true)])?;
+    let union = DataType::Union(fields, UnionMode::Sparse);
+    for data_type in [
+        union.clone(),
+        DataType::List(Arc::new(Field::new_list_field(union.clone(), true))),
+        DataType::Struct(vec![Field::new("u", union, false)].into()),
+    ] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", data_type, false),
+        ]));
+        let manifest = run_task(test_task(Arc::clone(&store), 0), &schema, vec![]).await?;
+        assert_eq!(manifest_rows(&manifest)?, vec![(0, 0, None, 0, 0)]);
+        assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_and_commit_plan_without_input_partitions() -> Result<()> {
+    let (ctx, store) = memory_context()?;
+    let schema = int_schema();
+    let writer = Arc::new(write_exec(&[], &schema, None, false)?);
+    assert_eq!(writer.input().output_partitioning().partition_count(), 0);
+    assert_eq!(
+        writer.properties().output_partitioning().partition_count(),
+        1
+    );
+    let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
+    assert_eq!(count_value(&output)?, vec![0]);
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(
+        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        vec![
+            "table/_SUCCESS".to_string(),
+            file_name(0, 0, ".zstd.parquet")
+        ]
     );
     Ok(())
 }

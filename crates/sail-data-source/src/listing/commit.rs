@@ -38,9 +38,12 @@ pub struct WrittenFile {
 /// The schema of the manifest that each writer task returns.
 /// The manifest has one row per completed file.
 /// A task that completed no file returns a single row with a null path.
+/// The row is required since the commit must see every writer partition,
+/// and an exchange between the writers and the commit drops empty batches.
 pub fn manifest_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("partition", DataType::UInt64, false),
+        Field::new("partitions", DataType::UInt64, false),
         Field::new("attempt", DataType::UInt64, false),
         Field::new("path", DataType::Utf8, true),
         Field::new("size", DataType::UInt64, false),
@@ -48,9 +51,10 @@ pub fn manifest_schema() -> SchemaRef {
     ]))
 }
 
-/// Builds the manifest of a writer task.
+/// Builds the manifest of the writer task for one of the writer partitions.
 pub fn manifest_batch(
     partition: usize,
+    partitions: usize,
     attempt: usize,
     files: &[WrittenFile],
 ) -> Result<RecordBatch> {
@@ -66,6 +70,7 @@ pub fn manifest_batch(
     num_rows.resize(rows, 0);
     let columns: Vec<ArrayRef> = vec![
         Arc::new(UInt64Array::from(vec![partition as u64; rows])),
+        Arc::new(UInt64Array::from(vec![partitions as u64; rows])),
         Arc::new(UInt64Array::from(vec![attempt as u64; rows])),
         Arc::new(StringArray::from(paths)),
         Arc::new(UInt64Array::from(sizes)),
@@ -77,6 +82,8 @@ pub fn manifest_batch(
 /// The manifests of all writer tasks of a write.
 #[derive(Debug, Default)]
 struct Manifests {
+    /// The number of writer partitions.
+    partitions: Option<u64>,
     /// The attempt number of each writer partition.
     attempts: HashMap<u64, u64>,
     /// The partitions that completed no file.
@@ -88,12 +95,17 @@ struct Manifests {
 impl Manifests {
     fn add(&mut self, manifest: &RecordBatch) -> Result<()> {
         let partition = as_uint64_array(manifest.column(0))?;
-        let attempt = as_uint64_array(manifest.column(1))?;
-        let path = as_string_array(manifest.column(2))?;
-        let num_rows = as_uint64_array(manifest.column(4))?;
+        let partitions = as_uint64_array(manifest.column(1))?;
+        let attempt = as_uint64_array(manifest.column(2))?;
+        let path = as_string_array(manifest.column(3))?;
+        let num_rows = as_uint64_array(manifest.column(5))?;
         for i in 0..manifest.num_rows() {
             let partition = partition.value(i);
+            let partitions = partitions.value(i);
             let attempt = attempt.value(i);
+            if *self.partitions.get_or_insert(partitions) != partitions {
+                return internal_err!("writer tasks disagree on the number of partitions");
+            }
             let known = self.attempts.insert(partition, attempt);
             if known.is_some_and(|known| known != attempt) {
                 return internal_err!("writer partition {partition} has more than one attempt");
@@ -111,6 +123,22 @@ impl Manifests {
                 return internal_err!("writer partition {partition} has more than one manifest");
             }
             self.num_rows += num_rows.value(i);
+        }
+        Ok(())
+    }
+
+    /// Checks that the manifests of all writer partitions were received.
+    /// The end of the input does not show this, since the output of a failed
+    /// or canceled writer task can end in the same way as a complete output.
+    fn validate(&self) -> Result<()> {
+        let Some(partitions) = self.partitions else {
+            return exec_err!("the write is incomplete: no writer task has reported its files");
+        };
+        let received = self.attempts.len() as u64;
+        if received != partitions || self.attempts.keys().any(|x| *x >= partitions) {
+            return exec_err!(
+                "the write is incomplete: {received} of {partitions} writer tasks have reported their files"
+            );
         }
         Ok(())
     }
@@ -148,6 +176,7 @@ async fn commit_file_write(
             break;
         }
     }
+    let result = result.and_then(|()| manifests.validate());
     if let Err(e) = result {
         // Stop the writer tasks that are still running, and remove the files
         // of the tasks that have completed. These files have names that no
@@ -533,12 +562,12 @@ mod tests {
                 num_rows: 4,
             },
         ];
-        let manifest = manifest_batch(5, 6, &files)?;
+        let manifest = manifest_batch(5, 8, 6, &files)?;
         assert_eq!(manifest.schema(), manifest_schema());
         assert_eq!(manifest.num_rows(), 2);
         let mut manifests = Manifests::default();
         manifests.add(&manifest)?;
-        manifests.add(&manifest_batch(7, 0, &[])?)?;
+        manifests.add(&manifest_batch(7, 8, 0, &[])?)?;
         assert_eq!(manifests.attempts, HashMap::from([(5, 6), (7, 0)]));
         assert_eq!(
             manifests.files,
@@ -547,6 +576,8 @@ mod tests {
         assert_eq!(manifests.empty_partitions, HashSet::from([7]));
         assert_eq!(manifests.num_rows, 6);
         assert_eq!(manifests.max_attempt(), 6);
+        assert_eq!(manifests.partitions, Some(8));
+        assert!(manifests.validate().is_err());
         Ok(())
     }
 
@@ -569,9 +600,9 @@ mod tests {
             .await?;
         let count = write
             .commit(vec![
-                manifest_batch(0, 0, &[a, b]),
-                manifest_batch(1, 0, &[]),
-                manifest_batch(2, 0, &[c]),
+                manifest_batch(0, 3, 0, &[a, b]),
+                manifest_batch(1, 3, 0, &[]),
+                manifest_batch(2, 3, 0, &[c]),
             ])
             .await?;
         assert_eq!(count, 30);
@@ -583,7 +614,7 @@ mod tests {
     #[tokio::test]
     async fn test_commit_of_empty_write() -> Result<()> {
         let write = TestWrite::new();
-        let count = write.commit(vec![manifest_batch(0, 0, &[])]).await?;
+        let count = write.commit(vec![manifest_batch(0, 1, 0, &[])]).await?;
         assert_eq!(count, 0);
         assert_eq!(write.requests(), vec!["PUT table/_SUCCESS 0"]);
         assert_eq!(write.files().await?, vec!["table/_SUCCESS"]);
@@ -626,9 +657,9 @@ mod tests {
         let committed = [a.clone(), b.clone(), c.clone()];
         let count = write
             .commit(vec![
-                manifest_batch(0, 2, &[a, b]),
-                manifest_batch(1, 2, &[]),
-                manifest_batch(2, 0, &[c]),
+                manifest_batch(0, 3, 2, &[a, b]),
+                manifest_batch(1, 3, 2, &[]),
+                manifest_batch(2, 3, 0, &[c]),
             ])
             .await?;
         assert_eq!(count, 30);
@@ -666,14 +697,73 @@ mod tests {
         write.create(&other).await?;
         let result = write
             .commit(vec![
-                manifest_batch(0, 1, std::slice::from_ref(&a)),
+                manifest_batch(0, 2, 1, std::slice::from_ref(&a)),
                 exec_err!("writer failure"),
-                manifest_batch(1, 1, &[]),
+                manifest_batch(1, 2, 1, &[]),
             ])
             .await;
         assert!(matches!(&result, Err(e) if e.to_string().contains("writer failure")));
         assert_eq!(write.requests(), vec![format!("DELETE {}", a.location)]);
         assert_eq!(write.files().await?, vec![other]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_missing_manifests() -> Result<()> {
+        // The input ends without an error, but one writer partition has not reported.
+        let write = TestWrite::new();
+        let a = write
+            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
+            .await?;
+        let result = write
+            .commit(vec![
+                manifest_batch(0, 3, 0, std::slice::from_ref(&a)),
+                manifest_batch(2, 3, 0, &[]),
+            ])
+            .await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("2 of 3 writer tasks")),
+            "{result:?}"
+        );
+        // The files that the commit has received are deleted.
+        assert_eq!(write.requests(), vec![format!("DELETE {}", a.location)]);
+        assert_eq!(write.files().await?, Vec::<String>::new());
+
+        // no manifest at all
+        let write = TestWrite::new();
+        let result = write.commit(vec![]).await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("no writer task has reported")),
+            "{result:?}"
+        );
+        assert_eq!(write.files().await?, Vec::<String>::new());
+
+        // a partition index outside the range
+        let write = TestWrite::new();
+        let result = write
+            .commit(vec![
+                manifest_batch(0, 2, 0, &[]),
+                manifest_batch(2, 2, 0, &[]),
+            ])
+            .await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("the write is incomplete")),
+            "{result:?}"
+        );
+
+        // different numbers of partitions
+        let write = TestWrite::new();
+        let result = write
+            .commit(vec![
+                manifest_batch(0, 2, 0, &[]),
+                manifest_batch(1, 3, 0, &[]),
+            ])
+            .await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("disagree on the number of partitions")),
+            "{result:?}"
+        );
+        assert_eq!(write.files().await?, Vec::<String>::new());
         Ok(())
     }
 
@@ -689,7 +779,10 @@ mod tests {
         let a = file(&write, 0, 0).await?;
         let b = file(&write, 0, 1).await?;
         let result = write
-            .commit(vec![manifest_batch(0, 0, &[a]), manifest_batch(0, 1, &[b])])
+            .commit(vec![
+                manifest_batch(0, 1, 0, &[a]),
+                manifest_batch(0, 1, 1, &[b]),
+            ])
             .await;
         assert!(
             matches!(&result, Err(e) if e.to_string().contains("more than one attempt")),
@@ -702,8 +795,8 @@ mod tests {
         let a = file(&write, 0, 0).await?;
         let result = write
             .commit(vec![
-                manifest_batch(0, 0, std::slice::from_ref(&a)),
-                manifest_batch(0, 0, &[a]),
+                manifest_batch(0, 1, 0, std::slice::from_ref(&a)),
+                manifest_batch(0, 1, 0, &[a]),
             ])
             .await;
         assert!(
@@ -714,7 +807,10 @@ mod tests {
         // the same manifest twice for a partition without files
         let write = TestWrite::new();
         let result = write
-            .commit(vec![manifest_batch(0, 0, &[]), manifest_batch(0, 0, &[])])
+            .commit(vec![
+                manifest_batch(0, 1, 0, &[]),
+                manifest_batch(0, 1, 0, &[]),
+            ])
             .await;
         assert!(
             matches!(&result, Err(e) if e.to_string().contains("more than one manifest")),
@@ -726,10 +822,10 @@ mod tests {
         let a = file(&write, 0, 0).await?;
         for manifests in [
             vec![
-                manifest_batch(0, 0, std::slice::from_ref(&a)),
-                manifest_batch(0, 0, &[]),
+                manifest_batch(0, 1, 0, std::slice::from_ref(&a)),
+                manifest_batch(0, 1, 0, &[]),
             ],
-            vec![manifest_batch(0, 0, &[]), manifest_batch(0, 0, &[a])],
+            vec![manifest_batch(0, 1, 0, &[]), manifest_batch(0, 1, 0, &[a])],
         ] {
             let result = write.commit(manifests).await;
             assert!(

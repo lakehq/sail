@@ -13,8 +13,8 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties,
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
@@ -79,7 +79,9 @@ impl ParquetWriteExec {
         }
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(manifest_schema()),
-            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count()),
+            // The plan has at least one partition, so that a table is written
+            // for an input without partitions in the same way as for an empty input.
+            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count().max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
@@ -236,7 +238,12 @@ impl ExecutionPlan for ParquetWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let input: SendableRecordBatchStream =
+            if partition < self.input.output_partitioning().partition_count() {
+                self.input.execute(partition, Arc::clone(&context))?
+            } else {
+                Box::pin(EmptyRecordBatchStream::new(self.input.schema()))
+            };
         let store = context.runtime_env().object_store(&self.object_store_url)?;
         let execution = &context.session_config().options().execution;
         let task = ParquetWriteTask {
@@ -244,6 +251,7 @@ impl ExecutionPlan for ParquetWriteExec {
             table_path: self.table_path.clone(),
             write_id: self.write_id,
             partition,
+            partitions: self.properties.output_partitioning().partition_count(),
             attempt: self.attempt,
             file_suffix: self.file_suffix.clone(),
             partition_columns: self.partition_columns.clone(),
