@@ -59,7 +59,7 @@ pub(super) fn effective_max_file_size(max_file_size: u64, buffer_size: usize) ->
 
 /// Returns whether the partitions of the plan are the partitions
 /// that the query asks for with a repartition or a coalesce.
-fn has_explicit_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+pub fn has_explicit_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
     let mut plan = plan;
     loop {
         if plan.is::<ExplicitRepartitionExec>() {
@@ -108,6 +108,9 @@ pub struct ParquetWriteExec {
     attempt: usize,
     /// The partition columns as expressions on the input.
     partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// Whether the rows are written by the tasks of the input partitions that
+    /// they are in, also when the data has partition columns.
+    keeps_input_partitions: bool,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -178,6 +181,7 @@ impl ParquetWriteExec {
             max_file_size: 0,
             attempt: 0,
             partition_exprs,
+            keeps_input_partitions: false,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -204,6 +208,7 @@ impl ParquetWriteExec {
             max_file_size: self.max_file_size,
             attempt,
             partition_exprs: self.partition_exprs.clone(),
+            keeps_input_partitions: self.keeps_input_partitions,
             properties: Arc::clone(&self.properties),
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -213,6 +218,20 @@ impl ParquetWriteExec {
     /// The schema must have the columns of the input.
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = schema;
+        self
+    }
+
+    /// Returns the plan that keeps the partitions of its input, or that requires
+    /// its input to be distributed by the partition columns.
+    ///
+    /// The rows of each partition directory are written by one task when the input
+    /// is distributed by the partition columns, so that the number of files and
+    /// the number of files that are open at the same time follow from the number
+    /// of directories and not from the number of tasks. The partitions that
+    /// the query asks for are kept instead, so that a query can divide the rows
+    /// of a directory among several tasks and files.
+    pub fn with_input_partitions_kept(mut self, keeps_input_partitions: bool) -> Self {
+        self.keeps_input_partitions = keeps_input_partitions;
         self
     }
 
@@ -284,6 +303,10 @@ impl ParquetWriteExec {
     pub fn attempt(&self) -> usize {
         self.attempt
     }
+
+    pub fn keeps_input_partitions(&self) -> bool {
+        self.keeps_input_partitions
+    }
 }
 
 impl DisplayAs for ParquetWriteExec {
@@ -313,12 +336,7 @@ impl ExecutionPlan for ParquetWriteExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        // The rows of each partition directory are written by one task, so that
-        // the number of files and the number of files that are open at the same time
-        // follow from the number of directories and not from the number of tasks.
-        // The partitions that the query asks for are kept, so that a query can
-        // divide the rows of a directory among several tasks and files.
-        if self.partition_exprs.is_empty() || has_explicit_partitions(&self.input) {
+        if self.partition_exprs.is_empty() || self.keeps_input_partitions {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             vec![Distribution::KeyPartitioned(self.partition_exprs.clone())]
@@ -372,6 +390,7 @@ impl ExecutionPlan for ParquetWriteExec {
         Ok(Arc::new(
             plan.with_schema(Arc::clone(&self.schema))
                 .with_file_limits(self.max_records_per_file, self.max_file_size)
+                .with_input_partitions_kept(self.keeps_input_partitions)
                 .with_attempt(self.attempt),
         ))
     }

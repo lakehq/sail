@@ -52,6 +52,7 @@ use datafusion::physical_expr::{Distribution, PhysicalExpr};
 use datafusion::physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, Time};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -63,6 +64,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_datafusion_err};
 use datafusion_datasource::ListingTableUrl;
 use futures::stream::BoxStream;
@@ -74,10 +76,11 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
-use crate::formats::parquet::writer::exec::ParquetWriteExec;
+use crate::formats::parquet::writer::exec::{ParquetWriteExec, has_explicit_partitions};
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::lane::{Lane, LaneInput, logical_size};
 use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
@@ -2410,9 +2413,31 @@ fn partitioned_write_plan(
         0,
         NonZeroUsize::new(100).ok_or_else(|| internal_datafusion_err!("zero"))?,
     )?;
+    let keeps_input_partitions = has_explicit_partitions(writer.input());
+    let writer = writer.with_input_partitions_kept(keeps_input_partitions);
     let mut config = ConfigOptions::default();
     config.execution.target_partitions = target_partitions;
-    EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)
+    let plan = EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)?;
+    // The requirements of the writer are also met after the partitions that
+    // the query asks for have been replaced with the plans that compute them.
+    let plan = plan
+        .transform_up(|plan| {
+            let Some(explicit) = plan.downcast_ref::<ExplicitRepartitionExec>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let input = Arc::clone(explicit.input());
+            let plan: Arc<dyn ExecutionPlan> = match plan.output_partitioning().clone() {
+                Partitioning::RoundRobinBatch(_) => return Ok(Transformed::no(plan)),
+                Partitioning::UnknownPartitioning(1) => {
+                    Arc::new(CoalescePartitionsExec::new(input))
+                }
+                Partitioning::UnknownPartitioning(n) => Arc::new(CoalesceExec::new(input, n)),
+                partitioning => Arc::new(RepartitionExec::try_new(input, partitioning)?),
+            };
+            Ok(Transformed::yes(plan))
+        })?
+        .data;
+    SanityCheckPlan::new().optimize(plan, &config)
 }
 
 /// Returns the input of the writer in the plan.
@@ -2441,6 +2466,7 @@ fn test_write_plan_distributes_rows_by_partition_columns() -> Result<()> {
         )?)
     };
     let p: Arc<dyn PhysicalExpr> = Arc::new(Column::new("p", 0));
+    let v: Arc<dyn PhysicalExpr> = Arc::new(Column::new("v", 1));
     let hash = |partitions: usize| Partitioning::Hash(vec![Arc::clone(&p)], partitions);
 
     // The rows of each key are written by one task, whatever the partitions of the input are.
@@ -2478,13 +2504,13 @@ fn test_write_plan_distributes_rows_by_partition_columns() -> Result<()> {
         Partitioning::UnknownPartitioning(1),
         Partitioning::UnknownPartitioning(2),
         hash(3),
+        Partitioning::Hash(vec![v], 3),
     ] {
         let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
             source(4)?,
             partitioning.clone(),
         ));
         let input = writer_input(&partitioned_write_plan(Arc::clone(&explicit), 8)?)?;
-        assert!(input.is::<ExplicitRepartitionExec>(), "{partitioning}");
         assert_eq!(
             input.output_partitioning().partition_count(),
             partitioning.partition_count()

@@ -1496,6 +1496,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 max_records_per_file,
                 max_file_size,
+                keeps_input_partitions,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1537,7 +1538,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         max_open_files_per_task,
                     )?
                     .with_schema(Arc::new(try_decode_schema(&schema)?))
-                    .with_file_limits(max_records_per_file, max_file_size),
+                    .with_file_limits(max_records_per_file, max_file_size)
+                    .with_input_partitions_kept(keeps_input_partitions),
                 ))
             }
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -3787,6 +3789,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema: try_encode_schema(write.data_schema().as_ref())?,
                 max_records_per_file: write.max_records_per_file(),
                 max_file_size: write.max_file_size(),
+                keeps_input_partitions: write.keeps_input_partitions(),
             })
         } else if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -9934,6 +9937,7 @@ mod tests {
                 max_open_files_per_task,
             )?
             .with_file_limits(encoding_parallelism as u64 * 1000, u64::MAX - 7)
+            .with_input_partitions_kept(write_sorting_columns)
             .with_attempt(2);
             let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
@@ -9957,6 +9961,7 @@ mod tests {
                 encoding_parallelism as u64 * 1000
             );
             assert_eq!(decoded.max_file_size(), u64::MAX - 7);
+            assert_eq!(decoded.keeps_input_partitions(), write_sorting_columns);
             assert_eq!(decoded.required_input_ordering(), required_ordering);
             assert_eq!(decoded.input().schema(), schema);
             assert_eq!(

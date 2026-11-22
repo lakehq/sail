@@ -11,7 +11,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 
-use crate::formats::parquet::writer::exec::ParquetWriteExec;
+use crate::formats::parquet::writer::exec::{ParquetWriteExec, has_explicit_partitions};
 use crate::listing::commit::FileWriteCommitExec;
 use crate::listing::source::{ListingSinkInput, WriteFormat};
 use crate::options::r#gen::ParquetWriteOptions;
@@ -65,6 +65,7 @@ impl WriteFormat for ParquetWriteFormat {
             Some(sort_order) => (Some(LexOrdering::from(sort_order)), true),
             None => (sorted_input_ordering(&input), false),
         };
+        let keeps_input_partitions = has_explicit_partitions(&input);
         let writer = Arc::new(
             ParquetWriteExec::try_new(
                 input,
@@ -79,7 +80,8 @@ impl WriteFormat for ParquetWriteFormat {
                 encoding_parallelism,
                 max_open_files_per_task,
             )?
-            .with_file_limits(max_records_per_file, max_file_size),
+            .with_file_limits(max_records_per_file, max_file_size)
+            .with_input_partitions_kept(keeps_input_partitions),
         );
         Ok(Arc::new(
             FileWriteCommitExec::new(writer, sink.object_store_url, table_path, write_id)
