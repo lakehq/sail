@@ -50,15 +50,25 @@ const MAX_UPLOAD_PART_SIZE: u64 = 4000 * 1024 * 1024;
 
 /// Returns the size in bytes at which a task continues with a new file,
 /// and the size in bytes of the parts in which each file is uploaded.
+/// A size of zero means that the size of a file is not limited.
 ///
-/// All parts of a file have the same size, and an upload fails when it has
-/// more parts than the object store accepts. The parts are therefore larger
-/// when the limit on the size of a file is larger than the size that the parts
-/// of the smallest size allow. A task continues with a new file before
-/// a file has the largest number of parts, also when the size of the files
-/// is not limited. A tenth of the parts is left for the row groups that are
-/// being encoded when the size of the file is checked.
-pub(super) fn upload_limits(max_file_size: u64) -> (u64, usize) {
+/// The limit on the size of a file and the smallest size of a part are used
+/// as they are when the object store does not limit the number of parts
+/// of a file, which is the case for the local file system and HDFS.
+///
+/// Otherwise all parts of a file have the same size, and an upload fails
+/// when it has more parts than the object store accepts. The parts are
+/// therefore larger when the limit on the size of a file is larger than
+/// the size that the parts of the smallest size allow. A task continues with
+/// a new file before a file has the largest number of parts, also when
+/// the size of the files is not limited. A tenth of the parts is left for
+/// the row groups that are being encoded when the size of the file is checked.
+/// The data of a part is in memory until the part is stored, and the task
+/// counts it as the memory of the file.
+pub(super) fn upload_limits(max_file_size: u64, limits_parts: bool) -> (u64, usize) {
+    if !limits_parts {
+        return (max_file_size, UPLOAD_BUFFER_SIZE);
+    }
     let parts = MAX_UPLOAD_PARTS / 10 * 9;
     let part_size = max_file_size
         .div_ceil(parts)
@@ -392,7 +402,8 @@ impl ExecutionPlan for ParquetWriteExec {
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)))
             };
         let publisher = Publisher::try_new(&context, &self.object_store_url)?;
-        let (max_file_size, part_size) = upload_limits(self.max_file_size);
+        let (max_file_size, part_size) =
+            upload_limits(self.max_file_size, publisher.limits_parts());
         let task = ParquetWriteTask {
             publisher,
             table_path: self.table_path.clone(),

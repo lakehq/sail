@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -26,6 +27,8 @@ pub(super) const MAX_UPLOAD_CONCURRENCY: usize = 4;
 /// Dropping the writer before that abandons the upload.
 pub struct ParquetFileWriter {
     inner: FileEncoder,
+    /// The size of the data that is handed to the upload and not stored.
+    uploading: Arc<AtomicUsize>,
     location: Path,
     rows: u64,
     resources: Arc<EncodeResources>,
@@ -51,6 +54,7 @@ impl ParquetFileWriter {
         buffer_size: usize,
         resources: Arc<EncodeResources>,
     ) -> Result<Self> {
+        let uploading = writer.buffered();
         // Content-defined chunking keeps state across the row groups of a column,
         // which is only available in the Arrow writer.
         let inner = if props.content_defined_chunking().is_none() {
@@ -72,6 +76,7 @@ impl ParquetFileWriter {
         };
         Ok(Self {
             inner,
+            uploading,
             location,
             rows: 0,
             resources,
@@ -143,13 +148,14 @@ impl ParquetFileWriter {
         }
     }
 
-    /// The memory used by the data that has not been handed to the upload.
+    /// The memory used by the data that the object store has not stored.
     /// This does not include the input that waits to be encoded.
     pub fn memory_size(&self) -> usize {
-        match &self.inner {
+        let encoding = match &self.inner {
             FileEncoder::Arrow(writer) => writer.memory_size(),
             FileEncoder::Columns(writer) => writer.memory_size(),
-        }
+        };
+        encoding + self.uploading.load(Ordering::Relaxed)
     }
 
     /// Writes the remaining data and the footer, and uploads what remains.

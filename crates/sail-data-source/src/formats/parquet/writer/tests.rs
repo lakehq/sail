@@ -3264,28 +3264,31 @@ fn test_file_size_and_part_size_of_upload() {
 
     const MB: u64 = 1024 * 1024;
     const GB: u64 = 1024 * MB;
-    // A file of this size has nine tenths of the parts that an upload can have.
-    assert_eq!(upload_limits(0), (94_371_840_000, 10 * MB as usize));
-    assert_eq!(upload_limits(5), (5, 10 * MB as usize));
-    assert_eq!(upload_limits(64 * GB), (64 * GB, 10 * MB as usize));
-    assert_eq!(
-        upload_limits(94_371_840_000),
-        (94_371_840_000, 10 * MB as usize)
-    );
+    let part = 10 * MB as usize;
+    // An object store that limits the parts of a file:
+    // a file of this size has nine tenths of the parts that an upload can have.
+    assert_eq!(upload_limits(0, true), (94_371_840_000, part));
+    assert_eq!(upload_limits(5, true), (5, part));
+    assert_eq!(upload_limits(64 * GB, true), (64 * GB, part));
+    assert_eq!(upload_limits(94_371_840_000, true), (94_371_840_000, part));
     // The parts are larger for a file that would have more parts otherwise.
     assert_eq!(
-        upload_limits(94_371_840_001),
-        (94_371_840_001, 10 * MB as usize + 1)
+        upload_limits(94_371_840_001, true),
+        (94_371_840_001, part + 1)
     );
-    let (max_file_size, part_size) = upload_limits(900 * GB);
+    let (max_file_size, part_size) = upload_limits(900 * GB, true);
     assert_eq!(max_file_size, 900 * GB);
     assert_eq!(part_size, 107_374_183);
     assert!(part_size as u64 * 9000 >= max_file_size);
     // A part is not larger than the object stores accept.
     assert_eq!(
-        upload_limits(u64::MAX),
+        upload_limits(u64::MAX, true),
         (4000 * MB * 9000, 4000 * MB as usize)
     );
+    // An object store that does not limit the parts of a file.
+    for size in [0, 5, 900 * GB, u64::MAX] {
+        assert_eq!(upload_limits(size, false), (size, part));
+    }
 }
 
 #[tokio::test]
