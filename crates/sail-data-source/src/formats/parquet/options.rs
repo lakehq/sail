@@ -10,6 +10,8 @@ use datafusion_common::config::{
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
@@ -110,17 +112,11 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             column_index_truncate_length: Some(self.global.column_index_truncate_length),
             statistics_truncate_length: Some(self.global.statistics_truncate_length),
             data_page_row_count_limit: Some(self.global.data_page_row_count_limit),
-            encoding: Some(self.global.encoding.clone()),
             bloom_filter_on_write: Some(self.global.bloom_filter_on_write),
             bloom_filter_fpp: Some(self.global.bloom_filter_fpp),
             bloom_filter_ndv: Some(self.global.bloom_filter_ndv),
-            allow_single_file_parallelism: Some(self.global.allow_single_file_parallelism),
-            maximum_parallel_row_group_writers: Some(
-                self.global.maximum_parallel_row_group_writers,
-            ),
-            maximum_buffered_record_batches_per_stream: Some(
-                self.global.maximum_buffered_record_batches_per_stream,
-            ),
+            encoding_parallelism: None,
+            max_open_files_per_task: None,
             content_defined_chunking_enabled: Some(self.global.content_defined_chunking.enabled),
             content_defined_chunking_min_chunk_size: Some(
                 self.global.content_defined_chunking.min_chunk_size,
@@ -151,13 +147,11 @@ impl ParquetWriteOptions {
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
-            encoding,
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            allow_single_file_parallelism,
-            maximum_parallel_row_group_writers,
-            maximum_buffered_record_batches_per_stream,
+            encoding_parallelism: _,
+            max_open_files_per_task: _,
             content_defined_chunking_enabled,
             content_defined_chunking_min_chunk_size,
             content_defined_chunking_max_chunk_size,
@@ -279,13 +273,9 @@ impl ParquetWriteOptions {
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
-            encoding,
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            allow_single_file_parallelism,
-            maximum_parallel_row_group_writers,
-            maximum_buffered_record_batches_per_stream,
             content_defined_chunking: ParquetCdcOptions {
                 enabled: content_defined_chunking_enabled,
                 min_chunk_size: content_defined_chunking_min_chunk_size,
@@ -324,6 +314,12 @@ impl ResolveOptions for ParquetWriteOptions {
                 .parquet
                 .build_partial_options()?,
         );
+        let config = ctx.extension::<ParquetWriteConfig>()?;
+        partial.merge(ParquetWritePartialOptions {
+            encoding_parallelism: Some(config.encoding_parallelism()),
+            max_open_files_per_task: Some(config.max_open_files_per_task()),
+            ..Default::default()
+        });
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -333,15 +329,34 @@ impl ResolveOptions for ParquetWriteOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
     use std::str::FromStr;
+    use std::sync::Arc;
 
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::config::MaxRowGroupBytes;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
     use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
+    use sail_common_datafusion::datasource::OptionLayer;
+    use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
+
+    /// A session that has the values of the application configuration
+    /// for the Parquet write options.
+    fn write_session(
+        encoding_parallelism: usize,
+        max_open_files_per_task: usize,
+    ) -> datafusion_common::Result<SessionContext> {
+        let max_open_files_per_task = NonZeroUsize::new(max_open_files_per_task)
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("invalid test value"))?;
+        let config = SessionConfig::new().with_extension(Arc::new(ParquetWriteConfig::new(
+            encoding_parallelism,
+            max_open_files_per_task,
+        )));
+        Ok(SessionContext::new_with_config(config))
+    }
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -431,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_resolve_parquet_write_options() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
+        let ctx = write_session(0, 100)?;
         let state = ctx.state();
 
         let kv = option_list(&[
@@ -447,13 +462,11 @@ mod tests {
             ("column_index_truncate_length", "100"),
             ("statistics_truncate_length", "200"),
             ("data_page_row_count_limit", "10000"),
-            ("encoding", "delta_binary_packed"),
             ("bloom_filter_on_write", "true"),
             ("bloom_filter_fpp", "0.01"),
             ("bloom_filter_ndv", "1000"),
-            ("allow_single_file_parallelism", "false"),
-            ("maximum_parallel_row_group_writers", "4"),
-            ("maximum_buffered_record_batches_per_stream", "10"),
+            ("encoding_parallelism", "4"),
+            ("max_open_files_per_task", "10"),
             ("content_defined_chunking_enabled", "true"),
             ("content_defined_chunking_min_chunk_size", "4096"),
             ("content_defined_chunking_max_chunk_size", "8192"),
@@ -461,7 +474,10 @@ mod tests {
             ("max_row_group_bytes", "65536"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.encoding_parallelism, 4);
+        assert_eq!(options.max_open_files_per_task.get(), 10);
+        let options = options
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
@@ -479,19 +495,9 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, Some(100));
         assert_eq!(options.global.statistics_truncate_length, Some(200));
         assert_eq!(options.global.data_page_row_count_limit, 10000);
-        assert_eq!(
-            options.global.encoding,
-            Some("delta_binary_packed".to_string())
-        );
         assert!(options.global.bloom_filter_on_write);
         assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
         assert_eq!(options.global.bloom_filter_ndv, Some(1000));
-        assert!(!options.global.allow_single_file_parallelism);
-        assert_eq!(options.global.maximum_parallel_row_group_writers, 4);
-        assert_eq!(
-            options.global.maximum_buffered_record_batches_per_stream,
-            10
-        );
         assert!(options.global.content_defined_chunking.enabled);
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
@@ -505,7 +511,6 @@ mod tests {
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
-            ("encoding", ""),
             ("max_row_group_bytes", "0"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
@@ -514,7 +519,6 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
-        assert_eq!(options.global.encoding, None);
         assert_eq!(options.global.max_row_group_bytes, None);
 
         // bloom_filter_ndv = "0" leaves the NDV unset so the Parquet writer derives it
@@ -535,7 +539,7 @@ mod tests {
         use datafusion::parquet::file::properties::WriterPropertiesBuilder;
         use datafusion::parquet::schema::types::ColumnPath;
 
-        let ctx = SessionContext::default();
+        let ctx = write_session(0, 100)?;
         let state = ctx.state();
         let writer_ndv = |kv: &[(&str, &str)]| -> datafusion_common::Result<Option<u64>> {
             // The Arrow schema is only embedded by the file sink, which this test bypasses.
@@ -574,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_resolve_parquet_write_options_with_global_default() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
+        let ctx = write_session(0, 100)?;
         let state = ctx.state_ref();
         state
             .write()
@@ -597,13 +601,6 @@ mod tests {
             .execution
             .parquet
             .statistics_truncate_length = Some(99);
-        state
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .parquet
-            .encoding = Some("bit_packed".to_string());
         state
             .write()
             .config_mut()
@@ -653,7 +650,6 @@ mod tests {
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
-        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
         assert!(options.global.content_defined_chunking.enabled);
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
@@ -666,7 +662,6 @@ mod tests {
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
-            ("encoding", ""),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
@@ -674,6 +669,65 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options_of_writer_tasks() -> datafusion_common::Result<()> {
+        let ctx = write_session(2, 50)?;
+        let state = ctx.state();
+
+        // The values of the session are used when the options are not set.
+        let options = ParquetWriteOptions::resolve(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.encoding_parallelism, 2);
+        assert_eq!(options.max_open_files_per_task.get(), 50);
+
+        let kv = option_list(&[("encodingParallelism", "0"), ("maxOpenFilesPerTask", "1")]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.encoding_parallelism, 0);
+        assert_eq!(options.max_open_files_per_task.get(), 1);
+
+        // A task must be able to keep one file open.
+        let kv = option_list(&[("max_open_files_per_task", "0")]);
+        let result = ParquetWriteOptions::resolve(&state, vec![kv]);
+        assert!(
+            matches!(&result, Err(e) if e.to_string() == "invalid option: max_open_files_per_task: 0"),
+            "{result:?}"
+        );
+
+        // The options are not table properties, so that a table does not decide
+        // how the tasks that write to the table use their worker.
+        let kv = OptionLayer::TablePropertyList {
+            items: vec![
+                ("option.encoding_parallelism".to_string(), "7".to_string()),
+                (
+                    "option.max_open_files_per_task".to_string(),
+                    "7".to_string(),
+                ),
+            ],
+        };
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.encoding_parallelism, 2);
+        assert_eq!(options.max_open_files_per_task.get(), 50);
+
+        // A removed option is ignored in the same way as an unknown option.
+        let kv = option_list(&[
+            ("allow_single_file_parallelism", "false"),
+            ("maximum_parallel_row_group_writers", "4"),
+            ("maximum_buffered_record_batches_per_stream", "10"),
+            ("encoding", "plain"),
+            ("no_such_option", "1"),
+        ]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.encoding_parallelism, 2);
+        let options = options
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.encoding, None);
 
         Ok(())

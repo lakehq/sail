@@ -1062,6 +1062,8 @@ message ParquetWriteExecNode {
   string file_suffix = 7;
   LexOrdering ordering = 8;
   bool write_sorting_columns = 9;
+  uint64 encoding_parallelism = 10;
+  uint64 max_open_files_per_task = 11;
 }
 
 message FileWriteCommitExecNode {

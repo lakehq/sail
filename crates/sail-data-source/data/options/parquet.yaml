@@ -672,30 +672,6 @@
         - option.dataPageRowCountLimit
       parser: crate::options::parsers::parse_usize
 
-- key: encoding
-  description: |
-    (Writing) The default encoding for any column.
-    Valid values are `plain`, `plain_dictionary`, `rle`,
-    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
-    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
-    These values are not case sensitive.
-    An empty value can also be used, which allows the Parquet writer to choose
-    the encoding for each column to achieve good performance.
-    Defaults to the Sail configuration option `parquet.encoding`.
-  supported: true
-  rust_type: "Option<String>"
-  scopes:
-    - write
-  origins:
-    - type: option
-      keys:
-        - encoding
-      parser: crate::options::parsers::parse_optional_string
-    - type: table_property
-      keys:
-        - option.encoding
-      parser: crate::options::parsers::parse_optional_string
-
 - key: bloom_filter_on_write
   description: |
     (Writing) Whether to write bloom filters for all columns.
@@ -758,34 +734,15 @@
         - option.bloomFilterNdv
       parser: crate::options::parsers::parse_optional_non_zero_u64
 
-- key: allow_single_file_parallelism
+- key: encoding_parallelism
   description: |
-    (Writing) Whether to parallelize writing for each single Parquet file.
-    If the value is `true`, the columns of each file are encoded in parallel
-    when there are more CPU cores than partitions being written.
+    (Writing) The maximum number of CPU cores that one write task uses to encode Parquet files.
+    A write task writes one partition of the data.
+    If the value is `0`, the limit is chosen automatically from the number of CPU cores
+    and the number of write tasks that run at the same time.
+    If the value is `1`, each write task encodes its files on a single CPU core.
     The content of the files does not depend on this option.
-    Defaults to the Sail configuration option `parquet.allow_single_file_parallelism`.
-  supported: true
-  rust_type: bool
-  scopes:
-    - write
-  origins:
-    - type: option
-      keys:
-        - allow_single_file_parallelism
-        - allowSingleFileParallelism
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.allow_single_file_parallelism
-        - option.allowSingleFileParallelism
-      parser: crate::options::parsers::parse_bool
-
-- key: maximum_parallel_row_group_writers
-  description: |
-    (Writing) The maximum number of row group writers to use for the Parquet writer.
-    This option currently has no effect. The row groups of each Parquet file are written one at a time.
-    Defaults to the Sail configuration option `parquet.maximum_parallel_row_group_writers`.
+    Defaults to the Sail configuration option `parquet.encoding_parallelism`.
   supported: true
   rust_type: usize
   scopes:
@@ -793,40 +750,36 @@
   origins:
     - type: option
       keys:
-        - maximum_parallel_row_group_writers
-        - maximumParallelRowGroupWriters
-      parser: crate::options::parsers::parse_usize
-    - type: table_property
-      keys:
-        - option.maximum_parallel_row_group_writers
-        - option.maximumParallelRowGroupWriters
+        - encoding_parallelism
+        - encodingParallelism
       parser: crate::options::parsers::parse_usize
 
-- key: maximum_buffered_record_batches_per_stream
+- key: max_open_files_per_task
   description: |
-    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
-    This option currently has no effect. The Parquet writer does not buffer record batches.
-    Defaults to the Sail configuration option `parquet.maximum_buffered_record_batches_per_stream`.
+    (Writing) The maximum number of Parquet files that one write task keeps open
+    when the data is written with partition columns.
+    When the limit is reached, the file that has not received rows for the longest time is closed.
+    Rows that arrive later for the same partition directory are written to a new file.
+    A larger value gives fewer files when the data is not clustered by the partition columns.
+    A larger value also uses more memory, since each open file buffers the rows of one row group.
+    The value must be greater than `0`.
+    Defaults to the Sail configuration option `parquet.max_open_files_per_task`.
   supported: true
-  rust_type: usize
+  rust_type: std::num::NonZeroUsize
   scopes:
     - write
   origins:
     - type: option
       keys:
-        - maximum_buffered_record_batches_per_stream
-        - maximumBufferedRecordBatchesPerStream
-      parser: crate::options::parsers::parse_usize
-    - type: table_property
-      keys:
-        - option.maximum_buffered_record_batches_per_stream
-        - option.maximumBufferedRecordBatchesPerStream
-      parser: crate::options::parsers::parse_usize
+        - max_open_files_per_task
+        - maxOpenFilesPerTask
+      parser: crate::options::parsers::parse_non_zero_usize
 
 - key: content_defined_chunking_enabled
   description: |
     (Writing) Whether to enable content-defined chunking (CDC) when writing Parquet files.
     When enabled, data page boundaries are determined by a rolling hash of column values.
+    When enabled, each write task encodes its files on a single CPU core.
     Defaults to the Sail configuration option `parquet.content_defined_chunking.enabled`.
   supported: true
   rust_type: bool

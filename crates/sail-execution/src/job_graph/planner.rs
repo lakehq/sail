@@ -3007,6 +3007,8 @@ mod tests {
                 ".parquet".to_string(),
                 None,
                 false,
+                0,
+                std::num::NonZeroUsize::MIN,
             )
             .unwrap(),
         );

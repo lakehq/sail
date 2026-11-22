@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1406,6 +1407,8 @@ fn write_exec(
         ".zstd.parquet".to_string(),
         ordering,
         write_sorting_columns,
+        0,
+        NonZeroUsize::MIN,
     )
 }
 
@@ -1634,10 +1637,73 @@ fn test_write_plan_validation() -> Result<()> {
         ".parquet".to_string(),
         None,
         false,
+        0,
+        NonZeroUsize::MIN,
     );
     assert!(
         matches!(&result, Err(e) if e.to_string().contains("partition column missing does not exist"))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_plan_passes_task_limits() -> Result<()> {
+    let schema = partitioned_schema();
+    let batches = vec![
+        partitioned_batch(&[(1, 1, "x")])?,
+        partitioned_batch(&[(2, 2, "x")])?,
+        partitioned_batch(&[(3, 1, "x")])?,
+    ];
+    let name =
+        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
+    for (max_open_files, expected) in [
+        // The file of `a=1` is completed when the row of `a=2` arrives.
+        (1, vec![name(1, 0), name(1, 1), name(2, 0)]),
+        (2, vec![name(1, 0), name(2, 0)]),
+    ] {
+        let (ctx, store) = memory_context()?;
+        let max_open_files = NonZeroUsize::new(max_open_files)
+            .ok_or_else(|| internal_datafusion_err!("invalid number of open files"))?;
+        let writer = Arc::new(ParquetWriteExec::try_new(
+            MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?,
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+            vec!["a".to_string()],
+            TableParquetOptions::default(),
+            ".parquet".to_string(),
+            None,
+            false,
+            3,
+            max_open_files,
+        )?);
+        // The limits are kept when the plan is rewritten.
+        let input = Arc::clone(writer.input());
+        let writer = writer.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let writer = writer
+            .downcast_ref::<ParquetWriteExec>()
+            .ok_or_else(|| internal_datafusion_err!("unexpected plan"))?
+            .with_attempt(0);
+        assert_eq!(writer.encoding_parallelism(), 3);
+        assert_eq!(writer.max_open_files_per_task(), max_open_files);
+
+        let output = collect(commit_exec(Arc::new(writer))?, ctx.task_ctx()).await?;
+        assert_eq!(count_value(&output)?, vec![3]);
+        let files = list_files(store.as_ref()).await?;
+        let files: Vec<_> = files
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|path| !path.ends_with("_SUCCESS"))
+            .collect();
+        assert_eq!(files, expected);
+    }
     Ok(())
 }
 

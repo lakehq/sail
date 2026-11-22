@@ -29,6 +29,8 @@ impl WriteFormat for ParquetWriteFormat {
         _ctx: &dyn Session,
         input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let encoding_parallelism = self.options.encoding_parallelism;
+        let max_open_files_per_task = self.options.max_open_files_per_task;
         let options = self
             .options
             .clone()
@@ -68,6 +70,8 @@ impl WriteFormat for ParquetWriteFormat {
             file_suffix,
             ordering,
             write_sorting_columns,
+            encoding_parallelism,
+            max_open_files_per_task,
         )?);
         Ok(Arc::new(FileWriteCommitExec::new(
             writer,

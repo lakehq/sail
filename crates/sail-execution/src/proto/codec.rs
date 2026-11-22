@@ -1502,6 +1502,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 file_suffix,
                 ordering,
                 write_sorting_columns,
+                encoding_parallelism,
+                max_open_files_per_task,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1524,6 +1526,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         )
                     })
                     .transpose()?;
+                let max_open_files_per_task =
+                    std::num::NonZeroUsize::new(max_open_files_per_task as usize).ok_or_else(
+                        || plan_datafusion_err!("invalid number of open files for Parquet write"),
+                    )?;
                 Ok(Arc::new(ParquetWriteExec::try_new(
                     input,
                     object_store_url,
@@ -1534,6 +1540,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     file_suffix,
                     ordering,
                     write_sorting_columns,
+                    encoding_parallelism as usize,
+                    max_open_files_per_task,
                 )?))
             }
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -3780,6 +3788,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
                     .transpose()?,
                 write_sorting_columns: write.write_sorting_columns(),
+                encoding_parallelism: write.encoding_parallelism() as u64,
+                max_open_files_per_task: write.max_open_files_per_task().get() as u64,
             })
         } else if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -9919,15 +9929,22 @@ mod tests {
         options.global.created_by = "sail version test".to_string();
         options.global.max_row_group_size = 1234;
         options.global.skip_arrow_metadata = true;
-        options.global.allow_single_file_parallelism = false;
         options.global.bloom_filter_on_write = true;
         let write_id = uuid::Uuid::from_u128(42);
         let codec = RemoteExecutionCodec;
 
-        for (ordering, write_sorting_columns, required_ordering) in [
-            (Some(ordering), true, required_ordering),
-            (None, false, vec![None]),
+        for (
+            ordering,
+            write_sorting_columns,
+            required_ordering,
+            encoding_parallelism,
+            max_open_files_per_task,
+        ) in [
+            (Some(ordering), true, required_ordering, 0, 100),
+            (None, false, vec![None], 3, 1),
         ] {
+            let max_open_files_per_task = std::num::NonZeroUsize::new(max_open_files_per_task)
+                .ok_or_else(|| plan_datafusion_err!("invalid number of open files"))?;
             let write = ParquetWriteExec::try_new(
                 Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(3)),
                 datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
@@ -9938,6 +9955,8 @@ mod tests {
                 ".snappy.parquet".to_string(),
                 ordering,
                 write_sorting_columns,
+                encoding_parallelism,
+                max_open_files_per_task,
             )?
             .with_attempt(2);
             let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
@@ -9955,6 +9974,8 @@ mod tests {
             assert_eq!(decoded.options(), &options);
             assert_eq!(decoded.file_suffix(), ".snappy.parquet");
             assert_eq!(decoded.write_sorting_columns(), write_sorting_columns);
+            assert_eq!(decoded.encoding_parallelism(), encoding_parallelism);
+            assert_eq!(decoded.max_open_files_per_task(), max_open_files_per_task);
             assert_eq!(decoded.required_input_ordering(), required_ordering);
             assert_eq!(decoded.input().schema(), schema);
             assert_eq!(

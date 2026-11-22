@@ -1593,7 +1593,14 @@ mod tests {
         registry.register_data_source(Arc::new(
             sail_data_source::formats::parquet::ParquetDataSource::default(),
         ))?;
-        let config = SessionConfig::new().with_extension(registry);
+        let config = SessionConfig::new()
+            .with_extension(registry)
+            .with_extension(Arc::new(
+                sail_common_datafusion::session::parquet::ParquetWriteConfig::new(
+                    0,
+                    std::num::NonZeroUsize::MIN,
+                ),
+            ));
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime_env)

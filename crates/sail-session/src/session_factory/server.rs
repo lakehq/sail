@@ -17,6 +17,7 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
+use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
@@ -137,6 +138,10 @@ impl ServerSessionFactory {
             ))
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
+            )))
+            .with_extension(Arc::new(ParquetWriteConfig::new(
+                self.config.parquet.encoding_parallelism,
+                self.config.parquet.max_open_files_per_task,
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));

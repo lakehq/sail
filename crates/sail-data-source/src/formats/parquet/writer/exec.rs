@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt::Formatter;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -27,9 +28,11 @@ use crate::formats::parquet::writer::task::{
 };
 use crate::listing::commit::manifest_schema;
 
-/// The number of files that one task keeps open at the same time
-/// when the data has partition columns.
-const MAX_OPEN_FILES_PER_TASK: usize = 100;
+/// The capacity in bytes of the upload buffer of each file.
+const UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
+/// The number of rows after which a task continues with a new file.
+const MAX_ROWS_PER_FILE: usize = 50_000_000;
 
 /// Writes each input partition to Parquet files in a table directory.
 ///
@@ -46,6 +49,8 @@ pub struct ParquetWriteExec {
     file_suffix: String,
     ordering: Option<LexOrdering>,
     write_sorting_columns: bool,
+    encoding_parallelism: usize,
+    max_open_files_per_task: NonZeroUsize,
     attempt: usize,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
@@ -56,6 +61,10 @@ impl ParquetWriteExec {
     ///
     /// `ordering` is the ordering that each input partition must have.
     /// It is recorded in the file metadata when `write_sorting_columns` is set.
+    /// `encoding_parallelism` is the maximum number of threads that each task
+    /// uses to encode files, or zero when the number is chosen automatically.
+    /// `max_open_files_per_task` is the number of files that each task keeps open
+    /// at the same time when the data has partition columns.
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
@@ -67,6 +76,8 @@ impl ParquetWriteExec {
         file_suffix: String,
         ordering: Option<LexOrdering>,
         write_sorting_columns: bool,
+        encoding_parallelism: usize,
+        max_open_files_per_task: NonZeroUsize,
     ) -> Result<Self> {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
             return not_impl_err!("Parquet write does not support unbounded input");
@@ -95,6 +106,8 @@ impl ParquetWriteExec {
             file_suffix,
             ordering,
             write_sorting_columns,
+            encoding_parallelism,
+            max_open_files_per_task,
             attempt: 0,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -115,6 +128,8 @@ impl ParquetWriteExec {
             file_suffix: self.file_suffix.clone(),
             ordering: self.ordering.clone(),
             write_sorting_columns: self.write_sorting_columns,
+            encoding_parallelism: self.encoding_parallelism,
+            max_open_files_per_task: self.max_open_files_per_task,
             attempt,
             properties: Arc::clone(&self.properties),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -155,6 +170,14 @@ impl ParquetWriteExec {
 
     pub fn write_sorting_columns(&self) -> bool {
         self.write_sorting_columns
+    }
+
+    pub fn encoding_parallelism(&self) -> usize {
+        self.encoding_parallelism
+    }
+
+    pub fn max_open_files_per_task(&self) -> NonZeroUsize {
+        self.max_open_files_per_task
     }
 
     pub fn attempt(&self) -> usize {
@@ -229,6 +252,8 @@ impl ExecutionPlan for ParquetWriteExec {
             self.file_suffix.clone(),
             self.ordering.clone(),
             self.write_sorting_columns,
+            self.encoding_parallelism,
+            self.max_open_files_per_task,
         )?;
         Ok(Arc::new(plan.with_attempt(self.attempt)))
     }
@@ -245,7 +270,6 @@ impl ExecutionPlan for ParquetWriteExec {
                 Box::pin(EmptyRecordBatchStream::new(self.input.schema()))
             };
         let store = context.runtime_env().object_store(&self.object_store_url)?;
-        let execution = &context.session_config().options().execution;
         let task = ParquetWriteTask {
             store,
             table_path: self.table_path.clone(),
@@ -257,14 +281,10 @@ impl ExecutionPlan for ParquetWriteExec {
             partition_columns: self.partition_columns.clone(),
             options: self.options.clone(),
             sorting: self.ordering.clone().filter(|_| self.write_sorting_columns),
-            buffer_size: execution.objectstore_writer_buffer_size,
-            max_rows_per_file: execution.soft_max_rows_per_output_file.get(),
-            max_open_files: MAX_OPEN_FILES_PER_TASK,
-            encode: EncodeSettings::new(if self.options.global.allow_single_file_parallelism {
-                0
-            } else {
-                1
-            }),
+            buffer_size: UPLOAD_BUFFER_SIZE,
+            max_rows_per_file: MAX_ROWS_PER_FILE,
+            max_open_files: self.max_open_files_per_task.get(),
+            encode: EncodeSettings::new(self.encoding_parallelism),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());

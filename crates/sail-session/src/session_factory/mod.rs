@@ -68,15 +68,15 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.column_index_truncate_length = config.column_index_truncate_length;
     parquet.statistics_truncate_length = config.statistics_truncate_length;
     parquet.data_page_row_count_limit = config.data_page_row_count_limit;
-    parquet.encoding = config.encoding.clone();
     parquet.bloom_filter_on_read = config.bloom_filter_on_read;
     parquet.bloom_filter_on_write = config.bloom_filter_on_write;
     parquet.bloom_filter_fpp = Some(config.bloom_filter_fpp);
     parquet.bloom_filter_ndv = config.bloom_filter_ndv;
-    parquet.allow_single_file_parallelism = config.allow_single_file_parallelism;
-    parquet.maximum_parallel_row_group_writers = config.maximum_parallel_row_group_writers;
-    parquet.maximum_buffered_record_batches_per_stream =
-        config.maximum_buffered_record_batches_per_stream;
+    // The Parquet writer does not use these values.
+    // They are for the files of remote checkpoints, which DataFusion writes.
+    parquet.allow_single_file_parallelism = true;
+    parquet.maximum_parallel_row_group_writers = 2;
+    parquet.maximum_buffered_record_batches_per_stream = 16;
     parquet.content_defined_chunking.enabled = config.content_defined_chunking.enabled;
     parquet.content_defined_chunking.min_chunk_size =
         config.content_defined_chunking.min_chunk_size;

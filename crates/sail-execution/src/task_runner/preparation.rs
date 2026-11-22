@@ -296,6 +296,8 @@ mod tests {
             ".parquet".to_string(),
             None,
             false,
+            0,
+            std::num::NonZeroUsize::MIN,
         )?;
         assert_eq!(write.attempt(), 0);
         let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(Arc::new(write)));
