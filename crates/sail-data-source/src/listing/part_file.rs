@@ -7,9 +7,11 @@ use uuid::Uuid;
 /// The name is `part-<partition>-<write_id>-c<counter><suffix>`, where
 /// `partition` is the index of the writer partition that produced the file,
 /// `write_id` is the identifier shared by all files of one write, and `counter`
-/// is the index of the file among the files that the writer partition produced
-/// in the same directory. The suffix is either empty or starts with a dot
-/// (e.g. `.zstd.parquet`).
+/// is a number that differs among the files that the writer partition produced
+/// in the same directory. A writer partition numbers the files of each directory
+/// from zero, or all its files across the directories when the rows of each
+/// partition directory are next to each other in its input. The suffix is either
+/// empty or starts with a dot (e.g. `.zstd.parquet`).
 ///
 /// The name does not depend on the attempt of the writer task. Only the files
 /// of one attempt of each writer partition are ever published, so a write
