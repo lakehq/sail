@@ -8,7 +8,8 @@ use chrono::NaiveDate;
 use datafusion::arrow::array::{
     ArrayAccessor, ArrayRef, RecordBatch, StringArray, UInt32Array, downcast_dictionary_array,
 };
-use datafusion::arrow::compute::take_record_batch;
+use datafusion::arrow::compute::kernels::zip::zip;
+use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{
@@ -17,7 +18,9 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array, as_uint8_array, as_uint16_array,
     as_uint32_array, as_uint64_array,
 };
-use datafusion_common::{Result, exec_datafusion_err, internal_err, not_impl_err, plan_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, internal_err, not_impl_err, plan_err,
+};
 use object_store::path::Path;
 
 use crate::formats::parquet::writer::task::{DirectoryWriter, FileFactory};
@@ -79,33 +82,32 @@ impl PartitionRouter {
     pub fn split(&mut self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
         // Format the first row before anything else, so that an unsupported
         // partition column type is reported by the formatting function.
-        let first_key = self.key(batch, 0)?;
-        let columns: Vec<ArrayRef> = self
+        self.key(batch, 0)?;
+        let columns = self
             .column_indices
             .iter()
-            .map(|i| Arc::clone(batch.column(*i)))
-            .collect();
-        // The key of a row without a value is formatted from the content
-        // of the array at the row, which can differ among such rows.
-        // So these rows cannot be grouped as rows that are equal.
-        if columns.iter().any(|column| column.logical_null_count() > 0) {
-            return self.split_by_key(batch);
-        }
+            .map(|i| fill_missing_values(batch.column(*i)))
+            .collect::<Result<Vec<ArrayRef>>>()?;
+        let keys = RecordBatch::try_new(
+            Arc::new(batch.schema().project(&self.column_indices)?),
+            columns,
+        )?;
         let converter = match &mut self.converter {
             Some(converter) => converter,
             converter @ None => {
-                let fields = columns
+                let fields = keys
+                    .columns()
                     .iter()
                     .map(|column| SortField::new(column.data_type().clone()))
                     .collect();
                 converter.insert(RowConverter::new(fields)?)
             }
         };
-        let rows = converter.convert_columns(&columns)?;
+        let rows = converter.convert_columns(keys.columns())?;
         let data = batch.project(&self.file_indices)?;
         let first = rows.row(0);
         if rows.iter().all(|row| row == first) {
-            return Ok(vec![(first_key, data)]);
+            return Ok(vec![(self.key(&keys, 0)?, data)]);
         }
         let mut indices: Vec<Vec<u32>> = vec![];
         let mut groups = HashMap::new();
@@ -119,44 +121,7 @@ impl PartitionRouter {
         indices
             .into_iter()
             .map(|indices| {
-                let key = self.key(batch, indices[0] as usize)?;
-                let data = take_record_batch(&data, &UInt32Array::from(indices))?;
-                Ok((key, data))
-            })
-            .collect()
-    }
-
-    /// Splits a batch into one batch per distinct key of the rows.
-    fn split_by_key(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
-        let values = compute_partition_keys_by_row(batch, &self.columns)?;
-        let mut keys: Vec<PartitionKey> = vec![];
-        let mut indices: Vec<Vec<u32>> = vec![];
-        let mut groups: HashMap<Vec<&str>, usize> = HashMap::new();
-        for i in 0..batch.num_rows() {
-            let key = values
-                .iter()
-                .map(|column| column.get(i).map(|value| value.as_ref()))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| exec_datafusion_err!("missing partition key for row {i}"))?;
-            let group = match groups.get(&key) {
-                Some(group) => *group,
-                None => {
-                    let group = keys.len();
-                    keys.push(key.iter().map(|value| value.to_string()).collect());
-                    indices.push(vec![]);
-                    groups.insert(key, group);
-                    group
-                }
-            };
-            indices
-                .get_mut(group)
-                .ok_or_else(|| exec_datafusion_err!("missing partition group for row {i}"))?
-                .push(i as u32);
-        }
-        let data = batch.project(&self.file_indices)?;
-        keys.into_iter()
-            .zip(indices)
-            .map(|(key, indices)| {
+                let key = self.key(&keys, indices[0] as usize)?;
                 let data = take_record_batch(&data, &UInt32Array::from(indices))?;
                 Ok((key, data))
             })
@@ -177,6 +142,25 @@ impl PartitionRouter {
         }
         path
     }
+}
+
+/// Returns the partition column with the default value of its type
+/// in place of each missing value.
+///
+/// A row without a value is written to the directory of the default value.
+/// The directory cannot be named after the content of the array at such a row,
+/// since that content is arbitrary.
+fn fill_missing_values(column: &ArrayRef) -> Result<ArrayRef> {
+    if column.logical_null_count() == 0 {
+        return Ok(Arc::clone(column));
+    }
+    let values = match column.data_type() {
+        DataType::Dictionary(_, value_type) => cast(column, value_type)?,
+        _ => Arc::clone(column),
+    };
+    let default = ScalarValue::new_default(values.data_type())?.to_scalar()?;
+    let values = zip(&is_not_null(&values)?, &values, &default)?;
+    Ok(cast(&values, column.data_type())?)
 }
 
 // SPDX-SnippetBegin

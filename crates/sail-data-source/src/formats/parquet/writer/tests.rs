@@ -16,7 +16,7 @@ use datafusion::arrow::array::{
     make_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
-use datafusion::arrow::compute::{SortOptions, cast, concat_batches, take};
+use datafusion::arrow::compute::{SortOptions, cast, concat, concat_batches, take};
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Float16Type, Float32Type, Int32Type, Int64Type,
     IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
@@ -1051,8 +1051,13 @@ async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
     let task = partition_task(Arc::clone(&store), 0, &["p"]);
     run_task(task, &schema, vec![batch.clone()]).await?;
     let actual = read_directories(store.as_ref()).await?;
-    let expected = write_with_data_sink(&batch, &["p"]).await?;
-    assert_eq!(actual, expected);
+    // The DataFusion Parquet sink writes a row without a value to the directory
+    // of the first value of the dictionary when the column is a dictionary.
+    let is_dictionary = matches!(batch.column(0).data_type(), DataType::Dictionary(_, _));
+    if !is_dictionary || batch.column(0).logical_null_count() == 0 {
+        let expected = write_with_data_sink(&batch, &["p"]).await?;
+        assert_eq!(actual, expected);
+    }
     Ok(actual.into_keys().collect())
 }
 
@@ -1175,6 +1180,34 @@ fn with_null_rows(array: &ArrayRef, null_rows: impl Fn(usize) -> bool) -> Result
     let nulls: NullBuffer = (0..array.len()).map(|i| !null_rows(i)).collect();
     let data = array.to_data().into_builder().nulls(Some(nulls)).build()?;
     Ok(make_array(data))
+}
+
+/// Returns an array with the default value of the type, which names the directory
+/// of the rows without a value.
+fn default_partition_value(data_type: &DataType) -> Result<ArrayRef> {
+    let value: ArrayRef = match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(_, _) => {
+            Arc::new(StringArray::from(vec![""]))
+        }
+        DataType::Boolean => Arc::new(BooleanArray::from(vec![false])),
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+            Arc::new(Float64Array::from(vec![0.0]))
+        }
+        DataType::Date32 => Arc::new(Int32Array::from(vec![0])),
+        _ => Arc::new(Int64Array::from(vec![0])),
+    };
+    Ok(cast(&value, data_type)?)
+}
+
+/// Returns the array with the default value of its type in the given rows.
+fn with_default_rows(array: &ArrayRef, default_rows: impl Fn(usize) -> bool) -> Result<ArrayRef> {
+    let rows = array.len() as u32;
+    let default = default_partition_value(array.data_type())?;
+    let values = concat(&[array.as_ref(), default.as_ref()])?;
+    let indices = UInt32Array::from_iter_values(
+        (0..rows).map(|i| if default_rows(i as usize) { rows } else { i }),
+    );
+    Ok(take(&values, &indices, None)?)
 }
 
 /// Arrays of each type that a partition column can have, with values that
@@ -1316,6 +1349,14 @@ fn partition_value_cases() -> Result<Vec<(String, ArrayRef)>> {
     Ok(cases)
 }
 
+/// Writes the batches with the partition column `p`, and returns the rows of each directory.
+async fn write_partitioned(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<DirectoryRows> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let task = partition_task(Arc::clone(&store), 0, &["p"]);
+    run_task(task, schema, batches.to_vec()).await?;
+    read_directories(store.as_ref()).await
+}
+
 #[tokio::test]
 async fn test_partition_rows_match_data_sink() -> Result<()> {
     for (name, values) in partition_value_cases()? {
@@ -1323,10 +1364,21 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             Field::new("p", values.data_type().clone(), true),
             Field::new("v", DataType::Int64, true),
         ]));
+        let is_dictionary = matches!(values.data_type(), DataType::Dictionary(_, _));
+        let default = default_partition_value(values.data_type())?;
+        let default_directory = write_partitioned(
+            &schema,
+            &[RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![default, Arc::new(Int64Array::from(vec![0]))],
+            )?],
+        )
+        .await?
+        .into_keys()
+        .next()
+        .ok_or_else(|| internal_datafusion_err!("missing directory"))?;
         let rows = values.len();
         let reversed = UInt32Array::from_iter_values((0..rows as u32).rev());
-        // The rows without a value have the content of other rows of the array,
-        // as in the arrays that are read from Parquet files.
         type NullRows = fn(usize) -> bool;
         let null_cases: [(&str, NullRows); 4] = [
             ("no row", |_| false),
@@ -1335,7 +1387,14 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             ("every row", |_| true),
         ];
         for (null_rows_name, null_rows) in null_cases {
-            let mut batches = vec![];
+            let message = format!("{name}, {null_rows_name} without a value");
+            // The rows without a value have the content of other rows of the array,
+            // as in arrays that are read from Parquet files, or the default value,
+            // or they are rows with the default value.
+            let mut leftover = vec![];
+            let mut zeroed = vec![];
+            let mut filled = vec![];
+            let mut null_ids = vec![];
             // The second batch has the values in another order,
             // and the last batch has a single row.
             for (i, values) in [
@@ -1346,24 +1405,75 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             .into_iter()
             .enumerate()
             {
-                let values = with_null_rows(&values, null_rows)?;
                 let start = (i * rows) as i64;
                 let v: ArrayRef = Arc::new(Int64Array::from_iter_values(
                     start..start + values.len() as i64,
                 ));
-                batches.push(RecordBatch::try_new(Arc::clone(&schema), vec![values, v])?);
+                null_ids.extend(
+                    (0..values.len())
+                        .filter(|x| null_rows(*x))
+                        .map(|x| start + x as i64),
+                );
+                let with_default = with_default_rows(&values, null_rows)?;
+                for (batches, values) in [
+                    (&mut leftover, with_null_rows(&values, null_rows)?),
+                    (&mut zeroed, with_null_rows(&with_default, null_rows)?),
+                    (&mut filled, with_default),
+                ] {
+                    batches.push(RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![values, Arc::clone(&v)],
+                    )?);
+                }
             }
-            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-            let task = partition_task(Arc::clone(&store), 0, &["p"]);
-            run_task(task, &schema, batches.clone()).await?;
-            let actual = read_directories(store.as_ref()).await?;
-            let expected = write_batches_with_data_sink(&batches, &["p"]).await?;
-            assert_eq!(actual, expected, "{name}, {null_rows_name} without a value");
-            assert!(actual.len() >= 2, "{name}");
+            // A row without a value is written like a row with the default value,
+            // whatever the content of the array at the row is.
+            let expected = write_batches_with_data_sink(&filled, &["p"]).await?;
             assert_eq!(
-                actual.values().map(|x| x.len()).sum::<usize>(),
+                write_partitioned(&schema, &filled).await?,
+                expected,
+                "{message}"
+            );
+            assert_eq!(
+                write_partitioned(&schema, &zeroed).await?,
+                expected,
+                "{message}"
+            );
+            assert_eq!(
+                write_partitioned(&schema, &leftover).await?,
+                expected,
+                "{message}"
+            );
+            // The DataFusion Parquet sink does the same when the array has the default
+            // value at the row, except for a dictionary, where it uses the first value
+            // of the dictionary.
+            if !is_dictionary {
+                assert_eq!(
+                    write_batches_with_data_sink(&zeroed, &["p"]).await?,
+                    expected,
+                    "{message}"
+                );
+            }
+            let default_rows = expected
+                .get(&default_directory)
+                .cloned()
+                .unwrap_or_default();
+            for id in null_ids {
+                assert!(
+                    default_rows
+                        .iter()
+                        .any(|row| row.trim_matches(['|', ' ']) == id.to_string()),
+                    "{message}: row {id} is not in {default_directory}"
+                );
+            }
+            assert!(
+                expected.len() >= 2 || null_rows_name == "every row",
+                "{message}"
+            );
+            assert_eq!(
+                expected.values().map(|x| x.len()).sum::<usize>(),
                 2 * rows + 1,
-                "{name}"
+                "{message}"
             );
         }
     }
@@ -1388,23 +1498,31 @@ async fn test_partition_rows_match_data_sink_for_several_columns() -> Result<()>
     ]));
     let v: ArrayRef = Arc::new(Int64Array::from_iter_values(0..7));
     for null_rows in [[7, 7], [1, 7], [7, 2], [3, 3], [1, 5]] {
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                with_null_rows(&column("Float16")?, |i| i % null_rows[0] == 0)?,
-                Arc::clone(&v),
-                with_null_rows(&column("Utf8View")?, |i| i % null_rows[1] == 1)?,
-                column("Boolean")?,
-            ],
+        let p_rows = |i: usize| i.is_multiple_of(null_rows[0]);
+        let q_rows = |i: usize| i % null_rows[1] == 1;
+        let batch = |p: ArrayRef, q: ArrayRef| -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![p, Arc::clone(&v), q, column("Boolean")?],
+            )?)
+        };
+        // The rows without a value have the content of other rows.
+        let leftover = batch(
+            with_null_rows(&column("Float16")?, p_rows)?,
+            with_null_rows(&column("Utf8View")?, q_rows)?,
+        )?;
+        let filled = batch(
+            with_default_rows(&column("Float16")?, p_rows)?,
+            with_default_rows(&column("Utf8View")?, q_rows)?,
         )?;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let task = partition_task(Arc::clone(&store), 0, &["r", "p", "q"]);
-        run_task(task, &schema, vec![batch.clone(), batch.clone()]).await?;
+        run_task(task, &schema, vec![leftover.clone(), leftover]).await?;
         let actual = read_directories(store.as_ref()).await?;
         let expected =
-            write_batches_with_data_sink(&[batch.clone(), batch], &["r", "p", "q"]).await?;
+            write_batches_with_data_sink(&[filled.clone(), filled], &["r", "p", "q"]).await?;
         assert_eq!(actual, expected, "{null_rows:?}");
-        assert!(actual.len() >= 4, "{null_rows:?}");
+        assert!(actual.len() >= 3, "{null_rows:?}");
     }
     Ok(())
 }
