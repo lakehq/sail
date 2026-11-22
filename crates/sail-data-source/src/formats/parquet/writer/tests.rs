@@ -3762,6 +3762,162 @@ async fn test_task_removes_staged_files_when_a_request_fails() -> Result<()> {
     Ok(())
 }
 
+/// The ways in which a task writes to partition directories: the name of the case,
+/// the keys of the rows, the number of directories that can be open, and whether
+/// the rows of each key are next to each other in the input.
+type PartitionedCase = (&'static str, fn(i64) -> Option<i64>, usize, bool);
+
+const PARTITIONED_CASES: [PartitionedCase; 3] = [
+    // Every key has an open directory, and the files are completed when the input has ended.
+    ("open directories", |i| Some(i * 7 % 40), 100, false),
+    // The rows of most keys are sorted and written when the input has ended.
+    (
+        "sorted keys",
+        |i| Some(i * 7 % 40).filter(|x| *x > 0),
+        3,
+        false,
+    ),
+    // The file of a key is completed while the rows of the next keys are written.
+    (
+        "clustered keys",
+        |i| Some(i / 25).filter(|x| *x < 39),
+        2,
+        true,
+    ),
+];
+
+/// A task that writes to partition directories and stages its files in the way
+/// of the mode, in an object store that fails and holds requests.
+fn fault_partition_task(
+    store: &Arc<FaultStore>,
+    mode: Mode,
+    max_open_files: usize,
+    clustered: bool,
+) -> ParquetWriteTask {
+    let mut task = partition_task(Arc::clone(store) as Arc<dyn ObjectStore>, 0, &["p"]);
+    task.publisher = store.publisher(mode);
+    task.max_open_files = max_open_files;
+    if clustered {
+        task.ordering = LexOrdering::new([PhysicalSortExpr::new(
+            Arc::new(Column::new("p", 0)),
+            SortOptions::new(false, false),
+        )]);
+    }
+    task
+}
+
+/// The kind of the request that stores the data of a small file.
+fn small_file_request(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Rename => "PUT",
+        Mode::Multipart => "PART",
+    }
+}
+
+#[tokio::test]
+async fn test_partitioned_task_stages_the_files_of_all_directories() -> Result<()> {
+    for mode in Mode::ALL {
+        for (name, key, max_open_files, clustered) in PARTITIONED_CASES {
+            let case = format!("{mode:?} {name}");
+            let batches = keyed_batches(1000, 100, key)?;
+            let schema = batches[0].schema();
+            let store = FaultStore::new();
+            let task = fault_partition_task(&store, mode, max_open_files, clustered);
+            let input = test_stream(&schema, batches.clone());
+            let manifest = read_manifest(write_stream(task, input)).await?;
+            // The manifest has the files of all directories, also the files that were
+            // completed while the task was writing other files, and none is visible.
+            let rows = manifest_rows(&manifest)?;
+            assert_eq!(rows.len(), 40, "{case}");
+            assert_eq!(rows.iter().map(|x| x.3).sum::<u64>(), 1000, "{case}");
+            wait_for_staged(&store, mode, 40).await?;
+            assert_eq!(store.count(mode.publish_request()), 0, "{case}");
+            publish_manifest(&store.publisher(mode), &manifest).await?;
+            assert_eq!(store.open_uploads(), Vec::<String>::new(), "{case}");
+            check_one_file_per_key(store.inner().as_ref(), &batches).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partitioned_task_that_fails_or_is_canceled_leaves_nothing() -> Result<()> {
+    // The tasks that complete or remove files in the background have ended
+    // when the runtime has its tasks from before the write.
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    for mode in Mode::ALL {
+        for (name, key, max_open_files, clustered) in PARTITIONED_CASES {
+            let batches = keyed_batches(1000, 100, key)?;
+            let schema = batches[0].schema();
+            let task = |store: &Arc<FaultStore>| {
+                fault_partition_task(store, mode, max_open_files, clustered)
+            };
+            let request = small_file_request(mode);
+
+            // The input fails after its last rows.
+            let case = format!("{mode:?} {name} with an input that fails");
+            let store = FaultStore::new();
+            let input = task_input(&schema, batches.clone(), true);
+            let result = read_manifest(write_stream(task(&store), input)).await;
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains("input failure")),
+                "{case} {result:?}"
+            );
+            wait_for_tasks(tasks).await?;
+            store.wait_for(&[]).await?;
+            // The files of the keys whose rows have ended were staged before that.
+            assert_eq!(store.count(request) > 0, clustered, "{case}");
+            assert_eq!(store.count(mode.publish_request()), 0, "{case}");
+
+            // A request for one of the files fails. The files that are being
+            // completed at that time are removed when they are staged.
+            for skip in [0, 5, 39] {
+                let case = format!("{mode:?} {name} with a request that fails after {skip}");
+                let store = FaultStore::new();
+                store.fail(request, skip);
+                let input = test_stream(&schema, batches.clone());
+                let result = read_manifest(write_stream(task(&store), input)).await;
+                let message = format!("{request} failure");
+                assert!(
+                    matches!(&result, Err(e) if e.to_string().contains(&message)),
+                    "{case} {result:?}"
+                );
+                wait_for_tasks(tasks).await?;
+                store.wait_for(&[]).await?;
+                assert_eq!(store.count(mode.publish_request()), 0, "{case}");
+            }
+
+            // The task is canceled while it waits for the files that are being completed.
+            let case = format!("{mode:?} {name} with a task that is canceled");
+            let store = FaultStore::new();
+            let gate = store.hold(request);
+            let input = test_stream(&schema, batches.clone());
+            let mut stream = Box::pin(write_stream(task(&store), input));
+            tokio::select! {
+                _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
+                _ = gate.wait_for(max_open_files.min(40)) => {}
+            }
+            drop(stream);
+            assert_eq!(store.objects().await?, Vec::<String>::new(), "{case}");
+            // The requests end after the cancellation, and what they have stored is removed.
+            gate.open();
+            wait_for_tasks(tasks).await?;
+            store.wait_for(&[]).await?;
+            let removal = match mode {
+                Mode::Rename => "DELETE",
+                Mode::Multipart => "ABORT",
+            };
+            store
+                .wait_for_requests(removal, max_open_files.min(40))
+                .await?;
+            assert_eq!(store.count(mode.publish_request()), 0, "{case}");
+        }
+    }
+    Ok(())
+}
+
 /// The parts of a file have the same size, and the file is the file
 /// that is written to an object store directly.
 #[tokio::test]
