@@ -21,17 +21,41 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
-use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use sail_common_datafusion::error::{CommitRequiresReplanningError, CommitStateUnknownError};
-use sail_common_datafusion::extension::{SessionExtension, SessionExtensionAccessor};
-use tokio::task::JoinHandle;
+use sail_common_datafusion::extension::{
+    SessionExtension, SessionExtensionAccessor, task_context_with_extension,
+};
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::listing::staging::{
     PUBLISH_CONCURRENCY, Publish, Publisher, StagedFile, is_staged_name,
 };
+
+/// Stops the writer tasks of a write that run in the process of its commit.
+///
+/// The commit gives this to its input in the task context, and the writer
+/// tasks of the input stop when the commit has failed or is canceled.
+/// The writer tasks on other workers do not have it. The driver stops them.
+#[derive(Debug)]
+pub struct WriteCancellation(CancellationToken);
+
+impl WriteCancellation {
+    /// Returns the cancellation of the write whose commit has created
+    /// the task context, if there is one.
+    pub fn of(context: &TaskContext) -> Option<Arc<Self>> {
+        context.session_config().get_extension::<Self>()
+    }
+
+    /// Waits until the write is canceled.
+    pub async fn canceled(&self) {
+        self.0.cancelled().await
+    }
+}
 
 /// The name of the empty file that marks a completed write.
 const SUCCESS_FILE_NAME: &str = "_SUCCESS";
@@ -306,50 +330,6 @@ async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<
     result
 }
 
-/// Removes the objects that the writer tasks of the write have staged for
-/// a rename and that are still in the table directory. These are the files
-/// of writer tasks whose manifests no commit has received, for example
-/// of an earlier attempt of the write. A failure is logged.
-///
-/// Multipart uploads cannot be listed, so the uploads of such writer tasks
-/// stay open. A writer task of a later attempt of the write that has staged
-/// a file already loses the file, and the commit of that attempt fails and
-/// is attempted again.
-async fn remove_staged_leftovers(publisher: &Publisher, table_path: &Path, write_id: Uuid) {
-    if !matches!(publisher, Publisher::Rename { .. }) {
-        return;
-    }
-    let store = publisher.store();
-    let id = write_id.as_hyphenated().to_string();
-    let removed = async {
-        // The staged objects are in the table directory itself.
-        let listing = store.list_with_delimiter(Some(table_path)).await?;
-        let leftovers: Vec<Path> = listing
-            .objects
-            .into_iter()
-            .map(|object| object.location)
-            .filter(|location| {
-                location
-                    .filename()
-                    .is_some_and(|name| is_staged_name(name) && name.contains(&id))
-            })
-            .collect();
-        if !leftovers.is_empty() {
-            log::warn!(
-                "removing {} staged objects of the write {write_id} to {table_path} \
-                that were not reported",
-                leftovers.len(),
-            );
-        }
-        delete_files(store, leftovers).await
-    };
-    if let Err(e) = removed.await {
-        log::warn!(
-            "failed to remove the staged objects of the write {write_id} to {table_path}: {e}"
-        );
-    }
-}
-
 /// How far the commit of a write has come in a session.
 #[derive(Debug, Clone)]
 enum CommitState {
@@ -431,12 +411,6 @@ impl WriteCommitLedger {
         Ok(CommitStart::Publish)
     }
 
-    /// Whether an attempt of the commit of the write has started to publish
-    /// files and has not ended with a known result.
-    fn is_publishing(&self, write_id: Uuid) -> bool {
-        matches!(self.commits().get(&write_id), Some(CommitState::Publishing))
-    }
-
     fn end(&self, write_id: Uuid, state: CommitState) {
         self.commits().insert(write_id, state);
     }
@@ -457,12 +431,79 @@ fn staged_fingerprint(files: &[StagedFile]) -> u64 {
     hasher.finish()
 }
 
-/// The work of the commit of a write, and the staged files that the commit
-/// has received and not published.
+/// The staged files of the manifests of all writer tasks of a write.
+struct ReceivedManifests {
+    /// The number of rows written.
+    num_rows: u64,
+    files: Vec<StagedFile>,
+}
+
+/// Reads the manifests of all writer tasks to the end of the input, and
+/// gives their staged files to the commit.
 ///
-/// The commit owns the staged files that it has received. It removes them
-/// when it ends before it has published them, also when it is canceled,
-/// as far as the code that removes them can run.
+/// A writer task does not own its staged files any longer when its manifest
+/// is taken, so every manifest that reaches the input must be read. This is
+/// therefore a task of its own, which starts when the commit is executed and
+/// which is not canceled when the commit is. A manifest can wait in the input
+/// for a long time, since the input can collect the manifests of many writer
+/// tasks before it returns one.
+///
+/// The input ends when all writer tasks have ended. The first error stops
+/// the writer tasks that run in this process, and the driver stops the writer
+/// tasks on the workers when the commit has failed or is canceled.
+/// The staged files are removed here when the input has failed, when
+/// a manifest is rejected, when the write is incomplete, or when the commit
+/// is gone at the end of the input. The commit receives the error after that.
+async fn read_manifests(
+    mut input: SendableRecordBatchStream,
+    publisher: Publisher,
+    table_path: Path,
+    write_id: Uuid,
+    cancel: CancellationToken,
+    commit: oneshot::Sender<Result<ReceivedManifests>>,
+) {
+    let mut manifests = Manifests::default();
+    let mut files = vec![];
+    let mut result = Ok(());
+    // The input is read after an error as well, since the manifests of
+    // the writer tasks that have ended can follow the error of another task.
+    while let Some(manifest) = input.next().await {
+        let added = manifest.and_then(|manifest| manifests.add(&manifest, &mut files));
+        if added.is_err() && result.is_ok() {
+            cancel.cancel();
+            result = added;
+        }
+    }
+    drop(input);
+    let remove = |files: Vec<StagedFile>| async move {
+        if !files.is_empty() {
+            log::warn!(
+                "removing {} staged files of the write {write_id} to {table_path}, \
+                which are not published",
+                files.len(),
+            );
+            publisher.abort_all(&files).await;
+        }
+    };
+    match result.and_then(|()| manifests.validate()) {
+        Ok(()) => {
+            let received = ReceivedManifests {
+                num_rows: manifests.num_rows,
+                files,
+            };
+            // The commit owns the files, unless it was canceled.
+            if let Err(Ok(received)) = commit.send(Ok(received)) {
+                remove(received.files).await;
+            }
+        }
+        Err(e) => {
+            remove(files).await;
+            let _ = commit.send(Err(e));
+        }
+    }
+}
+
+/// The work of the commit of a write.
 struct WriteCommit {
     ledger: Arc<WriteCommitLedger>,
     publisher: Publisher,
@@ -472,101 +513,76 @@ struct WriteCommit {
     overwrite: bool,
     /// Whether the `_SUCCESS` file is written.
     write_success_file: bool,
-    /// The manifests of the writer tasks, until all of them are read.
-    /// The mutex is never locked. It allows the commit to be used from
-    /// the task that publishes the files.
-    input: Option<Mutex<SendableRecordBatchStream>>,
-    received: Vec<StagedFile>,
 }
 
 impl WriteCommit {
-    /// Starts to remove the staged files of the write that are not published:
-    /// the files that the commit has received, the files of the manifests
-    /// that have arrived in the input and that the commit has not read, and
-    /// the staged objects of the write that are in the table directory.
-    /// The writer tasks that are running are stopped when the input is
-    /// dropped, and they remove their files themselves.
-    ///
-    /// The staged objects in the table directory are removed only when
-    /// `leftovers` is set. They must be kept while another attempt of
-    /// the commit can be publishing them.
-    ///
-    /// The files are removed by a separate task, which is not canceled when
-    /// the commit is.
-    fn start_abort(&mut self, leftovers: bool) -> Option<JoinHandle<()>> {
-        let mut files = std::mem::take(&mut self.received);
-        let mut input = self
-            .input
-            .take()
-            .map(|input| input.into_inner().unwrap_or_else(PoisonError::into_inner));
-        if files.is_empty() && input.is_none() {
-            return None;
+    /// Starts to read the manifests of the writer tasks from the input, and
+    /// returns the work that completes the write with the number of rows
+    /// written. `cancel` stops the writer tasks of the input that run in
+    /// this process. They are stopped when the work ends or is dropped.
+    fn start(
+        self,
+        input: SendableRecordBatchStream,
+        cancel: CancellationToken,
+    ) -> Result<impl Future<Output = Result<u64>> + Send + 'static> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|e| {
+            internal_datafusion_err!("the commit of a write is executed outside of a runtime: {e}")
+        })?;
+        let (sender, manifests) = oneshot::channel();
+        runtime.spawn(read_manifests(
+            input,
+            self.publisher.clone(),
+            self.table_path.clone(),
+            self.write_id,
+            cancel.clone(),
+            sender,
+        ));
+        let cancel = cancel.drop_guard();
+        Ok(async move {
+            let _cancel = cancel;
+            let received = match manifests.await {
+                Ok(received) => received?,
+                Err(_) => return internal_err!("the manifests of the write were not read"),
+            };
+            self.run(received).await
+        })
+    }
+
+    /// Removes staged files that are not published. The files are removed
+    /// by a separate task, which is not canceled when the commit is.
+    async fn abort(&self, files: Vec<StagedFile>) {
+        if files.is_empty() {
+            return;
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            log::warn!(
-                "{} staged files of the write {} to {} are not removed, \
-                since the commit has ended outside of a runtime",
-                files.len(),
-                self.write_id,
-                self.table_path
-            );
-            return None;
-        };
+        log::warn!(
+            "removing {} staged files of the write {} to {}, which are not published",
+            files.len(),
+            self.write_id,
+            self.table_path
+        );
         let publisher = self.publisher.clone();
-        let table_path = self.table_path.clone();
-        let write_id = self.write_id;
-        Some(runtime.spawn(async move {
-            if let Some(input) = input.as_mut() {
-                // The input is read without waiting for the writer tasks.
-                while let Some(Some(Ok(manifest))) = input.next().now_or_never() {
-                    let _ = Manifests::default().add(&manifest, &mut files);
-                }
-            }
-            drop(input);
-            if !files.is_empty() {
-                log::warn!(
-                    "removing {} staged files of the write {write_id} to {table_path}, \
-                    which are not published",
-                    files.len(),
-                );
-            }
-            publisher.abort_all(&files).await;
-            if leftovers {
-                remove_staged_leftovers(&publisher, &table_path, write_id).await;
-            }
-        }))
+        // The files are removed whether or not the task is awaited.
+        let _ = tokio::spawn(async move { publisher.abort_all(&files).await }).await;
     }
 
-    /// Removes the staged files of the write that are not published.
-    async fn abort(&mut self, leftovers: bool) {
-        if let Some(task) = self.start_abort(leftovers) {
-            // The files are removed whether or not the task is awaited.
-            let _ = task.await;
-        }
-    }
-
-    /// Completes the write, and returns the number of rows written.
-    async fn run(mut self) -> Result<u64> {
-        let count = match self.read_manifests().await {
-            Ok(count) => count,
-            Err(e) => {
-                let leftovers = !self.ledger.is_publishing(self.write_id);
-                self.abort(leftovers).await;
-                return Err(e);
-            }
-        };
-        let staged = staged_fingerprint(&self.received);
+    /// Completes the write with the staged files of all writer tasks,
+    /// and returns the number of rows written.
+    async fn run(self, received: ReceivedManifests) -> Result<u64> {
+        let ReceivedManifests {
+            num_rows: count,
+            files,
+        } = received;
+        let staged = staged_fingerprint(&files);
         match self.ledger.start(self.write_id, staged) {
             Ok(CommitStart::Publish) => {}
             Ok(CommitStart::Committed(count)) => {
                 // An earlier attempt has committed the write, so the files
                 // of this attempt are not needed.
-                self.abort(true).await;
+                self.abort(files).await;
                 return Ok(count);
             }
             Err(e) => {
-                // Another attempt can be publishing its staged files.
-                self.abort(false).await;
+                self.abort(files).await;
                 return Err(e);
             }
         }
@@ -577,7 +593,7 @@ impl WriteCommit {
         let ledger = Arc::clone(&self.ledger);
         let write_id = self.write_id;
         let published = tokio::spawn(async move {
-            let result = self.publish().await;
+            let result = self.publish(files).await;
             match &result {
                 Ok(()) => ledger.end(write_id, CommitState::Committed(count)),
                 Err(e) if is_commit_state_unknown(e) => {}
@@ -595,25 +611,6 @@ impl WriteCommit {
                 Some(DataFusionError::External(Box::new(e))),
             )),
         }
-    }
-
-    /// Reads the manifests of all writer tasks. Returns the number of rows written.
-    async fn read_manifests(&mut self) -> Result<u64> {
-        let mut manifests = Manifests::default();
-        loop {
-            let Some(input) = self.input.as_mut() else {
-                return internal_err!("the commit has no input");
-            };
-            let input = input.get_mut().unwrap_or_else(PoisonError::into_inner);
-            let Some(manifest) = input.next().await else {
-                break;
-            };
-            manifests.add(&manifest?, &mut self.received)?;
-        }
-        manifests.validate()?;
-        // The input has ended, so it has no manifest that is not read.
-        self.input = None;
-        Ok(manifests.num_rows)
     }
 
     /// Lists the content of the table directory that an overwrite replaces.
@@ -702,8 +699,7 @@ impl WriteCommit {
     /// and 3 sees the old and the new rows together. This lasts as long as
     /// it takes to publish the files and to delete the old content, which is
     /// one small request for each file, with many requests at the same time.
-    async fn publish(mut self) -> Result<()> {
-        let files = std::mem::take(&mut self.received);
+    async fn publish(self, files: Vec<StagedFile>) -> Result<()> {
         let store = Arc::clone(self.publisher.store());
         let success_file = self.table_path.clone().join(SUCCESS_FILE_NAME);
 
@@ -728,9 +724,7 @@ impl WriteCommit {
         let (old_content, had_success_file) = match prepared.await {
             Ok(prepared) => prepared,
             Err(e) => {
-                // This attempt is the only one that can publish files.
-                self.received = files;
-                self.abort(true).await;
+                self.abort(files).await;
                 return Err(e);
             }
         };
@@ -763,9 +757,6 @@ impl WriteCommit {
                     )
                 })?;
         }
-        // The writer tasks of an earlier attempt of the write can have staged
-        // files that no commit has received.
-        remove_staged_leftovers(&self.publisher, &self.table_path, self.write_id).await;
         Ok(())
     }
 
@@ -835,14 +826,6 @@ impl WriteCommit {
     }
 }
 
-impl Drop for WriteCommit {
-    fn drop(&mut self) {
-        // The commit was canceled before it has published the files.
-        let leftovers = !self.ledger.is_publishing(self.write_id);
-        self.start_abort(leftovers);
-    }
-}
-
 /// Returns the error of a commit that has changed the table directory and
 /// that has not completed. The error keeps the write from being attempted again.
 fn commit_state_unknown(
@@ -871,6 +854,11 @@ fn is_commit_state_unknown(error: &DataFusionError) -> bool {
 /// when the files are published. A write that fails or is canceled before
 /// the files are published leaves the table directory as it was.
 /// The output is a single row with the number of rows written.
+///
+/// The manifests are read from the time the plan is executed, to the end of
+/// the input, by a task that is not canceled with the commit. The staged
+/// files of every manifest that the input delivers are therefore published
+/// or removed.
 ///
 /// The commit is not stopped once it has started to publish the files.
 /// A write that is canceled at that time is reported as canceled to its
@@ -1048,12 +1036,16 @@ impl ExecutionPlan for FileWriteCommitExec {
             write_id: self.write_id,
             overwrite: self.overwrite,
             write_success_file: self.write_success_file,
-            input: Some(Mutex::new(self.input.execute(0, context)?)),
-            received: vec![],
         };
+        // The writer tasks of the input that run in this process are given
+        // the means to stop them.
+        let cancel = CancellationToken::new();
+        let input_context =
+            task_context_with_extension(&context, Arc::new(WriteCancellation(cancel.clone())));
+        let commit = commit.start(self.input.execute(0, input_context)?, cancel)?;
         let schema = self.schema();
         let output = stream::once(async move {
-            let count = commit.run().await?;
+            let count = commit.await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -1064,6 +1056,9 @@ impl ExecutionPlan for FileWriteCommitExec {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures::FutureExt;
+    use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
 
     use super::*;
     use crate::listing::testing::{FaultStore, Mode};
@@ -1134,15 +1129,25 @@ mod tests {
             &self,
             manifests: Vec<Result<RecordBatch>>,
             overwrite: bool,
-        ) -> impl Future<Output = Result<u64>> + Send + 'static {
+        ) -> BoxFuture<'static, Result<u64>> {
             self.commit_stream(stream::iter(manifests).boxed(), overwrite)
         }
 
         fn commit_stream(
             &self,
-            manifests: futures::stream::BoxStream<'static, Result<RecordBatch>>,
+            manifests: BoxStream<'static, Result<RecordBatch>>,
             overwrite: bool,
-        ) -> impl Future<Output = Result<u64>> + Send + 'static {
+        ) -> BoxFuture<'static, Result<u64>> {
+            self.commit_input(|_| manifests, overwrite)
+        }
+
+        /// Starts the commit, which reads the manifests from then on.
+        /// The manifests are created with the means to stop the writer tasks.
+        fn commit_input(
+            &self,
+            manifests: impl FnOnce(CancellationToken) -> BoxStream<'static, Result<RecordBatch>>,
+            overwrite: bool,
+        ) -> BoxFuture<'static, Result<u64>> {
             // Only the requests of the commit are of interest.
             self.store.clear_requests();
             let commit = WriteCommit {
@@ -1152,13 +1157,14 @@ mod tests {
                 write_id: WRITE_ID,
                 overwrite,
                 write_success_file: self.success_file,
-                input: Some(Mutex::new(Box::pin(RecordBatchStreamAdapter::new(
-                    manifest_schema(),
-                    manifests,
-                )))),
-                received: vec![],
             };
-            commit.run()
+            let cancel = CancellationToken::new();
+            let manifests = manifests(cancel.clone());
+            let input = Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
+            match commit.start(input, cancel) {
+                Ok(commit) => commit.boxed(),
+                Err(e) => futures::future::ready(Err(e)).boxed(),
+            }
         }
 
         async fn commit(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
@@ -1386,14 +1392,15 @@ mod tests {
                 assert_eq!(write.store.count(mode.publish_request()), 0);
                 assert_eq!(write.store.count("PUT"), 0);
                 assert_eq!(write.store.count("LIST"), 0);
-                // The staged files that the commit has not received are removed
-                // as well when they are objects, and they stay as open uploads.
-                let expected = vec!["table/_SUCCESS", "table/old.parquet"];
-                let missing = [0, 1, 3];
+                // The staged files that the commit has not received stay.
+                let missing = [0, 1, 3][case];
+                let mut expected = vec!["table/_SUCCESS"];
+                expected.extend(write.staged_objects(missing));
+                expected.push("table/old.parquet");
                 assert_eq!(write.store.objects().await?, expected, "{mode:?} {message}");
                 let uploads = match mode {
                     Mode::Rename => 0,
-                    Mode::Multipart => missing[case],
+                    Mode::Multipart => missing,
                 };
                 assert_eq!(write.store.open_uploads().len(), uploads);
             }
@@ -1475,7 +1482,7 @@ mod tests {
             write.put("table/old.parquet").await?;
             let a = write.stage("table/a.parquet").await?;
             let b = write.stage("table/b.parquet").await?;
-            // A manifest that has arrived when the commit fails is taken as well.
+            // A manifest that follows the error of another writer task is taken as well.
             let manifests = vec![
                 manifest(0, 3, &[&a]),
                 exec_err!("writer failure"),
@@ -1505,11 +1512,15 @@ mod tests {
             let write = TestWrite::new(mode);
             write.put("table/old.parquet").await?;
             let a = write.stage("table/a.parquet").await?;
-            // The input does not end, so the commit waits for the other manifest.
-            let manifests = stream::iter(vec![manifest(0, 2, &[&a])])
-                .chain(stream::pending())
-                .boxed();
-            let commit = write.commit_stream(manifests, true);
+            // The commit waits for the other manifest. The input ends when
+            // the commit stops the writer task that is running.
+            let a = manifest(0, 2, &[&a]);
+            let manifests = |cancel: CancellationToken| {
+                let running =
+                    stream::once(cancel.cancelled_owned()).filter_map(|()| async { None });
+                stream::iter(vec![a]).chain(running).boxed()
+            };
+            let commit = write.commit_input(manifests, true);
             let waiting = tokio::time::timeout(std::time::Duration::from_millis(50), commit);
             assert!(waiting.await.is_err());
             write.store.wait_for(&["table/old.parquet"]).await?;
@@ -1532,6 +1543,31 @@ mod tests {
             let b = write.stage("table/b.parquet").await?;
             let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&b])];
             drop(write.commit_future(manifests, false));
+            write.store.wait_for(&["table/old.parquet"]).await?;
+            assert_eq!(write.store.count(mode.publish_request()), 0);
+        }
+        Ok(())
+    }
+
+    /// A writer task can hand over its manifest while the write is canceled.
+    #[tokio::test]
+    async fn test_canceled_commit_removes_files_of_manifests_that_arrive_later() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let (a, b) = (manifest(0, 2, &[&a]), manifest(1, 2, &[&b]));
+            let manifests = |cancel: CancellationToken| {
+                let late = stream::once(async move {
+                    cancel.cancelled().await;
+                    b
+                });
+                stream::iter(vec![a]).chain(late).boxed()
+            };
+            let commit = write.commit_input(manifests, false);
+            let waiting = tokio::time::timeout(std::time::Duration::from_millis(50), commit);
+            assert!(waiting.await.is_err());
             write.store.wait_for(&["table/old.parquet"]).await?;
             assert_eq!(write.store.count(mode.publish_request()), 0);
         }
@@ -2014,40 +2050,6 @@ mod tests {
                 assert_eq!(result?, 10);
                 write.store.wait_for(&committed).await?;
             }
-        }
-        Ok(())
-    }
-
-    /// The staged objects of writer tasks whose manifests no commit has
-    /// received are removed by a commit of the write.
-    #[tokio::test]
-    async fn test_commit_removes_staged_objects_that_were_not_reported() -> Result<()> {
-        let other = format!("table/_staged-{OTHER_WRITE_ID}-{OTHER_WRITE_ID}");
-        for fails in [false, true] {
-            let write = TestWrite::new(Mode::Rename);
-            write.put(&other).await?;
-            let a = write.stage("table/a.parquet").await?;
-            // The files of a writer task of an earlier attempt of the write.
-            write.stage("table/a.parquet").await?;
-            write.stage("table/p=1/b.parquet").await?;
-            let partitions = if fails { 2 } else { 1 };
-            let result = write.commit(vec![manifest(0, partitions, &[&a])]).await;
-            assert_eq!(result.is_err(), fails);
-            let expected = if fails {
-                vec!["table/_staged-*"]
-            } else {
-                vec!["table/_SUCCESS", "table/_staged-*", "table/a.parquet"]
-            };
-            assert_eq!(write.store.objects().await?, expected);
-            // The staged object of the other write is kept.
-            assert!(
-                write
-                    .store
-                    .inner()
-                    .head(&Path::from(other.as_str()))
-                    .await
-                    .is_ok()
-            );
         }
         Ok(())
     }

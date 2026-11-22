@@ -26,15 +26,19 @@
 //! the object where readers can see it. With a rename, a file takes
 //! the requests of a direct write and the rename.
 //!
-//! Everything that is staged and not published is removed wherever the code
-//! that owns it still runs: a writer task that fails or is canceled removes
-//! what it has staged and not reported, and the commit removes what it has
-//! received and does not publish. The remaining cases leave objects behind
-//! that no reader can see: a process that is killed, a writer task that
-//! the driver has given up on and that completes later, and a write whose
-//! commit never runs after writer tasks have reported their files. These
-//! are objects with the name `_staged-<write id>-<random id>` in the table
-//! directory, or multipart uploads that are not completed. An object store
+//! Each staged file has one owner that removes it when it is not published.
+//! A writer task owns what it has staged until its manifest is taken, and it
+//! removes that when it fails or is canceled. The commit owns the files of
+//! every manifest that reaches its input, also when the commit is canceled,
+//! since it reads its input to the end in a task of its own. The remaining
+//! cases leave objects behind that no reader can see: a process that is
+//! killed, a writer task that the driver has given up on and that completes
+//! later, and a manifest that never reaches a commit after its writer task
+//! has handed it over, which happens when the commit of the write is not
+//! started, or when the output of the writer task is discarded before
+//! the commit has asked for it. These are objects with the name
+//! `_staged-<write id>-<random id>` in the table directory, or multipart
+//! uploads that are not completed. Nothing lists and removes them. An object store
 //! keeps the parts of such an upload and charges for them until the upload
 //! is aborted, and it has no listing of them that is available here. The
 //! bucket therefore needs a lifecycle rule that aborts incomplete multipart

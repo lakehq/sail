@@ -83,3 +83,21 @@ impl SessionExtensionAccessor for TaskContext {
         self.runtime_env().clone()
     }
 }
+
+/// Returns a task context that has the extension in its session configuration
+/// and that is the given task context otherwise.
+pub fn task_context_with_extension<T: Send + Sync + 'static>(
+    context: &TaskContext,
+    extension: Arc<T>,
+) -> Arc<TaskContext> {
+    Arc::new(TaskContext::new(
+        context.task_id(),
+        context.session_id(),
+        context.session_config().clone().with_extension(extension),
+        context.scalar_functions().clone(),
+        context.higher_order_functions().clone(),
+        context.aggregate_functions().clone(),
+        context.window_functions().clone(),
+        context.runtime_env(),
+    ))
+}

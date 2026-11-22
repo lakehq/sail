@@ -3223,6 +3223,89 @@ async fn test_failed_writer_leaves_the_table_as_it_was() -> Result<()> {
     Ok(())
 }
 
+/// The input of a writer task, which has one batch and which ends or not.
+#[derive(Debug)]
+struct TestInput {
+    schema: SchemaRef,
+    batch: RecordBatch,
+    ends: bool,
+}
+
+impl datafusion::physical_plan::streaming::PartitionStream for TestInput {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        if self.ends {
+            test_stream(&self.schema, vec![self.batch.clone()])
+        } else {
+            task_input(&self.schema, vec![self.batch.clone()], false)
+        }
+    }
+}
+
+/// The manifests of the writer tasks that have ended wait in the input of
+/// the commit when the write is canceled, as they do in the input that
+/// reads them from other workers, which collects them into larger batches.
+/// The writer tasks that are running are stopped.
+#[tokio::test]
+#[expect(deprecated)]
+async fn test_canceled_write_removes_the_files_of_all_writer_tasks() -> Result<()> {
+    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+    use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+
+    for mode in Mode::ALL {
+        let (ctx, store) = fault_context(mode, RuntimeEnvBuilder::new())?;
+        let schema = int_schema();
+        // The first writer task ends, and the second one waits for its input.
+        let inputs: Vec<Arc<dyn PartitionStream>> = vec![
+            Arc::new(TestInput {
+                schema: Arc::clone(&schema),
+                batch: int_batch(&schema, 0..5)?,
+                ends: true,
+            }),
+            Arc::new(TestInput {
+                schema: Arc::clone(&schema),
+                batch: int_batch(&schema, 5..12)?,
+                ends: false,
+            }),
+        ];
+        let input =
+            StreamingTableExec::try_new(Arc::clone(&schema), inputs, None, [], false, None)?;
+        let writer = ParquetWriteExec::try_new(
+            Arc::new(input),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+            vec![],
+            TableParquetOptions::default(),
+            ".zstd.parquet".to_string(),
+            None,
+            false,
+            0,
+            NonZeroUsize::MIN,
+        )?;
+        let manifests = CoalesceBatchesExec::new(
+            Arc::new(CoalescePartitionsExec::new(Arc::new(writer))),
+            ctx.task_ctx().session_config().batch_size(),
+        );
+        let plan = Arc::new(FileWriteCommitExec::new(
+            Arc::new(manifests),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+        ));
+        let commit = tokio::spawn(collect(plan, ctx.task_ctx()));
+        wait_for_staged(&store, mode, 1).await?;
+        assert!(!commit.is_finished());
+        commit.abort();
+        store.wait_for(&[]).await?;
+        assert_eq!(store.count(mode.publish_request()), 0);
+    }
+    Ok(())
+}
+
 /// The tasks of a partition are attempted again when the write fails,
 /// and the files of all attempts have the same names.
 #[tokio::test]
@@ -3250,14 +3333,14 @@ async fn test_write_that_is_attempted_again_publishes_one_attempt() -> Result<()
 
         let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![12]);
-        // The files of the first attempt are not visible. The commit removes
-        // them when they are objects, and they stay as open uploads otherwise,
-        // since uploads cannot be listed.
-        let expected = vec![
-            "table/_SUCCESS".to_string(),
+        // The files of the first attempt are not visible. They stay as staged
+        // files, since no commit has received their manifests.
+        let mut expected = vec!["table/_SUCCESS".to_string()];
+        expected.extend(staged.iter().map(|x| x.to_string()));
+        expected.extend([
             file_name(0, 0, ".zstd.parquet"),
             file_name(1, 0, ".zstd.parquet"),
-        ];
+        ]);
         assert_eq!(store.objects().await?, expected, "{mode:?}");
         let uploads = match mode {
             Mode::Rename => vec![],

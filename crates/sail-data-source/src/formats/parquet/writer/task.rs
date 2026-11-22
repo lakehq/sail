@@ -22,7 +22,7 @@ use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWri
 use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
 use crate::formats::parquet::writer::schema::check_file_columns;
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
-use crate::listing::commit::manifest_batch;
+use crate::listing::commit::{WriteCancellation, manifest_batch};
 use crate::listing::part_file::part_file_name;
 use crate::listing::staging::{Publisher, StagedFile};
 
@@ -521,7 +521,8 @@ impl TaskOutput {
 /// to the readers of the table. The commit of the write owns the files once
 /// the stream is read to its end after the manifest, which shows that
 /// the manifest was taken. If the task fails, or if the stream is dropped
-/// before that, the task removes what it has staged.
+/// before that, the task removes what it has staged. The task also fails
+/// when the commit of the write runs in the same process and cancels the write.
 pub fn write_partition(
     task: ParquetWriteTask,
     input: SendableRecordBatchStream,
@@ -552,7 +553,18 @@ pub fn write_partition(
                     task.write_id,
                 ));
                 let guard = AbandonGuard(Arc::clone(&files));
-                match write_files(task, files, input, reservation, metrics).await {
+                let canceled = WriteCancellation::of(&task.context);
+                let written = write_files(task, files, input, reservation, metrics);
+                let written = match canceled {
+                    // The commit of the write runs in this process and stops the task.
+                    Some(canceled) => tokio::select! {
+                        biased;
+                        () = canceled.canceled() => exec_err!("the write is canceled"),
+                        written = written => written,
+                    },
+                    None => written.await,
+                };
+                match written {
                     Ok(manifest) => Some((Ok(manifest), State::Written(guard))),
                     Err(e) => Some((Err(e), State::Ended)),
                 }
