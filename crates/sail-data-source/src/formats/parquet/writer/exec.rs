@@ -120,6 +120,18 @@ impl ParquetWriteExec {
         }
     }
 
+    /// The maximum number of tasks that encode the columns of a file in parallel.
+    /// The writer partitions run at the same time, so the cores are divided
+    /// among the partitions.
+    fn max_lanes(&self) -> usize {
+        if !self.options.global.allow_single_file_parallelism {
+            return 1;
+        }
+        let cores = std::thread::available_parallelism().map_or(1, |x| x.get());
+        let partitions = self.properties.output_partitioning().partition_count();
+        (cores / partitions.max(1)).max(1)
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -259,6 +271,7 @@ impl ExecutionPlan for ParquetWriteExec {
             buffer_size: execution.objectstore_writer_buffer_size,
             max_rows_per_file: execution.soft_max_rows_per_output_file.get(),
             max_open_files: MAX_OPEN_FILES_PER_TASK,
+            max_lanes: self.max_lanes(),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());

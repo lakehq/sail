@@ -15,8 +15,8 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::ScalarBuffer;
 use datafusion::arrow::compute::{SortOptions, cast, concat_batches};
 use datafusion::arrow::datatypes::{
-    DataType, Field, Int32Type, Int64Type, IntervalDayTime, IntervalMonthDayNano, Schema,
-    SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DataType, Field, Int32Type, Int64Type, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
+    Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -83,6 +83,7 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         buffer_size: 10 * 1024 * 1024,
         max_rows_per_file: 50_000_000,
         max_open_files: 100,
+        max_lanes: 1,
     }
 }
 
@@ -1859,5 +1860,183 @@ async fn test_canceled_task_deletes_file_that_completes_later() -> Result<()> {
     }
     assert_eq!(gated.completed.load(Ordering::SeqCst), 1);
     wait_for_files(&gated.inner, &[]).await?;
+    Ok(())
+}
+
+/// A batch with one column for each type that the Parquet writer supports.
+/// The four rows of each type are repeated.
+fn all_types_batch(repeat: usize) -> Result<RecordBatch> {
+    let mut fields = vec![];
+    let mut columns = vec![];
+    for values in type_cases()? {
+        let values = match values.data_type() {
+            DataType::Union(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => continue,
+            // The other columns have four rows.
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => values.slice(1, 4),
+            _ => values,
+        };
+        let name = format!("c{}", fields.len());
+        fields.push(Field::new(name, values.data_type().clone(), true));
+        columns.push(values);
+    }
+    let schema = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    Ok(concat_batches(&schema, &vec![batch; repeat])?)
+}
+
+/// Writes the batches with the Arrow writer and the properties
+/// that the writer task is expected to use.
+fn reference_file_of_batches(
+    options: &TableParquetOptions,
+    batches: &[RecordBatch],
+) -> Result<Vec<u8>> {
+    let schema = batches[0].schema();
+    let mut options = options.clone();
+    options.arrow_schema(&schema);
+    let props = WriterPropertiesBuilder::try_from(&options)?.build();
+    let mut writer = ArrowWriter::try_new_with_options(
+        vec![],
+        schema,
+        ArrowWriterOptions::new().with_properties(props),
+    )?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    Ok(writer.into_inner()?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_parallel_columns_write_the_same_file() -> Result<()> {
+    // The batches have different sizes, so that row groups end inside batches,
+    // and so that some parts of the batches are below the size for parallel encoding.
+    let batches = vec![
+        all_types_batch(600)?,
+        all_types_batch(1)?,
+        all_types_batch(900)?,
+        all_types_batch(300)?,
+    ];
+    let schema = batches[0].schema();
+    let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
+
+    let mut by_rows = TableParquetOptions::default();
+    by_rows.global.max_row_group_size = 3000;
+    by_rows.global.data_pagesize_limit = 512;
+    by_rows.global.write_batch_size = 64;
+    let mut by_bytes = TableParquetOptions::default();
+    by_bytes.global.max_row_group_bytes = Some("65536".parse()?);
+    by_bytes.global.compression = Some("snappy".to_string());
+    let mut plain = TableParquetOptions::default();
+    plain.global.dictionary_enabled = Some(false);
+    plain.global.writer_version = "2.0".parse()?;
+    plain.global.bloom_filter_on_write = true;
+
+    for (i, options) in [by_rows, by_bytes, plain].into_iter().enumerate() {
+        let expected = reference_file_of_batches(&options, &batches)?;
+        for lanes in [1, 2, 8, 1000] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let mut task = test_task(Arc::clone(&store), 0);
+            task.options = options.clone();
+            task.max_lanes = lanes;
+            // The upload buffer is small, so that the file is uploaded in parts.
+            task.buffer_size = 64 * 1024;
+            let manifest = run_task(task, &schema, batches.clone()).await?;
+            let name = file_name(0, 0, ".parquet");
+            assert_eq!(
+                manifest_rows(&manifest)?,
+                vec![(0, 0, Some(name.clone()), expected.len() as u64, rows as u64)],
+                "options {i} lanes {lanes}"
+            );
+            let data = read_bytes(store.as_ref(), &name).await?;
+            assert!(data == expected, "options {i} lanes {lanes}");
+            let (metadata, _) = read_parquet(data)?;
+            if i == 0 {
+                assert_eq!(metadata.num_row_groups(), rows.div_ceil(3000));
+            } else if i == 1 {
+                assert!(metadata.num_row_groups() > 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = partitioned_schema();
+    let rows: Vec<(i64, i32, &str)> = (0..5000).map(|i| (i, (i % 2) as i32, "x")).collect();
+    let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
+    task.max_lanes = 4;
+    task.max_rows_per_file = 2000;
+    task.options.global.max_row_group_size = 1500;
+    let manifest = run_task(task, &schema, vec![partitioned_batch(&rows)?]).await?;
+    let mut manifest = manifest_rows(&manifest)?;
+    manifest.sort();
+    let files = list_files(store.as_ref()).await?;
+    // Each directory has 2500 rows. A file is completed at the end of
+    // the row group that reaches the row limit of the file.
+    let name =
+        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
+    assert_eq!(
+        manifest,
+        vec![
+            (0, 0, Some(name(0, 0)), files[0].1, 2500),
+            (0, 0, Some(name(1, 0)), files[1].1, 2500),
+        ]
+    );
+    let directories = read_directories(store.as_ref()).await?;
+    assert_eq!(directories["table/a=0"].len(), 2500);
+    assert_eq!(directories["table/a=1"].len(), 2500);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_parallel_columns_report_encoding_error() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let intervals: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNano::new(1, 2, 3);
+            2000
+        ]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", intervals.data_type().clone(), true),
+        Field::new("c", DataType::Int64, true),
+    ]));
+    let integers: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::clone(&integers), intervals, integers],
+    )?;
+    let expected = reference_file_of_batches(
+        &TableParquetOptions::default(),
+        std::slice::from_ref(&batch),
+    );
+    let mut task = test_task(Arc::clone(&store), 0);
+    task.max_lanes = 3;
+    let actual = run_task(task, &schema, vec![batch]).await;
+    let (Err(expected), Err(actual)) = (expected, actual) else {
+        return Err(internal_datafusion_err!("expected errors"));
+    };
+    assert_eq!(actual.strip_backtrace(), expected.strip_backtrace());
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parallel_columns_with_content_defined_chunking() -> Result<()> {
+    // Content-defined chunking is not available for parallel columns,
+    // so the columns are encoded in order and the option keeps its effect.
+    let batches = vec![all_types_batch(600)?, all_types_batch(600)?];
+    let schema = batches[0].schema();
+    let mut options = TableParquetOptions::default();
+    options.global.content_defined_chunking.enabled = true;
+    options.global.max_row_group_size = 1000;
+    let expected = reference_file_of_batches(&options, &batches)?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = test_task(Arc::clone(&store), 0);
+    task.options = options;
+    task.max_lanes = 8;
+    run_task(task, &schema, batches).await?;
+    let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+    assert!(data == expected);
     Ok(())
 }

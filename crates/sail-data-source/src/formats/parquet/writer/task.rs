@@ -51,6 +51,8 @@ pub struct ParquetWriteTask {
     /// The number of files that the task keeps open at the same time
     /// when the data has partition columns.
     pub max_open_files: usize,
+    /// The maximum number of tasks that encode the columns of a file in parallel.
+    pub max_lanes: usize,
 }
 
 /// The metrics of one Parquet writer task.
@@ -180,6 +182,7 @@ pub(super) struct FileFactory {
     skip_arrow_metadata: bool,
     buffer_size: usize,
     max_rows_per_file: u64,
+    max_lanes: usize,
 }
 
 impl FileFactory {
@@ -214,6 +217,7 @@ impl FileFactory {
             skip_arrow_metadata,
             buffer_size: task.buffer_size,
             max_rows_per_file: task.max_rows_per_file as u64,
+            max_lanes: task.max_lanes,
         })
     }
 
@@ -232,6 +236,7 @@ impl FileFactory {
             self.props.clone(),
             self.skip_arrow_metadata,
             self.buffer_size,
+            self.max_lanes,
         )
     }
 }

@@ -12,6 +12,7 @@ use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 
+use crate::formats::parquet::writer::encoder::ColumnEncoder;
 use crate::listing::commit::WrittenFile;
 
 /// The maximum number of concurrent part uploads for one file.
@@ -30,7 +31,10 @@ pub struct ParquetFileWriter {
 }
 
 enum FileEncoder {
-    Arrow(AsyncArrowWriter<BufWriter>),
+    /// Encodes the columns of the file one after another.
+    Arrow(Box<AsyncArrowWriter<BufWriter>>),
+    /// Encodes the columns of the file in parallel.
+    Columns(Box<ColumnEncoder>),
 }
 
 impl ParquetFileWriter {
@@ -41,15 +45,31 @@ impl ParquetFileWriter {
         props: WriterProperties,
         skip_arrow_metadata: bool,
         buffer_size: usize,
+        lanes: usize,
     ) -> Result<Self> {
         let writer = BufWriter::with_capacity(store, location.clone(), buffer_size)
             .with_max_concurrency(MAX_UPLOAD_CONCURRENCY);
-        let options = ArrowWriterOptions::new()
-            .with_properties(props)
-            .with_skip_arrow_metadata(skip_arrow_metadata);
-        let writer = AsyncArrowWriter::try_new_with_options(writer, schema, options)?;
+        // Content-defined chunking keeps state across the row groups of a column,
+        // which is only available in the writer that encodes the columns in order.
+        let inner = if lanes > 1 && props.content_defined_chunking().is_none() {
+            FileEncoder::Columns(Box::new(ColumnEncoder::try_new(
+                writer,
+                buffer_size,
+                schema,
+                props,
+                skip_arrow_metadata,
+                lanes,
+            )?))
+        } else {
+            let options = ArrowWriterOptions::new()
+                .with_properties(props)
+                .with_skip_arrow_metadata(skip_arrow_metadata);
+            FileEncoder::Arrow(Box::new(AsyncArrowWriter::try_new_with_options(
+                writer, schema, options,
+            )?))
+        };
         Ok(Self {
-            inner: FileEncoder::Arrow(writer),
+            inner,
             location,
             rows: 0,
         })
@@ -63,6 +83,11 @@ impl ParquetFileWriter {
                 let row_groups = writer.flushed_row_groups().len();
                 writer.write(batch).await?;
                 writer.flushed_row_groups().len() > row_groups
+            }
+            FileEncoder::Columns(writer) => {
+                let row_groups = writer.flushed_row_groups();
+                writer.write(batch).await?;
+                writer.flushed_row_groups() > row_groups
             }
         };
         self.rows += batch.num_rows() as u64;
@@ -78,6 +103,7 @@ impl ParquetFileWriter {
     pub fn memory_size(&self) -> usize {
         match &self.inner {
             FileEncoder::Arrow(writer) => writer.memory_size(),
+            FileEncoder::Columns(writer) => writer.memory_size(),
         }
     }
 
@@ -88,6 +114,7 @@ impl ParquetFileWriter {
                 writer.finish().await?;
                 writer.bytes_written()
             }
+            FileEncoder::Columns(mut writer) => writer.finish().await?,
         };
         Ok(WrittenFile {
             location: self.location,

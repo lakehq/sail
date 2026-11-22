@@ -825,8 +825,9 @@
   default: "true"
   description: |
     (Writing) Whether to parallelize writing for each single Parquet file.
-    This option currently has no effect. Each Parquet file is written by a single writer,
-    and the files of different partitions are written in parallel.
+    If the value is `true`, the columns of each file are encoded in parallel
+    when there are more CPU cores than partitions being written.
+    The content of the files does not depend on this option.
   experimental: true
 
 - key: parquet.maximum_parallel_row_group_writers
