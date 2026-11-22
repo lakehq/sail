@@ -10,6 +10,7 @@ use datafusion::arrow::array::{
     Array, ArrayData, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait, RecordBatch,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{DataType, FieldRef, SchemaRef};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_writer::{
@@ -44,6 +45,22 @@ const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 /// 1.8 times the memory.
 const TIME_SLICE: Duration = Duration::from_millis(10);
 
+/// The number of rows below which a batch is combined with the batches after it
+/// before its rows are encoded or kept for the jobs.
+///
+/// A batch has a cost for each of its columns that does not depend on its rows:
+/// an array with two rows used about 250 bytes of memory and took longer
+/// to encode than a thousand rows of a larger array. Measured with 20 million
+/// rows of 17 columns that 48 tasks wrote to 100 directories each, in batches
+/// of two rows for each directory: 9.6 s, 437 s of CPU time and 55 GiB without
+/// combining the batches, and 5.8 s, 257 s and 19 GiB with it. A column writer
+/// takes at most this number of rows at a time, so larger batches are not combined.
+const SMALL_BATCH_ROWS: usize = 1024;
+
+/// The number of small batches that are combined at a time, so that a file
+/// never keeps more than a few of them as they are.
+const SMALL_BATCH_COUNT: usize = 32;
+
 /// Encodes a Parquet file.
 ///
 /// The writer task divides its input into row groups, and it collects the rows
@@ -67,10 +84,11 @@ const TIME_SLICE: Duration = Duration::from_millis(10);
 /// group is limited in bytes, since the size of the encoded rows is known
 /// only then.
 ///
-/// Each column writer receives the same arrays in the same order as it does
-/// in [`ArrowWriter`], so the file has the same content as the file that
-/// [`ArrowWriter`] writes, unless the size of a row group is limited in bytes
-/// or a batch is larger than a slab.
+/// Batches of few rows are combined before they are encoded, whatever the budget
+/// has. Each column writer then receives the same arrays in the same order as
+/// it does in [`ArrowWriter`] for the combined batches, so the file has the same
+/// content as the file that [`ArrowWriter`] writes for them, unless the size of
+/// a row group is limited in bytes or a batch is larger than a slab.
 pub(super) struct ColumnEncoder {
     writer: SerializedFileWriter<SharedBuffer>,
     /// The encoded data that has not been handed to the upload.
@@ -85,6 +103,9 @@ pub(super) struct ColumnEncoder {
     /// The maximum size of the data that is handed to the upload at a time.
     upload_chunk_size: usize,
     schema: SchemaRef,
+    /// The last rows of the row group that receives rows, when they have arrived
+    /// in batches of few rows that are not combined yet.
+    small: SmallBatches,
     /// The rows of the row group that receives rows which no job has received.
     pending: Slab,
     /// The row group that receives rows, once it has column writers.
@@ -102,8 +123,10 @@ pub(super) struct ColumnEncoder {
     measured: Option<MeasuredRows>,
     /// The number of leaf columns of each top-level column.
     leaf_counts: Vec<usize>,
-    /// The size of the rows that the file has received.
+    /// The size and the number of the rows that the file has received,
+    /// without the batches of few rows that are not combined.
     input_bytes: u64,
+    input_rows: u64,
     resources: Arc<EncodeResources>,
     /// Tells the jobs to stop. This is set when the encoder is dropped.
     stop: Arc<AtomicBool>,
@@ -135,6 +158,17 @@ struct MeasuredRows {
     rows: usize,
     /// Whether the row group is expected to reach the limit on its size with the rows.
     last: bool,
+}
+
+/// Batches of few rows that are combined before they are encoded.
+#[derive(Default)]
+struct SmallBatches {
+    batches: Vec<RecordBatch>,
+    rows: usize,
+    /// The expected size of the values of the batches. The file has less than
+    /// [`SMALL_BATCH_ROWS`] rows in these batches, and they are counted with
+    /// the memory of the file and not in the budget.
+    bytes: usize,
 }
 
 /// Rows of a row group that are handed to the jobs together.
@@ -286,6 +320,7 @@ impl ColumnEncoder {
             unstored: resources.charge_outside_budget(),
             upload_chunk_size: upload_chunk_size.max(1),
             schema,
+            small: SmallBatches::default(),
             pending: Slab::default(),
             open: None,
             sealed: VecDeque::new(),
@@ -296,6 +331,7 @@ impl ColumnEncoder {
             measured: None,
             leaf_counts,
             input_bytes: 0,
+            input_rows: 0,
             resources,
             stop: Arc::new(AtomicBool::new(false)),
             slice: TimeSlice::start(),
@@ -326,19 +362,23 @@ impl ColumnEncoder {
     /// The number of row groups that have rows and are not in the file.
     #[cfg(test)]
     pub fn row_groups_in_flight(&self) -> usize {
-        self.sealed.len() + usize::from(self.open.is_some() || self.pending.rows > 0)
+        let rows = self.pending.rows + self.small.rows;
+        self.sealed.len() + usize::from(self.open.is_some() || rows > 0)
     }
 
-    /// The memory used by the column writers. This does not include the memory
-    /// that is taken from the encode budget, and the encoded data that
-    /// the object store has not stored, which are in the memory pool already.
+    /// The memory used by the column writers and by the batches of few rows
+    /// that are not combined. This does not include the memory that is taken
+    /// from the encode budget, and the encoded data that the object store
+    /// has not stored, which are in the memory pool already.
     pub fn memory_size(&self) -> usize {
-        self.open
+        let columns: usize = self
+            .open
             .iter()
             .chain(&self.sealed)
             .flat_map(|x| x.memory.iter())
             .map(|x| x.load(Ordering::Relaxed))
-            .sum()
+            .sum();
+        columns + self.small.bytes
     }
 
     /// Counts the encoded data that the object store has not stored.
@@ -374,6 +414,7 @@ impl ColumnEncoder {
                 let measured = if measured > 0 {
                     measured
                 } else if last {
+                    self.flush_small().await?;
                     self.seal()?;
                     continue;
                 } else {
@@ -387,24 +428,26 @@ impl ColumnEncoder {
                 };
                 rows = rows.min(measured);
             }
+            if rows < SMALL_BATCH_ROWS {
+                let piece = rest.slice(0, rows);
+                rest = rest.slice(rows, rest.num_rows() - rows);
+                if let Some(measured) = &mut self.measured {
+                    measured.rows = measured.rows.saturating_sub(rows);
+                }
+                self.add_small(piece).await?;
+                continue;
+            }
+            self.flush_small().await?;
             let piece = rest.slice(0, rows);
-            let column_bytes: Vec<usize> = piece
-                .columns()
-                .iter()
-                .map(|x| logical_size(x.as_ref()))
-                .collect();
+            let column_bytes = column_sizes(&piece);
             // A batch that is larger than a slab is divided, so that a job
             // does not encode more than a slab at a time.
             let bytes: usize = column_bytes.iter().sum();
             let slab_bytes = self.resources.slab_bytes();
-            let (piece, column_bytes) = if bytes > slab_bytes && rows > 1 {
+            let (piece, column_bytes) = if bytes > slab_bytes {
                 rows = (rows as u128 * slab_bytes as u128 / bytes as u128).max(1) as usize;
                 let piece = rest.slice(0, rows);
-                let column_bytes = piece
-                    .columns()
-                    .iter()
-                    .map(|x| logical_size(x.as_ref()))
-                    .collect();
+                let column_bytes = column_sizes(&piece);
                 (piece, column_bytes)
             } else {
                 (piece, column_bytes)
@@ -418,10 +461,56 @@ impl ColumnEncoder {
         Ok(())
     }
 
+    /// Adds a batch of few rows to the row group that receives rows. The batch
+    /// is combined with the batches of few rows before and after it.
+    async fn add_small(&mut self, piece: RecordBatch) -> Result<()> {
+        // The size of the values of each batch is not computed, since that
+        // takes longer than the batch does once the batches are combined.
+        self.small.bytes += match self.input_rows {
+            0 => column_sizes(&piece).iter().sum(),
+            rows => piece.num_rows() * (self.input_bytes / rows).max(1) as usize,
+        };
+        self.small.rows += piece.num_rows();
+        self.small.batches.push(piece);
+        if self.small.rows >= SMALL_BATCH_ROWS || self.is_full() {
+            return self.flush_small().await;
+        }
+        if self.small.batches.len() >= SMALL_BATCH_COUNT
+            && let Some(batch) = combine(&self.small.batches)
+        {
+            self.small.batches = vec![batch];
+        }
+        Ok(())
+    }
+
+    /// Adds the batches of few rows to the row group as one batch.
+    async fn flush_small(&mut self) -> Result<()> {
+        if self.small.batches.is_empty() {
+            return Ok(());
+        }
+        let batches = std::mem::take(&mut self.small).batches;
+        let batches = match combine(&batches) {
+            Some(batch) => vec![batch],
+            // The batches have a data type that cannot be combined.
+            None => batches,
+        };
+        for batch in batches {
+            let column_bytes = column_sizes(&batch);
+            self.add(batch, column_bytes).await?;
+        }
+        Ok(())
+    }
+
     /// The number of rows that the row group that receives rows can still take.
     fn row_group_room(&self) -> usize {
-        let rows = self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows;
-        self.max_row_group_row_count.saturating_sub(rows).max(1)
+        self.max_row_group_row_count
+            .saturating_sub(self.row_group_rows())
+            .max(1)
+    }
+
+    /// The number of rows that the row group that receives rows has.
+    fn row_group_rows(&self) -> usize {
+        self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows + self.small.rows
     }
 
     /// Returns the rows that the row group that receives rows takes next when
@@ -436,6 +525,7 @@ impl ColumnEncoder {
     /// was measured with. The row group ends without another measurement
     /// when it has taken the rows that are expected to fit.
     async fn measure(&mut self, max_bytes: usize) -> Result<Option<MeasuredRows>> {
+        self.flush_small().await?;
         self.submit(false)?;
         self.join_open().await?;
         let Some(open) = &self.open else {
@@ -472,6 +562,7 @@ impl ColumnEncoder {
     async fn add(&mut self, piece: RecordBatch, column_bytes: Vec<usize>) -> Result<()> {
         let bytes: usize = column_bytes.iter().sum();
         self.input_bytes += bytes as u64;
+        self.input_rows += piece.num_rows() as u64;
         loop {
             if let Some(charge) = self.resources.try_charge(bytes) {
                 self.pending.rows += piece.num_rows();
@@ -512,8 +603,7 @@ impl ColumnEncoder {
 
     /// Whether the row group that receives rows has all its rows.
     fn is_full(&self) -> bool {
-        let rows = self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows;
-        rows >= self.max_row_group_row_count
+        self.row_group_rows() >= self.max_row_group_row_count
     }
 
     /// Makes the file return a part of what it has taken from the budget,
@@ -706,6 +796,7 @@ impl ColumnEncoder {
     /// Returns the size of the file and how the file is published.
     pub async fn finish(&mut self) -> Result<(usize, Publish)> {
         self.slice = TimeSlice::start();
+        self.flush_small().await?;
         self.seal()?;
         self.append_all().await?;
         self.writer.finish()?;
@@ -862,6 +953,25 @@ async fn encode_column(
     report(0);
     drop(charge);
     Ok(ColumnOutput::Closed(chunks, encoded))
+}
+
+/// The size of the values of each column of the batch.
+fn column_sizes(batch: &RecordBatch) -> Vec<usize> {
+    batch
+        .columns()
+        .iter()
+        .map(|x| logical_size(x.as_ref()))
+        .collect()
+}
+
+/// Combines the batches into one batch, or returns nothing if there is
+/// no batch or if the batches cannot be combined.
+fn combine(batches: &[RecordBatch]) -> Option<RecordBatch> {
+    match batches {
+        [] => None,
+        [batch] => Some(batch.clone()),
+        [first, ..] => concat_batches(&first.schema(), batches).ok(),
+    }
 }
 
 /// Writes the leaf columns of an array of a top-level column to their column writers.

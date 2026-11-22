@@ -4529,10 +4529,59 @@ fn reference_file_of_batches(
         schema,
         ArrowWriterOptions::new().with_properties(props),
     )?;
-    for batch in batches {
+    let batches = match options.global.content_defined_chunking.enabled {
+        true => batches.to_vec(),
+        false => combined_batches(batches, options.global.max_row_group_size)?,
+    };
+    for batch in &batches {
         writer.write(batch)?;
     }
     Ok(writer.into_inner()?)
+}
+
+/// The batches as the file writer gives them to the column writers.
+///
+/// The batches are divided at the rows where the row groups end. The parts
+/// with fewer than 1024 rows are combined with the parts after them, until
+/// they have 1024 rows, a part with more rows follows, or their row group ends.
+fn combined_batches(batches: &[RecordBatch], row_group_rows: usize) -> Result<Vec<RecordBatch>> {
+    fn flush(small: &mut Vec<RecordBatch>, out: &mut Vec<RecordBatch>) -> Result<()> {
+        if let Some(first) = small.first() {
+            out.push(concat_batches(&first.schema(), small.iter())?);
+            small.clear();
+        }
+        Ok(())
+    }
+
+    let mut out = vec![];
+    let mut small = vec![];
+    // The rows of the row group, and those of them that are in parts with few rows.
+    let (mut rows, mut small_rows) = (0, 0);
+    for batch in batches {
+        let mut rest = batch.clone();
+        while rest.num_rows() > 0 {
+            let part = rest.slice(0, rest.num_rows().min(row_group_rows - rows));
+            rest = rest.slice(part.num_rows(), rest.num_rows() - part.num_rows());
+            rows += part.num_rows();
+            if part.num_rows() < 1024 {
+                small_rows += part.num_rows();
+                small.push(part);
+                if small_rows >= 1024 || rows == row_group_rows {
+                    flush(&mut small, &mut out)?;
+                    small_rows = 0;
+                }
+            } else {
+                flush(&mut small, &mut out)?;
+                small_rows = 0;
+                out.push(part);
+            }
+            if rows == row_group_rows {
+                rows = 0;
+            }
+        }
+    }
+    flush(&mut small, &mut out)?;
+    Ok(out)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5189,17 +5238,22 @@ fn three_int_batch(values: std::ops::Range<i64>) -> Result<RecordBatch> {
 #[tokio::test]
 async fn test_budget_limits_the_rows_that_are_not_encoded() -> Result<()> {
     // The runtime of the test has one thread, so the jobs run only when
-    // the writer waits for them. A batch has 888 bytes of values.
-    let schema = three_int_schema();
+    // the writer waits for them. A batch has 26,400 bytes of values.
     // The batches have the same values, so the encoded rows are small.
-    let batches = vec![three_int_batch(0..37)?; 100];
-    let input: usize = batches.len() * 888;
+    let schema = three_int_schema();
+    let batches = vec![three_int_batch(0..1100)?; 100];
+    let input: usize = batches.len() * 26_400;
     let mut options = TableParquetOptions::default();
-    options.global.max_row_group_size = 1000;
+    options.global.max_row_group_size = 11_000;
     let expected = reference_file_of_batches(&options, &batches)?;
     options.arrow_schema(&schema);
     // The first budget is smaller than a batch.
-    for (capacity, slab) in [(100, 4096), (2000, 888), (5000, 2000), (20_000, 10_000)] {
+    for (capacity, slab) in [
+        (1000, 100_000),
+        (60_000, 26_400),
+        (150_000, 60_000),
+        (600_000, 300_000),
+    ] {
         let case = format!("budget {capacity} slab {slab}");
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
@@ -5228,6 +5282,9 @@ async fn test_budget_limits_the_rows_that_are_not_encoded() -> Result<()> {
         // smaller than the file. Without the budget it would have all rows.
         assert!(most <= capacity + expected.len(), "{case} {most}");
         assert!(capacity + expected.len() < input / 2, "{case}");
+        if capacity >= 26_400 {
+            assert!(most >= 26_400, "{case} {most}");
+        }
         writer.close().await?;
         assert_eq!(budget.used(), 0, "{case}");
         assert_eq!(pool.reserved(), 0, "{case}");
@@ -5252,14 +5309,14 @@ async fn test_rows_are_counted_by_the_size_of_their_values() -> Result<()> {
     ]));
     let source = RecordBatch::try_new(Arc::clone(&schema), vec![integers, strings])?;
     assert!(source.get_array_memory_size() > 4 * 1024 * 1024);
-    let batches: Vec<_> = (0..100).map(|i| source.slice(i * 1000, 1000)).collect();
+    let batches: Vec<_> = (0..50).map(|i| source.slice(i * 2000, 2000)).collect();
 
     let mut options = TableParquetOptions::default();
     options.global.max_row_group_size = 30_000;
     let expected = reference_file_of_batches(&options, &batches)?;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    // The values of a batch have 8 KB of integers and 64 KB of strings,
+    // The values of a batch have 16 KB of integers and 128 KB of strings,
     // and the buffers of a batch have more than 4 MB.
     let budget = EncodeBudget::with_slab_bytes(1024 * 1024, 256 * 1024);
     let resources = test_resources(Arc::clone(&budget), &pool);
@@ -5275,7 +5332,7 @@ async fn test_rows_are_counted_by_the_size_of_their_values() -> Result<()> {
         Arc::clone(&resources),
     )?;
     writer.write(&batches[0]).await?;
-    assert_eq!(budget.used(), 1000 * 8 + 1000 * 16 + 1000 * 48);
+    assert_eq!(budget.used(), 2000 * 8 + 2000 * 16 + 2000 * 48);
     for batch in &batches[1..] {
         writer.write(batch).await?;
         assert!(budget.used() <= 1024 * 1024 + expected.len());
@@ -5715,9 +5772,10 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
         batches += 1;
         assert!(batches < 100);
     }
-    // The row groups that are in the file are not in the budget,
-    // which has the rows of the third row group.
-    assert_eq!(budget.used(), (1 + batches) * 24);
+    // The row groups that are in the file are not in the budget, which has
+    // at most the rows of the third row group. The batches of that row group
+    // have one row each, and they are counted when they are combined.
+    assert!(budget.used() <= (1 + batches) * 24);
     // The uploaded parts are complete when the next part is accepted, so wait for them.
     for _ in 0..500 {
         if uploaded()? > 4_000_000 {
@@ -5903,6 +5961,54 @@ async fn test_batch_that_is_larger_than_a_slab_is_divided() -> Result<()> {
             _ => vec![100_000],
         };
         assert_eq!(row_groups, expected, "{case}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_batches_of_few_rows_are_combined() -> Result<()> {
+    let schema = three_int_schema();
+    // The rows arrive in batches of two rows, as the rows of a directory of
+    // a partitioned table do. The batches are combined to batches of 1024 rows,
+    // and the last batch of a row group has the rows that remain.
+    let source = three_int_batch(0..7000)?;
+    let batches: Vec<_> = (0..3500).map(|i| source.slice(i * 2, 2)).collect();
+    let mut options = TableParquetOptions::default();
+    options.global.max_row_group_size = 3000;
+    let combined = combined_batches(&batches, 3000)?;
+    let rows: Vec<_> = combined.iter().map(|x| x.num_rows()).collect();
+    assert_eq!(rows, vec![1024, 1024, 952, 1024, 1024, 952, 1000]);
+    let expected = reference_file_of_batches(&options, &batches)?;
+    options.arrow_schema(&schema);
+    for budget in budget_cases(&combined) {
+        let case = format!("{budget:?}");
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut writer = file_writer(
+            Arc::clone(&store),
+            Path::from("file.parquet"),
+            Arc::clone(&schema),
+            WriterPropertiesBuilder::try_from(&options)?.build(),
+            false,
+            10 * 1024 * 1024,
+            test_resources(Arc::clone(&budget), &pool),
+        )?;
+        for batch in &batches {
+            writer.write(batch).await?;
+            // The batches that are not combined yet are not counted, and the file
+            // has at most 32 of them, so the budget has less than the rows.
+            assert!(budget.used() <= budget.capacity() + 7000 * 24, "{case}");
+        }
+        let file = writer.close().await?;
+        assert_eq!(file.num_rows, 7000, "{case}");
+        assert_eq!(budget.used(), 0, "{case}");
+        assert_eq!(pool.reserved(), 0, "{case}");
+        let data = read_bytes(store.as_ref(), "file.parquet").await?;
+        assert!(data == expected, "{case}");
+        let (metadata, data) = read_parquet(data)?;
+        assert_eq!(data, source, "{case}");
+        let row_groups: Vec<_> = metadata.row_groups().iter().map(|x| x.num_rows()).collect();
+        assert_eq!(row_groups, vec![3000, 3000, 1000], "{case}");
     }
     Ok(())
 }
