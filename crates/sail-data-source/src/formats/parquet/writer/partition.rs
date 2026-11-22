@@ -85,6 +85,12 @@ impl PartitionRouter {
             .iter()
             .map(|i| Arc::clone(batch.column(*i)))
             .collect();
+        // The key of a row without a value is formatted from the content
+        // of the array at the row, which can differ among such rows.
+        // So these rows cannot be grouped as rows that are equal.
+        if columns.iter().any(|column| column.logical_null_count() > 0) {
+            return self.split_by_key(batch);
+        }
         let converter = match &mut self.converter {
             Some(converter) => converter,
             converter @ None => {
@@ -114,6 +120,43 @@ impl PartitionRouter {
             .into_iter()
             .map(|indices| {
                 let key = self.key(batch, indices[0] as usize)?;
+                let data = take_record_batch(&data, &UInt32Array::from(indices))?;
+                Ok((key, data))
+            })
+            .collect()
+    }
+
+    /// Splits a batch into one batch per distinct key of the rows.
+    fn split_by_key(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
+        let values = compute_partition_keys_by_row(batch, &self.columns)?;
+        let mut keys: Vec<PartitionKey> = vec![];
+        let mut indices: Vec<Vec<u32>> = vec![];
+        let mut groups: HashMap<Vec<&str>, usize> = HashMap::new();
+        for i in 0..batch.num_rows() {
+            let key = values
+                .iter()
+                .map(|column| column.get(i).map(|value| value.as_ref()))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| exec_datafusion_err!("missing partition key for row {i}"))?;
+            let group = match groups.get(&key) {
+                Some(group) => *group,
+                None => {
+                    let group = keys.len();
+                    keys.push(key.iter().map(|value| value.to_string()).collect());
+                    indices.push(vec![]);
+                    groups.insert(key, group);
+                    group
+                }
+            };
+            indices
+                .get_mut(group)
+                .ok_or_else(|| exec_datafusion_err!("missing partition group for row {i}"))?
+                .push(i as u32);
+        }
+        let data = batch.project(&self.file_indices)?;
+        keys.into_iter()
+            .zip(indices)
+            .map(|(key, indices)| {
                 let data = take_record_batch(&data, &UInt32Array::from(indices))?;
                 Ok((key, data))
             })

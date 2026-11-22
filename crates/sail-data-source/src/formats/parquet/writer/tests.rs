@@ -11,14 +11,15 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
     Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
-    ListViewArray, MapBuilder, NullArray, RecordBatch, RunArray, StringArray, StringBuilder,
-    StringViewArray, StructArray, UnionArray,
+    ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RunArray, StringArray,
+    StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray, make_array,
 };
-use datafusion::arrow::buffer::ScalarBuffer;
-use datafusion::arrow::compute::{SortOptions, cast, concat_batches};
+use datafusion::arrow::buffer::{NullBuffer, ScalarBuffer};
+use datafusion::arrow::compute::{SortOptions, cast, concat_batches, take};
 use datafusion::arrow::datatypes::{
-    DataType, Field, Int32Type, Int64Type, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
-    Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    ArrowPrimitiveType, DataType, Field, Float16Type, Float32Type, Int32Type, Int64Type,
+    IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode,
 };
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -1000,6 +1001,14 @@ async fn write_with_data_sink(
     batch: &RecordBatch,
     partition_columns: &[&str],
 ) -> Result<DirectoryRows> {
+    write_batches_with_data_sink(std::slice::from_ref(batch), partition_columns).await
+}
+
+async fn write_batches_with_data_sink(
+    batches: &[RecordBatch],
+    partition_columns: &[&str],
+) -> Result<DirectoryRows> {
+    let batch = &batches[0];
     let ctx = SessionContext::new();
     let store = Arc::new(InMemory::new());
     let url = ObjectStoreUrl::parse("memory://")?;
@@ -1022,7 +1031,7 @@ async fn write_with_data_sink(
         },
         TableParquetOptions::default(),
     );
-    let input = test_stream(&batch.schema(), vec![batch.clone()]);
+    let input = test_stream(&batch.schema(), batches.to_vec());
     sink.write_all(input, &ctx.task_ctx()).await?;
     read_directories(store.as_ref()).await
 }
@@ -1156,6 +1165,246 @@ async fn test_partition_directory_names() -> Result<()> {
         partition_directories(cast(&milliseconds, &DataType::Date64)?).await?,
         vec!["table/p=1970-01-01", "table/p=2022-01-08"]
     );
+    Ok(())
+}
+
+/// Returns the array with the given rows marked as rows without a value.
+/// The content of the array at these rows is kept.
+fn with_null_rows(array: &ArrayRef, null_rows: impl Fn(usize) -> bool) -> Result<ArrayRef> {
+    let nulls: NullBuffer = (0..array.len()).map(|i| !null_rows(i)).collect();
+    let data = array.to_data().into_builder().nulls(Some(nulls)).build()?;
+    Ok(make_array(data))
+}
+
+/// Arrays of each type that a partition column can have, with values that
+/// are repeated and that are not next to each other.
+fn partition_value_cases() -> Result<Vec<(String, ArrayRef)>> {
+    let mut cases: Vec<(String, ArrayRef)> = vec![];
+    let mut add = |name: &str, array: ArrayRef| cases.push((name.to_string(), array));
+
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![
+        "a",
+        "b",
+        "a",
+        "",
+        "a/b",
+        "a value that is not stored in the view",
+        "b",
+        "x=y",
+        "a value that is not stored in the view",
+        "",
+        "a",
+    ]));
+    for data_type in [
+        DataType::Utf8,
+        DataType::LargeUtf8,
+        DataType::Utf8View,
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+    ] {
+        add(&data_type.to_string(), cast(&strings, &data_type)?);
+    }
+    add(
+        "Boolean",
+        Arc::new(BooleanArray::from(vec![
+            true, false, false, true, true, false, true,
+        ])),
+    );
+    let integers: ArrayRef = Arc::new(Int64Array::from(vec![
+        1, 0, -3, 100, 1, -128, 127, 0, -3, 1, 100,
+    ]));
+    for data_type in [
+        DataType::Int8,
+        DataType::Int16,
+        DataType::Int32,
+        DataType::Int64,
+    ] {
+        add(&data_type.to_string(), cast(&integers, &data_type)?);
+    }
+    let integers: ArrayRef = Arc::new(Int64Array::from(vec![
+        1, 0, 3, 100, 1, 255, 0, 3, 1, 100, 255,
+    ]));
+    for data_type in [
+        DataType::UInt8,
+        DataType::UInt16,
+        DataType::UInt32,
+        DataType::UInt64,
+    ] {
+        add(&data_type.to_string(), cast(&integers, &data_type)?);
+    }
+    let floats: ArrayRef = Arc::new(Float64Array::from(vec![
+        0.5,
+        1.0,
+        f64::INFINITY,
+        f64::NAN,
+        0.0,
+        -0.0,
+        f64::NEG_INFINITY,
+        -139.25,
+        1.0,
+        0.5,
+        f64::INFINITY,
+        -0.0,
+        0.0,
+        f64::NAN,
+        285.5,
+    ]));
+    for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+        add(&data_type.to_string(), cast(&floats, &data_type)?);
+    }
+    // Values that are not a number and that differ in their bits, among other values.
+    let bits: [u16; 9] = [
+        0x7e00, 0x3c00, 0x7e01, 0xfe00, 0x7c00, 0x7dff, 0x3c00, 0x7e00, 0xfc00,
+    ];
+    add(
+        "Float16 bits",
+        Arc::new(PrimitiveArray::<Float16Type>::from_iter_values(
+            bits.iter()
+                .map(|x| <Float16Type as ArrowPrimitiveType>::Native::from_bits(*x)),
+        )),
+    );
+    let bits: [u32; 9] = [
+        0x7fc0_0000,
+        0x3f80_0000,
+        0x7fc0_0001,
+        0xffc0_0000,
+        0x7f80_0000,
+        0x7fbf_ffff,
+        0x3f80_0000,
+        0x7fc0_0000,
+        0xff80_0000,
+    ];
+    add(
+        "Float32 bits",
+        Arc::new(PrimitiveArray::<Float32Type>::from_iter_values(
+            bits.iter().map(|x| f32::from_bits(*x)),
+        )),
+    );
+    let bits: [u64; 9] = [
+        0x7ff8_0000_0000_0000,
+        0x3ff0_0000_0000_0000,
+        0x7ff8_0000_0000_0001,
+        0xfff8_0000_0000_0000,
+        0x7ff0_0000_0000_0000,
+        0x7ff7_ffff_ffff_ffff,
+        0x3ff0_0000_0000_0000,
+        0x7ff8_0000_0000_0000,
+        0xfff0_0000_0000_0000,
+    ];
+    add(
+        "Float64 bits",
+        Arc::new(Float64Array::from_iter_values(
+            bits.iter().map(|x| f64::from_bits(*x)),
+        )),
+    );
+    let days: ArrayRef = Arc::new(Int32Array::from(vec![0, 19000, -1, 0, 1, 19000, -1, 2, 0]));
+    add("Date32", cast(&days, &DataType::Date32)?);
+    // Some of the values are on the same day.
+    let milliseconds: ArrayRef = Arc::new(Int64Array::from(vec![
+        0,
+        1641600000123,
+        86400000,
+        1,
+        1641600000000,
+        -86400000,
+        86400001,
+        0,
+    ]));
+    add("Date64", cast(&milliseconds, &DataType::Date64)?);
+    Ok(cases)
+}
+
+#[tokio::test]
+async fn test_partition_rows_match_data_sink() -> Result<()> {
+    for (name, values) in partition_value_cases()? {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("p", values.data_type().clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let rows = values.len();
+        let reversed = UInt32Array::from_iter_values((0..rows as u32).rev());
+        // The rows without a value have the content of other rows of the array,
+        // as in the arrays that are read from Parquet files.
+        type NullRows = fn(usize) -> bool;
+        let null_cases: [(&str, NullRows); 4] = [
+            ("no row", |_| false),
+            ("some rows", |i| i % 3 == 1),
+            ("first rows", |i| i < 5),
+            ("every row", |_| true),
+        ];
+        for (null_rows_name, null_rows) in null_cases {
+            let mut batches = vec![];
+            // The second batch has the values in another order,
+            // and the last batch has a single row.
+            for (i, values) in [
+                Arc::clone(&values),
+                take(&values, &reversed, None)?,
+                values.slice(2, 1),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let values = with_null_rows(&values, null_rows)?;
+                let start = (i * rows) as i64;
+                let v: ArrayRef = Arc::new(Int64Array::from_iter_values(
+                    start..start + values.len() as i64,
+                ));
+                batches.push(RecordBatch::try_new(Arc::clone(&schema), vec![values, v])?);
+            }
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let task = partition_task(Arc::clone(&store), 0, &["p"]);
+            run_task(task, &schema, batches.clone()).await?;
+            let actual = read_directories(store.as_ref()).await?;
+            let expected = write_batches_with_data_sink(&batches, &["p"]).await?;
+            assert_eq!(actual, expected, "{name}, {null_rows_name} without a value");
+            assert!(actual.len() >= 2, "{name}");
+            assert_eq!(
+                actual.values().map(|x| x.len()).sum::<usize>(),
+                2 * rows + 1,
+                "{name}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_rows_match_data_sink_for_several_columns() -> Result<()> {
+    let cases = partition_value_cases()?;
+    let column = |name: &str| -> Result<ArrayRef> {
+        cases
+            .iter()
+            .find(|(x, _)| x == name)
+            .map(|(_, values)| values.slice(0, 7))
+            .ok_or_else(|| internal_datafusion_err!("missing case {name}"))
+    };
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", DataType::Float16, true),
+        Field::new("v", DataType::Int64, true),
+        Field::new("q", DataType::Utf8View, true),
+        Field::new("r", DataType::Boolean, true),
+    ]));
+    let v: ArrayRef = Arc::new(Int64Array::from_iter_values(0..7));
+    for null_rows in [[7, 7], [1, 7], [7, 2], [3, 3], [1, 5]] {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                with_null_rows(&column("Float16")?, |i| i % null_rows[0] == 0)?,
+                Arc::clone(&v),
+                with_null_rows(&column("Utf8View")?, |i| i % null_rows[1] == 1)?,
+                column("Boolean")?,
+            ],
+        )?;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let task = partition_task(Arc::clone(&store), 0, &["r", "p", "q"]);
+        run_task(task, &schema, vec![batch.clone(), batch.clone()]).await?;
+        let actual = read_directories(store.as_ref()).await?;
+        let expected =
+            write_batches_with_data_sink(&[batch.clone(), batch], &["r", "p", "q"]).await?;
+        assert_eq!(actual, expected, "{null_rows:?}");
+        assert!(actual.len() >= 4, "{null_rows:?}");
+    }
     Ok(())
 }
 
