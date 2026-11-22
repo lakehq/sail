@@ -41,6 +41,11 @@ use crate::shared_cte::inline_deterministic_references;
 /// `spark.sql.view.maxNestedViewDepth`.
 const MAX_NESTED_VIEW_DEPTH: usize = 100;
 
+/// The number of nested view queries above which a view that reads its own name stores
+/// its resolved plan, so that replacing a view by a query over itself in a loop does not
+/// resolve every earlier version of the view at each read.
+const MAX_SELF_READING_VIEW_NESTING: usize = 4;
+
 /// The stack space that the resolution of a view query needs without a new stack segment.
 const VIEW_BODY_RED_ZONE: usize = 2 * 1024 * 1024;
 /// The size of a new stack segment for the resolution of a view query.
@@ -67,6 +72,8 @@ pub(in crate::resolver) struct ViewDefinition {
     pub query_columns: Vec<String>,
     /// The view that this view replaced, under its name, if the query reads that name.
     pub replaced: Option<(TemporaryViewName, TableStatus)>,
+    /// The number of nested view queries, including this one.
+    pub nesting: usize,
     /// The session that created a global temporary view, whose temporary views, session
     /// functions, and session-local catalogs the view reads from every session.
     pub session: Option<Arc<CatalogManager>>,
@@ -104,6 +111,11 @@ impl std::fmt::Debug for ViewBodyContext {
 }
 
 impl ViewDefinition {
+    /// Returns whether the view stores its resolved plan instead of this definition.
+    pub fn stores_plan(&self) -> bool {
+        self.replaced.is_some() && self.nesting > MAX_SELF_READING_VIEW_NESTING
+    }
+
     fn context(&self, parent: Option<&ViewBodyContext>) -> ViewBodyContext {
         let mut pinned = parent.map(|x| x.pinned.clone()).unwrap_or_default();
         if let Some((name, status)) = &self.replaced {
@@ -404,6 +416,15 @@ impl PlanResolver<'_> {
             None
         };
         let (temp_views, functions) = state.take_referred_names();
+        let mut nesting = 1;
+        for reference in temp_views.values() {
+            if let Some(status) = manager.find_temporary_view(reference).await?
+                && let Some(node) =
+                    stored_plan(&status).and_then(|x| TemporaryViewDefinitionNode::try_from_plan(x))
+            {
+                nesting = nesting.max(node.definition.nesting + 1);
+            }
+        }
         Ok(ViewDefinition {
             query,
             config: Arc::clone(&self.config),
@@ -413,6 +434,7 @@ impl PlanResolver<'_> {
             functions,
             query_columns,
             replaced,
+            nesting,
             session: is_global.then(|| Arc::new(manager.session_handle())),
         })
     }

@@ -166,7 +166,11 @@ impl PlanResolver<'_> {
                         state,
                     )
                     .await?;
-                TemporaryViewDefinitionNode::new(schema, definition).into_plan()
+                if definition.stores_plan() {
+                    Self::store_view_plan(input, state)?
+                } else {
+                    TemporaryViewDefinitionNode::new(schema, definition).into_plan()
+                }
             }
             // The view reads its tables again at each read, so its plan does not keep the
             // table sources that the definition was resolved with.

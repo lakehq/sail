@@ -295,6 +295,27 @@ def test_views_that_read_each_other_keep_working(creator):
     assert rows(creator, f"SELECT * FROM {a}") == [(121,)]
 
 
+def test_views_replaced_in_turn_by_queries_over_each_other(creator):
+    a, b = name("a"), name("b")
+    creator.sql(f"CREATE TEMPORARY VIEW {a} AS SELECT 0 AS id")
+    creator.sql(f"CREATE TEMPORARY VIEW {b} AS SELECT id + 1 AS id FROM {a}")
+    for _ in range(150):
+        creator.sql(f"CREATE OR REPLACE TEMPORARY VIEW {a} AS SELECT id + 1 AS id FROM {b}")
+        creator.sql(f"CREATE OR REPLACE TEMPORARY VIEW {b} AS SELECT id + 1 AS id FROM {a}")
+    assert len(rows(creator, f"SELECT * FROM {b}")) == 1
+    assert len(rows(creator, f"SELECT * FROM {a}")) == 1
+
+
+def test_view_that_reads_its_own_name_reads_current_rows_after_many_replacements(creator, tmp_path, table):
+    create_table(creator, tmp_path, table, "id INT", "(0)")
+    view = create_view(creator, "sv", f"SELECT id FROM {table}")
+    for _ in range(40):
+        creator.sql(f"CREATE OR REPLACE TEMPORARY VIEW {view} AS SELECT id + 1 AS id FROM {view}")
+    assert rows(creator, f"SELECT * FROM {view}") == [(40,)]
+    creator.sql(f"INSERT INTO {table} VALUES (1)")
+    assert rows(creator, f"SELECT * FROM {view}") == [(40,), (41,)]
+
+
 def test_view_over_a_data_frame_argument_outlives_the_statement(creator):
     view = name("sv")
     creator.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT id + 1 AS id FROM {{df}}", df=creator.range(2))
