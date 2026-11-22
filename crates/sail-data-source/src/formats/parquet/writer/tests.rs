@@ -1944,9 +1944,9 @@ fn test_write_plan_validation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_write_plan_requires_column_in_files() -> Result<()> {
+async fn test_rows_require_column_in_files() -> Result<()> {
     // The files would have no columns, and a Parquet file without columns has no rows.
-    // The plan is rejected for any number of rows and partitions, before a file is written.
+    // So the write fails when it has rows, and it writes no data file otherwise.
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, true),
         Field::new("b", DataType::Utf8, true),
@@ -1959,48 +1959,54 @@ async fn test_write_plan_requires_column_in_files() -> Result<()> {
         )?)
     };
     let empty = Arc::new(Schema::empty());
-    let without_columns = RecordBatch::try_new_with_options(
-        Arc::clone(&empty),
-        vec![],
-        &RecordBatchOptions::new().with_row_count(Some(3)),
-    )?;
-    for (partitions, schema, partition_columns, message) in [
+    let without_columns = |rows: usize| -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new_with_options(
+            Arc::clone(&empty),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )?)
+    };
+    let all_partition_columns =
+        "Parquet write does not support data whose columns are all partition columns";
+    let no_columns = "Parquet write does not support data without columns";
+    for (partitions, schema, partition_columns, error) in [
         (
             vec![vec![batch(0..1)?]],
             Arc::clone(&schema),
             vec!["a", "b"],
-            "Parquet write does not support data whose columns are all partition columns",
+            Some(all_partition_columns),
         ),
         (
             vec![
-                vec![batch(0..4)?, batch(4..9)?],
+                vec![batch(0..0)?, batch(0..4)?, batch(4..9)?],
                 vec![],
                 vec![batch(9..10)?],
             ],
             Arc::clone(&schema),
             vec!["b", "a"],
-            "Parquet write does not support data whose columns are all partition columns",
+            Some(all_partition_columns),
         ),
         (
-            vec![vec![], vec![]],
+            vec![vec![], vec![batch(0..0)?]],
             Arc::clone(&schema),
             vec!["a", "b"],
-            "Parquet write does not support data whose columns are all partition columns",
+            None,
         ),
         (
-            vec![vec![without_columns]],
+            vec![vec![without_columns(3)?]],
             Arc::clone(&empty),
             vec![],
-            "Parquet write does not support data without columns",
+            Some(no_columns),
         ),
         (
-            vec![vec![]],
+            vec![vec![without_columns(0)?], vec![]],
             Arc::clone(&empty),
             vec![],
-            "Parquet write does not support data without columns",
+            None,
         ),
     ] {
-        let result = ParquetWriteExec::try_new(
+        let (ctx, store) = memory_context()?;
+        let writer = Arc::new(ParquetWriteExec::try_new(
             MemorySourceConfig::try_new_exec(&partitions, schema, None)?,
             ObjectStoreUrl::parse("memory://")?,
             Path::from("table"),
@@ -2012,11 +2018,24 @@ async fn test_write_plan_requires_column_in_files() -> Result<()> {
             false,
             0,
             NonZeroUsize::MIN,
-        );
-        assert!(
-            matches!(&result, Err(DataFusionError::Plan(e)) if e.contains(message)),
-            "{result:?}"
-        );
+        )?);
+        let result = collect(commit_exec(writer)?, ctx.task_ctx()).await;
+        let files = list_files(store.as_ref()).await?;
+        let files: Vec<_> = files.iter().map(|(path, _)| path.as_str()).collect();
+        match error {
+            Some(error) => {
+                assert!(
+                    matches!(&result, Err(e) if e.to_string().contains(error)),
+                    "{result:?}"
+                );
+                assert!(files.is_empty(), "{files:?}");
+            }
+            // A write without rows succeeds, and there is no file that has the schema.
+            None => {
+                assert_eq!(count_value(&result?)?, vec![0]);
+                assert_eq!(files, vec!["table/_SUCCESS"]);
+            }
+        }
     }
 
     // One column that is not a partition column is enough.

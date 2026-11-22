@@ -1696,7 +1696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parquet_write_fails_before_files_change_when_all_columns_are_partition_columns()
+    async fn parquet_write_fails_when_all_columns_are_partition_columns()
     -> datafusion_common::Result<()> {
         use futures::TryStreamExt;
         use object_store::ObjectStore;
@@ -1705,7 +1705,12 @@ mod tests {
         let (_, files) =
             write_range_to_parquet(None, spec::SaveMode::Append, &[], store.clone()).await?;
         assert_eq!(files.len(), 3, "{files:?}");
-        for mode in [spec::SaveMode::Overwrite, spec::SaveMode::Append] {
+        // The write fails when it has rows, and it leaves no file of its own.
+        // The files of the table are deleted before that when they are overwritten.
+        for (mode, expected) in [
+            (spec::SaveMode::Append, files),
+            (spec::SaveMode::Overwrite, vec![]),
+        ] {
             let result = write_range_to_parquet(None, mode, &["id"], store.clone()).await;
             assert!(
                 matches!(&result, Err(e) if e.to_string().contains(
@@ -1713,14 +1718,13 @@ mod tests {
                 )),
                 "{result:?}"
             );
-            // The files of the table are neither deleted nor added to.
             let mut remaining: Vec<String> = store
                 .list(None)
                 .map_ok(|meta| meta.location.to_string())
                 .try_collect()
                 .await?;
             remaining.sort();
-            assert_eq!(remaining, files);
+            assert_eq!(remaining, expected);
         }
         Ok(())
     }

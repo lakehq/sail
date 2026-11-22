@@ -11,7 +11,7 @@ use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBu
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use futures::{Stream, StreamExt};
 use object_store::ObjectStore;
 use object_store::path::Path;
@@ -506,11 +506,23 @@ async fn write_files(
         reservation.new_empty(),
         metrics.elapsed_compute.clone(),
     ));
+    // A Parquet file takes its number of rows from its columns,
+    // so rows cannot be written to files without columns.
+    let rows_not_supported = schema.fields().is_empty().then(|| {
+        if task.partition_columns.is_empty() {
+            "Parquet write does not support data without columns"
+        } else {
+            "Parquet write does not support data whose columns are all partition columns"
+        }
+    });
     let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
             continue;
+        }
+        if let Some(message) = rows_not_supported {
+            return exec_err!("{message}");
         }
         output.write(&factory, &batch, &mut written).await?;
         reservation.try_resize(output.memory_size())?;
@@ -518,6 +530,7 @@ async fn write_files(
     if let TaskOutput::Directory(output) = &mut output
         && partition == 0
         && !output.has_files()
+        && rows_not_supported.is_none()
         && !input_schema
             .fields()
             .iter()
@@ -526,7 +539,8 @@ async fn write_files(
         // Without partition columns, the first partition always produces a file,
         // so that the schema of the data can be read from the table even when
         // the result is empty. This is skipped for a schema that the Parquet
-        // writer cannot represent, so that an empty result can still be written.
+        // writer cannot represent and for a schema without columns, so that
+        // an empty result can still be written.
         output.open(&factory)?;
     }
     output.close(&factory, &mut written).await?;
