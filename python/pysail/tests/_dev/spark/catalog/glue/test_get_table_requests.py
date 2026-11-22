@@ -104,3 +104,5 @@ def test_insert_gets_target_table_once(spark, moto_endpoint):
         with _get_table_calls(moto_endpoint) as calls:
             spark.sql(sql)
         assert calls == {"t_parquet": 1}, sql
+    rows = spark.sql(f"SELECT id FROM {name} ORDER BY id").collect()
+    assert [row.id for row in rows] == [1, 2, 3, 11, 12, 13]

@@ -911,7 +911,7 @@ async fn test_identifier_read_does_not_see_views() -> TestResult {
 }
 
 #[tokio::test]
-async fn test_missing_tables_are_reported_as_before() -> TestResult {
+async fn test_missing_tables_are_not_found() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
     let not_found = |name: &str| {
         format!(
@@ -1293,6 +1293,55 @@ async fn test_write_target_shares_the_catalog_load_of_the_statement() -> TestRes
     Ok(())
 }
 
+/// A write of the table `sail.default.t` to the table `t`, as `DataFrameWriter` sends it.
+fn write_table(save_method: spec::TableSaveMethod, mode: spec::SaveMode) -> spec::Plan {
+    spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
+        spec::Write {
+            input: Box::new(read_table(&["sail", "default", "t"], &[])),
+            source: None,
+            save_type: spec::SaveType::Table {
+                table: object_name(&["t"]),
+                save_method,
+            },
+            mode: Some(mode),
+            sort_columns: vec![],
+            partitioning_columns: vec![],
+            clustering_columns: vec![],
+            bucket_by: None,
+            options: vec![],
+        },
+    )))
+}
+
+#[tokio::test]
+async fn test_data_frame_write_target_shares_the_catalog_load_of_the_query() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    for (save_method, mode) in [
+        (spec::TableSaveMethod::SaveAsTable, spec::SaveMode::Append),
+        (spec::TableSaveMethod::InsertInto, spec::SaveMode::Append),
+        (spec::TableSaveMethod::InsertInto, spec::SaveMode::Overwrite),
+    ] {
+        let context = format!("{save_method:?} {mode:?}");
+        let resolution = fixture.resolve_plan(write_table(save_method, mode)).await?;
+        let writes = resolution.writes.clone();
+        let sources = resolution.expect(1, 1, &context);
+        assert_eq!(writes.len(), 1, "{context}");
+        assert_eq!(
+            writes[0].snapshot,
+            Some(sources[0].snapshot.clone()),
+            "{context}"
+        );
+        assert_eq!(writes[0].catalog_table, Some(full_name()), "{context}");
+    }
+    // A statement that creates the table if it is missing finds the table with the
+    // load of its query.
+    let sql = "CREATE TABLE IF NOT EXISTS t AS SELECT * FROM default.t";
+    let resolution = fixture.resolve(sql).await?;
+    assert_eq!(resolution.writes, vec![], "{sql}");
+    resolution.expect(1, 1, sql);
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_write_to_one_table_and_read_of_another_load_each_once() -> TestResult {
     let fixture = Fixture::try_new(&["CREATE DATABASE other"]).await?;
@@ -1331,7 +1380,7 @@ async fn test_insert_into_temporary_view_does_not_load_a_catalog_table() -> Test
 }
 
 #[tokio::test]
-async fn test_writes_to_missing_tables_and_views_are_reported_as_before() -> TestResult {
+async fn test_writes_to_missing_tables_and_views_are_rejected() -> TestResult {
     let fixture = Fixture::try_new(&[
         "CREATE VIEW tv AS SELECT * FROM t",
         "CREATE TEMPORARY VIEW temp AS SELECT 1L AS k, 2L AS v",
@@ -1349,8 +1398,7 @@ const NOT_FOUND: &str =
     "analysis error: Table not found: [TABLE_OR_VIEW_NOT_FOUND] Table or view not found";
 const ROW_LEVEL: &str = "not supported: row-level operations are only supported against tables";
 
-/// Writes to things that are not tables, with the errors from before the writes shared
-/// the catalog table lookups of the statement.
+/// Writes to things that are not tables, with their errors.
 fn write_errors() -> Vec<(&'static str, String)> {
     let insert = |name: &str| {
         format!(

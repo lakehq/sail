@@ -26,7 +26,7 @@ from testcontainers.core.waiting_utils import wait_for_logs
 from pysail.testing.spark.session import spark_connect_server
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator
+    from collections.abc import Callable, Generator, Iterator
     from pathlib import Path
 
 LAKEKEEPER_IMAGE = "quay.io/lakekeeper/catalog:v0.12.1"
@@ -293,14 +293,20 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
 
 @contextmanager
 def recording_proxy(
-    target: str, config_overrides: dict[str, str] | None = None, *, reject_access_delegation: bool = False
+    target: str,
+    config_overrides: dict[str, str] | None = None,
+    *,
+    reject_access_delegation: bool = False,
+    before_response: Callable[[str, str], None] | None = None,
 ) -> Iterator[tuple[str, list[tuple[str, str, Any, int, str | None]]]]:
     """Forward requests to a REST catalog and record each of them.
 
     Each record is the method, the path, the JSON body, the response status, and the
     access delegation header. `config_overrides` are added to the catalog config overrides.
     If `reject_access_delegation` is set, requests with the access delegation header get
-    403 Forbidden instead of being forwarded.
+    403 Forbidden instead of being forwarded. `before_response` is called with the method
+    and the path of each request after the catalog has answered it and before the answer
+    is sent back, so that a test can change a table between two requests of a statement.
     """
     records = []
 
@@ -335,6 +341,8 @@ def recording_proxy(
                     self.headers.get(ACCESS_DELEGATION),
                 )
             )
+            if before_response is not None:
+                before_response(self.command, self.path)
             content = response.content
             if config_overrides and urllib.parse.urlsplit(self.path).path == "/v1/config":
                 config = response.json()

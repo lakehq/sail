@@ -245,6 +245,23 @@ def test_read_loads_a_table_once_however_its_name_is_written(spark, recording_ca
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def _writes(name):
+    """Returns statements that write to the empty table `name`, each with the rows that it leaves."""
+    return [
+        (f"INSERT INTO {name} VALUES (1, 10), (2, 20)", [(1, 10), (2, 20)]),
+        # The target and the source are the same table under two names.
+        (f"INSERT INTO {name} SELECT id + 2, v FROM sail.{name}", [(1, 10), (2, 20), (3, 10), (4, 20)]),
+        (f"UPDATE {name} SET v = 0 WHERE id = 1", [(1, 0), (2, 20), (3, 10), (4, 20)]),
+        (f"DELETE FROM {name} WHERE id = 2", [(1, 0), (3, 10), (4, 20)]),
+        (
+            f"MERGE INTO {name} t USING sail.{name} s ON t.id = s.id AND s.id = 3 "
+            "WHEN MATCHED THEN UPDATE SET v = s.v + 1",
+            [(1, 0), (3, 11), (4, 20)],
+        ),
+        (f"TRUNCATE TABLE {name}", []),
+    ]
+
+
 def test_write_loads_the_target_table_once_to_plan_the_statement(spark, recording_catalog):
     _, records = recording_catalog
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
@@ -252,25 +269,88 @@ def test_write_loads_the_target_table_once_to_plan_the_statement(spark, recordin
     load = (f"{NAMESPACE}/tables/written", 200, None)
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
-        for sql, expected in [
-            (f"INSERT INTO {name} VALUES (1, 10), (2, 20)", [(1, 10), (2, 20)]),
-            # The target and the source are the same table under two names.
-            (f"INSERT INTO {name} SELECT id + 2, v FROM sail.{name}", [(1, 10), (2, 20), (3, 10), (4, 20)]),
-            (f"UPDATE {name} SET v = 0 WHERE id = 1", [(1, 0), (2, 20), (3, 10), (4, 20)]),
-            (f"DELETE FROM {name} WHERE id = 2", [(1, 0), (3, 10), (4, 20)]),
-            (
-                f"MERGE INTO {name} t USING sail.{name} s ON t.id = s.id AND s.id = 3 "
-                "WHEN MATCHED THEN UPDATE SET v = s.v + 1",
-                [(1, 0), (3, 11), (4, 20)],
-            ),
-            (f"TRUNCATE TABLE {name}", []),
-        ]:
+        for sql, expected in _writes(name):
             start = len(records)
             spark.sql(sql).collect()
             # The table is loaded once to plan the statement, and once more when the
             # statement commits, to detect a concurrent change to the table.
             assert _requests(records, start) == [load, load], sql
             assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_write_asks_for_access_delegation_only_to_plan_the_statement(spark, recording_catalog, seaweedfs_host_endpoint):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.delegated_write"
+    path = f"{NAMESPACE}/tables/delegated_write"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
+        options = ', access_delegation="vended-credentials"'
+        with (
+            _server(recording_catalog, seaweedfs_host_endpoint, options) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            for sql, expected in _writes(name):
+                start = len(records)
+                session.sql(sql).collect()
+                # Only the load that plans the statement asks for access delegation. The
+                # load without it is the one of the commit, so the statement is planned
+                # with one load.
+                assert _requests(records, start) == [(path, 200, "vended-credentials"), (path, 200, None)], sql
+                assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_write_keeps_a_change_made_to_the_table_after_the_statement_is_planned(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
+):
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.raced"
+    pending = []
+
+    def change_table(method, path):
+        # Another session adds a row right after the table is loaded to plan a statement.
+        if method == "GET" and path.endswith("/tables/raced") and pending:
+            spark.sql(pending.pop()).collect()
+
+    def rows():
+        return [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()]
+
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1, 10), (2, 20)")
+        with (
+            recording_proxy(iceberg_rest_endpoint, before_response=change_table) as catalog,
+            _server(catalog, seaweedfs_host_endpoint) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            # The target of each statement shares the table load of the statement, which
+            # is older than the added row. The commit loads the table again and sees the row.
+            for added, sql in enumerate(
+                [
+                    f"UPDATE {name} SET v = 0 WHERE id = 1",
+                    f"DELETE FROM {name} WHERE id = 2",
+                    f"INSERT INTO {name} SELECT id + 10, v FROM sail.{name} WHERE id < 100",
+                ],
+                start=100,
+            ):
+                before = rows()
+                pending.append(f"INSERT INTO {name} VALUES ({added}, 0)")
+                try:
+                    session.sql(sql).collect()
+                    failed = False
+                except Exception:  # noqa: BLE001
+                    failed = True
+                assert not pending, sql
+                # The statement fails, or it is applied to the table with the added row.
+                assert (added, 0) in rows(), sql
+                if failed:
+                    assert rows() == sorted([*before, (added, 0)]), sql
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
