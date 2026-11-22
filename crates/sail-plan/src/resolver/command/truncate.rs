@@ -34,8 +34,10 @@ impl PlanResolver<'_> {
         // Resolve views before format paths, including temporary views shadowing tables.
         let manager = self.ctx.extension::<CatalogManager>()?;
         let mut table = table;
-        let transactional = match manager.get_table_or_view(table.parts()).await {
-            Ok(status) => match status.kind {
+        let reference: Vec<String> = table.clone().into();
+        let lookup = Self::lookup_catalog_table_or_view(&manager, &reference, state).await;
+        let transactional = match lookup {
+            Ok((status, _)) => match status.kind {
                 TableKind::Table { format, .. } => {
                     // A namespace named delta/iceberg is not a format path. Preserve
                     // the catalog resolution for both target metadata and its read plan.
@@ -65,7 +67,7 @@ impl PlanResolver<'_> {
                 table: table.into(),
             });
         }
-        let target = self.resolve_row_level_target(&table).await?;
+        let target = self.resolve_row_level_target(&table, state).await?;
         let source = registry.get_lake_source(&target.format)?;
         let target_plan = Arc::new(self.resolve_row_level_table_plan(table, state).await?);
         let truncate = source

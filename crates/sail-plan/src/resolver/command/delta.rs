@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
         if !self.alter_table_target_is_delta(table, false).await? {
             return Ok(());
         }
-        let Some(info) = self.resolve_table_info(table).await? else {
+        let Some(info) = self.resolve_table_info(table, state).await? else {
             return Ok(());
         };
         let generated = requested

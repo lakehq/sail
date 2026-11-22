@@ -351,7 +351,7 @@ impl PlanResolver<'_> {
                 table,
                 column_match,
             } => {
-                let info = self.resolve_table_info(&table).await?;
+                let info = self.resolve_table_info(&table, state).await?;
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {
@@ -816,17 +816,18 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_table_info(
         &self,
         table: &spec::ObjectName,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Option<TableInfo>> {
-        let status = match self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table(table.parts())
-            .await
-        {
-            Ok(x) => x,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
+        let catalog_table: Vec<String> = table.clone().into();
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        // The table is looked up as the reads of the query look it up, so that the query
+        // writes to the table metadata that it reads.
+        let (status, resolved) =
+            match Self::lookup_catalog_table(&manager, &catalog_table, state).await {
+                Ok(x) => x,
+                Err(CatalogError::NotFound(_, _)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
         match status.kind {
             TableKind::Table {
                 mut columns,
@@ -840,18 +841,11 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
-                let catalog_table = table
-                    .parts()
-                    .iter()
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>();
+                let resolved = resolved.ok_or_else(|| {
+                    PlanError::internal("catalog table without lakehouse resolution")
+                })?;
                 let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
-                        &catalog_table,
-                        LakehouseOperation::Read,
-                        Some(&format),
-                        vec![],
-                    )
+                    .begin_resolved_table_access(&catalog_table, resolved, LakehouseOperation::Read)
                     .await?;
                 let write_precondition_lakehouse_table =
                     Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));

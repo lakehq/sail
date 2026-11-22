@@ -2,7 +2,8 @@
 
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+    BeginTableAccessRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{
@@ -36,6 +37,21 @@ impl PlanResolver<'_> {
         self.begin_lakehouse_table_access(
             table,
             resolved.execution,
+            table_access_purpose(operation),
+        )
+        .await
+    }
+
+    /// Begins access for `operation` to a table from a catalog table lookup of the query.
+    pub(super) async fn begin_resolved_table_access(
+        &self,
+        table: &[String],
+        resolved: LakehouseResolvedTable,
+        operation: LakehouseOperation,
+    ) -> PlanResult<LakehouseExecutionContext> {
+        self.begin_lakehouse_table_access(
+            table,
+            resolved.execution.for_operation(operation),
             table_access_purpose(operation),
         )
         .await

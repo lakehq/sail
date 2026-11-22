@@ -4,13 +4,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{LogicalPlan, TableSource};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{plan_datafusion_err, plan_err};
+use datafusion_common::plan_datafusion_err;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
@@ -21,11 +21,14 @@ use sail_catalog::provider::{
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common::spec;
 use sail_common::spec::CreateTableMode;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    DatabaseStatus, LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
 use sail_common_datafusion::datasource::{
     DataSource, DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::{LakeSource, RowLevelOperation};
 use sail_plan::config::PlanConfig;
 use sail_plan::resolver::PlanResolver;
 use sail_sql_analyzer::parser::parse_one_statement;
@@ -176,16 +179,68 @@ struct CreatedSource {
     options: Vec<(String, String)>,
 }
 
-/// A data source that records the sources it creates. It is named after a format
-/// with time travel and identifier reads, so that the tests can cover both.
+/// The columns `k` and `v`, which all the tables that the tests write to have.
+fn columns() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, true),
+        Field::new("v", DataType::Int64, true),
+    ]))
+}
+
+/// What the target of a write was planned with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedWrite {
+    /// The `snapshot` property of the catalog load that the write is planned on.
+    snapshot: Option<String>,
+    /// The operation that the catalog table of the target is accessed for.
+    operation: Option<LakehouseOperation>,
+}
+
+/// A data source that records the sources it creates and the writes it plans. It is
+/// named after a format with time travel, identifier reads, and row-level operations,
+/// so that the tests can cover them.
 struct RecordingDataSource {
+    name: &'static str,
     created: Mutex<Vec<CreatedSource>>,
+    written: Mutex<Vec<PlannedWrite>>,
+}
+
+impl RecordingDataSource {
+    fn new(name: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            name,
+            created: Mutex::new(vec![]),
+            written: Mutex::new(vec![]),
+        })
+    }
+
+    fn record_write(
+        &self,
+        options: Vec<OptionLayer>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    ) -> datafusion_common::Result<LogicalPlan> {
+        let snapshot = options.into_iter().find_map(|layer| match layer {
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .find(|(key, _)| key == SNAPSHOT)
+                .map(|(_, value)| value),
+            _ => None,
+        });
+        self.written
+            .lock()
+            .map_err(|e| plan_datafusion_err!("{e}"))?
+            .push(PlannedWrite {
+                snapshot,
+                operation: lakehouse_table.map(|x| x.operation),
+            });
+        LogicalPlanBuilder::empty(false).build()
+    }
 }
 
 #[async_trait]
 impl DataSource for RecordingDataSource {
     fn name(&self) -> &str {
-        "iceberg"
+        self.name
     }
 
     async fn create_source(
@@ -207,25 +262,54 @@ impl DataSource for RecordingDataSource {
                 _ => {}
             }
         }
+        let schema = match info.schema {
+            Some(schema) => Arc::new(schema),
+            // A read by path, which the tests use for temporary views only.
+            None => return Ok(provider_as_source(Arc::new(EmptyTable::new(columns())))),
+        };
         let snapshot = snapshot.ok_or_else(|| plan_datafusion_err!("missing snapshot"))?;
         self.created
             .lock()
             .map_err(|e| plan_datafusion_err!("{e}"))?
             .push(CreatedSource { snapshot, options });
-        let schema = info
-            .schema
-            .ok_or_else(|| plan_datafusion_err!("missing table schema"))?;
-        Ok(provider_as_source(Arc::new(EmptyTable::new(Arc::new(
-            schema,
-        )))))
+        Ok(provider_as_source(Arc::new(EmptyTable::new(schema))))
     }
 
     async fn create_writer(
         &self,
         _ctx: &dyn Session,
-        _info: SinkInfo,
+        info: SinkInfo,
     ) -> datafusion_common::Result<LogicalPlan> {
-        plan_err!("the recording data source does not write")
+        self.record_write(info.options, info.lakehouse_table)
+    }
+
+    async fn infer_schema(
+        &self,
+        _ctx: &dyn Session,
+        _info: SourceInfo,
+    ) -> datafusion_common::Result<SchemaRef> {
+        Ok(columns())
+    }
+
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl LakeSource for RecordingDataSource {
+    async fn plan_row_level_operation(
+        &self,
+        _ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> datafusion_common::Result<LogicalPlan> {
+        let target = match operation {
+            RowLevelOperation::Truncate { target, .. } => *target,
+            RowLevelOperation::Delete(info) => info.target,
+            RowLevelOperation::Update(info) => info.target,
+            RowLevelOperation::Merge(info) => info.options.target,
+        };
+        self.record_write(target.options, target.lakehouse_table)
     }
 }
 
@@ -235,6 +319,7 @@ struct Resolution {
     loads: usize,
     requests: Vec<String>,
     sources: Vec<CreatedSource>,
+    writes: Vec<PlannedWrite>,
     error: Option<String>,
 }
 
@@ -264,9 +349,7 @@ impl Fixture {
         });
         let session =
             create_session_with_catalog(Arc::clone(&catalog) as Arc<dyn CatalogProvider>)?;
-        let source = Arc::new(RecordingDataSource {
-            created: Mutex::new(vec![]),
-        });
+        let source = RecordingDataSource::new("iceberg");
         session
             .extension::<DataSourceRegistry>()?
             .register_data_source(Arc::clone(&source) as Arc<dyn DataSource>)?;
@@ -317,6 +400,11 @@ impl Fixture {
             .lock()
             .map_err(|e| e.to_string())?
             .clear();
+        self.source
+            .written
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clear();
         let error = self
             .resolver()
             .resolve_named_plan(plan)
@@ -334,6 +422,12 @@ impl Fixture {
             sources: self
                 .source
                 .created
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone(),
+            writes: self
+                .source
+                .written
                 .lock()
                 .map_err(|e| e.to_string())?
                 .clone(),
@@ -367,7 +461,7 @@ fn create_table_options(columns: &[&str], properties: Vec<(String, String)>) -> 
         columns,
         comment: None,
         constraints: vec![],
-        location: None,
+        location: Some("memory:///table".to_string()),
         format: "iceberg".to_string(),
         partition_by: vec![],
         sort_by: vec![],
@@ -746,4 +840,157 @@ async fn test_missing_tables_are_reported_as_before() -> TestResult {
         }
     }
     Ok(())
+}
+
+/// Statements that write to the table `t` and may read it under other names.
+const WRITES: [(&str, usize); 14] = [
+    ("INSERT INTO t SELECT * FROM t", 1),
+    ("INSERT INTO t SELECT * FROM default.t", 1),
+    ("INSERT INTO default.t SELECT * FROM sail.default.t", 1),
+    (
+        "INSERT INTO sail.default.t SELECT a.k, b.v FROM t a JOIN default.t b ON a.k = b.k",
+        1,
+    ),
+    ("INSERT OVERWRITE t SELECT * FROM default.t", 1),
+    ("INSERT INTO t VALUES (1, 2)", 0),
+    ("DELETE FROM t WHERE k = 1", 1),
+    ("DELETE FROM default.t WHERE k IN (SELECT k FROM t)", 1),
+    ("UPDATE t SET v = 1 WHERE k = 1", 1),
+    (
+        "UPDATE sail.default.t SET v = (SELECT max(v) FROM default.t)",
+        1,
+    ),
+    (
+        "MERGE INTO t a USING default.t b ON a.k = b.k WHEN MATCHED THEN DELETE",
+        1,
+    ),
+    (
+        "MERGE INTO t a USING (SELECT * FROM sail.default.t) b ON a.k = b.k \
+            WHEN MATCHED THEN UPDATE SET v = b.v WHEN NOT MATCHED THEN INSERT *",
+        1,
+    ),
+    ("TRUNCATE TABLE t", 1),
+    ("TRUNCATE TABLE default.t", 1),
+];
+
+#[tokio::test]
+async fn test_write_target_shares_the_catalog_load_of_the_statement() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    for (sql, sources) in WRITES {
+        let resolution = fixture.resolve(sql).await?;
+        let writes = resolution.writes.clone();
+        let sources = resolution.expect(1, sources, sql);
+        assert_eq!(writes.len(), 1, "{sql}");
+        // The write is planned on the table metadata that the statement reads.
+        for source in sources {
+            assert_eq!(writes[0].snapshot, Some(source.snapshot), "{sql}");
+        }
+        assert_eq!(
+            writes[0].operation,
+            Some(LakehouseOperation::Write),
+            "{sql}"
+        );
+    }
+    // Each statement loads the table again.
+    let sql = "INSERT INTO t SELECT * FROM default.t";
+    let first = fixture.resolve(sql).await?.writes;
+    let second = fixture.resolve(sql).await?.writes;
+    assert_ne!(first[0].snapshot, second[0].snapshot);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_to_one_table_and_read_of_another_load_each_once() -> TestResult {
+    let fixture = Fixture::try_new(&["CREATE DATABASE other"]).await?;
+    fixture.create_table(&["other", "t"], &["k", "v"]).await?;
+    for sql in [
+        "INSERT INTO t SELECT * FROM other.t",
+        "DELETE FROM t WHERE k IN (SELECT k FROM other.t)",
+        "MERGE INTO t a USING other.t b ON a.k = b.k WHEN MATCHED THEN DELETE",
+    ] {
+        let resolution = fixture.resolve(sql).await?;
+        assert_eq!(resolution.error, None, "{sql}");
+        assert_eq!(resolution.loads, 2, "{sql}");
+        assert_eq!(resolution.writes.len(), 1, "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_insert_into_temporary_view_does_not_load_a_catalog_table() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    // A temporary view over a data source, with the name of the catalog table `t`.
+    let source = RecordingDataSource::new("recording");
+    fixture
+        .session
+        .extension::<DataSourceRegistry>()?
+        .register_data_source(Arc::clone(&source) as Arc<dyn DataSource>)?;
+    fixture
+        .execute("CREATE TEMPORARY VIEW t USING recording OPTIONS (path 'memory:///view')")
+        .await?;
+    let resolution = fixture.resolve("INSERT INTO t VALUES (1, 2)").await?;
+    assert_eq!(resolution.error, None);
+    assert_eq!(resolution.requests, Vec::<String>::new());
+    assert_eq!(resolution.writes, vec![]);
+    assert_eq!(source.written.lock().map_err(|e| e.to_string())?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_writes_to_missing_tables_and_views_are_reported_as_before() -> TestResult {
+    let fixture = Fixture::try_new(&[
+        "CREATE VIEW tv AS SELECT * FROM t",
+        "CREATE TEMPORARY VIEW temp AS SELECT 1L AS k, 2L AS v",
+    ])
+    .await?;
+    for (sql, error) in write_errors() {
+        let resolution = fixture.resolve(sql).await?;
+        assert_eq!(resolution.error, Some(error), "{sql}");
+        assert_eq!(resolution.writes, vec![], "{sql}");
+    }
+    Ok(())
+}
+
+const NOT_FOUND: &str =
+    "analysis error: Table not found: [TABLE_OR_VIEW_NOT_FOUND] Table or view not found";
+const ROW_LEVEL: &str = "not supported: row-level operations are only supported against tables";
+
+/// Writes to things that are not tables, with the errors from before the writes shared
+/// the catalog table lookups of the statement.
+fn write_errors() -> Vec<(&'static str, String)> {
+    let insert = |name: &str| {
+        format!(
+            "analysis error: [TABLE_OR_VIEW_NOT_FOUND] The table or view `{name}` cannot be found"
+        )
+    };
+    vec![
+        ("INSERT INTO missing VALUES (1, 2)", insert("missing")),
+        ("INSERT INTO missing SELECT * FROM t", insert("missing")),
+        ("INSERT INTO tv VALUES (1, 2)", insert("tv")),
+        ("INSERT INTO tv SELECT * FROM tv", insert("tv")),
+        ("INSERT INTO temp VALUES (1, 2)", insert("temp")),
+        ("INSERT INTO temp SELECT * FROM default.t", insert("temp")),
+        (
+            "DELETE FROM missing WHERE k = 1",
+            format!("{NOT_FOUND}: missing"),
+        ),
+        ("DELETE FROM tv WHERE k = 1", ROW_LEVEL.to_string()),
+        ("DELETE FROM temp WHERE k = 1", ROW_LEVEL.to_string()),
+        (
+            "DELETE FROM tv WHERE k IN (SELECT k FROM tv)",
+            ROW_LEVEL.to_string(),
+        ),
+        ("UPDATE tv SET v = 1", ROW_LEVEL.to_string()),
+        (
+            "MERGE INTO tv a USING t b ON a.k = b.k WHEN MATCHED THEN DELETE",
+            ROW_LEVEL.to_string(),
+        ),
+        (
+            "TRUNCATE TABLE tv",
+            "not supported: [EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE] 'TRUNCATE TABLE' expects \
+                a table but `tv` is a view."
+                .to_string(),
+        ),
+        ("TRUNCATE TABLE missing", format!("{NOT_FOUND}: missing")),
+    ]
 }

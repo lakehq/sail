@@ -127,6 +127,8 @@ impl PlanResolver<'_> {
 
     /// The request of every catalog table lookup in a query. Reads with different options,
     /// time travel, or required formats share a lookup, so the request has none of these.
+    /// Writes share the lookup as well, and set their own operation on the execution
+    /// context of the lookup, which is all that the operation of a request decides.
     fn catalog_table_lookup_request(reference: &[String]) -> ResolveLakehouseTableRequest {
         ResolveLakehouseTableRequest {
             catalog_table: reference.to_vec(),
@@ -139,8 +141,9 @@ impl PlanResolver<'_> {
     /// Looks up a temporary view, a catalog table, or a catalog view, reusing earlier
     /// successful lookups in the query. The catalog is asked once for each table, however
     /// the name of the table is written, so that all the references to the table in the
-    /// query read the same table metadata.
-    async fn lookup_catalog_table_or_view(
+    /// query read the same table metadata. The targets of writes use the same lookups, so
+    /// that a statement writes to the table metadata that it reads.
+    pub(in crate::resolver) async fn lookup_catalog_table_or_view(
         manager: &CatalogManager,
         reference: &[String],
         state: &mut PlanResolverState,
@@ -167,8 +170,9 @@ impl PlanResolver<'_> {
     }
 
     /// Looks up a catalog table like [`Self::lookup_catalog_table_or_view`], but without
-    /// temporary views and catalog views. Data-source identifier reads use this lookup.
-    async fn lookup_catalog_table(
+    /// temporary views and catalog views. Data-source identifier reads and the targets of
+    /// `INSERT` use this lookup.
+    pub(in crate::resolver) async fn lookup_catalog_table(
         manager: &CatalogManager,
         reference: &[String],
         state: &mut PlanResolverState,
