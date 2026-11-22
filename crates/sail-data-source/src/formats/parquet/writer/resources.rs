@@ -22,9 +22,9 @@ const SLAB_BYTES: usize = 64 * 1024 * 1024;
 
 /// The number of slabs in the encode budget for each thread of the runtime:
 /// one slab that the thread is encoding and one slab that is waiting for it.
-/// Measured in the same way: with one, two and three slabs for each thread,
-/// the table with 16 columns took 6.42 s, 6.43 s and 6.41 s, and the table
-/// with 121 columns took 7.25 s, 6.93 s and 6.90 s.
+/// Measured in the same way: with one and two slabs for each thread,
+/// the table with 16 columns took 6.28 s and 6.29 s, and the table
+/// with 121 columns took 7.22 s and 6.67 s.
 const SLABS_PER_THREAD: usize = 2;
 
 /// The number of jobs that encode at the same time for each thread of the runtime.
