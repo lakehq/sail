@@ -66,7 +66,13 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
         .and_then(|v| MaxRowGroupBytes::try_new(v).ok());
     parquet.column_index_truncate_length = config.column_index_truncate_length;
     parquet.statistics_truncate_length = config.statistics_truncate_length;
-    parquet.data_page_row_count_limit = config.data_page_row_count_limit;
+    // A limit of zero means that the rows of a data page are not limited.
+    // The Arrow writer does not accept zero, and a data page cannot have more
+    // rows than the largest value of the 32-bit count in its header.
+    parquet.data_page_row_count_limit = match config.data_page_row_count_limit {
+        0 => i32::MAX as usize,
+        rows => rows,
+    };
     parquet.bloom_filter_on_read = config.bloom_filter_on_read;
     parquet.bloom_filter_on_write = config.bloom_filter_on_write;
     parquet.bloom_filter_fpp = Some(config.bloom_filter_fpp);
