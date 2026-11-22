@@ -3271,6 +3271,141 @@ async fn test_canceled_write_removes_the_files_of_all_writer_tasks() -> Result<(
     Ok(())
 }
 
+/// An input partition of a partitioned write whose rows have one partition
+/// key and never end. It counts the input partitions that are being read
+/// and the batches that were read.
+#[derive(Debug)]
+struct EndlessInput {
+    batch: RecordBatch,
+    reading: Arc<AtomicUsize>,
+    batches: Arc<AtomicUsize>,
+}
+
+impl datafusion::physical_plan::streaming::PartitionStream for EndlessInput {
+    fn schema(&self) -> &SchemaRef {
+        self.batch.schema_ref()
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        struct Reading(Arc<AtomicUsize>);
+
+        impl Drop for Reading {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        self.reading.fetch_add(1, Ordering::SeqCst);
+        let state = (
+            Reading(Arc::clone(&self.reading)),
+            self.batch.clone(),
+            Arc::clone(&self.batches),
+        );
+        let batches = futures::stream::unfold(state, |(reading, batch, batches)| async move {
+            tokio::task::yield_now().await;
+            batches.fetch_add(1, Ordering::SeqCst);
+            Some((Ok(batch.clone()), (reading, batch, batches)))
+        });
+        Box::pin(RecordBatchStreamAdapter::new(self.batch.schema(), batches))
+    }
+}
+
+/// The rows of a partitioned write are distributed by keys among the writer
+/// tasks by a plan that reads the input only as fast as the writer tasks read
+/// their rows. When the write has failed or is canceled, the writer tasks
+/// stop, also those that wait for rows or for the object store, the plan
+/// stops reading the input with them, and the commit ends.
+#[tokio::test]
+async fn test_failed_or_canceled_write_stops_the_distribution_of_its_rows() -> Result<()> {
+    use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    for mode in Mode::ALL {
+        for fails in [true, false] {
+            let case = format!("{mode:?} fails: {fails}");
+            let (ctx, store) = fault_context(mode, RuntimeEnvBuilder::new())?;
+            let request = small_file_request(mode);
+            // The first file of the write fails, or no file is staged before the gate is opened.
+            let gate = if fails {
+                store.fail(request, 0);
+                None
+            } else {
+                Some(store.hold(request))
+            };
+            let batch = keyed_batch(&vec![Some(0); 1000], 0)?;
+            let schema = batch.schema();
+            let reading = Arc::new(AtomicUsize::new(0));
+            let batches = Arc::new(AtomicUsize::new(0));
+            let inputs: Vec<Arc<dyn PartitionStream>> = (0..3)
+                .map(|_| {
+                    Arc::new(EndlessInput {
+                        batch: batch.clone(),
+                        reading: Arc::clone(&reading),
+                        batches: Arc::clone(&batches),
+                    }) as _
+                })
+                .collect();
+            let source =
+                StreamingTableExec::try_new(Arc::clone(&schema), inputs, None, [], false, None)?;
+            // One of the four writer tasks has all rows, and the others wait for rows.
+            let keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("p", 0))];
+            let writer = ParquetWriteExec::try_new(
+                Arc::new(KeyDistributionExec::new(Arc::new(source), keys, 4)),
+                ObjectStoreUrl::parse("memory://")?,
+                Path::from("table"),
+                WRITE_ID,
+                vec!["p".to_string()],
+                TableParquetOptions::default(),
+                ".parquet".to_string(),
+                None,
+                false,
+                0,
+                NonZeroUsize::MIN,
+            )?
+            .with_file_limits(1000, 0);
+            let commit = tokio::spawn(collect(commit_exec(Arc::new(writer))?, ctx.task_ctx()));
+            match gate {
+                None => {
+                    let result = commit
+                        .await
+                        .map_err(|e| internal_datafusion_err!("{case} {e}"))?;
+                    let message = format!("{request} failure");
+                    assert!(
+                        matches!(&result, Err(e) if e.to_string().contains(&message)),
+                        "{case} {result:?}"
+                    );
+                }
+                Some(gate) => {
+                    gate.wait_for(1).await;
+                    // The writer task waits for the object store, and the input
+                    // is not read any longer when the rows for the task wait.
+                    let mut read = usize::MAX;
+                    for _ in 0..500 {
+                        if read == batches.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        read = batches.load(Ordering::SeqCst);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    assert_eq!(read, batches.load(Ordering::SeqCst), "{case}");
+                    assert_eq!(reading.load(Ordering::SeqCst), 3, "{case}");
+                    assert!(!commit.is_finished(), "{case}");
+                    commit.abort();
+                    assert!(matches!(commit.await, Err(e) if e.is_cancelled()), "{case}");
+                    gate.open();
+                }
+            }
+            wait_for_tasks(tasks).await?;
+            assert_eq!(reading.load(Ordering::SeqCst), 0, "{case}");
+            store.wait_for(&[]).await?;
+            assert_eq!(store.count(mode.publish_request()), 0, "{case}");
+        }
+    }
+    Ok(())
+}
+
 /// The tasks of a partition are attempted again when the write fails,
 /// and the files of all attempts have the same names.
 #[tokio::test]
