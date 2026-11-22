@@ -3250,19 +3250,33 @@ async fn test_write_plan_writes_planned_schema() -> Result<()> {
 }
 
 #[test]
-fn test_file_size_is_limited_by_upload_parts() {
-    use crate::formats::parquet::writer::exec::effective_max_file_size;
+fn test_file_size_and_part_size_of_upload() {
+    use crate::formats::parquet::writer::exec::upload_limits;
 
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * MB;
     // A file of this size has nine tenths of the parts that an upload can have.
-    let buffer_size = 10 * 1024 * 1024;
-    assert_eq!(effective_max_file_size(0, buffer_size), 94_371_840_000);
-    assert_eq!(effective_max_file_size(5, buffer_size), 5);
+    assert_eq!(upload_limits(0), (94_371_840_000, 10 * MB as usize));
+    assert_eq!(upload_limits(5), (5, 10 * MB as usize));
+    assert_eq!(upload_limits(64 * GB), (64 * GB, 10 * MB as usize));
     assert_eq!(
-        effective_max_file_size(u64::MAX, buffer_size),
-        94_371_840_000
+        upload_limits(94_371_840_000),
+        (94_371_840_000, 10 * MB as usize)
     );
-    assert_eq!(effective_max_file_size(0, 1024), 9_216_000);
-    assert_eq!(effective_max_file_size(0, usize::MAX), u64::MAX / 10 * 9);
+    // The parts are larger for a file that would have more parts otherwise.
+    assert_eq!(
+        upload_limits(94_371_840_001),
+        (94_371_840_001, 10 * MB as usize + 1)
+    );
+    let (max_file_size, part_size) = upload_limits(900 * GB);
+    assert_eq!(max_file_size, 900 * GB);
+    assert_eq!(part_size, 107_374_183);
+    assert!(part_size as u64 * 9000 >= max_file_size);
+    // A part is not larger than the object stores accept.
+    assert_eq!(
+        upload_limits(u64::MAX),
+        (4000 * MB * 9000, 4000 * MB as usize)
+    );
 }
 
 #[tokio::test]

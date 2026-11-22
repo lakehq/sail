@@ -36,26 +36,39 @@ use crate::formats::parquet::writer::task::{
 use crate::listing::commit::manifest_schema;
 use crate::listing::staging::Publisher;
 
-/// The capacity in bytes of the upload buffer of each file.
+/// The smallest size in bytes of the parts in which a file is uploaded.
 const UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
 
 /// The largest number of parts of a multipart upload that object stores accept.
 /// This is the limit of Amazon S3 and Google Cloud Storage.
 const MAX_UPLOAD_PARTS: u64 = 10_000;
 
-/// Returns the size in bytes at which a task continues with a new file.
+/// The largest size in bytes of a part of a multipart upload that all object
+/// stores accept. This is the limit of a block of Azure Blob Storage.
+/// The limit of Amazon S3 and Google Cloud Storage is 5 GiB.
+const MAX_UPLOAD_PART_SIZE: u64 = 4000 * 1024 * 1024;
+
+/// Returns the size in bytes at which a task continues with a new file,
+/// and the size in bytes of the parts in which each file is uploaded.
 ///
-/// A file is uploaded in parts of the size of the upload buffer, and an upload
-/// fails when it has more parts than the object store accepts. A task therefore
-/// continues with a new file before a file has that many parts, also when
-/// the size of the files is not limited. The size leaves room for the row groups
-/// that are being encoded when the size of the file is checked.
-pub(super) fn effective_max_file_size(max_file_size: u64, buffer_size: usize) -> u64 {
-    let upload_limit = (buffer_size as u64).saturating_mul(MAX_UPLOAD_PARTS) / 10 * 9;
-    match max_file_size {
+/// All parts of a file have the same size, and an upload fails when it has
+/// more parts than the object store accepts. The parts are therefore larger
+/// when the limit on the size of a file is larger than the size that the parts
+/// of the smallest size allow. A task continues with a new file before
+/// a file has the largest number of parts, also when the size of the files
+/// is not limited. A tenth of the parts is left for the row groups that are
+/// being encoded when the size of the file is checked.
+pub(super) fn upload_limits(max_file_size: u64) -> (u64, usize) {
+    let parts = MAX_UPLOAD_PARTS / 10 * 9;
+    let part_size = max_file_size
+        .div_ceil(parts)
+        .clamp(UPLOAD_BUFFER_SIZE as u64, MAX_UPLOAD_PART_SIZE);
+    let upload_limit = part_size * parts;
+    let max_file_size = match max_file_size {
         0 => upload_limit,
         size => size.min(upload_limit),
-    }
+    };
+    (max_file_size, part_size as usize)
 }
 
 /// Returns whether the partitions of the plan are the partitions
@@ -379,6 +392,7 @@ impl ExecutionPlan for ParquetWriteExec {
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)))
             };
         let publisher = Publisher::try_new(&context, &self.object_store_url)?;
+        let (max_file_size, part_size) = upload_limits(self.max_file_size);
         let task = ParquetWriteTask {
             publisher,
             table_path: self.table_path.clone(),
@@ -390,9 +404,9 @@ impl ExecutionPlan for ParquetWriteExec {
             options: self.options.clone(),
             ordering: self.ordering.clone(),
             write_sorting_columns: self.write_sorting_columns,
-            buffer_size: UPLOAD_BUFFER_SIZE,
+            buffer_size: part_size,
             max_records_per_file: self.max_records_per_file,
-            max_file_size: effective_max_file_size(self.max_file_size, UPLOAD_BUFFER_SIZE),
+            max_file_size,
             max_open_files: self.max_open_files_per_task.get(),
             context: Arc::clone(&context),
             encode: EncodeSettings::new(self.encoding_parallelism),
