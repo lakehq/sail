@@ -1474,23 +1474,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
                 path,
-                keep_write_id,
             }) => {
                 let object_store_url =
                     datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
                 let path = object_store::path::Path::parse(path)
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
-                let keep_write_id = keep_write_id
-                    .map(|id| {
-                        uuid::Uuid::try_parse(&id)
-                            .map_err(|e| plan_datafusion_err!("invalid file delete write ID: {e}"))
-                    })
-                    .transpose()?;
-                Ok(Arc::new(FileDeleteExec::new(
-                    object_store_url,
-                    path,
-                    keep_write_id,
-                )))
+                Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
             }
             NodeKind::ParquetWrite(r#gen::ParquetWriteExecNode {
                 input,
@@ -1553,6 +1542,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url,
                 table_path,
                 write_id,
+                overwrite,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1562,12 +1552,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("invalid file write commit path: {e}"))?;
                 let write_id = uuid::Uuid::try_parse(&write_id)
                     .map_err(|e| plan_datafusion_err!("invalid file write commit ID: {e}"))?;
-                Ok(Arc::new(FileWriteCommitExec::new(
-                    input,
-                    object_store_url,
-                    table_path,
-                    write_id,
-                )))
+                Ok(Arc::new(
+                    FileWriteCommitExec::new(input, object_store_url, table_path, write_id)
+                        .with_overwrite(overwrite),
+                ))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
                 let input =
@@ -3769,9 +3757,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
                 path: file_delete_exec.path().to_string(),
-                keep_write_id: file_delete_exec
-                    .keep_write_id()
-                    .map(|id| id.as_hyphenated().to_string()),
             })
         } else if let Some(write) = node.downcast_ref::<ParquetWriteExec>() {
             let options = gen_datafusion_common::TableParquetOptions::try_from(write.options())?;
@@ -3806,6 +3791,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 object_store_url: commit.object_store_url().as_str().to_string(),
                 table_path: commit.table_path().to_string(),
                 write_id: commit.write_id().as_hyphenated().to_string(),
+                overwrite: commit.overwrite(),
             })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
@@ -9890,30 +9876,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_file_delete_plan() -> Result<()> {
-        let codec = RemoteExecutionCodec;
-        for keep_write_id in [None, Some(uuid::Uuid::from_u128(42))] {
-            let delete = FileDeleteExec::new(
-                datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
-                object_store::path::Path::from("warehouse/table"),
-                keep_write_id,
-            );
-            let bytes = try_encode_physical_plan(&codec, Arc::new(delete))?;
-            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-            let decoded = decoded
-                .downcast_ref::<FileDeleteExec>()
-                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a file delete"))?;
-            assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
-            assert_eq!(
-                decoded.path(),
-                &object_store::path::Path::from("warehouse/table")
-            );
-            assert_eq!(decoded.keep_write_id(), keep_write_id.as_ref());
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_round_trip_parquet_write_plan() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
 
@@ -10080,26 +10042,30 @@ mod tests {
         use sail_data_source::listing::commit::manifest_schema;
 
         let write_id = uuid::Uuid::from_u128(42);
-        let commit = FileWriteCommitExec::new(
-            Arc::new(EmptyExec::new(manifest_schema())),
-            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
-            object_store::path::Path::from("warehouse/table"),
-            write_id,
-        );
-        let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
-        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-        let decoded = decoded
-            .downcast_ref::<FileWriteCommitExec>()
-            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a file write commit"))?;
-        assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
-        assert_eq!(
-            decoded.table_path(),
-            &object_store::path::Path::from("warehouse/table")
-        );
-        assert_eq!(decoded.write_id(), &write_id);
-        assert_eq!(decoded.input().schema(), manifest_schema());
-        assert_eq!(decoded.schema().field(0).name(), "count");
+        for overwrite in [false, true] {
+            let commit = FileWriteCommitExec::new(
+                Arc::new(EmptyExec::new(manifest_schema())),
+                datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+                object_store::path::Path::from("warehouse/table"),
+                write_id,
+            )
+            .with_overwrite(overwrite);
+            let codec = RemoteExecutionCodec;
+            let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<FileWriteCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a file write commit"))?;
+            assert_eq!(decoded.object_store_url().as_str(), "s3://bucket/");
+            assert_eq!(
+                decoded.table_path(),
+                &object_store::path::Path::from("warehouse/table")
+            );
+            assert_eq!(decoded.write_id(), &write_id);
+            assert_eq!(decoded.overwrite(), overwrite);
+            assert_eq!(decoded.input().schema(), manifest_schema());
+            assert_eq!(decoded.schema().field(0).name(), "count");
+        }
         Ok(())
     }
 

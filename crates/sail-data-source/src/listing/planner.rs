@@ -254,14 +254,14 @@ async fn plan_file_write(
                 sink: conf,
                 sort_order,
                 write_id,
+                overwrite: *overwrite,
             },
         )
         .await?;
-    if *overwrite {
+    if *overwrite && !format.replaces_existing_files() {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
-            Some(write_id),
         ));
         Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
     } else {

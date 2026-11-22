@@ -3093,52 +3093,6 @@ mod tests {
     }
 
     #[test]
-    fn test_job_graph_places_file_write_commit_inside_barrier_on_driver() {
-        use sail_data_source::listing::commit::FileWriteCommitExec;
-        use sail_data_source::listing::delete::FileDeleteExec;
-
-        // The physical optimizer wraps the deletion in `CooperativeExec`.
-        for (partitions, cooperative) in [(1, false), (2, false), (1, true), (2, true)] {
-            let delete: Arc<dyn ExecutionPlan> = Arc::new(FileDeleteExec::new(
-                ObjectStoreUrl::parse("memory://").unwrap(),
-                object_store::path::Path::from("table"),
-                Some(uuid::Uuid::from_u128(1)),
-            ));
-            let delete = if cooperative {
-                Arc::new(CooperativeExec::new(delete))
-            } else {
-                delete
-            };
-            let plan = Arc::new(BarrierExec::new(
-                vec![delete],
-                parquet_write_plan(partitions),
-            ));
-            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
-            let (_, commit) = assert_parquet_write_stages(&graph, partitions);
-
-            let deletes = graph
-                .stages()
-                .iter()
-                .enumerate()
-                .filter(|(_, stage)| stage.plan.is::<FileDeleteExec>())
-                .collect::<Vec<_>>();
-            assert_eq!(deletes.len(), 1);
-            let (delete, stage) = deletes[0];
-            assert_eq!(stage.placement, TaskPlacement::Driver);
-
-            // The commit waits for the deletion in the driver stage of the barrier.
-            let stage = &graph.stages()[commit];
-            #[expect(clippy::expect_used)]
-            let barrier = stage
-                .plan
-                .downcast_ref::<BarrierExec>()
-                .expect("driver stage should contain BarrierExec");
-            assert!(barrier.plan().is::<FileWriteCommitExec>());
-            assert!(stage.inputs.iter().any(|input| input.stage == delete));
-        }
-    }
-
-    #[test]
     fn test_job_graph_keeps_driver_actual_plan_inside_barrier() {
         let precondition = Arc::new(
             RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(1)).unwrap(),

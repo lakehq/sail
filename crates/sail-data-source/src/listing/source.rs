@@ -139,6 +139,9 @@ pub struct ListingSinkInput {
     pub sort_order: Option<LexRequirement>,
     /// The identifier of the write, shared by all files that the write produces.
     pub write_id: Uuid,
+    /// Whether the write replaces the content of the table directory.
+    /// This is for the formats that replace the content themselves.
+    pub overwrite: bool,
 }
 
 /// A trait for format-specific logic for writing listing files.
@@ -149,6 +152,13 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
         ctx: &dyn Session,
         input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Whether the plan of the sink replaces the content of the table directory
+    /// itself when the write overwrites. The content is deleted before the plan
+    /// of the sink runs otherwise.
+    fn replaces_existing_files(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]

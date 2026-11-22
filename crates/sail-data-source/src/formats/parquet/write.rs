@@ -42,6 +42,7 @@ impl WriteFormat for ParquetWriteFormat {
             sink,
             sort_order,
             write_id,
+            overwrite,
         } = input;
         let table_path = sink
             .table_paths
@@ -73,12 +74,14 @@ impl WriteFormat for ParquetWriteFormat {
             encoding_parallelism,
             max_open_files_per_task,
         )?);
-        Ok(Arc::new(FileWriteCommitExec::new(
-            writer,
-            sink.object_store_url,
-            table_path,
-            write_id,
-        )))
+        Ok(Arc::new(
+            FileWriteCommitExec::new(writer, sink.object_store_url, table_path, write_id)
+                .with_overwrite(overwrite),
+        ))
+    }
+
+    fn replaces_existing_files(&self) -> bool {
+        true
     }
 }
 

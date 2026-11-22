@@ -1687,7 +1687,13 @@ mod tests {
         // Another write to the same path replaces the files.
         let (display, overwritten) =
             write_range_to_parquet(None, spec::SaveMode::Overwrite, &[], store.clone()).await?;
-        assert!(display.contains("FileDeleteExec"), "{display}");
+        // The commit replaces the files, so the plan does not delete them first.
+        assert!(
+            display.contains("FileWriteCommitExec: path=table, overwrite"),
+            "{display}"
+        );
+        assert!(!display.contains("FileDeleteExec"), "{display}");
+        assert!(!display.contains("BarrierExec"), "{display}");
         assert_eq!(overwritten.len(), 3, "{overwritten:?}");
         assert_eq!(overwritten[0], "table/_SUCCESS");
         assert_ne!(id(&overwritten[1]), id(&files[1]));
@@ -1706,10 +1712,12 @@ mod tests {
             write_range_to_parquet(None, spec::SaveMode::Append, &[], store.clone()).await?;
         assert_eq!(files.len(), 3, "{files:?}");
         // The write fails when it has rows, and it leaves no file of its own.
-        // The files of the table are deleted before that when they are overwritten.
+        // A write that overwrites keeps the data files of the table when it fails,
+        // and only the `_SUCCESS` file is deleted, which is done before the write starts.
+        assert_eq!(files[0], "table/_SUCCESS");
         for (mode, expected) in [
-            (spec::SaveMode::Append, files),
-            (spec::SaveMode::Overwrite, vec![]),
+            (spec::SaveMode::Append, files.clone()),
+            (spec::SaveMode::Overwrite, files[1..].to_vec()),
         ] {
             let result = write_range_to_parquet(None, mode, &["id"], store.clone()).await;
             assert!(

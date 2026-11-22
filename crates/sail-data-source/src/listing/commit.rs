@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::cast::{as_string_array, as_uint64_array};
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -158,7 +159,14 @@ impl Manifests {
 
 /// Deletes the files. A file that does not exist is not an error.
 pub(crate) async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<()> {
-    let files = stream::iter(files.into_iter().map(Ok)).boxed();
+    delete_file_stream(store, stream::iter(files.into_iter().map(Ok)).boxed()).await
+}
+
+/// Deletes the files of the stream. A file that does not exist is not an error.
+async fn delete_file_stream(
+    store: &Arc<dyn ObjectStore>,
+    files: BoxStream<'static, object_store::Result<Path>>,
+) -> Result<()> {
     let mut deleted = store.delete_stream(files);
     while let Some(result) = deleted.next().await {
         match result {
@@ -170,12 +178,25 @@ pub(crate) async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>)
 }
 
 /// Completes a write and returns the number of rows written.
+///
+/// A write that overwrites replaces the content of the table directory when
+/// all writer tasks have completed their files. The files that were in the
+/// directory before the write are kept until then, so that a write that fails
+/// does not remove them. The `_SUCCESS` file of the earlier content is removed
+/// before the writer tasks start, so that the file is present only when
+/// the directory has the files of exactly one completed write.
 async fn commit_file_write(
-    mut input: SendableRecordBatchStream,
+    open_input: impl FnOnce() -> Result<SendableRecordBatchStream>,
     store: Arc<dyn ObjectStore>,
     table_path: Path,
     write_id: Uuid,
+    overwrite: bool,
 ) -> Result<u64> {
+    let success_file = table_path.clone().join(SUCCESS_FILE_NAME);
+    if overwrite {
+        delete_files(&store, vec![success_file.clone()]).await?;
+    }
+    let mut input = open_input()?;
     let mut manifests = Manifests::default();
     let mut result = Ok(());
     while let Some(manifest) = input.next().await {
@@ -200,33 +221,47 @@ async fn commit_file_write(
         return Err(e);
     }
 
-    // A file that no manifest refers to exists only if a writer task was
-    // attempted more than once. The files of later attempts are kept, since
-    // such an attempt may be running when this attempt of the commit was
-    // canceled but has not stopped yet.
+    // The write has all its files from here on, and none of them is deleted
+    // if the rest of the commit fails.
+    //
+    // The write has files that are not in a manifest only if a writer task was
+    // attempted more than once. These are the files whose name has another
+    // attempt than the attempt that the writer partition has reported.
+    // The files of later attempts are kept, since such an attempt may be
+    // running when this attempt of the commit was canceled but has not
+    // stopped yet. A write that overwrites also removes everything that
+    // is not a file of the write.
+    //
+    // The files of the write are recognized by their names and not by the
+    // locations in the manifests, so that a file of the write is kept even
+    // when the object store lists its location in another form than the form
+    // in which the writer task has reported it.
     let max_attempt = manifests.max_attempt();
-    if max_attempt > 0 {
-        let stale = store
+    if overwrite || max_attempt > 0 {
+        let attempts = std::mem::take(&mut manifests.attempts);
+        let files = store
             .list(Some(&table_path))
-            .try_filter_map(|meta| {
-                let stale = meta
+            .try_filter_map(move |meta| {
+                let name = meta
                     .location
                     .filename()
                     .and_then(parse_part_file_name)
-                    .is_some_and(|name| {
-                        name.write_id == write_id && name.attempt as u64 <= max_attempt
-                    })
-                    && !manifests.files.contains(&meta.location);
-                futures::future::ready(Ok(stale.then_some(meta.location)))
+                    .filter(|name| name.write_id == write_id);
+                let delete = match name {
+                    Some(name) => {
+                        let attempt = name.attempt as u64;
+                        attempt <= max_attempt
+                            && attempts.get(&(name.partition as u64)) != Some(&attempt)
+                    }
+                    None => overwrite,
+                };
+                futures::future::ready(Ok(delete.then_some(meta.location)))
             })
-            .try_collect::<Vec<_>>()
-            .await?;
-        delete_files(&store, stale).await?;
+            .boxed();
+        delete_file_stream(&store, files).await?;
     }
 
-    store
-        .put(&table_path.join(SUCCESS_FILE_NAME), PutPayload::default())
-        .await?;
+    store.put(&success_file, PutPayload::default()).await?;
     Ok(manifests.num_rows)
 }
 
@@ -235,6 +270,8 @@ async fn commit_file_write(
 /// The input is the manifests of the writer tasks.
 /// The files of failed or superseded writer task attempts are deleted,
 /// and then an empty `_SUCCESS` file is written to the table directory.
+/// A write that overwrites also deletes everything else in the table directory
+/// that is not a file of the write, before the `_SUCCESS` file is written.
 /// The output is a single row with the number of rows written.
 #[derive(Debug)]
 pub struct FileWriteCommitExec {
@@ -242,6 +279,8 @@ pub struct FileWriteCommitExec {
     object_store_url: ObjectStoreUrl,
     table_path: Path,
     write_id: Uuid,
+    /// Whether the write replaces the content of the table directory.
+    overwrite: bool,
     properties: Arc<PlanProperties>,
 }
 
@@ -263,8 +302,19 @@ impl FileWriteCommitExec {
             object_store_url,
             table_path,
             write_id,
+            overwrite: false,
             properties,
         }
+    }
+
+    /// Sets whether the write replaces the content of the table directory.
+    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
+    }
+
+    pub fn overwrite(&self) -> bool {
+        self.overwrite
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -296,7 +346,11 @@ fn count_schema() -> SchemaRef {
 
 impl DisplayAs for FileWriteCommitExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}: path={}", self.name(), self.table_path)
+        write!(f, "{}: path={}", self.name(), self.table_path)?;
+        if self.overwrite {
+            write!(f, ", overwrite")?;
+        }
+        Ok(())
     }
 }
 
@@ -344,12 +398,15 @@ impl ExecutionPlan for FileWriteCommitExec {
         let [input] = children.as_slice() else {
             return internal_err!("{} must have exactly one child", self.name());
         };
-        Ok(Arc::new(Self::new(
-            Arc::clone(input),
-            self.object_store_url.clone(),
-            self.table_path.clone(),
-            self.write_id,
-        )))
+        Ok(Arc::new(
+            Self::new(
+                Arc::clone(input),
+                self.object_store_url.clone(),
+                self.table_path.clone(),
+                self.write_id,
+            )
+            .with_overwrite(self.overwrite),
+        ))
     }
 
     fn execute(
@@ -364,13 +421,18 @@ impl ExecutionPlan for FileWriteCommitExec {
                 partition
             );
         }
-        let input = self.input.execute(0, Arc::clone(&context))?;
+        let input = Arc::clone(&self.input);
         let store = context.runtime_env().object_store(&self.object_store_url)?;
         let table_path = self.table_path.clone();
         let write_id = self.write_id;
+        let overwrite = self.overwrite;
         let schema = self.schema();
         let output = stream::once(async move {
-            let count = commit_file_write(input, store, table_path, write_id).await?;
+            // The writer tasks can start when the input is executed, which must
+            // not be before the commit has prepared the table directory.
+            let open_input = move || input.execute(0, context);
+            let count =
+                commit_file_write(open_input, store, table_path, write_id, overwrite).await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -398,11 +460,13 @@ mod tests {
     const WRITE_ID: Uuid = Uuid::from_u128(1);
     const OTHER_WRITE_ID: Uuid = Uuid::from_u128(2);
 
-    /// An object store that records the requests it receives.
+    /// An object store that records the requests it receives,
+    /// and that fails one of the requests when it is told to.
     #[derive(Debug)]
     struct RecordingStore {
         inner: InMemory,
         requests: Arc<Mutex<Vec<String>>>,
+        failure: Arc<Mutex<Option<(&'static str, usize)>>>,
     }
 
     impl RecordingStore {
@@ -410,6 +474,7 @@ mod tests {
             Self {
                 inner: InMemory::new(),
                 requests: Arc::new(Mutex::new(vec![])),
+                failure: Arc::new(Mutex::new(None)),
             }
         }
     }
@@ -418,6 +483,30 @@ mod tests {
         if let Ok(mut requests) = requests.lock() {
             requests.push(request);
         }
+    }
+
+    /// Returns an error if the request of the kind is the request that fails.
+    fn fail(
+        failure: &Mutex<Option<(&'static str, usize)>>,
+        kind: &'static str,
+    ) -> object_store::Result<()> {
+        let Ok(mut failure) = failure.lock() else {
+            return Ok(());
+        };
+        match failure.as_mut() {
+            Some((failing, remaining)) if *failing == kind => {
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    return Ok(());
+                }
+            }
+            _ => return Ok(()),
+        }
+        *failure = None;
+        Err(object_store::Error::Generic {
+            store: "RecordingStore",
+            source: format!("{kind} failure").into(),
+        })
     }
 
     impl Display for RecordingStore {
@@ -438,6 +527,7 @@ mod tests {
                 &self.requests,
                 format!("PUT {location} {}", payload.content_length()),
             );
+            fail(&self.failure, "PUT")?;
             self.inner.put_opts(location, payload, options).await
         }
 
@@ -462,8 +552,14 @@ mod tests {
             locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
             let requests = Arc::clone(&self.requests);
+            let failure = Arc::clone(&self.failure);
             let locations = locations
-                .inspect_ok(move |location| record(&requests, format!("DELETE {location}")))
+                .map(move |location| {
+                    let location = location?;
+                    record(&requests, format!("DELETE {location}"));
+                    fail(&failure, "DELETE")?;
+                    Ok(location)
+                })
                 .boxed();
             self.inner.delete_stream(locations)
         }
@@ -474,6 +570,9 @@ mod tests {
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             let prefix_text = prefix.map(|x| x.to_string()).unwrap_or_default();
             record(&self.requests, format!("LIST {prefix_text}"));
+            if let Err(e) = fail(&self.failure, "LIST") {
+                return stream::once(async move { Err(e) }).boxed();
+            }
             self.inner.list(prefix)
         }
 
@@ -521,25 +620,55 @@ mod tests {
         }
 
         async fn commit(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
-            let input = Box::pin(RecordBatchStreamAdapter::new(
-                manifest_schema(),
-                stream::iter(manifests),
-            ));
+            self.commit_with(manifests, false).await
+        }
+
+        async fn commit_with(
+            &self,
+            manifests: Vec<Result<RecordBatch>>,
+            overwrite: bool,
+        ) -> Result<u64> {
+            let requests = Arc::clone(&self.recording.requests);
+            let open_input = move || {
+                record(&requests, "INPUT".to_string());
+                let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+                    manifest_schema(),
+                    stream::iter(manifests),
+                ));
+                Ok(input)
+            };
             commit_file_write(
-                input,
+                open_input,
                 Arc::clone(&self.store),
                 Path::from("table"),
                 WRITE_ID,
+                overwrite,
             )
             .await
         }
 
-        fn requests(&self) -> Vec<String> {
+        /// Makes a later request of the kind fail,
+        /// after the given number of requests of the kind.
+        fn fail(&self, kind: &'static str, after: usize) {
+            if let Ok(mut failure) = self.recording.failure.lock() {
+                *failure = Some((kind, after));
+            }
+        }
+
+        /// The requests to the object store, and `INPUT` for the point
+        /// at which the commit has started the writer tasks.
+        fn requests_and_input(&self) -> Vec<String> {
             self.recording
                 .requests
                 .lock()
                 .map(|x| x.clone())
                 .unwrap_or_default()
+        }
+
+        fn requests(&self) -> Vec<String> {
+            let mut requests = self.requests_and_input();
+            requests.retain(|x| x != "INPUT");
+            requests
         }
 
         async fn files(&self) -> Result<Vec<String>> {
@@ -851,6 +980,343 @@ mod tests {
             );
         }
         assert!(!write.files().await?.contains(&"table/_SUCCESS".to_string()));
+        Ok(())
+    }
+
+    /// The content of a table directory before a write that overwrites,
+    /// and a file outside the directory.
+    const OLD_FILES: [&str; 6] = [
+        "table/_SUCCESS",
+        "table/.hidden",
+        "table/data.json",
+        "table/old.parquet",
+        "table/x=1/y=2/old.parquet",
+        "other/file",
+    ];
+
+    async fn create_old_files(write: &TestWrite) -> Result<Vec<String>> {
+        let mut files: Vec<String> = OLD_FILES.iter().map(|x| x.to_string()).collect();
+        // The files of an earlier write have the names of files of a write.
+        files.push(format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 0)));
+        files.push(format!("table/x=1/{}", name(0, &OTHER_WRITE_ID, 0, 1)));
+        for file in &files {
+            write.create(file).await?;
+        }
+        files.sort();
+        Ok(files)
+    }
+
+    fn sorted(mut files: Vec<String>) -> Vec<String> {
+        files.sort();
+        files
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_replaces_files_at_commit() -> Result<()> {
+        let write = TestWrite::new();
+        let old = create_old_files(&write).await?;
+        let a = write
+            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
+            .await?;
+        let b = write
+            .create(&format!("table/x=1/y=2/{}", name(1, &WRITE_ID, 0, 0)))
+            .await?;
+        let new = vec![a.location.to_string(), b.location.to_string()];
+        let count = write
+            .commit_with(
+                vec![manifest_batch(0, 2, 0, &[a]), manifest_batch(1, 2, 0, &[b])],
+                true,
+            )
+            .await?;
+        assert_eq!(count, 20);
+
+        // The `_SUCCESS` file of the earlier content is deleted before the
+        // writer tasks start, and the rest is deleted after they have ended.
+        let requests = write.requests_and_input();
+        assert_eq!(
+            requests[..3],
+            ["DELETE table/_SUCCESS", "INPUT", "LIST table"]
+        );
+        assert_eq!(
+            requests.last().map(|x| x.as_str()),
+            Some("PUT table/_SUCCESS 0")
+        );
+        let deleted = sorted(requests[3..requests.len() - 1].to_vec());
+        let expected: Vec<_> = old
+            .iter()
+            .filter(|x| x.starts_with("table/") && *x != "table/_SUCCESS")
+            .map(|x| format!("DELETE {x}"))
+            .collect();
+        assert_eq!(deleted, sorted(expected));
+
+        let mut expected = new;
+        expected.extend(["other/file".to_string(), "table/_SUCCESS".to_string()]);
+        assert_eq!(write.files().await?, sorted(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_of_empty_directory() -> Result<()> {
+        let write = TestWrite::new();
+        let count = write
+            .commit_with(vec![manifest_batch(0, 1, 0, &[])], true)
+            .await?;
+        assert_eq!(count, 0);
+        assert_eq!(
+            write.requests_and_input(),
+            vec![
+                "DELETE table/_SUCCESS",
+                "INPUT",
+                "LIST table",
+                "PUT table/_SUCCESS 0"
+            ]
+        );
+        assert_eq!(write.files().await?, vec!["table/_SUCCESS"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_overwrite_keeps_old_files() -> Result<()> {
+        // The input fails, or the input ends before all writer tasks have reported.
+        for failed_input in [true, false] {
+            let write = TestWrite::new();
+            let old = create_old_files(&write).await?;
+            let a = write
+                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
+                .await?;
+            let mut manifests = vec![manifest_batch(0, 2, 0, std::slice::from_ref(&a))];
+            if failed_input {
+                manifests.push(exec_err!("writer failure"));
+            }
+            let result = write.commit_with(manifests, true).await;
+            let message = if failed_input {
+                "writer failure"
+            } else {
+                "1 of 2 writer tasks"
+            };
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains(message)),
+                "{result:?}"
+            );
+            // The directory is not listed, and only the file of the write is deleted.
+            assert_eq!(
+                write.requests_and_input(),
+                vec![
+                    "DELETE table/_SUCCESS".to_string(),
+                    "INPUT".to_string(),
+                    format!("DELETE {}", a.location)
+                ]
+            );
+            let expected: Vec<_> = old
+                .iter()
+                .filter(|x| *x != "table/_SUCCESS")
+                .cloned()
+                .collect();
+            assert_eq!(write.files().await?, expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_does_not_start_writers_when_success_file_is_not_deleted() -> Result<()>
+    {
+        let write = TestWrite::new();
+        let old = create_old_files(&write).await?;
+        write.fail("DELETE", 0);
+        let result = write
+            .commit_with(vec![manifest_batch(0, 1, 0, &[])], true)
+            .await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("DELETE failure")),
+            "{result:?}"
+        );
+        assert_eq!(write.requests_and_input(), vec!["DELETE table/_SUCCESS"]);
+        assert_eq!(write.files().await?, old);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_keeps_new_files_when_commit_fails_after_writers() -> Result<()> {
+        // The listing fails, a deletion of an old file fails,
+        // or the `_SUCCESS` file is not written.
+        for (kind, after) in [("LIST", 0), ("DELETE", 1), ("DELETE", 3), ("PUT", 0)] {
+            let write = TestWrite::new();
+            let old = create_old_files(&write).await?;
+            let a = write
+                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
+                .await?;
+            let b = write
+                .create(&format!("table/x=1/y=2/{}", name(1, &WRITE_ID, 0, 0)))
+                .await?;
+            let new = [a.location.to_string(), b.location.to_string()];
+            write.fail(kind, after);
+            let result = write
+                .commit_with(
+                    vec![manifest_batch(0, 2, 0, &[a]), manifest_batch(1, 2, 0, &[b])],
+                    true,
+                )
+                .await;
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains(&format!("{kind} failure"))),
+                "{kind} {result:?}"
+            );
+            // No file of the write is deleted, and there is no `_SUCCESS` file.
+            let requests = write.requests();
+            for file in &new {
+                assert!(!requests.contains(&format!("DELETE {file}")), "{kind}");
+            }
+            let files = write.files().await?;
+            for file in &new {
+                assert!(files.contains(file), "{kind} {files:?}");
+            }
+            assert!(!files.contains(&"table/_SUCCESS".to_string()), "{kind}");
+            let old_files = files
+                .iter()
+                .filter(|x| x.starts_with("table/") && !new.contains(*x))
+                .count();
+            match (kind, after) {
+                // Nothing of the earlier content is deleted but its `_SUCCESS` file.
+                ("LIST", _) => assert_eq!(old_files, old.len() - 2),
+                // The deletion that fails is the second or the fourth deletion
+                // after the deletion of the `_SUCCESS` file.
+                ("DELETE", after) => assert!(old_files > old.len() - 2 - after - 1, "{files:?}"),
+                _ => assert_eq!(old_files, 0),
+            }
+            assert!(files.contains(&"other/file".to_string()));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_after_retry_lists_once() -> Result<()> {
+        let write = TestWrite::new();
+        let old = create_old_files(&write).await?;
+        let stale = [
+            format!("table/{}", name(0, &WRITE_ID, 0, 0)),
+            format!("table/x=1/{}", name(1, &WRITE_ID, 0, 0)),
+        ];
+        for path in &stale {
+            write.create(path).await?;
+        }
+        // a later attempt that may still be running
+        let later = format!("table/{}", name(0, &WRITE_ID, 0, 2));
+        write.create(&later).await?;
+        let a = write
+            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
+            .await?;
+        let b = write
+            .create(&format!("table/x=1/{}", name(1, &WRITE_ID, 0, 1)))
+            .await?;
+        let new = vec![a.location.to_string(), b.location.to_string()];
+        write
+            .commit_with(
+                vec![manifest_batch(0, 2, 1, &[a]), manifest_batch(1, 2, 1, &[b])],
+                true,
+            )
+            .await?;
+        let requests = write.requests();
+        assert_eq!(requests.iter().filter(|x| x.starts_with("LIST")).count(), 1);
+        let deleted = sorted(
+            requests
+                .iter()
+                .filter(|x| x.starts_with("DELETE") && *x != "DELETE table/_SUCCESS")
+                .cloned()
+                .collect(),
+        );
+        let expected: Vec<_> = old
+            .iter()
+            .filter(|x| x.starts_with("table/") && *x != "table/_SUCCESS")
+            .chain(stale.iter())
+            .map(|x| format!("DELETE {x}"))
+            .collect();
+        assert_eq!(deleted, sorted(expected));
+        let mut expected = new;
+        expected.extend([
+            later,
+            "other/file".to_string(),
+            "table/_SUCCESS".to_string(),
+        ]);
+        assert_eq!(write.files().await?, sorted(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_keeps_files_in_directories_with_special_names() -> Result<()> {
+        use object_store::local::LocalFileSystem;
+
+        // The files of the write are kept whatever the form is in which
+        // the object store lists the locations of the files.
+        let directory = tempfile::tempdir()?;
+        let stores: [Arc<dyn ObjectStore>; 2] = [
+            Arc::new(InMemory::new()),
+            Arc::new(LocalFileSystem::new_with_prefix(directory.path())?),
+        ];
+        for store in stores {
+            for (overwrite, attempt) in [(true, 0), (true, 1), (false, 1)] {
+                let table = Path::from("table");
+                let mut written = vec![];
+                for (partition, value) in ["x=50% off", "x=a b", "x=é/y=%20", "x=a%2Fb"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut location = table.clone();
+                    for part in value.split('/') {
+                        location = location.join(part);
+                    }
+                    let location = location.join(name(partition, &WRITE_ID, 0, attempt));
+                    store
+                        .put(&location, Bytes::from_static(b"data").into())
+                        .await?;
+                    written.push(WrittenFile {
+                        location,
+                        size: 4,
+                        num_rows: 1,
+                    });
+                }
+                let old = table.clone().join("x=50% off").join("old.parquet");
+                store.put(&old, Bytes::from_static(b"old").into()).await?;
+                let stale = table
+                    .clone()
+                    .join("x=a b")
+                    .join(name(1, &WRITE_ID, 0, attempt + 1));
+                store.put(&stale, Bytes::from_static(b"old").into()).await?;
+
+                let manifests: Vec<_> = written
+                    .iter()
+                    .enumerate()
+                    .map(|(partition, file)| {
+                        manifest_batch(partition, 4, attempt, std::slice::from_ref(file))
+                    })
+                    .collect();
+                let open_input = move || {
+                    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+                        manifest_schema(),
+                        stream::iter(manifests),
+                    ));
+                    Ok(input)
+                };
+                let count = commit_file_write(
+                    open_input,
+                    Arc::clone(&store),
+                    table.clone(),
+                    WRITE_ID,
+                    overwrite,
+                )
+                .await?;
+                assert_eq!(count, 4);
+                for file in &written {
+                    let data = store.get(&file.location).await?.bytes().await?;
+                    assert_eq!(data.as_ref(), b"data", "{store} {}", file.location);
+                }
+                // The file of a later attempt is kept, and the file that is not
+                // a file of the write is kept unless the write overwrites.
+                assert!(store.head(&stale).await.is_ok());
+                assert_eq!(store.head(&old).await.is_ok(), !overwrite);
+                let files: Vec<_> = store.list(Some(&table)).try_collect().await?;
+                assert_eq!(files.len(), if overwrite { 6 } else { 7 }, "{files:?}");
+                delete_files(&store, files.into_iter().map(|x| x.location).collect()).await?;
+            }
+        }
         Ok(())
     }
 }

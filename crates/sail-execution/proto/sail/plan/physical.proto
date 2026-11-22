@@ -1049,7 +1049,6 @@ message TextSinkExecNode {
 message FileDeleteExecNode {
   string object_store_url = 1;
   string path = 2;
-  optional string keep_write_id = 3;
 }
 
 message ParquetWriteExecNode {
@@ -1072,6 +1071,7 @@ message FileWriteCommitExecNode {
   string object_store_url = 2;
   string table_path = 3;
   string write_id = 4;
+  bool overwrite = 5;
 }
 
 message StreamCollectorExecNode {
