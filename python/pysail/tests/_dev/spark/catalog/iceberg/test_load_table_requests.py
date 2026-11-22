@@ -226,3 +226,50 @@ def test_rejected_access_delegation_is_reported_when_table_access_begins(
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view}")
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_read_loads_a_table_once_however_its_name_is_written(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.spelled"
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        spark.sql(f"INSERT INTO {name} VALUES (1), (2)")
+        start = len(records)
+        rows = spark.sql(
+            f"SELECT a.id FROM {name} a JOIN sail.{name} b ON a.id = b.id JOIN `sail`.{name} c ON a.id = c.id"
+        ).collect()
+        assert sorted(row.id for row in rows) == [1, 2]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/spelled", 200, None)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_write_loads_the_target_table_once_to_plan_the_statement(spark, recording_catalog):
+    _, records = recording_catalog
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+    name = f"{NAMESPACE}.written"
+    load = (f"{NAMESPACE}/tables/written", 200, None)
+    try:
+        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
+        for sql, expected in [
+            (f"INSERT INTO {name} VALUES (1, 10), (2, 20)", [(1, 10), (2, 20)]),
+            # The target and the source are the same table under two names.
+            (f"INSERT INTO {name} SELECT id + 2, v FROM sail.{name}", [(1, 10), (2, 20), (3, 10), (4, 20)]),
+            (f"UPDATE {name} SET v = 0 WHERE id = 1", [(1, 0), (2, 20), (3, 10), (4, 20)]),
+            (f"DELETE FROM {name} WHERE id = 2", [(1, 0), (3, 10), (4, 20)]),
+            (
+                f"MERGE INTO {name} t USING sail.{name} s ON t.id = s.id AND s.id = 3 "
+                "WHEN MATCHED THEN UPDATE SET v = s.v + 1",
+                [(1, 0), (3, 11), (4, 20)],
+            ),
+            (f"TRUNCATE TABLE {name}", []),
+        ]:
+            start = len(records)
+            spark.sql(sql).collect()
+            # The table is loaded once to plan the statement, and once more when the
+            # statement commits, to detect a concurrent change to the table.
+            assert _requests(records, start) == [load, load], sql
+            assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
