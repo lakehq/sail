@@ -3223,6 +3223,43 @@ async fn test_failed_writer_leaves_the_table_as_it_was() -> Result<()> {
     Ok(())
 }
 
+/// A write that is canceled while its files are published is reported as
+/// canceled to its caller, and it is committed nevertheless.
+#[tokio::test]
+async fn test_write_that_is_canceled_while_it_publishes_is_committed() -> Result<()> {
+    for mode in Mode::ALL {
+        let (ctx, store) = fault_context(mode, RuntimeEnvBuilder::new())?;
+        let schema = int_schema();
+        let partitions = vec![
+            vec![int_batch(&schema, 0..5)?],
+            vec![int_batch(&schema, 5..12)?],
+        ];
+        let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
+        let gate = store.hold(mode.publish_request());
+        let commit = tokio::spawn(collect(commit_exec(writer)?, ctx.task_ctx()));
+        // Both files are being published.
+        gate.wait_for(2).await;
+        let staged = match mode {
+            Mode::Rename => vec!["table/_staged-*"; 2],
+            Mode::Multipart => vec![],
+        };
+        assert_eq!(store.objects().await?, staged, "{mode:?}");
+        commit.abort();
+        assert!(matches!(commit.await, Err(e) if e.is_cancelled()));
+        gate.open();
+        let (first, second) = (
+            file_name(0, 0, ".zstd.parquet"),
+            file_name(1, 0, ".zstd.parquet"),
+        );
+        store
+            .wait_for(&["table/_SUCCESS", first.as_str(), second.as_str()])
+            .await?;
+        let (_, data) = read_parquet(read_bytes(store.inner().as_ref(), &second).await?)?;
+        assert_eq!(data, int_batch(&schema, 5..12)?);
+    }
+    Ok(())
+}
+
 /// The input of a writer task, which has one batch and which ends or not.
 #[derive(Debug)]
 struct TestInput {

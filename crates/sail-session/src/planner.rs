@@ -1679,6 +1679,65 @@ mod tests {
         Ok((display, context))
     }
 
+    /// The object stores of a session of Sail come from its own registry,
+    /// which gives the multipart upload interface of the in-memory object
+    /// store, so the files of the write are multipart uploads that the commit
+    /// completes.
+    #[tokio::test]
+    async fn parquet_write_publishes_multipart_uploads_in_object_store_of_session()
+    -> datafusion_common::Result<()> {
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::prelude::ParquetReadOptions;
+        use futures::TryStreamExt;
+        use sail_common::config::AppConfig;
+        use sail_common::runtime::RuntimeHandle;
+        use sail_data_source::listing::staging::Publisher;
+
+        use crate::runtime::RuntimeEnvFactory;
+
+        let handle = tokio::runtime::Handle::current();
+        let config = AppConfig::load().map_err(|e| internal_datafusion_err!("{e}"))?;
+        let mut factory =
+            RuntimeEnvFactory::new(Arc::new(config), RuntimeHandle::new(handle.clone(), handle));
+        let (runtime_env, multipart) = factory.create(Ok)?;
+        let config = SessionConfig::new().with_extension(multipart);
+        let (display, context) = write_range_in_session(
+            config,
+            Arc::clone(&runtime_env),
+            None,
+            spec::SaveMode::Append,
+            &[],
+        )
+        .await?;
+        assert!(display.contains("FileWriteCommitExec"), "{display}");
+
+        let url = ObjectStoreUrl::parse("memory://")?;
+        let publisher = Publisher::try_new(&context.task_ctx(), &url)?;
+        assert!(matches!(publisher, Publisher::Multipart { .. }));
+        let mut files: Vec<String> = runtime_env
+            .object_store(&url)?
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await?;
+        files.sort();
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert_eq!(files[0], "table/_SUCCESS");
+        assert!(
+            files[1..]
+                .iter()
+                .all(|file| file.starts_with("table/part-") && file.ends_with(".parquet")),
+            "{files:?}"
+        );
+        let rows = context
+            .read_parquet("memory:///table/", ParquetReadOptions::default())
+            .await?
+            .count()
+            .await?;
+        assert_eq!(rows, 10);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn parquet_write_keeps_input_partitions_and_commits() -> datafusion_common::Result<()> {
         let store = Arc::new(InMemory::new());
