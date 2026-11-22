@@ -129,9 +129,12 @@ impl PlanResolver<'_> {
     /// time travel, or required formats share a lookup, so the request has none of these.
     /// Writes share the lookup as well, and set their own operation on the execution
     /// context of the lookup, which is all that the operation of a request decides.
-    fn catalog_table_lookup_request(reference: &[String]) -> ResolveLakehouseTableRequest {
+    /// The request names the table by its fully qualified name, which the execution
+    /// context carries, so that a commit looks up the same table whichever reference
+    /// of the query came first and whatever the current database is by then.
+    fn catalog_table_lookup_request(table: &[String]) -> ResolveLakehouseTableRequest {
         ResolveLakehouseTableRequest {
-            catalog_table: reference.to_vec(),
+            catalog_table: table.to_vec(),
             operation: LakehouseOperation::Read,
             requested_format: None,
             options: vec![],
@@ -160,10 +163,7 @@ impl PlanResolver<'_> {
         // The table is loaded by the qualified name that the lookup is stored under, so
         // that the stored lookup is always the one of that table.
         let lookup = manager
-            .get_catalog_lakehouse_table_or_view(
-                &table,
-                Self::catalog_table_lookup_request(reference),
-            )
+            .get_catalog_lakehouse_table_or_view(&table, Self::catalog_table_lookup_request(&table))
             .await?;
         state.insert_catalog_table_lookup(table, lookup.clone());
         Ok(lookup)
@@ -184,7 +184,7 @@ impl PlanResolver<'_> {
             return Ok(lookup);
         }
         let (status, resolved) = manager
-            .get_lakehouse_table(&table, Self::catalog_table_lookup_request(reference))
+            .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
             .await?;
         let lookup = (status, Some(resolved));
         state.insert_catalog_table_lookup(table, lookup.clone());

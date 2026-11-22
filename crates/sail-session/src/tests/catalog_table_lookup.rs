@@ -177,6 +177,8 @@ struct CreatedSource {
     snapshot: String,
     /// The read options and the time travel options.
     options: Vec<(String, String)>,
+    /// The table name that the source carries to execution.
+    catalog_table: Option<Vec<String>>,
 }
 
 /// The columns `k` and `v`, which all the tables that the tests write to have.
@@ -194,6 +196,9 @@ struct PlannedWrite {
     snapshot: Option<String>,
     /// The operation that the catalog table of the target is accessed for.
     operation: Option<LakehouseOperation>,
+    /// The table name that the write carries to execution, where the write commits
+    /// to the table of that name.
+    catalog_table: Option<Vec<String>>,
 }
 
 /// A data source that records the sources it creates and the writes it plans. It is
@@ -231,7 +236,8 @@ impl RecordingDataSource {
             .map_err(|e| plan_datafusion_err!("{e}"))?
             .push(PlannedWrite {
                 snapshot,
-                operation: lakehouse_table.map(|x| x.operation),
+                operation: lakehouse_table.as_ref().map(|x| x.operation),
+                catalog_table: lakehouse_table.map(|x| x.catalog_table().to_vec()),
             });
         LogicalPlanBuilder::empty(false).build()
     }
@@ -271,7 +277,11 @@ impl DataSource for RecordingDataSource {
         self.created
             .lock()
             .map_err(|e| plan_datafusion_err!("{e}"))?
-            .push(CreatedSource { snapshot, options });
+            .push(CreatedSource {
+                snapshot,
+                options,
+                catalog_table: info.lakehouse_table.map(|x| x.catalog_table().to_vec()),
+            });
         Ok(provider_as_source(Arc::new(EmptyTable::new(schema))))
     }
 
@@ -573,6 +583,14 @@ async fn test_table_spellings_share_one_catalog_load() -> TestResult {
             .join(", ")
     );
     fixture.resolve(&sql).await?.expect(1, 1, &sql);
+    // The source carries the full name of the table, whichever name comes first.
+    for sql in [
+        "SELECT * FROM t a JOIN sail.default.t b ON a.k = b.k",
+        "SELECT * FROM sail.default.t a JOIN t b ON a.k = b.k",
+    ] {
+        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        assert_eq!(sources[0].catalog_table, Some(full_name()), "{sql}");
+    }
     // Each statement loads the table again.
     let first = fixture.resolve(&sql).await?.expect(1, 1, &sql);
     let second = fixture.resolve(&sql).await?.expect(1, 1, &sql);
@@ -998,8 +1016,13 @@ async fn test_table_spellings_in_a_nested_database_share_one_catalog_load() -> T
     Ok(())
 }
 
+/// The full name of the table `t`.
+fn full_name() -> Vec<String> {
+    vec!["sail".to_string(), "default".to_string(), "t".to_string()]
+}
+
 /// Statements that write to the table `t` and may read it under other names.
-const WRITES: [(&str, usize); 14] = [
+const WRITES: [(&str, usize); 16] = [
     ("INSERT INTO t SELECT * FROM t", 1),
     ("INSERT INTO t SELECT * FROM default.t", 1),
     ("INSERT INTO default.t SELECT * FROM sail.default.t", 1),
@@ -1007,6 +1030,7 @@ const WRITES: [(&str, usize); 14] = [
         "INSERT INTO sail.default.t SELECT a.k, b.v FROM t a JOIN default.t b ON a.k = b.k",
         1,
     ),
+    ("INSERT INTO sail.default.t SELECT * FROM t", 1),
     ("INSERT OVERWRITE t SELECT * FROM default.t", 1),
     ("INSERT INTO t VALUES (1, 2)", 0),
     ("DELETE FROM t WHERE k = 1", 1),
@@ -1027,6 +1051,7 @@ const WRITES: [(&str, usize); 14] = [
     ),
     ("TRUNCATE TABLE t", 1),
     ("TRUNCATE TABLE default.t", 1),
+    ("TRUNCATE TABLE sail.default.t", 1),
 ];
 
 #[tokio::test]
@@ -1046,6 +1071,9 @@ async fn test_write_target_shares_the_catalog_load_of_the_statement() -> TestRes
             Some(LakehouseOperation::Write),
             "{sql}"
         );
+        // The write carries the full name of its target, however the statement
+        // writes the name of the table.
+        assert_eq!(writes[0].catalog_table, Some(full_name()), "{sql}");
     }
     // Each statement loads the table again.
     let sql = "INSERT INTO t SELECT * FROM default.t";
