@@ -53,6 +53,24 @@ impl Drop for LaneEnd {
     }
 }
 
+/// The task of a lane, or the failure of the task after the task has ended.
+///
+/// The result of a task can be taken from the task only once,
+/// while the lane can be asked for its failure any number of times.
+enum LaneTask {
+    Running(SpawnedTask<Result<LaneOutput>>),
+    /// The task has ended without the columns of the lane, and its error has
+    /// been returned. This is the message of the error.
+    Failed(String),
+}
+
+impl LaneTask {
+    /// The error for a failure that has been returned before.
+    fn failed(message: &str) -> ParquetError {
+        ParquetError::General(format!("the column encoder has failed: {message}"))
+    }
+}
+
 /// A group of top-level columns of one row group that is encoded by one task.
 ///
 /// The task receives the parts of the batches of the row group in order through
@@ -65,7 +83,7 @@ pub(super) struct Lane {
     columns: Vec<usize>,
     /// The queue of the task. It is closed when the row group has all its rows.
     queue: Option<mpsc::UnboundedSender<LaneInput>>,
-    task: SpawnedTask<Result<LaneOutput>>,
+    task: LaneTask,
     /// Whether the task has ended.
     ended: Arc<AtomicBool>,
     _stop: LaneStop,
@@ -96,7 +114,7 @@ impl Lane {
         Self {
             columns,
             queue: Some(queue),
-            task,
+            task: LaneTask::Running(task),
             ended,
             _stop: LaneStop(stopped),
         }
@@ -134,20 +152,30 @@ impl Lane {
 
     /// Waits for the task and returns the columns of the lane.
     pub async fn join(self) -> Result<LaneOutput> {
-        self.task
-            .await
-            .map_err(|e| ParquetError::External(Box::new(e)))?
+        match self.task {
+            LaneTask::Running(task) => task
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))?,
+            LaneTask::Failed(message) => Err(LaneTask::failed(&message)),
+        }
     }
 
     /// Returns the error of a task that has ended before its queue was closed.
     pub async fn failure(&mut self) -> ParquetError {
-        match (&mut self.task).await {
+        let task = match &mut self.task {
+            LaneTask::Running(task) => task,
+            LaneTask::Failed(message) => return LaneTask::failed(message),
+        };
+        let error = match task.await {
             Ok(Ok(_)) => ParquetError::General(
                 "the task of a column encoder has ended before its input".to_string(),
             ),
             Ok(Err(e)) => e,
             Err(e) => ParquetError::External(Box::new(e)),
-        }
+        };
+        // The task must not be asked for its result again.
+        self.task = LaneTask::Failed(error.to_string());
+        error
     }
 }
 

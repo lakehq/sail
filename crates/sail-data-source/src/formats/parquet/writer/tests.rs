@@ -3368,9 +3368,49 @@ impl MemoryPool for PanickingPool {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// Lets the task of the lane run until it has ended.
+/// The test must run on a single thread, so that the task runs only here.
+async fn run_lane_to_its_end(lane: &Lane) {
+    for _ in 0..1000 {
+        if lane.has_ended() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(lane.has_ended());
+}
+
+/// Asks a lane that has reported its failure for its failure again,
+/// in every way that the lane can be asked.
+async fn check_failure_is_reported_again(
+    mut lane: Lane,
+    input: LaneInput,
+    expected: &str,
+) -> Result<()> {
+    for _ in 0..2 {
+        let error = lane.failure().await;
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    let Err(error) = lane.send(input).await else {
+        return Err(internal_datafusion_err!("expected an error"));
+    };
+    assert!(error.to_string().contains(expected), "{error}");
+    let error = lane.failure().await;
+    assert!(error.to_string().contains(expected), "{error}");
+    lane.seal();
+    let Err(error) = lane.join().await else {
+        return Err(internal_datafusion_err!("expected an error"));
+    };
+    assert!(error.to_string().contains(expected), "{error}");
+    Ok(())
+}
+
+// The test runs on a single thread, so that the task of a lane
+// runs only while the test waits.
+#[tokio::test]
 async fn test_lane_reports_panic_of_its_task() -> Result<()> {
-    let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+    use datafusion::parquet::errors::ParquetError;
+
     // The task of the lane panics when it has encoded its first input,
     // which is when the input is no longer counted as waiting.
     let spawn = || {
@@ -3393,28 +3433,49 @@ async fn test_lane_reports_panic_of_its_task() -> Result<()> {
         })
     };
 
-    // The panic is reported when the lane is given more input.
+    // The panic is reported when the lane is given more input
+    // after its task has ended.
     let (mut lane, resources) = spawn();
     lane.send(input(Arc::clone(&resources), None).await?)
         .await?;
-    for _ in 0..500 {
-        if lane.has_ended() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    assert!(lane.has_ended());
+    assert!(!lane.has_ended());
+    run_lane_to_its_end(&lane).await;
     let Err(error) = lane.send(input(Arc::clone(&resources), None).await?).await else {
         return Err(internal_datafusion_err!("expected an error"));
     };
+    assert!(matches!(error, ParquetError::External(_)), "{error:?}");
     assert!(error.to_string().contains("panicked"), "{error}");
+    assert_eq!(resources.waiting_input_size(), 0);
+    let more = input(Arc::clone(&resources), None).await?;
+    check_failure_is_reported_again(lane, more, "panicked").await?;
     assert_eq!(resources.waiting_input_size(), 0);
 
     // The panic is reported when the lane is asked for the size of its encoded data.
     // The size is sent before the panic, so the lane is given a second input.
+    // The task ends after it has been given the second input.
     let (mut lane, resources) = spawn();
     lane.send(input(Arc::clone(&resources), None).await?)
         .await?;
+    let (encoded, report) = tokio::sync::oneshot::channel();
+    lane.send(input(Arc::clone(&resources), Some(encoded)).await?)
+        .await?;
+    assert!(!lane.has_ended());
+    assert!(report.await.is_err());
+    assert!(lane.has_ended());
+    let error = lane.failure().await;
+    assert!(matches!(error, ParquetError::External(_)), "{error:?}");
+    assert!(error.to_string().contains("panicked"), "{error}");
+    let more = input(Arc::clone(&resources), None).await?;
+    check_failure_is_reported_again(lane, more, "panicked").await?;
+    assert_eq!(resources.waiting_input_size(), 0);
+
+    // The same, when the task ends before it is given the second input.
+    // The second input is not accepted then, which is not the report of the panic
+    // for a caller that asks for the size of the encoded data.
+    let (mut lane, resources) = spawn();
+    lane.send(input(Arc::clone(&resources), None).await?)
+        .await?;
+    run_lane_to_its_end(&lane).await;
     let (encoded, report) = tokio::sync::oneshot::channel();
     let _ = lane
         .send(input(Arc::clone(&resources), Some(encoded)).await?)
@@ -3422,17 +3483,115 @@ async fn test_lane_reports_panic_of_its_task() -> Result<()> {
     assert!(report.await.is_err());
     let error = lane.failure().await;
     assert!(error.to_string().contains("panicked"), "{error}");
+    assert_eq!(resources.waiting_input_size(), 0);
 
-    // The panic is reported when the columns of the lane are requested.
-    let (mut lane, resources) = spawn();
-    lane.send(input(Arc::clone(&resources), None).await?)
-        .await?;
+    // The panic is reported when the columns of the lane are requested,
+    // before and after the task has ended.
+    for ended in [false, true] {
+        let (mut lane, resources) = spawn();
+        lane.send(input(Arc::clone(&resources), None).await?)
+            .await?;
+        lane.seal();
+        if ended {
+            run_lane_to_its_end(&lane).await;
+        }
+        assert_eq!(lane.has_ended(), ended);
+        let Err(error) = lane.join().await else {
+            return Err(internal_datafusion_err!("expected an error"));
+        };
+        assert!(matches!(error, ParquetError::External(_)), "{error:?}");
+        assert!(error.to_string().contains("panicked"), "{error}");
+        assert_eq!(resources.waiting_input_size(), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_lane_reports_error_of_its_task_to_every_request() -> Result<()> {
+    use datafusion::parquet::errors::ParquetError;
+
+    let schema = int_schema();
+    let column: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let resources = test_resources(fixed_degree(2), &pool);
+    // The lane has no writer for its column, so its task fails at the first input.
+    let spawn = || {
+        Lane::spawn(
+            vec![0],
+            schema.fields().to_vec(),
+            vec![],
+            resources.new_reservation(),
+            Time::new(),
+        )
+    };
+    let input = || async {
+        Ok::<_, DataFusionError>(LaneInput {
+            columns: vec![Arc::clone(&column)],
+            encoded: None,
+            admission: resources.admit(80).await?,
+        })
+    };
+    let expected = "missing column writer for leaf column";
+    let is_error_of_task =
+        |error: &ParquetError| matches!(error, ParquetError::General(x) if x == expected);
+
+    // The error is first reported when the lane is given more input.
+    let mut lane = spawn();
+    lane.send(input().await?).await?;
+    run_lane_to_its_end(&lane).await;
+    let Err(error) = lane.send(input().await?).await else {
+        return Err(internal_datafusion_err!("expected an error"));
+    };
+    assert!(is_error_of_task(&error), "{error:?}");
+    check_failure_is_reported_again(lane, input().await?, expected).await?;
+
+    // The error is first reported when the lane is asked for its failure,
+    // before and after its task has ended.
+    for ended in [false, true] {
+        let mut lane = spawn();
+        lane.send(input().await?).await?;
+        if ended {
+            run_lane_to_its_end(&lane).await;
+        }
+        assert_eq!(lane.has_ended(), ended);
+        let error = lane.failure().await;
+        assert!(is_error_of_task(&error), "{error:?}");
+        check_failure_is_reported_again(lane, input().await?, expected).await?;
+    }
+
+    // The error is first reported when the columns of the lane are requested.
+    let mut lane = spawn();
+    lane.send(input().await?).await?;
     lane.seal();
     let Err(error) = lane.join().await else {
         return Err(internal_datafusion_err!("expected an error"));
     };
-    assert!(error.to_string().contains("panicked"), "{error}");
+    assert!(is_error_of_task(&error), "{error:?}");
+
+    // A lane that is asked for its failure after its task has completed
+    // the columns reports that each time.
+    let mut lane = Lane::spawn(
+        vec![],
+        vec![],
+        vec![],
+        resources.new_reservation(),
+        Time::new(),
+    );
+    lane.seal();
+    run_lane_to_its_end(&lane).await;
+    let expected = "the task of a column encoder has ended before its input";
+    let Err(error) = lane.send(input().await?).await else {
+        return Err(internal_datafusion_err!("expected an error"));
+    };
+    assert!(
+        matches!(&error, ParquetError::General(x) if x == expected),
+        "{error:?}"
+    );
+    check_failure_is_reported_again(lane, input().await?, expected).await?;
+
     assert_eq!(Arc::strong_count(&column), 1);
+    assert_eq!(resources.waiting_input_size(), 0);
+    assert_eq!(pool.reserved(), 0);
     Ok(())
 }
 
