@@ -163,9 +163,9 @@ def test_parquet_partitioned_write_file_count(spark, tmp_path):
 def test_parquet_partitioned_write_with_more_keys_than_open_files(spark, tmp_path):
     rows, keys = 20_000, 500
     df = spark.range(0, rows, 1, 4).selectExpr("id", f"id % {keys} AS p")
-    for name, df in [("one_task", df.coalesce(1)), ("tasks", df)]:
+    for name, data in [("one_task", df.coalesce(1)), ("tasks", df)]:
         path = tmp_path / name
-        df.write.option("maxOpenFilesPerTask", 3).partitionBy("p").parquet(str(path))
+        data.write.option("maxOpenFilesPerTask", 3).partitionBy("p").parquet(str(path))
         assert len(check_partitioned_rows(spark, path, rows, keys)) == keys
 
     # The rows of each key are next to each other in the sorted input.
