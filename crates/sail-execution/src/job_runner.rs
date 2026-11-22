@@ -4,11 +4,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use sail_common::actor::ActorSystem;
+use sail_common_datafusion::extension::task_context_with_extension;
 use sail_common_datafusion::session::job::JobRunner;
+use sail_data_source::listing::commit::WriteCommitLedger;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
@@ -88,6 +90,13 @@ impl JobRunner for LocalJobRunner {
     }
 }
 
+/// Returns the task context of a job whose tasks can be attempted again.
+/// The job remembers the commits of its writes in the task context,
+/// which lives as long as the job.
+fn job_context(ctx: &SessionContext) -> Arc<TaskContext> {
+    task_context_with_extension(&ctx.task_ctx(), Arc::new(WriteCommitLedger::default()))
+}
+
 pub struct ClusterJobRunner {
     driver: DriverHandle,
     shuffle_backend: ShuffleBackendKind,
@@ -128,7 +137,7 @@ impl JobRunner for ClusterJobRunner {
         self.driver
             .send(DriverMessage::ExecuteJob {
                 plan,
-                context: ctx.task_ctx(),
+                context: job_context(ctx),
                 result: tx,
             })
             .await
@@ -140,5 +149,31 @@ impl JobRunner for ClusterJobRunner {
 
     async fn stop(&self) {
         let _ = self.driver.shutdown_and_wait().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionConfig;
+
+    use super::*;
+
+    #[test]
+    fn each_job_has_its_own_write_commit_ledger() {
+        let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(7));
+        let ledger = |context: &TaskContext| {
+            context
+                .session_config()
+                .get_extension::<WriteCommitLedger>()
+        };
+        assert!(ledger(&ctx.task_ctx()).is_none());
+        let (first, second) = (job_context(&ctx), job_context(&ctx));
+        // The task context of the job is the one of the session otherwise.
+        assert_eq!(first.session_config().batch_size(), 7);
+        assert_eq!(first.session_id(), ctx.session_id());
+        assert!(matches!(
+            (ledger(&first), ledger(&second)),
+            (Some(first), Some(second)) if !Arc::ptr_eq(&first, &second)
+        ));
     }
 }

@@ -1590,21 +1590,38 @@ mod tests {
         let object_store_url =
             datafusion::execution::object_store::ObjectStoreUrl::parse("memory://")?;
         runtime_env.register_object_store(object_store_url.as_ref(), store.clone());
+        let (display, _) =
+            write_range_in_session(SessionConfig::new(), runtime_env, sort, mode, partition_by)
+                .await?;
+        let mut files: Vec<String> = store
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await?;
+        files.sort();
+        Ok((display, files))
+    }
+
+    /// Plans and runs a Parquet write of a range with two partitions to
+    /// `memory:///table` in a session with the configuration and the runtime
+    /// environment. Returns the plan text and the session.
+    async fn write_range_in_session(
+        config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+        sort: Option<spec::SortDirection>,
+        mode: spec::SaveMode,
+        partition_by: &[&str],
+    ) -> datafusion_common::Result<(String, SessionContext)> {
         let registry = Arc::new(sail_common_datafusion::datasource::DataSourceRegistry::new());
         registry.register_data_source(Arc::new(
             sail_data_source::formats::parquet::ParquetDataSource::default(),
         ))?;
-        let config = SessionConfig::new()
-            .with_extension(registry)
-            .with_extension(Arc::new(
-                sail_common_datafusion::session::parquet::ParquetWriteConfig::new(
-                    0,
-                    std::num::NonZeroUsize::MIN,
-                ),
-            ))
-            .with_extension(Arc::new(
-                sail_data_source::listing::commit::WriteCommitLedger::default(),
-            ));
+        let config = config.with_extension(registry).with_extension(Arc::new(
+            sail_common_datafusion::session::parquet::ParquetWriteConfig::new(
+                0,
+                std::num::NonZeroUsize::MIN,
+            ),
+        ));
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime_env)
@@ -1659,13 +1676,7 @@ mod tests {
                 .map_err(|error| internal_datafusion_err!("{error}"))?;
         let display = displayable(physical.as_ref()).indent(true).to_string();
         collect(physical, context.task_ctx()).await?;
-        let mut files: Vec<String> = store
-            .list(None)
-            .map_ok(|meta| meta.location.to_string())
-            .try_collect()
-            .await?;
-        files.sort();
-        Ok((display, files))
+        Ok((display, context))
     }
 
     #[tokio::test]

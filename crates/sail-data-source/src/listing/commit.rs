@@ -25,9 +25,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use sail_common_datafusion::error::{CommitRequiresReplanningError, CommitStateUnknownError};
-use sail_common_datafusion::extension::{
-    SessionExtension, SessionExtensionAccessor, task_context_with_extension,
-};
+use sail_common_datafusion::extension::task_context_with_extension;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -330,7 +328,7 @@ async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<
     result
 }
 
-/// How far the commit of a write has come in a session.
+/// How far the commit of a write has come in a job.
 #[derive(Debug, Clone)]
 enum CommitState {
     /// An attempt of the commit has started to publish the files. It is still
@@ -344,7 +342,7 @@ enum CommitState {
     Undone { staged: u64, error: String },
 }
 
-/// The commits of the writes of a session.
+/// The commits of the writes of a job.
 ///
 /// The task of a commit can be attempted again after an earlier attempt has
 /// published files, for example when the attempt was canceled while it was
@@ -353,18 +351,16 @@ enum CommitState {
 /// of a write can divide the rows among the files in different ways. A second
 /// attempt must therefore not publish files, since it would add rows to
 /// the table or, for a write that overwrites, find the files of the first
-/// attempt as the old content. All attempts of a commit run in the process
-/// of the session that has planned the write, so the session remembers
-/// the commits that have started to publish.
+/// attempt as the old content.
+///
+/// All attempts of a commit run in the process that schedules the tasks of
+/// the job, with the task context of the job. The job runner that attempts
+/// tasks again gives each job a ledger in that task context, so the ledger
+/// lives as long as the job. A plan that is executed without such a job
+/// runner is attempted once, and its commit has a ledger of its own.
 #[derive(Debug, Default)]
 pub struct WriteCommitLedger {
     commits: Mutex<HashMap<Uuid, CommitState>>,
-}
-
-impl SessionExtension for WriteCommitLedger {
-    fn name() -> &'static str {
-        "WriteCommitLedger"
-    }
 }
 
 /// What an attempt of a commit does with its files.
@@ -376,6 +372,15 @@ enum CommitStart {
 }
 
 impl WriteCommitLedger {
+    /// Returns the ledger of the job that the task context belongs to,
+    /// or a new ledger if the task context is not the one of a job.
+    fn of(context: &TaskContext) -> Arc<Self> {
+        context
+            .session_config()
+            .get_extension::<Self>()
+            .unwrap_or_default()
+    }
+
     fn commits(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, CommitState>> {
         self.commits.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -588,7 +593,7 @@ impl WriteCommit {
         }
         // The files are published by a separate task, which is not canceled
         // when the commit is, so that the table directory is not left with
-        // a part of the write. The state of the commit in the session stays
+        // a part of the write. The state of the commit in the job stays
         // unknown if the task does not end.
         let ledger = Arc::clone(&self.ledger);
         let write_id = self.write_id;
@@ -865,8 +870,8 @@ fn is_commit_state_unknown(error: &DataFusionError) -> bool {
 /// client, and it is committed nevertheless when the process keeps running.
 /// If the process stops then, the directory has a part of the files.
 ///
-/// The session must have the [`WriteCommitLedger`], which keeps a second
-/// attempt of the commit from publishing the files of the write again.
+/// The [`WriteCommitLedger`] of the job keeps a second attempt of the commit
+/// from publishing the files of the write again.
 #[derive(Debug, Clone)]
 pub struct FileWriteCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -1030,7 +1035,7 @@ impl ExecutionPlan for FileWriteCommitExec {
             );
         }
         let commit = WriteCommit {
-            ledger: context.extension::<WriteCommitLedger>()?,
+            ledger: WriteCommitLedger::of(&context),
             publisher: Publisher::try_new(&context, &self.object_store_url)?,
             table_path: self.table_path.clone(),
             write_id: self.write_id,
@@ -1229,6 +1234,21 @@ mod tests {
 
     fn is_state_unknown(error: &DataFusionError) -> bool {
         is_commit_state_unknown(error)
+    }
+
+    #[test]
+    fn test_ledger_of_task_context() {
+        use datafusion::prelude::SessionConfig;
+
+        // The commits of a job are remembered in the task context of the job.
+        let job = Arc::new(WriteCommitLedger::default());
+        let config = SessionConfig::new().with_extension(Arc::clone(&job));
+        let context = TaskContext::default().with_session_config(config);
+        assert!(Arc::ptr_eq(&WriteCommitLedger::of(&context), &job));
+        // A plan that is executed without a job has one attempt.
+        let context = TaskContext::default();
+        let ledger = WriteCommitLedger::of(&context);
+        assert!(!Arc::ptr_eq(&ledger, &WriteCommitLedger::of(&context)));
     }
 
     #[test]

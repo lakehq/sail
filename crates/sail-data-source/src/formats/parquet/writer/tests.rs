@@ -3001,7 +3001,7 @@ fn commit_exec(writer: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>
     )))
 }
 
-/// The configuration of a session that commits writes.
+/// The configuration of a job that remembers the commits of its writes.
 fn commit_config() -> SessionConfig {
     SessionConfig::new().with_extension(Arc::new(WriteCommitLedger::default()))
 }
