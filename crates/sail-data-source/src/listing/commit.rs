@@ -16,10 +16,11 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
 };
 use datafusion_common::cast::{as_string_array, as_uint64_array};
-use datafusion_common::{Result, exec_err, internal_datafusion_err, internal_err};
+use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+use sail_common_datafusion::error::InputIncompleteError;
 use uuid::Uuid;
 
 use crate::listing::part_file::parse_part_file_name;
@@ -130,15 +131,22 @@ impl Manifests {
     /// Checks that the manifests of all writer partitions were received.
     /// The end of the input does not show this, since the output of a failed
     /// or canceled writer task can end in the same way as a complete output.
+    ///
+    /// The error says that the input is incomplete, so that the error of a writer
+    /// task that has failed is reported for the write instead of this error.
     fn validate(&self) -> Result<()> {
+        let incomplete =
+            |message: String| DataFusionError::External(Box::new(InputIncompleteError(message)));
         let Some(partitions) = self.partitions else {
-            return exec_err!("the write is incomplete: no writer task has reported its files");
+            return Err(incomplete(
+                "the write is incomplete: no writer task has reported its files".to_string(),
+            ));
         };
         let received = self.attempts.len() as u64;
         if received != partitions || self.attempts.keys().any(|x| *x >= partitions) {
-            return exec_err!(
+            return Err(incomplete(format!(
                 "the write is incomplete: {received} of {partitions} writer tasks have reported their files"
-            );
+            )));
         }
         Ok(())
     }
@@ -728,6 +736,10 @@ mod tests {
             matches!(&result, Err(e) if e.to_string().contains("2 of 3 writer tasks")),
             "{result:?}"
         );
+        // The error says that the input is incomplete, so that the error
+        // of a failed writer task is reported for the write instead.
+        let is_incomplete = |result: &Result<u64>| matches!(result, Err(DataFusionError::External(e)) if e.is::<InputIncompleteError>());
+        assert!(is_incomplete(&result), "{result:?}");
         // The files that the commit has received are deleted.
         assert_eq!(write.requests(), vec![format!("DELETE {}", a.location)]);
         assert_eq!(write.files().await?, Vec::<String>::new());
@@ -739,6 +751,7 @@ mod tests {
             matches!(&result, Err(e) if e.to_string().contains("no writer task has reported")),
             "{result:?}"
         );
+        assert!(is_incomplete(&result), "{result:?}");
         assert_eq!(write.files().await?, Vec::<String>::new());
 
         // a partition index outside the range
@@ -766,6 +779,7 @@ mod tests {
             matches!(&result, Err(e) if e.to_string().contains("disagree on the number of partitions")),
             "{result:?}"
         );
+        assert!(!is_incomplete(&result), "{result:?}");
         assert_eq!(write.files().await?, Vec::<String>::new());
         Ok(())
     }

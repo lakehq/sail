@@ -60,6 +60,14 @@ impl fmt::Display for CommitStateUnknownError {
 #[error("commit requires replanning: {0}")]
 pub struct CommitRequiresReplanningError(pub String);
 
+/// The input of an operator has ended before the operator has received all
+/// the data that it requires. The end of the output of a task does not show
+/// whether the task has succeeded, so this is usually the consequence
+/// of the failure of a task that produces the input.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct InputIncompleteError(pub String);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonErrorCause {
     pub summary: String,
@@ -109,6 +117,7 @@ pub enum CommonErrorCause {
     DeltaTable(String),
     CommitStateUnknown(String),
     CommitRequiresReplanning(String),
+    InputIncomplete(String),
 }
 
 impl fmt::Display for CommonErrorCause {
@@ -140,7 +149,8 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x)
             | CommonErrorCause::CommitStateUnknown(x)
-            | CommonErrorCause::CommitRequiresReplanning(x) => write!(f, "{x}"),
+            | CommonErrorCause::CommitRequiresReplanning(x)
+            | CommonErrorCause::InputIncomplete(x) => write!(f, "{x}"),
             CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
                 write!(f, "{summary}")
             }
@@ -248,6 +258,10 @@ impl CommonErrorCause {
             return Self::CommitRequiresReplanning(e.to_string());
         }
 
+        if let Some(e) = error.downcast_ref::<InputIncompleteError>() {
+            return Self::InputIncomplete(e.to_string());
+        }
+
         if let Some(e) = error.source() {
             Self::build::<Py>(e, seen)
         } else {
@@ -320,6 +334,34 @@ mod tests {
             ))
             .is_retryable()
         );
+    }
+
+    #[test]
+    fn input_incomplete_cause_survives_wrappers_and_serialization() {
+        fn incomplete() -> DataFusionError {
+            DataFusionError::External(Box::new(InputIncompleteError(
+                "the write is incomplete".into(),
+            )))
+        }
+        for error in [
+            incomplete(),
+            DataFusionError::Context("commit failed".into(), Box::new(incomplete())),
+            DataFusionError::Shared(std::sync::Arc::new(incomplete())),
+        ] {
+            let cause = CommonErrorCause::new::<NoPythonError>(&error);
+            assert!(cause.is_retryable());
+            assert_eq!(cause.to_string(), "the write is incomplete");
+            let json = serde_json::to_value(&cause).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({ "inputIncomplete": "the write is incomplete" })
+            );
+            let remote = DataFusionError::External(Box::new(RemoteError {
+                cause: serde_json::from_value(json).unwrap(),
+            }));
+            assert!(matches!(CommonErrorCause::new::<NoPythonError>(&remote),
+                CommonErrorCause::InputIncomplete(message) if message == "the write is incomplete"));
+        }
     }
 
     #[test]

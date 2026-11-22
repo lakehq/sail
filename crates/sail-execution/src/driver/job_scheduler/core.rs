@@ -160,7 +160,10 @@ impl JobScheduler {
     /// The method first determines the task regions and then decides
     /// the actions to take.
     ///   1. For each task region, if any task attempt fails, all existing task attempts
-    ///      in the region are canceled if not already.
+    ///      in the region are canceled if not already. A task that has failed because
+    ///      its input was incomplete is not acted on while a task that produces
+    ///      its input is active, since the failure of that task is then the failure
+    ///      to act on and to report.
     ///   2. If any task in the final stages is running or has succeeded, all its channels are
     ///      added as job output streams if not already.
     ///   3. For each stage, if all the stages that consume it have succeeded, remove
@@ -264,6 +267,7 @@ impl JobScheduler {
                 if let Some(attempt) = attempts.last()
                     && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
                     && attempts.len() >= task_max_attempts
+                    && !Self::waits_for_input_tasks(job, t.stage, t.partition)
                 {
                     return true;
                 }
@@ -287,6 +291,37 @@ impl JobScheduler {
         }
     }
 
+    /// Whether the failure of the task is not acted on yet.
+    ///
+    /// This is the case when the latest attempt of the task has failed because
+    /// its input was incomplete, and a task that produces its input has not
+    /// reported how it has ended. The input of a task ends in the same way
+    /// whether the task that produces it has succeeded or not, so the task
+    /// that reads the input can report its failure first.
+    fn waits_for_input_tasks(job: &JobDescriptor, stage: usize, partition: usize) -> bool {
+        let incomplete = job
+            .stages
+            .get(stage)
+            .and_then(|stage| stage.tasks.get(partition))
+            .and_then(|task| task.attempts.last())
+            .is_some_and(|attempt| {
+                matches!(attempt.state, TaskState::Failed)
+                    && matches!(attempt.cause, Some(CommonErrorCause::InputIncomplete(_)))
+            });
+        incomplete
+            && job.graph.stages().get(stage).is_some_and(|stage| {
+                stage.inputs.iter().any(|input| {
+                    job.stages.get(input.stage).is_some_and(|stage| {
+                        stage.tasks.iter().any(|task| {
+                            task.attempts
+                                .last()
+                                .is_some_and(|attempt| !attempt.state.is_terminal())
+                        })
+                    })
+                })
+            })
+    }
+
     fn cascade_cancel_task_attempts(
         job_id: JobId,
         job: &mut JobDescriptor,
@@ -303,9 +338,10 @@ impl JobScheduler {
                         .cause
                         .as_ref()
                         .is_some_and(|cause| !cause.is_retryable())
-                }) || attempts
+                }) || (attempts
                     .last()
                     .is_some_and(|attempt| matches!(attempt.state, TaskState::Failed))
+                    && !Self::waits_for_input_tasks(job, t.stage, t.partition))
             });
 
             if failed {
@@ -581,13 +617,19 @@ impl JobScheduler {
 
     /// Returns the cause of the task failures of the job, if any task attempt has
     /// failed with a known cause.
+    ///
+    /// The cause of a task that has failed because its input was incomplete
+    /// is returned only when there is no other cause, since the failure is
+    /// usually the consequence of the failure of another task.
     fn find_job_failure_cause(job: &JobDescriptor) -> Option<CommonErrorCause> {
         // a map from (stage, partition) to a list of causes
         let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
         let mut terminal_cause = None;
+        // the latest attempt that has failed with incomplete input, and its cause
+        let mut incomplete_cause: Option<(usize, &CommonErrorCause)> = None;
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
-                for attempt in task.attempts.iter() {
+                for (a, attempt) in task.attempts.iter().enumerate() {
                     if let Some(cause) = &attempt.cause {
                         if matches!(cause, CommonErrorCause::CommitStateUnknown(_)) {
                             return Some(cause.clone());
@@ -599,7 +641,13 @@ impl JobScheduler {
                     if matches!(attempt.state, TaskState::Failed)
                         && let Some(cause) = &attempt.cause
                     {
-                        causes.entry((s, t)).or_default().push(cause);
+                        if matches!(cause, CommonErrorCause::InputIncomplete(_)) {
+                            if incomplete_cause.is_none_or(|(latest, _)| a >= latest) {
+                                incomplete_cause = Some((a, cause));
+                            }
+                        } else {
+                            causes.entry((s, t)).or_default().push(cause);
+                        }
                     }
                 }
             }
@@ -618,7 +666,7 @@ impl JobScheduler {
         ) {
             Some(cause.clone())
         } else {
-            None
+            incomplete_cause.map(|(_, cause)| cause.clone())
         }
     }
 
@@ -1461,6 +1509,259 @@ pub(super) mod tests {
                     Some(CommonErrorCause::Execution(message)) if message == "forced task failure"
                 )
         }));
+        Ok(())
+    }
+
+    /// How the tasks of an attempt of the region end in a test.
+    #[derive(Debug, Clone, Copy)]
+    enum IncompleteInputCase {
+        /// A task fails because its input is incomplete, and then a task
+        /// that produces the input reports its failure.
+        ConsumerFirst,
+        /// A task that produces the input fails, and then a task that reads
+        /// the input reports that its input was incomplete.
+        ProducerFirst,
+        /// All tasks that produce the input succeed, and a task that reads
+        /// the input fails because its input is incomplete.
+        ProducersSucceed,
+    }
+
+    /// Runs a job with two stages in one region until the job fails, where the tasks
+    /// end in the given way in each attempt. Returns the cause of the failure of the job.
+    async fn fail_job_with_incomplete_input(
+        name: &str,
+        task_max_attempts: usize,
+        case: IncompleteInputCase,
+    ) -> Result<sail_common_datafusion::error::CommonErrorCause, Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobAction, JobScheduler, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::DriverId;
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.task_max_attempts = task_max_attempts;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options =
+            DriverOptions::try_new(&config, runtime.clone(), name.into(), DriverId::from(1), 0)?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 0 is read by stage 1 through a shuffle, so all tasks are in one region.
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = |stage, partition, attempt| TaskKey {
+            job_id,
+            stage,
+            partition,
+            attempt,
+        };
+        let incomplete = || Some(CommonErrorCause::InputIncomplete("incomplete input".into()));
+        let failure = |attempt: usize| {
+            Some(CommonErrorCause::Io(format!(
+                "failure of attempt {attempt}"
+            )))
+        };
+        let failed = |actions: &[JobAction]| {
+            actions.iter().find_map(|action| match action {
+                JobAction::FailJobOutput { cause, .. } => Some(cause.clone()),
+                _ => None,
+            })
+        };
+        let canceled = |actions: &[JobAction]| {
+            actions
+                .iter()
+                .filter(|action| matches!(action, JobAction::CancelTask { .. }))
+                .count()
+        };
+        let scheduled = |actions: &[JobAction]| {
+            actions
+                .iter()
+                .any(|action| matches!(action, JobAction::ScheduleTaskRegion { .. }))
+        };
+
+        for attempt in 0..task_max_attempts {
+            let last = attempt + 1 == task_max_attempts;
+            for stage in 0..2 {
+                for partition in 0..2 {
+                    scheduler.update_task(
+                        &key(stage, partition, attempt),
+                        TaskState::Running,
+                        None,
+                        None,
+                    );
+                }
+            }
+            scheduler.refresh_job(job_id);
+            let actions = match case {
+                IncompleteInputCase::ConsumerFirst => {
+                    // The task of stage 0 that fails is not the same in each attempt, so
+                    // the task of stage 1 fails more often than any task of stage 0.
+                    scheduler.update_task(
+                        &key(1, 0, attempt),
+                        TaskState::Failed,
+                        None,
+                        incomplete(),
+                    );
+                    // The failure is not acted on while the tasks of stage 0 are running.
+                    let actions = scheduler.refresh_job(job_id);
+                    assert_eq!(canceled(&actions), 0, "{case:?} {actions:?}");
+                    assert!(!scheduled(&actions), "{case:?} {actions:?}");
+                    assert!(failed(&actions).is_none(), "{case:?} {actions:?}");
+                    assert!(matches!(
+                        scheduler.get_task_state(&key(0, attempt % 2, attempt)),
+                        Some(TaskState::Running)
+                    ));
+                    scheduler.update_task(
+                        &key(0, 1 - attempt % 2, attempt),
+                        TaskState::Failed,
+                        None,
+                        failure(attempt),
+                    );
+                    let actions = scheduler.refresh_job(job_id);
+                    // The other task of each stage is canceled.
+                    assert_eq!(canceled(&actions), 2, "{case:?} {actions:?}");
+                    actions
+                }
+                IncompleteInputCase::ProducerFirst => {
+                    scheduler.update_task(
+                        &key(0, 1, attempt),
+                        TaskState::Failed,
+                        None,
+                        failure(attempt),
+                    );
+                    let actions = scheduler.refresh_job(job_id);
+                    assert_eq!(canceled(&actions), 3, "{case:?} {actions:?}");
+                    // The report of the task that read the input arrives after the task
+                    // was canceled.
+                    scheduler.update_task(
+                        &key(1, 0, attempt),
+                        TaskState::Failed,
+                        None,
+                        incomplete(),
+                    );
+                    assert!(matches!(
+                        scheduler.get_task_state(&key(1, 0, attempt)),
+                        Some(TaskState::Canceled)
+                    ));
+                    let late = scheduler.refresh_job(job_id);
+                    assert_eq!(canceled(&late), 0, "{case:?} {late:?}");
+                    assert!(failed(&late).is_none(), "{case:?} {late:?}");
+                    actions
+                }
+                IncompleteInputCase::ProducersSucceed => {
+                    for partition in 0..2 {
+                        scheduler.update_task(
+                            &key(0, partition, attempt),
+                            TaskState::Succeeded,
+                            None,
+                            None,
+                        );
+                    }
+                    scheduler.refresh_job(job_id);
+                    scheduler.update_task(
+                        &key(1, 0, attempt),
+                        TaskState::Failed,
+                        None,
+                        incomplete(),
+                    );
+                    // The failure is acted on, since no task of stage 0 is active.
+                    let actions = scheduler.refresh_job(job_id);
+                    assert_eq!(canceled(&actions), 1, "{case:?} {actions:?}");
+                    actions
+                }
+            };
+            match failed(&actions) {
+                Some(cause) => {
+                    assert!(last, "{case:?} attempt {attempt}");
+                    return Ok(cause);
+                }
+                None => {
+                    assert!(!last, "{case:?} attempt {attempt}");
+                    assert!(scheduled(&actions), "{case:?} {actions:?}");
+                }
+            }
+        }
+        Err("the job has not failed".into())
+    }
+
+    #[tokio::test]
+    async fn incomplete_input_failure_waits_for_failure_of_input_task()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        // The cause of the job failure is the failure of the task that produces
+        // the input, whichever task reports its failure first, and also when
+        // a task has a single attempt.
+        for (task_max_attempts, case) in [
+            (3, IncompleteInputCase::ConsumerFirst),
+            (3, IncompleteInputCase::ProducerFirst),
+            (1, IncompleteInputCase::ConsumerFirst),
+            (1, IncompleteInputCase::ProducerFirst),
+        ] {
+            let cause =
+                fail_job_with_incomplete_input("incomplete-input", task_max_attempts, case).await?;
+            let expected = format!("failure of attempt {}", task_max_attempts - 1);
+            assert!(
+                matches!(&cause, CommonErrorCause::Io(message) if message == &expected),
+                "{case:?} {cause:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn incomplete_input_failure_is_reported_when_input_tasks_succeeded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        for task_max_attempts in [1, 3] {
+            let cause = fail_job_with_incomplete_input(
+                "incomplete-input-success",
+                task_max_attempts,
+                IncompleteInputCase::ProducersSucceed,
+            )
+            .await?;
+            assert!(
+                matches!(&cause, CommonErrorCause::InputIncomplete(message) if message == "incomplete input"),
+                "{cause:?}"
+            );
+        }
         Ok(())
     }
 
