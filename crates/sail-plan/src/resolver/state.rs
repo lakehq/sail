@@ -28,14 +28,6 @@ pub(super) struct TableSourceKey {
     pub temporal_options: Vec<(String, String)>,
 }
 
-/// Identifies a catalog table lookup by the table reference as written and the
-/// format required by the read, if any.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub(super) struct CatalogTableLookupKey {
-    pub reference: Vec<String>,
-    pub required_format: Option<String>,
-}
-
 struct SharedTableSource(Arc<dyn TableSource>);
 
 impl std::fmt::Debug for SharedTableSource {
@@ -163,8 +155,10 @@ pub(super) struct PlanResolverState {
     /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
     /// The successful catalog table lookups so far, shared by repeated references to
-    /// the same table within the query.
-    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
+    /// the same table within the query. The key is the fully qualified name of the table
+    /// (the catalog, the database, and the table), which is the same for all the ways
+    /// to write the name of the table.
+    catalog_table_lookups: HashMap<Vec<String>, CatalogTableLookup>,
 }
 
 /// A catalog table or view, with the lakehouse resolution of a catalog table.
@@ -514,19 +508,12 @@ impl PlanResolverState {
         self.table_sources.insert(key, SharedTableSource(source));
     }
 
-    pub fn get_catalog_table_lookup(
-        &self,
-        key: &CatalogTableLookupKey,
-    ) -> Option<CatalogTableLookup> {
-        self.catalog_table_lookups.get(key).cloned()
+    pub fn get_catalog_table_lookup(&self, table: &[String]) -> Option<CatalogTableLookup> {
+        self.catalog_table_lookups.get(table).cloned()
     }
 
-    pub fn insert_catalog_table_lookup(
-        &mut self,
-        key: CatalogTableLookupKey,
-        lookup: CatalogTableLookup,
-    ) {
-        self.catalog_table_lookups.insert(key, lookup);
+    pub fn insert_catalog_table_lookup(&mut self, table: Vec<String>, lookup: CatalogTableLookup) {
+        self.catalog_table_lookups.insert(table, lookup);
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.

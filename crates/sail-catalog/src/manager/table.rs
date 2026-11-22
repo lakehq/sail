@@ -355,9 +355,10 @@ impl CatalogManager {
             .await
     }
 
-    /// Like [`Self::get_table_or_view`], but a catalog table also comes with its lakehouse
+    /// Looks up a table or view in the catalogs only, without the temporary views that
+    /// [`Self::find_temporary_view`] returns. A catalog table also comes with its lakehouse
     /// resolution, as returned by [`Self::get_lakehouse_table`].
-    pub async fn get_lakehouse_table_or_view<T: AsRef<str>>(
+    pub async fn get_catalog_lakehouse_table_or_view<T: AsRef<str>>(
         &self,
         reference: &[T],
         request: ResolveLakehouseTableRequest,
@@ -366,21 +367,21 @@ impl CatalogManager {
             let (status, resolved) = self.get_lakehouse_table(reference, request).await?;
             Ok((status, Some(resolved)))
         };
-        self.get_table_or_view_with(reference, table, |status| (status, None))
+        self.get_catalog_table_or_view_with(reference, table, |status| (status, None))
             .await
     }
 
-    /// Looks up temporary views, then the catalog table with `table`, then catalog views.
-    /// Views are converted with `view`.
-    async fn get_table_or_view_with<T: AsRef<str>, R>(
+    /// Returns the temporary view or global temporary view that `reference` names, if any.
+    /// Such a view takes precedence over the catalog table or view that the same reference
+    /// would otherwise name. A reference into the global temporary view database names
+    /// nothing in the catalogs, so a missing view there is an error.
+    pub async fn find_temporary_view<T: AsRef<str>>(
         &self,
         reference: &[T],
-        table: impl Future<Output = CatalogResult<R>>,
-        view: impl Fn(TableStatus) -> R,
-    ) -> CatalogResult<R> {
+    ) -> CatalogResult<Option<TableStatus>> {
         if let [name] = reference {
             match self.get_temporary_view(name.as_ref()).await {
-                Ok(x) => return Ok(view(x)),
+                Ok(x) => return Ok(Some(x)),
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
@@ -391,8 +392,34 @@ impl CatalogManager {
             return self
                 .get_global_temporary_view(name.as_ref())
                 .await
-                .map(view);
+                .map(Some);
         }
+        Ok(None)
+    }
+
+    /// Looks up temporary views, then the catalog table with `table`, then catalog views.
+    /// Views are converted with `view`.
+    async fn get_table_or_view_with<T: AsRef<str>, R>(
+        &self,
+        reference: &[T],
+        table: impl Future<Output = CatalogResult<R>>,
+        view: impl Fn(TableStatus) -> R,
+    ) -> CatalogResult<R> {
+        if let Some(x) = self.find_temporary_view(reference).await? {
+            return Ok(view(x));
+        }
+        self.get_catalog_table_or_view_with(reference, table, view)
+            .await
+    }
+
+    /// Looks up the catalog table with `table`, then catalog views.
+    /// Views are converted with `view`.
+    async fn get_catalog_table_or_view_with<T: AsRef<str>, R>(
+        &self,
+        reference: &[T],
+        table: impl Future<Output = CatalogResult<R>>,
+        view: impl Fn(TableStatus) -> R,
+    ) -> CatalogResult<R> {
         match table.await {
             Ok(x) => return Ok(x),
             Err(CatalogError::NotFound(_, _)) => {}

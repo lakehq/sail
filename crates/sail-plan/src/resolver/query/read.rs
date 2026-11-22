@@ -15,9 +15,7 @@ use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{
-    LakehouseFormat, LakehouseOperation, TableColumnStatus, TableKind,
-};
+use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::{
@@ -38,9 +36,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{
-    CatalogTableLookup, CatalogTableLookupKey, PlanResolverState, TableSourceKey,
-};
+use crate::resolver::state::{CatalogTableLookup, PlanResolverState, TableSourceKey};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -129,37 +125,80 @@ impl PlanResolver<'_> {
         .await
     }
 
-    /// Looks up a catalog table or view, reusing earlier successful lookups in the query.
-    /// Data-source identifier reads (with a required format) do not look up views.
+    /// The request of every catalog table lookup in a query. Reads with different options,
+    /// time travel, or required formats share a lookup, so the request has none of these.
+    fn catalog_table_lookup_request(reference: &[String]) -> ResolveLakehouseTableRequest {
+        ResolveLakehouseTableRequest {
+            catalog_table: reference.to_vec(),
+            operation: LakehouseOperation::Read,
+            requested_format: None,
+            options: vec![],
+        }
+    }
+
+    /// Looks up a temporary view, a catalog table, or a catalog view, reusing earlier
+    /// successful lookups in the query. The catalog is asked once for each table, however
+    /// the name of the table is written, so that all the references to the table in the
+    /// query read the same table metadata.
+    async fn lookup_catalog_table_or_view(
+        manager: &CatalogManager,
+        reference: &[String],
+        state: &mut PlanResolverState,
+    ) -> Result<CatalogTableLookup, CatalogError> {
+        // A temporary view can have the name of a catalog table, so it is looked up by
+        // the name as written, before that name is qualified.
+        if let Some(status) = manager.find_temporary_view(reference).await? {
+            return Ok((status, None));
+        }
+        let table = manager.resolve_fully_qualified_object_name(reference)?;
+        if let Some(lookup) = state.get_catalog_table_lookup(&table) {
+            return Ok(lookup);
+        }
+        // The table is loaded by the qualified name that the lookup is stored under, so
+        // that the stored lookup is always the one of that table.
+        let lookup = manager
+            .get_catalog_lakehouse_table_or_view(
+                &table,
+                Self::catalog_table_lookup_request(reference),
+            )
+            .await?;
+        state.insert_catalog_table_lookup(table, lookup.clone());
+        Ok(lookup)
+    }
+
+    /// Looks up a catalog table like [`Self::lookup_catalog_table_or_view`], but without
+    /// temporary views and catalog views. Data-source identifier reads use this lookup.
     async fn lookup_catalog_table(
+        manager: &CatalogManager,
+        reference: &[String],
+        state: &mut PlanResolverState,
+    ) -> Result<CatalogTableLookup, CatalogError> {
+        let table = manager.resolve_fully_qualified_object_name(reference)?;
+        // An earlier lookup that found a view is not reused: the catalog is asked for
+        // the table, and reports that there is none.
+        if let Some(lookup @ (_, Some(_))) = state.get_catalog_table_lookup(&table) {
+            return Ok(lookup);
+        }
+        let (status, resolved) = manager
+            .get_lakehouse_table(&table, Self::catalog_table_lookup_request(reference))
+            .await?;
+        let lookup = (status, Some(resolved));
+        state.insert_catalog_table_lookup(table, lookup.clone());
+        Ok(lookup)
+    }
+
+    /// Looks up what a read refers to. A read with a required format reads tables only.
+    async fn lookup_catalog_read(
         manager: &CatalogManager,
         reference: &[String],
         required_format: Option<&str>,
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
-        let key = CatalogTableLookupKey {
-            reference: reference.to_vec(),
-            required_format: required_format.map(ToString::to_string),
-        };
-        if let Some(lookup) = state.get_catalog_table_lookup(&key) {
-            return Ok(lookup);
-        }
-        let request = ResolveLakehouseTableRequest {
-            catalog_table: reference.to_vec(),
-            operation: LakehouseOperation::Read,
-            requested_format: required_format.map(LakehouseFormat::from_format_name),
-            options: vec![],
-        };
-        let lookup = if required_format.is_some() {
-            let (status, resolved) = manager.get_lakehouse_table(reference, request).await?;
-            (status, Some(resolved))
+        if required_format.is_some() {
+            Self::lookup_catalog_table(manager, reference, state).await
         } else {
-            manager
-                .get_lakehouse_table_or_view(reference, request)
-                .await?
-        };
-        state.insert_catalog_table_lookup(key, lookup.clone());
-        Ok(lookup)
+            Self::lookup_catalog_table_or_view(manager, reference, state).await
+        }
     }
 
     async fn resolve_query_read_catalog_table(
@@ -178,7 +217,7 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let lookup = Self::lookup_catalog_table(&manager, &reference, required_format, state).await;
+        let lookup = Self::lookup_catalog_read(&manager, &reference, required_format, state).await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
@@ -190,7 +229,7 @@ impl PlanResolver<'_> {
                     return Err(error.into());
                 }
                 let base_lookup =
-                    Self::lookup_catalog_table(&manager, base_reference, required_format, state)
+                    Self::lookup_catalog_read(&manager, base_reference, required_format, state)
                         .await;
                 let (base_status, base_resolved) = match base_lookup {
                     Ok(lookup) => lookup,

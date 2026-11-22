@@ -13,6 +13,7 @@ mod shared_cte;
 
 #[cfg(test)]
 mod tests {
+    mod catalog_table_lookup;
     mod clone;
 
     use std::collections::HashMap;
@@ -497,8 +498,8 @@ mod tests {
         let lookups = catalog.lookups.load(Ordering::SeqCst);
         resolver.resolve_named_plan(plan).await?;
         let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
-        // Each spelling looks the table up, and the lookups return different orders.
-        assert_eq!(lookups, 2);
+        // Both names are the same table, which is looked up once.
+        assert_eq!(lookups, 1);
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
         Ok(())
     }
