@@ -40,6 +40,7 @@ use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
@@ -376,6 +377,7 @@ fn is_plain_exchange(plan: &dyn ExecutionPlan) -> bool {
             .downcast_ref::<RepartitionExec>()
             .is_some_and(|repartition| repartition_ordering_to_restore(repartition).is_none())
         || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<KeyDistributionExec>()
         || plan.is::<CoalesceExec>()
         || plan
             .downcast_ref::<SortPreservingMergeExec>()
@@ -579,6 +581,7 @@ fn plan_job_graph_stages(
         ]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<KeyDistributionExec>()
         || plan.is::<CoalescePartitionsExec>()
         || plan.is::<SortPreservingMergeExec>()
         || plan.is::<CoalesceExec>()
@@ -687,6 +690,12 @@ fn plan_job_graph_stages(
             }
         };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
+    } else if let Some(distribution) = subtree.plan.downcast_ref::<KeyDistributionExec>() {
+        let properties = distribution.properties().clone();
+        let child = subtree.only_child()?;
+        let plan = create_shuffle(child, graph, properties, consumption, scalar_context)?;
+        let has_pending_scalar_subquery_expr = reads_scalar_subquery(&plan)?;
+        PlannedSubtree::new(plan, has_pending_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
         let fetch = coalesce.fetch();
@@ -1376,6 +1385,7 @@ mod tests {
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::key_distribution::KeyDistributionExec;
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -2737,6 +2747,37 @@ mod tests {
                     .unwrap();
                 assert!(input.properties().output_ordering().is_none());
             }
+        }
+    }
+
+    #[test]
+    fn test_key_distribution_is_a_hash_shuffle() {
+        for (options, stages) in [
+            (flight_shuffle_options(), 2),
+            (blocking_shuffle_options(), 3),
+        ] {
+            let keys = vec![col("id", &schema()).unwrap()];
+            let source = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let partitioning = Partitioning::Hash(keys.clone(), 4);
+            let plan = Arc::new(KeyDistributionExec::new(source, keys, 4));
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(graph.stages().len(), stages);
+            // The stage of the input writes its rows to a channel for each partition.
+            assert!(matches!(
+                &graph.stages()[0].distribution,
+                OutputDistribution::Hash { .. }
+            ));
+            let OutputDistribution::Hash { keys, channels } = &graph.stages()[0].distribution
+            else {
+                return;
+            };
+            assert_eq!(*channels, 4);
+            assert_eq!(Partitioning::Hash(keys.clone(), *channels), partitioning);
+            assert!(graph.stages()[0].plan.is::<UnionExec>());
+            // The partitions are read from the channels, and the plan is not executed.
+            let output = &graph.stages().last().unwrap().plan;
+            assert!(output.is::<StageInputExec<usize>>());
+            assert_eq!(output.properties().output_partitioning(), &partitioning);
         }
     }
 
