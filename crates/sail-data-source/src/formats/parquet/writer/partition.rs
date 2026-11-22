@@ -491,13 +491,17 @@ impl PartitionStream for OverflowInput {
 struct Overflow {
     /// The schema of the input with the column of the partition key.
     schema: SchemaRef,
-    sender: Sender<Result<RecordBatch>>,
+    /// The input of the sort, until the sorted rows are read.
+    sender: Option<Sender<Result<RecordBatch>>>,
     sorted: Receiver<Result<RecordBatch>>,
-    /// The task that sorts the rows. The task is canceled when this is dropped.
-    _sort: SpawnedTask<()>,
+    /// The task that sorts the rows, until it has ended.
+    /// The task is canceled when this is dropped.
+    sort: Option<SpawnedTask<()>>,
     /// The number of each partition key in the order of their first rows.
     ids: HashMap<PartitionKey, u32>,
     keys: Vec<PartitionKey>,
+    /// The number of rows that have been added and have not been read.
+    rows: usize,
 }
 
 impl Overflow {
@@ -549,11 +553,12 @@ impl Overflow {
         });
         Ok(Self {
             schema,
-            sender,
+            sender: Some(sender),
             sorted,
-            _sort: sort,
+            sort: Some(sort),
             ids: HashMap::new(),
             keys: vec![],
+            rows: 0,
         })
     }
 
@@ -572,14 +577,49 @@ impl Overflow {
         let mut columns = rows.columns().to_vec();
         columns.push(Arc::new(UInt32Array::from(vec![id; rows.num_rows()])));
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-        if self.sender.send(Ok(batch)).await.is_ok() {
+        let Some(sender) = &self.sender else {
+            return internal_err!("rows are added to the sort after its rows have been read");
+        };
+        if sender.send(Ok(batch)).await.is_ok() {
+            self.rows += rows.num_rows();
             return Ok(());
         }
         // The sort has ended, which it does before the end of its input only when it fails.
-        while let Some(batch) = self.sorted.recv().await {
-            batch?;
-        }
+        while self.next().await?.is_some() {}
         exec_err!("the sort of the partitioned rows ended before the end of its input")
+    }
+
+    /// Returns the next sorted rows with the number of their partition key in
+    /// the last column, or nothing when all rows that were added have been returned.
+    /// No rows can be added once this has been called.
+    async fn next(&mut self) -> Result<Option<RecordBatch>> {
+        // The sort returns its rows when its input has ended.
+        self.sender = None;
+        if let Some(batch) = self.sorted.recv().await {
+            let batch = batch?;
+            self.rows = self.rows.checked_sub(batch.num_rows()).ok_or_else(|| {
+                internal_datafusion_err!("the sort of the partitioned rows returned other rows")
+            })?;
+            return Ok(Some(batch));
+        }
+        // The rows end without an error also when the task of the sort
+        // has panicked or has been canceled, so the task is asked how it ended.
+        if let Some(sort) = self.sort.take() {
+            sort.join()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?;
+        }
+        match self.rows {
+            0 => Ok(None),
+            rows => internal_err!("the sort of the partitioned rows did not return {rows} rows"),
+        }
+    }
+
+    /// Returns the partition key that has the number.
+    fn key(&self, id: u32) -> Result<&PartitionKey> {
+        self.keys
+            .get(id as usize)
+            .ok_or_else(|| internal_datafusion_err!("unknown partition key in the sorted rows"))
     }
 }
 
@@ -755,22 +795,12 @@ impl PartitionedWriter {
         written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         self.close_open(factory, written).await?;
-        let Some(overflow) = self.overflow.take() else {
+        let Some(mut overflow) = self.overflow.take() else {
             return self.wait_for_closing(0, written).await;
         };
-        let Overflow {
-            sender,
-            mut sorted,
-            _sort,
-            keys,
-            ..
-        } = overflow;
-        // The sort returns its rows when its input has ended.
-        drop(sender);
         // The rows of a partition key are next to each other, so one directory is open at a time.
         let mut current: Option<(u32, DirectoryWriter)> = None;
-        while let Some(batch) = sorted.recv().await {
-            let batch = batch?;
+        while let Some(batch) = overflow.next().await? {
             let ids = match batch.columns().last() {
                 Some(ids) => as_uint32_array(ids)?.clone(),
                 None => return internal_err!("missing partition keys in the sorted rows"),
@@ -791,12 +821,8 @@ impl PartitionedWriter {
                         if let Some((_, mut writer)) = current.take() {
                             self.start_close(&mut writer, factory, written).await?;
                         }
-                        let key = keys.get(id as usize).ok_or_else(|| {
-                            internal_datafusion_err!("unknown partition key in the sorted rows")
-                        })?;
-                        let writer =
-                            DirectoryWriter::new(self.router.directory(&self.table_path, key));
-                        &mut current.insert((id, writer)).1
+                        let directory = self.router.directory(&self.table_path, overflow.key(id)?);
+                        &mut current.insert((id, DirectoryWriter::new(directory))).1
                     }
                 };
                 writer

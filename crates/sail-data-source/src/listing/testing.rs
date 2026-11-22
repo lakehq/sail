@@ -80,7 +80,8 @@ impl Gate {
 struct State {
     requests: Vec<String>,
     faults: Vec<Fault>,
-    gates: HashMap<&'static str, Arc<Gate>>,
+    /// The gate of each kind of request, for the requests that contain the text if there is one.
+    gates: HashMap<&'static str, (Option<String>, Arc<Gate>)>,
     /// The location of each multipart upload that is neither completed nor aborted.
     uploads: BTreeMap<MultipartId, String>,
 }
@@ -96,7 +97,11 @@ impl Shared {
     async fn request(&self, kind: &'static str, detail: String) -> object_store::Result<bool> {
         let (gate, fault) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let gate = state.gates.get(kind).cloned();
+            let gate = state
+                .gates
+                .get(kind)
+                .filter(|(location, _)| location.as_ref().is_none_or(|l| detail.contains(l)))
+                .map(|(_, gate)| Arc::clone(gate));
             let mut fault = None;
             let matches = |x: &Fault| {
                 x.kind == kind && x.location.as_ref().is_none_or(|l| detail.contains(l))
@@ -249,6 +254,16 @@ impl FaultStore {
 
     /// Holds the requests of the kind until the gate is opened.
     pub fn hold(&self, kind: &'static str) -> Arc<Gate> {
+        self.gate(kind, None)
+    }
+
+    /// Holds the requests of the kind whose description contains the location
+    /// until the gate is opened.
+    pub fn hold_at(&self, kind: &'static str, location: &str) -> Arc<Gate> {
+        self.gate(kind, Some(location.to_string()))
+    }
+
+    fn gate(&self, kind: &'static str, location: Option<String>) -> Arc<Gate> {
         let gate = Arc::new(Gate {
             semaphore: Semaphore::new(0),
             waiting: AtomicUsize::new(0),
@@ -258,7 +273,7 @@ impl FaultStore {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        state.gates.insert(kind, Arc::clone(&gate));
+        state.gates.insert(kind, (location, Arc::clone(&gate)));
         gate
     }
 

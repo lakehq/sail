@@ -30,6 +30,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation,
     UnboundedMemoryPool,
@@ -2432,6 +2433,272 @@ async fn test_partition_sorted_keys_use_temporary_files() -> Result<()> {
     assert_eq!(sorted, rows - 10 * 200);
     check_one_file_per_key(store.as_ref(), &batches).await?;
     assert_eq!(runtime.memory_pool.reserved(), 0);
+    Ok(())
+}
+
+/// A memory pool without a limit that panics when memory is requested
+/// from it after it has been told to fail.
+#[derive(Debug, Default)]
+struct FailingPool {
+    inner: UnboundedMemoryPool,
+    fails: std::sync::atomic::AtomicBool,
+}
+
+impl std::fmt::Display for FailingPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FailingPool")
+    }
+}
+
+impl FailingPool {
+    fn check(&self, additional: usize) {
+        if self.fails.load(Ordering::SeqCst) {
+            // The index is out of bounds, which panics.
+            let values: [u8; 0] = [];
+            std::hint::black_box(values[std::hint::black_box(additional)]);
+        }
+    }
+}
+
+impl MemoryPool for FailingPool {
+    fn name(&self) -> &str {
+        "FailingPool"
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+        self.check(additional);
+        self.inner.grow(reservation, additional)
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+        self.inner.shrink(reservation, shrink)
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        self.check(additional);
+        self.inner.try_grow(reservation, additional)
+    }
+
+    fn reserved(&self) -> usize {
+        self.inner.reserved()
+    }
+}
+
+/// The batches as the input of a writer task, followed by the given end of the input.
+fn test_stream_with_end(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    end: impl Stream<Item = Result<RecordBatch>> + Send + 'static,
+) -> SendableRecordBatchStream {
+    Box::pin(RecordBatchStreamAdapter::new(
+        Arc::clone(schema),
+        futures::stream::iter(batches.into_iter().map(Ok)).chain(end),
+    ))
+}
+
+/// A task that sorts the rows of all keys of [`sorted_key_batches`] but the first ten,
+/// with the memory pool for the sort.
+fn sorted_key_task(
+    store: Arc<dyn ObjectStore>,
+    pool: Arc<dyn MemoryPool>,
+) -> Result<ParquetWriteTask> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(pool)
+        .build_arc()?;
+    let mut task = partition_task(store, 0, &["p"]);
+    task.max_open_files = 10;
+    task.context = Arc::new(TaskContext::default().with_runtime(runtime));
+    Ok(task)
+}
+
+fn sorted_key_batches() -> Result<Vec<RecordBatch>> {
+    keyed_batches(40_000, 1000, |i| Some(i * 7919 % 2000))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_partition_sort_panic_fails_the_task() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let batches = sorted_key_batches()?;
+    let schema = batches[0].schema();
+    // The sort panics when it asks for memory after the task has read its input,
+    // which the sort does to return its rows.
+    let pool = Arc::new(FailingPool::default());
+    let end = {
+        let pool = Arc::clone(&pool);
+        futures::stream::poll_fn(move |_| {
+            pool.fails.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(None)
+        })
+    };
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let task = sorted_key_task(Arc::clone(&store), pool.clone())?;
+    let input = test_stream_with_end(&schema, batches, end);
+    let mut stream = Box::pin(write_stream(task, input));
+    // The task does not report the files of the other keys as the result of the write.
+    let result = stream.next().await;
+    assert!(
+        matches!(&result, Some(Err(e)) if e.to_string().contains("panic")),
+        "{result:?}"
+    );
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    wait_for_tasks(tasks).await?;
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_partition_sort_error_fails_the_task() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let batches = sorted_key_batches()?;
+    let schema = batches[0].schema();
+    let size: usize = batches.iter().map(|x| x.get_array_memory_size()).sum();
+    // The rows that are sorted do not fit in the memory pool,
+    // and the sort cannot write them to temporary files.
+    let limit = 64 * 1024;
+    assert!(size > 2 * limit);
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = sorted_key_task(Arc::clone(&store), Arc::clone(&pool))?;
+    task.context = Arc::new(TaskContext::default().with_runtime(runtime));
+    let mut stream = Box::pin(write_stream(task, test_stream(&schema, batches)));
+    let result = stream.next().await;
+    assert!(
+        matches!(&result, Some(Err(e)) if matches!(e.find_root(), DataFusionError::ResourcesExhausted(_))),
+        "{result:?}"
+    );
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    wait_for_tasks(tasks).await?;
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_partition_input_error_with_sorted_keys_leaves_no_file() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let batches = sorted_key_batches()?;
+    let schema = batches[0].schema();
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let task = sorted_key_task(Arc::clone(&store), Arc::clone(&pool))?;
+    let end = futures::stream::once(async { Err(internal_datafusion_err!("input failure")) });
+    let input = test_stream_with_end(&schema, batches, end);
+    let mut stream = Box::pin(write_stream(task, input));
+    let result = stream.next().await;
+    assert!(
+        matches!(&result, Some(Err(e)) if e.to_string().contains("input failure")),
+        "{result:?}"
+    );
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    wait_for_tasks(tasks).await?;
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_partition_canceled_task_with_sorted_keys_leaves_no_file() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let batches = sorted_key_batches()?;
+    let schema = batches[0].schema();
+
+    // The task is canceled while it reads its input, with rows in the sort.
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let task = sorted_key_task(Arc::clone(&store), Arc::clone(&pool))?;
+    let input = test_stream_with_end(&schema, batches.clone(), futures::stream::pending());
+    let mut stream = Box::pin(write_stream(task, input));
+    let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
+    assert!(waiting.await.is_err());
+    assert!(pool.reserved() > 0);
+    drop(stream);
+    wait_for_tasks(tasks).await?;
+    assert_eq!(list_files(store.as_ref()).await?, vec![]);
+    assert_eq!(pool.reserved(), 0);
+
+    // The task is canceled while it writes the sorted rows, with staged files
+    // and with a file whose completion waits for the object store.
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let store = FaultStore::new();
+    let gate = store.hold_at("PART", "p=1000/");
+    let mut task = sorted_key_task(Arc::clone(&store) as _, Arc::clone(&pool))?;
+    task.publisher = store.publisher(Mode::Multipart);
+    let mut stream = Box::pin(write_stream(task, test_stream(&schema, batches)));
+    tokio::select! {
+        _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
+        _ = gate.wait_for(1) => {}
+    }
+    // The files of the ten open directories and of some sorted keys are staged.
+    let staged = store.open_uploads().len();
+    assert!(staged > 10, "{staged}");
+    drop(stream);
+    gate.open();
+    wait_for_tasks(tasks).await?;
+    store.wait_for(&[]).await?;
+    assert_eq!(store.count("COMPLETE"), 0);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_partition_failed_file_fails_the_task() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    // The file of one directory fails when it is completed, which happens while
+    // the task writes to other directories. The directory is one that is open
+    // while the input is read, one whose rows are sorted, or one of a clustered input.
+    let clustered = LexOrdering::new([PhysicalSortExpr::new(
+        Arc::new(Column::new("p", 0)),
+        SortOptions::new(false, false),
+    )]);
+    type Key = fn(i64) -> Option<i64>;
+    let shuffled: Key = |i| Some(i * 7919 % 2000);
+    let sorted: Key = |i| Some(i / 20);
+    for (key, ordering, directory) in [
+        (shuffled, None, "p=0/"),
+        (shuffled, None, "p=1000/"),
+        (sorted, clustered, "p=1000/"),
+    ] {
+        let batches = keyed_batches(40_000, 1000, key)?;
+        let schema = batches[0].schema();
+        let store = FaultStore::new();
+        store.fail_at("PART", directory);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut task = sorted_key_task(Arc::clone(&store) as _, Arc::clone(&pool))?;
+        task.publisher = store.publisher(Mode::Multipart);
+        task.ordering = ordering;
+        let mut stream = Box::pin(write_stream(task, test_stream(&schema, batches)));
+        let result = stream.next().await;
+        assert!(
+            matches!(&result, Some(Err(e)) if e.to_string().contains("PART failure")),
+            "{directory}: {result:?}"
+        );
+        assert!(stream.next().await.is_none());
+        drop(stream);
+        wait_for_tasks(tasks).await?;
+        store.wait_for(&[]).await?;
+        assert_eq!(store.count("COMPLETE"), 0);
+        assert_eq!(pool.reserved(), 0);
+    }
     Ok(())
 }
 
