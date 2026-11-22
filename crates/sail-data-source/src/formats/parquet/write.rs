@@ -4,14 +4,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, plan_err};
+use sail_physical_plan::key_distribution::KeyDistributionExec;
 
-use crate::formats::parquet::writer::exec::{ParquetWriteExec, has_explicit_partitions};
+use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::listing::commit::FileWriteCommitExec;
 use crate::listing::source::{ListingSinkInput, WriteFormat};
 use crate::options::r#gen::ParquetWriteOptions;
@@ -26,7 +29,7 @@ pub struct ParquetWriteFormat {
 impl WriteFormat for ParquetWriteFormat {
     async fn sink(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let encoding_parallelism = self.options.encoding_parallelism;
@@ -54,7 +57,7 @@ impl WriteFormat for ParquetWriteFormat {
             .ok_or_else(|| internal_datafusion_err!("missing table path for Parquet write"))?
             .prefix()
             .clone();
-        let partition_columns = sink
+        let partition_columns: Vec<_> = sink
             .table_partition_cols
             .into_iter()
             .map(|(name, _)| name)
@@ -65,7 +68,11 @@ impl WriteFormat for ParquetWriteFormat {
             Some(sort_order) => (Some(LexOrdering::from(sort_order)), true),
             None => (sorted_input_ordering(&input), false),
         };
-        let keeps_input_partitions = has_explicit_partitions(&input);
+        let input = distribute_by_partition_columns(
+            input,
+            &partition_columns,
+            ctx.config().target_partitions(),
+        )?;
         let writer = Arc::new(
             ParquetWriteExec::try_new(
                 input,
@@ -80,8 +87,7 @@ impl WriteFormat for ParquetWriteFormat {
                 encoding_parallelism,
                 max_open_files_per_task,
             )?
-            .with_file_limits(max_records_per_file, max_file_size)
-            .with_input_partitions_kept(keeps_input_partitions),
+            .with_file_limits(max_records_per_file, max_file_size),
         );
         Ok(Arc::new(
             FileWriteCommitExec::new(writer, sink.object_store_url, table_path, write_id)
@@ -93,6 +99,35 @@ impl WriteFormat for ParquetWriteFormat {
     fn replaces_existing_files(&self) -> bool {
         true
     }
+}
+
+/// Returns the input with its rows distributed by the partition columns, so that
+/// the rows of each partition directory are written by one task and to one file.
+///
+/// The number of files and the number of files that are open at the same time
+/// then follow from the number of directories and not from the number of tasks.
+/// The rows are distributed unless the input has a single partition, is already
+/// partitioned by the partition columns, or has the partitions of an explicit
+/// repartition or coalesce of the query, which the physical optimizer decides
+/// on the optimized plan. A query can therefore divide the rows of a directory
+/// among several tasks and files with a repartition.
+fn distribute_by_partition_columns(
+    input: Arc<dyn ExecutionPlan>,
+    partition_columns: &[String],
+    partitions: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if partition_columns.is_empty() {
+        return Ok(input);
+    }
+    let schema = input.schema();
+    let keys = partition_columns
+        .iter()
+        .map(|column| match schema.index_of(column) {
+            Ok(index) => Ok(Arc::new(Column::new(column, index)) as Arc<dyn PhysicalExpr>),
+            Err(_) => plan_err!("partition column {column} does not exist in schema {schema}"),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(KeyDistributionExec::new(input, keys, partitions)))
 }
 
 /// Returns the ordering of the input if the input is sorted by the query.
@@ -141,7 +176,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSourceExec;
-    use datafusion::physical_expr::expressions::{Column, col};
+    use datafusion::physical_expr::expressions::col;
     use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -203,6 +238,25 @@ mod tests {
             ],
             input,
         )?))
+    }
+
+    #[test]
+    fn test_distribute_by_partition_columns() -> Result<()> {
+        let schema = schema();
+        let source = MemorySourceConfig::try_new_exec(&[vec![], vec![]], schema.clone(), None)?;
+        let plan = distribute_by_partition_columns(source.clone(), &[], 8)?;
+        assert!(plan.is::<DataSourceExec>());
+        let columns = ["b".to_string(), "a".to_string()];
+        let plan = distribute_by_partition_columns(source.clone(), &columns, 8)?;
+        let Some(distribution) = plan.downcast_ref::<KeyDistributionExec>() else {
+            return Err(internal_datafusion_err!("missing key distribution"));
+        };
+        assert_eq!(plan.output_partitioning().partition_count(), 8);
+        let keys: Vec<_> = distribution.keys().iter().map(|x| x.to_string()).collect();
+        assert_eq!(keys, ["b@1", "a@0"]);
+        let columns = ["c".to_string()];
+        assert!(distribute_by_partition_columns(source, &columns, 8).is_err());
+        Ok(())
     }
 
     #[test]

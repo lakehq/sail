@@ -159,6 +159,38 @@ def test_parquet_partitioned_write_file_count(spark, tmp_path):
     assert len(check_partitioned_rows(spark, path, rows, keys)) == 3 * keys
 
 
+@pytest.mark.parametrize(
+    ("partitions", "limit"),
+    [
+        (lambda df: df, 1),
+        (lambda df: df.repartition(3), 3),
+        (lambda df: df.repartition(3, "id"), 3),
+        (lambda df: df.repartition("p"), 1),
+        (lambda df: df.coalesce(2), 2),
+    ],
+    ids=["plain", "repartition(3)", "repartition(3, id)", "repartition(p)", "coalesce(2)"],
+)
+@pytest.mark.parametrize(
+    "operation",
+    [
+        lambda df: df.selectExpr("id + 0 AS id", "p"),
+        lambda df: df.filter("id >= 0"),
+        lambda df: df.groupBy("id", "p").count().drop("count"),
+    ],
+    ids=["projection", "filter", "aggregate"],
+)
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail writes one file for each key unless the query defines the partitions")
+def test_parquet_partitioned_write_file_count_after_operation(spark, tmp_path, partitions, limit, operation):
+    rows, keys = 20_000, 50
+    df = spark.range(0, rows, 1, 4).selectExpr("id", f"id % {keys} AS p")
+    path = tmp_path / "table"
+    operation(partitions(df)).write.partitionBy("p").parquet(str(path))
+    files = check_partitioned_rows(spark, path, rows, keys)
+    # The rows of a key are written by one task when the rows are repartitioned for the operation,
+    # and never by more tasks than the partitions that the query asks for.
+    assert keys <= len(files) <= limit * keys
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail option")
 def test_parquet_partitioned_write_with_more_keys_than_open_files(spark, tmp_path):
     rows, keys = 20_000, 500

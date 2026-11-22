@@ -55,8 +55,6 @@ use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, Time};
-use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, Partitioning,
@@ -64,7 +62,6 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_datafusion_err};
 use datafusion_datasource::ListingTableUrl;
 use futures::stream::BoxStream;
@@ -73,11 +70,11 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
-use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
-use crate::formats::parquet::writer::exec::{ParquetWriteExec, has_explicit_partitions};
+use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::lane::{Lane, LaneInput, logical_size};
 use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, EncodeSettings};
@@ -2708,12 +2705,20 @@ async fn test_partition_failed_file_fails_the_task() -> Result<()> {
     Ok(())
 }
 
-/// Returns the plan that writes the input with the partition column `p`, after
-/// the distribution that the writer requires has been added to the plan.
+/// Returns the plan that writes the input with the partition column `p`,
+/// with its rows distributed by the column unless the partitions of the input are kept.
 fn partitioned_write_plan(
     input: Arc<dyn ExecutionPlan>,
     target_partitions: usize,
+    keeps_input_partitions: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let input: Arc<dyn ExecutionPlan> = if keeps_input_partitions {
+        input
+    } else {
+        let keys: Vec<Arc<dyn PhysicalExpr>> =
+            vec![Arc::new(Column::new("p", input.schema().index_of("p")?))];
+        Arc::new(KeyDistributionExec::new(input, keys, target_partitions))
+    };
     let writer = ParquetWriteExec::try_new(
         input,
         ObjectStoreUrl::parse("memory://")?,
@@ -2727,30 +2732,9 @@ fn partitioned_write_plan(
         0,
         NonZeroUsize::new(100).ok_or_else(|| internal_datafusion_err!("zero"))?,
     )?;
-    let keeps_input_partitions = has_explicit_partitions(writer.input());
-    let writer = writer.with_input_partitions_kept(keeps_input_partitions);
     let mut config = ConfigOptions::default();
     config.execution.target_partitions = target_partitions;
     let plan = EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)?;
-    // The requirements of the writer are also met after the partitions that
-    // the query asks for have been replaced with the plans that compute them.
-    let plan = plan
-        .transform_up(|plan| {
-            let Some(explicit) = plan.downcast_ref::<ExplicitRepartitionExec>() else {
-                return Ok(Transformed::no(plan));
-            };
-            let input = Arc::clone(explicit.input());
-            let plan: Arc<dyn ExecutionPlan> = match plan.output_partitioning().clone() {
-                Partitioning::RoundRobinBatch(_) => return Ok(Transformed::no(plan)),
-                Partitioning::UnknownPartitioning(1) => {
-                    Arc::new(CoalescePartitionsExec::new(input))
-                }
-                Partitioning::UnknownPartitioning(n) => Arc::new(CoalesceExec::new(input, n)),
-                partitioning => Arc::new(RepartitionExec::try_new(input, partitioning)?),
-            };
-            Ok(Transformed::yes(plan))
-        })?
-        .data;
     SanityCheckPlan::new().optimize(plan, &config)
 }
 
@@ -2769,7 +2753,7 @@ fn writer_input(plan: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>
 }
 
 #[test]
-fn test_write_plan_distributes_rows_by_partition_columns() -> Result<()> {
+fn test_write_plan_keeps_distribution_by_partition_columns() -> Result<()> {
     let schema = keyed_batch(&[], 0)?.schema();
     let source = |partitions: usize| -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = vec![vec![]; partitions];
@@ -2779,78 +2763,15 @@ fn test_write_plan_distributes_rows_by_partition_columns() -> Result<()> {
             None,
         )?)
     };
-    let p: Arc<dyn PhysicalExpr> = Arc::new(Column::new("p", 0));
-    let v: Arc<dyn PhysicalExpr> = Arc::new(Column::new("v", 1));
-    let hash = |partitions: usize| Partitioning::Hash(vec![Arc::clone(&p)], partitions);
-
-    // The rows of each key are written by one task, whatever the partitions of the input are.
-    for input in [
-        source(4)?,
-        source(32)?,
-        Arc::new(RepartitionExec::try_new(
-            source(4)?,
-            Partitioning::RoundRobinBatch(16),
-        )?),
-        Arc::new(RepartitionExec::try_new(source(2)?, hash(4))?),
-    ] {
-        let input = writer_input(&partitioned_write_plan(input, 8)?)?;
-        let Some(repartition) = input.downcast_ref::<RepartitionExec>() else {
-            return Err(internal_datafusion_err!("missing repartition"));
-        };
-        assert_eq!(repartition.partitioning(), &hash(8));
-        // The plan has no other repartition by the partition columns below.
-        assert!(
-            !repartition.input().is::<RepartitionExec>()
-                || !matches!(
-                    repartition.input().output_partitioning(),
-                    Partitioning::Hash(_, _)
-                )
-        );
+    // The writer does not repartition its input, and the optimizer adds
+    // no other repartition between the writer and the distribution.
+    for partitions in [1, 4, 32] {
+        let input = writer_input(&partitioned_write_plan(source(partitions)?, 8, false)?)?;
+        assert!(input.is::<KeyDistributionExec>());
+        assert_eq!(input.output_partitioning().partition_count(), 8);
+        let input = writer_input(&partitioned_write_plan(source(partitions)?, 8, true)?)?;
+        assert!(input.is::<DataSourceExec>());
     }
-
-    // A single task writes one file for each key without a repartition.
-    let input = writer_input(&partitioned_write_plan(source(1)?, 8)?)?;
-    assert!(input.is::<DataSourceExec>());
-
-    // The partitions that the query asks for are kept.
-    for partitioning in [
-        Partitioning::RoundRobinBatch(3),
-        Partitioning::UnknownPartitioning(1),
-        Partitioning::UnknownPartitioning(2),
-        hash(3),
-        Partitioning::Hash(vec![v], 3),
-    ] {
-        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
-            source(4)?,
-            partitioning.clone(),
-        ));
-        let input = writer_input(&partitioned_write_plan(Arc::clone(&explicit), 8)?)?;
-        assert_eq!(
-            input.output_partitioning().partition_count(),
-            partitioning.partition_count()
-        );
-        // The partitions are also kept below a plan that keeps the partitions of its input.
-        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-            vec![
-                ProjectionExpr {
-                    expr: Arc::new(Column::new("p", 0)),
-                    alias: "p".to_string(),
-                },
-                ProjectionExpr {
-                    expr: Arc::new(Column::new("v", 1)),
-                    alias: "v".to_string(),
-                },
-            ],
-            explicit,
-        )?);
-        let input = writer_input(&partitioned_write_plan(projection, 8)?)?;
-        assert!(input.is::<ProjectionExec>(), "{partitioning}");
-        assert_eq!(
-            input.output_partitioning().partition_count(),
-            partitioning.partition_count()
-        );
-    }
-
     // A write without partition columns keeps the partitions of its input.
     let writer = write_exec(&[vec![], vec![], vec![]], &schema, None, false)?;
     let mut config = ConfigOptions::default();
@@ -2876,13 +2797,13 @@ async fn test_write_plan_writes_one_file_per_key() -> Result<()> {
             input[i % partitions].push(batch.clone());
         }
         let source = MemorySourceConfig::try_new_exec(&input, Arc::clone(&schema), None)?;
-        let plan = partitioned_write_plan(source, 8)?;
+        let plan = partitioned_write_plan(source, 8, false)?;
         let output = collect(plan, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![rows as u64]);
         check_one_file_per_key(store.as_ref(), &batches).await?;
     }
 
-    // The rows of a key are divided among the partitions that the query asks for.
+    // The rows of a key are divided among the partitions that are kept.
     let (ctx, store) = memory_context()?;
     let source = MemorySourceConfig::try_new_exec(
         std::slice::from_ref(&batches),
@@ -2893,7 +2814,7 @@ async fn test_write_plan_writes_one_file_per_key() -> Result<()> {
         source,
         Partitioning::RoundRobinBatch(3),
     ));
-    let plan = partitioned_write_plan(explicit, 8)?;
+    let plan = partitioned_write_plan(explicit, 8, true)?;
     collect(plan, ctx.task_ctx()).await?;
     let files = list_files(store.as_ref()).await?;
     assert_eq!(files.len() - 1, 3 * 1001);

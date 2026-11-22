@@ -1066,7 +1066,6 @@ message ParquetWriteExecNode {
   bytes schema = 12;
   uint64 max_records_per_file = 13;
   uint64 max_file_size = 14;
-  bool keeps_input_partitions = 15;
 }
 
 message FileWriteCommitExecNode {

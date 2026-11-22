@@ -9,14 +9,10 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, OrderingRequirements, PhysicalExpr,
-};
+use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, PhysicalExpr};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
@@ -25,7 +21,6 @@ use datafusion::physical_plan::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use object_store::path::Path;
-use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::resources::EncodeSettings;
@@ -68,29 +63,6 @@ pub(super) fn file_size_limit(max_file_size: u64, limits_parts: bool) -> u64 {
     }
 }
 
-/// Returns whether the partitions of the plan are the partitions
-/// that the query asks for with a repartition or a coalesce.
-pub fn has_explicit_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let mut plan = plan;
-    loop {
-        if plan.is::<ExplicitRepartitionExec>() {
-            return true;
-        }
-        // The partitions are kept by the plans that compute each
-        // output partition from the input partition of the same index.
-        let partitions = plan.output_partitioning().partition_count();
-        match plan.children().as_slice() {
-            [child]
-                if !plan.is::<RepartitionExec>()
-                    && child.output_partitioning().partition_count() == partitions =>
-            {
-                plan = child
-            }
-            _ => return false,
-        }
-    }
-}
-
 /// Writes each input partition to Parquet files in a table directory.
 ///
 /// The input partitioning is kept. Each output partition has a single batch,
@@ -116,11 +88,6 @@ pub struct ParquetWriteExec {
     max_records_per_file: u64,
     /// The target maximum size in bytes of each file, or zero when there is no limit.
     max_file_size: u64,
-    /// The partition columns as expressions on the input.
-    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    /// Whether the rows are written by the tasks of the input partitions that
-    /// they are in, also when the data has partition columns.
-    keeps_input_partitions: bool,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -152,13 +119,11 @@ impl ParquetWriteExec {
             return not_impl_err!("Parquet write does not support unbounded input");
         }
         let schema = input.schema();
-        let partition_exprs = partition_columns
-            .iter()
-            .map(|column| match schema.index_of(column) {
-                Ok(index) => Ok(Arc::new(Column::new(column, index)) as Arc<dyn PhysicalExpr>),
-                Err(_) => plan_err!("partition column {column} does not exist in schema {schema}"),
-            })
-            .collect::<Result<Vec<_>>>()?;
+        for column in &partition_columns {
+            if schema.index_of(column).is_err() {
+                return plan_err!("partition column {column} does not exist in schema {schema}");
+            }
+        }
         check_file_columns(
             schema
                 .fields()
@@ -189,8 +154,6 @@ impl ParquetWriteExec {
             max_open_files_per_task,
             max_records_per_file: 0,
             max_file_size: 0,
-            partition_exprs,
-            keeps_input_partitions: false,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -200,20 +163,6 @@ impl ParquetWriteExec {
     /// The schema must have the columns of the input.
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = schema;
-        self
-    }
-
-    /// Returns the plan that keeps the partitions of its input, or that requires
-    /// its input to be distributed by the partition columns.
-    ///
-    /// The rows of each partition directory are written by one task when the input
-    /// is distributed by the partition columns, so that the number of files and
-    /// the number of files that are open at the same time follow from the number
-    /// of directories and not from the number of tasks. The partitions that
-    /// the query asks for are kept instead, so that a query can divide the rows
-    /// of a directory among several tasks and files.
-    pub fn with_input_partitions_kept(mut self, keeps_input_partitions: bool) -> Self {
-        self.keeps_input_partitions = keeps_input_partitions;
         self
     }
 
@@ -281,10 +230,6 @@ impl ParquetWriteExec {
     pub fn max_open_files_per_task(&self) -> NonZeroUsize {
         self.max_open_files_per_task
     }
-
-    pub fn keeps_input_partitions(&self) -> bool {
-        self.keeps_input_partitions
-    }
 }
 
 impl DisplayAs for ParquetWriteExec {
@@ -311,14 +256,6 @@ impl ExecutionPlan for ParquetWriteExec {
         // Otherwise, a sort of the input would be removed as unnecessary,
         // since the output of this plan has no relation to the order of the input.
         vec![self.ordering.clone().map(Into::into)]
-    }
-
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_exprs.is_empty() || self.keeps_input_partitions {
-            vec![Distribution::UnspecifiedDistribution]
-        } else {
-            vec![Distribution::KeyPartitioned(self.partition_exprs.clone())]
-        }
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -367,8 +304,7 @@ impl ExecutionPlan for ParquetWriteExec {
         )?;
         Ok(Arc::new(
             plan.with_schema(Arc::clone(&self.schema))
-                .with_file_limits(self.max_records_per_file, self.max_file_size)
-                .with_input_partitions_kept(self.keeps_input_partitions),
+                .with_file_limits(self.max_records_per_file, self.max_file_size),
         ))
     }
 
