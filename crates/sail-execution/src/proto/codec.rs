@@ -252,11 +252,13 @@ use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::string::base32::{FromBase32, ToBase32};
 use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::concat_ws::ConcatWs;
 use sail_function::scalar::string::encode_decode::{Decode, Encode};
 use sail_function::scalar::string::format_number::FormatNumber;
+use sail_function::scalar::string::jaro_winkler::JaroWinklerSimilarity;
 use sail_function::scalar::string::length::{BitLength, OctetLength};
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::lower::LowerFunc;
@@ -4109,6 +4111,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "uuid" => Ok(Arc::new(ScalarUDF::from(Uuid::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
+            "to_base32" => Ok(Arc::new(ScalarUDF::from(ToBase32::new()))),
+            "from_base32" => Ok(Arc::new(ScalarUDF::from(FromBase32::new()))),
+            "jaro_winkler_similarity" => {
+                Ok(Arc::new(ScalarUDF::from(JaroWinklerSimilarity::new())))
+            }
             "quote" => Ok(Arc::new(ScalarUDF::from(Quote::new()))),
             "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
@@ -4304,6 +4311,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Randstr>()
             || node_inner.is::<Uuid>()
             || node_inner.is::<Soundex>()
+            || node_inner.is::<ToBase32>()
+            || node_inner.is::<FromBase32>()
+            || node_inner.is::<JaroWinklerSimilarity>()
             || node_inner.is::<Quote>()
             || node_inner.is::<StAsBinary>()
             || node_inner.is::<StGeomFromWKB>()
