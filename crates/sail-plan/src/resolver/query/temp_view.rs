@@ -50,6 +50,17 @@ use crate::shared_cte::{
 #[derive(Debug)]
 pub(in crate::resolver) enum TableOrigin {
     CatalogTable(CatalogTableOrigin),
+    LakePath(LakePathOrigin),
+}
+
+/// A read of a Delta Lake or Iceberg table by its path.
+#[derive(Debug)]
+pub(in crate::resolver) struct LakePathOrigin {
+    pub format: String,
+    pub schema: Option<Schema>,
+    pub options: Vec<(String, String)>,
+    pub paths: Vec<String>,
+    pub read_case_sensitive: bool,
 }
 
 /// A read of a catalog table, as the query wrote it.
@@ -696,7 +707,19 @@ impl PlanResolver<'_> {
             TableOrigin::CatalogTable(origin) => (
                 self.resolve_view_catalog_table_source(origin, view, state)
                     .await?,
-                &origin.name,
+                origin.name.clone(),
+            ),
+            TableOrigin::LakePath(origin) => (
+                self.create_path_source(
+                    &origin.format,
+                    origin.schema.clone(),
+                    origin.options.clone(),
+                    origin.paths.clone(),
+                    origin.read_case_sensitive,
+                    state,
+                )
+                .await?,
+                vec![origin.format.clone(), origin.paths.join(",")],
             ),
         };
         let table_schema = source.schema();
@@ -721,7 +744,7 @@ impl PlanResolver<'_> {
                     initially captured.\nColumn changes:\n- {}\nThis indicates the table has \
                     evolved and the view based on the plan must be recreated.",
                     view_name(view),
-                    quote_names(table),
+                    quote_names(&table),
                     changes.join("\n- "),
                 ))
             })?;

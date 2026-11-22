@@ -546,3 +546,94 @@ def test_view_over_a_python_data_source_table_reads_the_table_of_each_read(spark
         assert NOT_FOUND in error(spark, f"SELECT * FROM {view}")
     finally:
         table.drop()
+
+
+PATH_KINDS = ["sql", "sql_columns", "global_sql", "data_frame", "global_data_frame", "using"]
+# A view created with `USING iceberg` and a path cannot be created.
+PATH_VIEWS = [(fmt, kind) for fmt in LAKE_FORMATS for kind in PATH_KINDS if (fmt, kind) != ("iceberg", "using")]
+
+
+def create_path_view(spark, kind, fmt, path):
+    """Creates a temporary view of the kind over the Delta Lake or Iceberg table at the path."""
+    view = f"{kind}_{uuid.uuid4().hex}"
+    if kind == "sql":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {fmt}.`{path}`")
+    elif kind == "sql_columns":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} (id) AS SELECT id FROM {fmt}.`{path}`")
+    elif kind == "global_sql":
+        spark.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS SELECT * FROM {fmt}.`{path}`")
+    elif kind == "data_frame":
+        spark.read.format(fmt).load(str(path)).createOrReplaceTempView(view)
+    elif kind == "global_data_frame":
+        spark.read.format(fmt).load(str(path)).createOrReplaceGlobalTempView(view)
+    elif kind == "using":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} USING {fmt} OPTIONS (path '{path}')")
+    else:
+        raise ValueError(kind)
+    return f"global_temp.{view}" if kind.startswith("global") else view
+
+
+def drop_path_view(spark, view):
+    if view.startswith("global_temp."):
+        spark.catalog.dropGlobalTempView(view.removeprefix("global_temp."))
+    else:
+        spark.catalog.dropTempView(view)
+
+
+@pytest.mark.parametrize(("fmt", "kind"), PATH_VIEWS)
+def test_view_over_a_lake_table_path_reads_the_rows_committed_after_its_creation(spark, tmp_path, fmt, kind):
+    path = tmp_path / "t"
+    spark.sql("SELECT 1L AS id").write.format(fmt).save(str(path))
+    view = create_path_view(spark, kind, fmt, path)
+    try:
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+        spark.sql("SELECT 2L AS id").write.format(fmt).mode("append").save(str(path))
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+        # The view and the path are read at one version of the table.
+        joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN {fmt}.`{path}` t ON v.id = t.id"
+        assert rows(spark, joined) == [(1, 1), (2, 2)]
+        spark.sql("SELECT 3L AS id").write.format(fmt).mode("append").save(str(path))
+        assert rows(spark, f"SELECT count(*) FROM {view} a JOIN {view} b ON a.id = b.id") == [(3,)]
+    finally:
+        drop_path_view(spark, view)
+
+
+def test_view_created_with_using_reads_the_rows_inserted_through_it(spark, tmp_path):
+    fmt = "delta"
+    path = tmp_path / "t"
+    spark.sql("SELECT 1L AS id").write.format(fmt).save(str(path))
+    view = create_path_view(spark, "using", fmt, path)
+    try:
+        spark.sql(f"INSERT INTO {view} VALUES (2)")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+        spark.sql(f"INSERT INTO {view} SELECT id + 10 FROM {view}")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,), (11,), (12,)]
+    finally:
+        drop_path_view(spark, view)
+
+
+@pytest.mark.parametrize("kind", PATH_KINDS)
+def test_view_over_a_lake_table_path_with_time_travel_reads_its_version(spark, tmp_path, kind):
+    path = tmp_path / "t"
+    spark.sql("SELECT 1L AS id").write.format("delta").save(str(path))
+    view = f"{kind}_{uuid.uuid4().hex}"
+    if kind in ("sql", "sql_columns", "global_sql"):
+        scope = "GLOBAL TEMPORARY" if kind == "global_sql" else "TEMPORARY"
+        spark.sql(f"CREATE {scope} VIEW {view} AS SELECT * FROM delta.`{path}` VERSION AS OF 0")
+    elif kind == "using":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} USING delta OPTIONS (path '{path}', versionAsOf '0')")
+    else:
+        df = spark.read.format("delta").option("versionAsOf", "0").load(str(path))
+        if kind == "global_data_frame":
+            df.createOrReplaceGlobalTempView(view)
+        else:
+            df.createOrReplaceTempView(view)
+    view = f"global_temp.{view}" if kind.startswith("global") else view
+    try:
+        spark.sql("SELECT 2L AS id").write.format("delta").mode("append").save(str(path))
+        for _ in range(2):
+            assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+        joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN delta.`{path}` t ON v.id = t.id"
+        assert rows(spark, joined) == [(1, 1), (None, 2)]
+    finally:
+        drop_path_view(spark, view)

@@ -279,6 +279,8 @@ struct RecordingDataSource {
     name: &'static str,
     created: Mutex<Vec<CreatedSource>>,
     written: Mutex<Vec<PlannedWrite>>,
+    /// The number of sources created for reads by path.
+    path_sources: AtomicUsize,
 }
 
 impl RecordingDataSource {
@@ -287,6 +289,7 @@ impl RecordingDataSource {
             name,
             created: Mutex::new(vec![]),
             written: Mutex::new(vec![]),
+            path_sources: AtomicUsize::new(0),
         })
     }
 
@@ -342,7 +345,10 @@ impl DataSource for RecordingDataSource {
         let schema = match info.schema {
             Some(schema) => Arc::new(schema),
             // A read by path, which the tests use for temporary views only.
-            None => return Ok(provider_as_source(Arc::new(EmptyTable::new(columns())))),
+            None => {
+                self.path_sources.fetch_add(1, Ordering::SeqCst);
+                return Ok(provider_as_source(Arc::new(EmptyTable::new(columns()))));
+            }
         };
         let snapshot = snapshot.ok_or_else(|| plan_datafusion_err!("missing snapshot"))?;
         self.created

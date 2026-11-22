@@ -889,3 +889,97 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
     assert_eq!(catalog.loads.load(Ordering::SeqCst), before + 1);
     Ok(())
 }
+
+/// A read of a path in the format of the test data source, as
+/// `spark.read.format("iceberg").options(..).load(..)` sends it.
+fn read_path(path: &str, options: &[(&str, &str)]) -> spec::QueryPlan {
+    spec::QueryPlan::new(spec::QueryNode::Read {
+        is_streaming: false,
+        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
+            format: Some("iceberg".to_string()),
+            schema: None,
+            options: owned(options),
+            paths: vec![path.to_string()],
+            predicates: vec![],
+        })),
+    })
+}
+
+impl Fixture {
+    /// Resolves the statement and returns the number of sources that it created for
+    /// reads of paths.
+    async fn path_sources(&self, sql: &str) -> TestResult<usize> {
+        let before = self.source.path_sources.load(Ordering::SeqCst);
+        let resolution = self.resolve(sql).await?;
+        assert_eq!(resolution.error, None, "{sql}");
+        assert_eq!(resolution.requests, Vec::<String>::new(), "{sql}");
+        Ok(self.source.path_sources.load(Ordering::SeqCst) - before)
+    }
+}
+
+#[tokio::test]
+async fn test_temporary_view_reads_the_lake_table_path_again() -> TestResult {
+    for share_ctes in [false, true] {
+        let setup = [
+            "CREATE TEMPORARY VIEW p_sql AS SELECT * FROM iceberg.`memory:///p`",
+            "CREATE TEMPORARY VIEW p_old AS SELECT * FROM iceberg.`memory:///p` VERSION AS OF 1",
+            "CREATE TEMPORARY VIEW p_cte AS WITH c AS (SELECT k, rand() AS r FROM iceberg.`memory:///p`) \
+                SELECT a.k, a.r, b.r AS r2 FROM c a JOIN c b ON a.k = b.k",
+        ];
+        let fixture = Fixture::try_new_with(TableNames::Exact, share_ctes, &setup).await?;
+        fixture
+            .create_data_frame_view("p_df", false, read_path("memory:///p", &[]))
+            .await?;
+        fixture
+            .create_data_frame_view(
+                "p_opt",
+                false,
+                read_path("memory:///p", &[("b", "2"), ("a", "1")]),
+            )
+            .await?;
+        for view in ["p_sql", "p_old", "p_df", "p_opt"] {
+            let stored = fixture.stored_view_plan(&[view]).await?;
+            assert_eq!(count_scans(&stored)?, (0, 1), "stored plan of {view}");
+            // Each statement reads the path once, however often it reads the view.
+            for sql in [
+                format!("SELECT * FROM {view}"),
+                format!("SELECT * FROM {view} a JOIN {view} b ON a.k = b.k"),
+                format!("SELECT (SELECT max(k) FROM {view}), (SELECT max(v) FROM {view})"),
+            ] {
+                assert_eq!(fixture.path_sources(&sql).await?, 1, "{sql}");
+                fixture.execute(&sql).await?;
+            }
+        }
+        assert_eq!(fixture.path_sources("SELECT * FROM p_cte").await?, 1);
+        fixture.execute("SELECT * FROM p_cte").await?;
+        // The views and a direct read of the path share one source.
+        for sql in [
+            "SELECT * FROM iceberg.`memory:///p` a JOIN iceberg.`memory:///p` b ON a.k = b.k",
+            "SELECT * FROM p_sql a JOIN iceberg.`memory:///p` b ON a.k = b.k \
+                JOIN p_df d ON a.k = d.k JOIN p_cte e ON a.k = e.k",
+        ] {
+            assert_eq!(fixture.path_sources(sql).await?, 1, "{sql}");
+        }
+        // Reads with other options, another version, or another path have their own source.
+        for sql in [
+            "SELECT * FROM p_sql a JOIN p_old b ON a.k = b.k",
+            "SELECT * FROM p_sql a JOIN p_opt b ON a.k = b.k",
+            "SELECT * FROM p_sql a JOIN iceberg.`memory:///q` b ON a.k = b.k",
+        ] {
+            assert_eq!(fixture.path_sources(sql).await?, 2, "{sql}");
+        }
+        // The order of the options of a read does not matter.
+        let before = fixture.source.path_sources.load(Ordering::SeqCst);
+        let plan = union(
+            read_path("memory:///p", &[("a", "1"), ("b", "2")]),
+            read_table(&["p_opt"], &[]),
+        );
+        let resolution = fixture.resolve_plan(plan).await?;
+        assert_eq!(resolution.error, None);
+        assert_eq!(
+            fixture.source.path_sources.load(Ordering::SeqCst) - before,
+            1
+        );
+    }
+    Ok(())
+}

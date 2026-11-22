@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use datafusion_common::arrow::datatypes::{Field, FieldRef};
+use datafusion_common::arrow::datatypes::{Field, FieldRef, Schema};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
@@ -38,6 +38,17 @@ pub(super) struct TableSourceKey {
 }
 
 struct SharedTableSource(Arc<dyn TableSource>);
+
+/// Identifies what a read of a Delta Lake or Iceberg table by its path scans.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct LakePathSourceKey {
+    /// The format in lower case.
+    pub format: String,
+    pub paths: Vec<String>,
+    /// The options of the read, sorted by key.
+    pub options: Vec<(String, String)>,
+    pub schema: Option<Schema>,
+}
 
 impl std::fmt::Debug for SharedTableSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -163,6 +174,9 @@ pub(super) struct PlanResolverState {
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
+    /// reads of a path in the query read one version of the table.
+    lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
     /// The successful catalog table lookups so far, shared by repeated references to
     /// the same table within the query. The key is the fully qualified name of the table
     /// (the catalog, the database, and the table), which is the same for all the ways
@@ -218,6 +232,7 @@ impl PlanResolverState {
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
+            lake_path_sources: HashMap::new(),
             catalog_table_lookups: HashMap::new(),
             session_catalog_table_lookups: HashMap::new(),
             table_origins: HashMap::new(),
@@ -531,6 +546,21 @@ impl PlanResolverState {
 
     pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
         self.table_sources.insert(key, SharedTableSource(source));
+    }
+
+    pub fn get_lake_path_source(&self, key: &LakePathSourceKey) -> Option<Arc<dyn TableSource>> {
+        self.lake_path_sources
+            .get(key)
+            .map(|source| Arc::clone(&source.0))
+    }
+
+    pub fn insert_lake_path_source(
+        &mut self,
+        key: LakePathSourceKey,
+        source: Arc<dyn TableSource>,
+    ) {
+        self.lake_path_sources
+            .insert(key, SharedTableSource(source));
     }
 
     pub fn get_catalog_table_lookup(&self, table: &[String]) -> Option<CatalogTableLookup> {
