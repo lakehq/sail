@@ -508,13 +508,13 @@ async fn write_files(
     ));
     // A Parquet file takes its number of rows from its columns,
     // so rows cannot be written to files without columns.
-    let rows_not_supported = schema.fields().is_empty().then(|| {
-        if task.partition_columns.is_empty() {
-            "Parquet write does not support data without columns"
-        } else {
-            "Parquet write does not support data whose columns are all partition columns"
-        }
-    });
+    let rows_not_supported = if !schema.fields().is_empty() {
+        None
+    } else if task.partition_columns.is_empty() {
+        Some("Parquet write does not support data without columns")
+    } else {
+        Some("Parquet write does not support data whose columns are all partition columns")
+    };
     let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
     while let Some(batch) = input.next().await.transpose()? {
