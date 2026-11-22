@@ -1546,6 +1546,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_path,
                 write_id,
                 overwrite,
+                write_success_file,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1557,7 +1558,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("invalid file write commit ID: {e}"))?;
                 Ok(Arc::new(
                     FileWriteCommitExec::new(input, object_store_url, table_path, write_id)
-                        .with_overwrite(overwrite),
+                        .with_overwrite(overwrite)
+                        .with_success_file(write_success_file),
                 ))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
@@ -3797,6 +3799,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_path: commit.table_path().to_string(),
                 write_id: commit.write_id().as_hyphenated().to_string(),
                 overwrite: commit.overwrite(),
+                write_success_file: commit.write_success_file(),
             })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
@@ -10060,7 +10063,8 @@ mod tests {
                 object_store::path::Path::from("warehouse/table"),
                 write_id,
             )
-            .with_overwrite(overwrite);
+            .with_overwrite(overwrite)
+            .with_success_file(!overwrite);
             let codec = RemoteExecutionCodec;
             let bytes = try_encode_physical_plan(&codec, Arc::new(commit))?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
@@ -10074,6 +10078,7 @@ mod tests {
             );
             assert_eq!(decoded.write_id(), &write_id);
             assert_eq!(decoded.overwrite(), overwrite);
+            assert_eq!(decoded.write_success_file(), !overwrite);
             assert_eq!(decoded.input().schema(), manifest_schema());
             assert_eq!(decoded.schema().field(0).name(), "count");
         }

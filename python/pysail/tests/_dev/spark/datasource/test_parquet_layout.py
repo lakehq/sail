@@ -103,6 +103,15 @@ def test_parquet_max_records_per_file(spark, tmp_path):
     assert sorted(r.id for r in spark.read.parquet(str(path)).collect()) == list(range(5))
 
 
+def test_parquet_write_without_success_file(spark, tmp_path):
+    path = tmp_path / "no_marker"
+    df = spark.range(0, 5, 1, 1)
+    df.write.option("mapreduce.fileoutputcommitter.marksuccessfuljobs", "false").parquet(str(path))
+    assert len(data_files(path)) == 1
+    assert not (path / "_SUCCESS").exists()
+    assert sorted(r.id for r in spark.read.parquet(str(path)).collect()) == list(range(5))
+
+
 def test_parquet_partitioned_write_layout(spark, tmp_path):
     path = tmp_path / "partitioned"
     df = spark.range(0, 20, 1, 2).withColumn("k", F.col("id") % 2)

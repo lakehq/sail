@@ -118,6 +118,7 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             max_open_files_per_task: None,
             max_records_per_file: None,
             max_file_size: None,
+            write_success_file: None,
             content_defined_chunking_enabled: Some(self.global.content_defined_chunking.enabled),
             content_defined_chunking_min_chunk_size: Some(
                 self.global.content_defined_chunking.min_chunk_size,
@@ -154,6 +155,7 @@ impl ParquetWriteOptions {
             max_open_files_per_task: _,
             max_records_per_file: _,
             max_file_size: _,
+            write_success_file: _,
             content_defined_chunking_enabled,
             content_defined_chunking_min_chunk_size,
             content_defined_chunking_max_chunk_size,
@@ -321,6 +323,7 @@ impl ResolveOptions for ParquetWriteOptions {
             max_open_files_per_task: Some(config.max_open_files_per_task()),
             max_records_per_file: Some(config.max_records_per_file()),
             max_file_size: Some(config.max_file_size()),
+            write_success_file: Some(config.write_success_file()),
             ..Default::default()
         });
         for layer in options {
@@ -395,6 +398,24 @@ mod tests {
         let options = resolve(vec![properties, option_list(&[("max_file_size", "0")])])?;
         assert_eq!(options.max_records_per_file, 7);
         assert_eq!(options.max_file_size, 0);
+
+        // The `_SUCCESS` file is written unless the session or the write says otherwise.
+        assert!(options.write_success_file);
+        for key in [
+            "write_success_file",
+            "writeSuccessFile",
+            "mapreduce.fileoutputcommitter.marksuccessfuljobs",
+        ] {
+            let options = resolve(vec![option_list(&[(key, "false")])])?;
+            assert!(!options.write_success_file, "{key}");
+        }
+        let config = SessionConfig::new().with_extension(Arc::new(
+            ParquetWriteConfig::new(0, NonZeroUsize::MIN).with_write_success_file(false),
+        ));
+        let other = SessionContext::new_with_config(config).state();
+        assert!(!ParquetWriteOptions::resolve(&other, vec![])?.write_success_file);
+        let kv = option_list(&[("write_success_file", "true")]);
+        assert!(ParquetWriteOptions::resolve(&other, vec![kv])?.write_success_file);
 
         // A limit on the rows that is not positive means that there is no limit.
         let options = resolve(vec![option_list(&[("max_records_per_file", "-1")])])?;

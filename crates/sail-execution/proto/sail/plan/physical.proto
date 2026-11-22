@@ -1074,6 +1074,7 @@ message FileWriteCommitExecNode {
   string table_path = 3;
   string write_id = 4;
   bool overwrite = 5;
+  bool write_success_file = 6;
 }
 
 message StreamCollectorExecNode {

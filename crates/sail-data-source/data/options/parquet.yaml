@@ -759,6 +759,24 @@
         - maxOpenFilesPerTask
       parser: crate::options::parsers::parse_non_zero_usize
 
+- key: write_success_file
+  description: |
+    (Writing) Whether to write an empty file named `_SUCCESS` to the output directory
+    after all Parquet files of a write have been written.
+    The file is not written when the write fails.
+    Defaults to the Sail configuration option `parquet.write_success_file`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - write_success_file
+        - writeSuccessFile
+        - mapreduce.fileoutputcommitter.marksuccessfuljobs
+      parser: crate::options::parsers::parse_bool
+
 - key: max_records_per_file
   description: |
     (Writing) The maximum number of rows in each Parquet file.

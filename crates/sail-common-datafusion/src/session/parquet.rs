@@ -12,6 +12,7 @@ pub struct ParquetWriteConfig {
     max_open_files_per_task: NonZeroUsize,
     max_records_per_file: i64,
     max_file_size: u64,
+    write_success_file: bool,
 }
 
 impl ParquetWriteConfig {
@@ -21,7 +22,19 @@ impl ParquetWriteConfig {
             max_open_files_per_task,
             max_records_per_file: 0,
             max_file_size: 0,
+            write_success_file: true,
         }
+    }
+
+    /// Sets whether a write completes with a `_SUCCESS` file.
+    pub fn with_write_success_file(mut self, write_success_file: bool) -> Self {
+        self.write_success_file = write_success_file;
+        self
+    }
+
+    /// Whether a write completes with a `_SUCCESS` file.
+    pub fn write_success_file(&self) -> bool {
+        self.write_success_file
     }
 
     /// Sets the limits on the rows and the size in bytes of each file.

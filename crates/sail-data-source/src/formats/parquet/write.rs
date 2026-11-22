@@ -34,6 +34,7 @@ impl WriteFormat for ParquetWriteFormat {
         // A limit on the rows of a file that is not positive means that there is no limit.
         let max_records_per_file = u64::try_from(self.options.max_records_per_file).unwrap_or(0);
         let max_file_size = self.options.max_file_size;
+        let write_success_file = self.options.write_success_file;
         let options = self
             .options
             .clone()
@@ -82,7 +83,8 @@ impl WriteFormat for ParquetWriteFormat {
         );
         Ok(Arc::new(
             FileWriteCommitExec::new(writer, sink.object_store_url, table_path, write_id)
-                .with_overwrite(overwrite),
+                .with_overwrite(overwrite)
+                .with_success_file(write_success_file),
         ))
     }
 

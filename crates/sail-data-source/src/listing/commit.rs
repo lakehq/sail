@@ -275,6 +275,7 @@ async fn commit_file_write(
     table_path: Path,
     write_id: Uuid,
     overwrite: bool,
+    write_success_file: bool,
     attempt: Option<u64>,
 ) -> Result<u64> {
     let success_file = table_path.clone().join(SUCCESS_FILE_NAME);
@@ -342,7 +343,9 @@ async fn commit_file_write(
         delete_file_stream(&store, files).await?;
     }
 
-    store.put(&success_file, PutPayload::default()).await?;
+    if write_success_file {
+        store.put(&success_file, PutPayload::default()).await?;
+    }
     Ok(manifests.num_rows)
 }
 
@@ -350,11 +353,12 @@ async fn commit_file_write(
 ///
 /// The input is the manifests of the writer tasks.
 /// The files of failed or superseded writer task attempts are deleted,
-/// and then an empty `_SUCCESS` file is written to the table directory.
+/// and then an empty `_SUCCESS` file is written to the table directory,
+/// unless the write is not to have the file.
 /// A write that overwrites also deletes everything else in the table directory
 /// that is not a file of the write, before the `_SUCCESS` file is written.
 /// The output is a single row with the number of rows written.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileWriteCommitExec {
     input: Arc<dyn ExecutionPlan>,
     object_store_url: ObjectStoreUrl,
@@ -362,6 +366,8 @@ pub struct FileWriteCommitExec {
     write_id: Uuid,
     /// Whether the write replaces the content of the table directory.
     overwrite: bool,
+    /// Whether the `_SUCCESS` file is written.
+    write_success_file: bool,
     /// The attempt of the task that runs the commit, when the writer tasks
     /// are attempted again whenever the commit is. This is [`None`] when the
     /// commit can be attempted again on its own.
@@ -388,6 +394,7 @@ impl FileWriteCommitExec {
             table_path,
             write_id,
             overwrite: false,
+            write_success_file: true,
             // The commit and the writer tasks are attempted once
             // when the plan is not run by tasks.
             attempt: Some(0),
@@ -414,6 +421,16 @@ impl FileWriteCommitExec {
 
     pub fn overwrite(&self) -> bool {
         self.overwrite
+    }
+
+    /// Sets whether the `_SUCCESS` file is written when the write is completed.
+    pub fn with_success_file(mut self, write_success_file: bool) -> Self {
+        self.write_success_file = write_success_file;
+        self
+    }
+
+    pub fn write_success_file(&self) -> bool {
+        self.write_success_file
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -505,6 +522,7 @@ impl ExecutionPlan for FileWriteCommitExec {
                 self.write_id,
             )
             .with_overwrite(self.overwrite)
+            .with_success_file(self.write_success_file)
             .with_attempt(self.attempt),
         ))
     }
@@ -526,15 +544,23 @@ impl ExecutionPlan for FileWriteCommitExec {
         let table_path = self.table_path.clone();
         let write_id = self.write_id;
         let overwrite = self.overwrite;
+        let write_success_file = self.write_success_file;
         let attempt = self.attempt.map(|x| x as u64);
         let schema = self.schema();
         let output = stream::once(async move {
             // The writer tasks can start when the input is executed, which must
             // not be before the commit has prepared the table directory.
             let open_input = move || input.execute(0, context);
-            let count =
-                commit_file_write(open_input, store, table_path, write_id, overwrite, attempt)
-                    .await?;
+            let count = commit_file_write(
+                open_input,
+                store,
+                table_path,
+                write_id,
+                overwrite,
+                write_success_file,
+                attempt,
+            )
+            .await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -698,13 +724,19 @@ mod tests {
     struct TestWrite {
         recording: Arc<RecordingStore>,
         store: Arc<dyn ObjectStore>,
+        /// Whether the commit writes the `_SUCCESS` file.
+        success_file: bool,
     }
 
     impl TestWrite {
         fn new() -> Self {
             let recording = Arc::new(RecordingStore::new());
             let store: Arc<dyn ObjectStore> = recording.clone();
-            Self { recording, store }
+            Self {
+                recording,
+                store,
+                success_file: true,
+            }
         }
 
         /// Creates a file without recording the request.
@@ -754,6 +786,7 @@ mod tests {
                 Path::from("table"),
                 WRITE_ID,
                 overwrite,
+                self.success_file,
                 attempt,
             )
             .await
@@ -1095,6 +1128,7 @@ mod tests {
                 Path::from("table"),
                 WRITE_ID,
                 false,
+                true,
                 attempt,
             );
             let canceled = tokio::time::timeout(std::time::Duration::from_millis(50), commit).await;
@@ -1325,6 +1359,42 @@ mod tests {
         let mut expected = new;
         expected.extend(["other/file".to_string(), "table/_SUCCESS".to_string()]);
         assert_eq!(write.files().await?, sorted(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_without_success_file() -> Result<()> {
+        // The commit does everything but write the `_SUCCESS` file.
+        for overwrite in [false, true] {
+            let mut write = TestWrite::new();
+            write.success_file = false;
+            let old = create_old_files(&write).await?;
+            let stale = format!("table/{}", name(0, &WRITE_ID, 0, 0));
+            write.create(&stale).await?;
+            let a = write
+                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
+                .await?;
+            let new = a.location.to_string();
+            let count = write
+                .commit_as(vec![manifest_batch(0, 1, 1, &[a])], overwrite, Some(1))
+                .await?;
+            assert_eq!(count, 10);
+            let requests = write.requests();
+            assert!(
+                requests.iter().all(|x| !x.starts_with("PUT")),
+                "{requests:?}"
+            );
+            assert!(requests.contains(&format!("DELETE {stale}")));
+            let mut expected: Vec<_> = if overwrite {
+                vec!["other/file".to_string()]
+            } else {
+                // The `_SUCCESS` file of an earlier write is kept
+                // by a write that does not overwrite.
+                old
+            };
+            expected.push(new);
+            assert_eq!(write.files().await?, sorted(expected));
+        }
         Ok(())
     }
 
@@ -1575,6 +1645,7 @@ mod tests {
                     table.clone(),
                     WRITE_ID,
                     overwrite,
+                    true,
                     Some(attempt as u64),
                 )
                 .await?;

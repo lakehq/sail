@@ -200,14 +200,9 @@ fn rewrite_write_attempt(
             ));
         }
         if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
-            let commit = FileWriteCommitExec::new(
-                Arc::clone(commit.input()),
-                commit.object_store_url().clone(),
-                commit.table_path().clone(),
-                *commit.write_id(),
-            )
-            .with_overwrite(commit.overwrite())
-            .with_attempt(inputs_are_running.then_some(attempt));
+            let commit = commit
+                .clone()
+                .with_attempt(inputs_are_running.then_some(attempt));
             return Ok(Transformed::yes(Arc::new(commit) as Arc<dyn ExecutionPlan>));
         }
         Ok(Transformed::no(node))
@@ -314,7 +309,8 @@ mod tests {
             object_store::path::Path::from("table"),
             uuid::Uuid::from_u128(1),
         )
-        .with_overwrite(true);
+        .with_overwrite(true)
+        .with_success_file(false);
         assert_eq!(commit.attempt(), Some(0));
         let plan: Arc<dyn ExecutionPlan> = Arc::new(commit);
         let input = |locator: TaskInputLocator| TaskInput {
@@ -351,6 +347,7 @@ mod tests {
                     .ok_or("missing commit")?;
                 assert_eq!(commit.attempt(), running.then_some(attempt));
                 assert!(commit.overwrite());
+                assert!(!commit.write_success_file());
                 assert_eq!(commit.table_path().as_ref(), "table");
             }
         }

@@ -147,7 +147,8 @@ impl ServerSessionFactory {
                 .with_file_limits(
                     self.config.parquet.max_records_per_file,
                     self.config.parquet.max_file_size,
-                ),
+                )
+                .with_write_success_file(self.config.parquet.write_success_file),
             ))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
