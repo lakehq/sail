@@ -498,28 +498,44 @@ async fn test_metrics() -> Result<()> {
 async fn test_page_row_limit_is_checked_within_the_limit() -> Result<()> {
     // The page limits of a column without levels and of a column with nulls
     // are only checked each time a number of rows has been written.
+    // The last column can have nulls and has none.
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, false),
         Field::new("b", DataType::Int64, true),
+        Field::new("c", DataType::Int64, true),
     ]));
     let batch = |rows: i64| -> Result<RecordBatch> {
         let a = Int64Array::from_iter_values(0..rows);
         let b: Int64Array = (0..rows).map(|x| (x % 7 != 0).then_some(x)).collect();
+        let c = Int64Array::from_iter_values(0..rows);
         Ok(RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(a), Arc::new(b)],
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
         )?)
     };
-    for (partition, (limit, rows, pages)) in
-        [(100, 5000, 50), (1, 3, 3), (0, 3, 3), (20000, 5000, 1)]
-            .into_iter()
-            .enumerate()
-    {
+    // A limit of zero means that the rows of a page are not limited. The pages
+    // are limited by their size then, which is checked every 1024 rows.
+    // The size limit of the last cases is the size of 1024 values.
+    let mut files = vec![];
+    for (limit, size_limit, rows, pages) in [
+        (100, None, 5000, [50, 50, 50]),
+        (1, None, 3, [3, 3, 3]),
+        (0, None, 3, [1, 1, 1]),
+        (0, None, 5000, [1, 1, 1]),
+        (20000, None, 5000, [1, 1, 1]),
+        (0, Some(8192), 5000, [5, 3, 5]),
+        (1_000_000, Some(8192), 5000, [5, 3, 5]),
+    ] {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let mut task = test_task(Arc::clone(&store), partition);
+        let mut task = test_task(Arc::clone(&store), 0);
         task.options.global.data_page_row_count_limit = limit;
+        if let Some(size_limit) = size_limit {
+            task.options.global.data_pagesize_limit = size_limit;
+            task.options.global.dictionary_enabled = Some(false);
+        }
         run_task(task, &schema, vec![batch(rows)?]).await?;
-        let data = read_bytes(store.as_ref(), &file_name(partition, 0, ".parquet")).await?;
+        let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+        files.push(data.clone());
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             data,
             ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
@@ -529,12 +545,17 @@ async fn test_page_row_limit_is_checked_within_the_limit() -> Result<()> {
         let index = metadata
             .offset_index()
             .ok_or_else(|| internal_datafusion_err!("missing offset index"))?;
-        for column in &index[0] {
-            assert_eq!(column.page_locations().len(), pages, "limit {limit}");
-        }
+        let actual: Vec<usize> = index[0]
+            .iter()
+            .map(|column| column.page_locations().len())
+            .collect();
+        assert_eq!(actual, pages, "limit {limit} {size_limit:?}");
         let batches = builder.build()?.collect::<Result<Vec<_>, _>>()?;
         assert_eq!(concat_batches(&schema, &batches)?, batch(rows)?);
     }
+    // A limit of zero writes the same file as a limit that is not reached.
+    assert!(files[3] == files[4]);
+    assert!(files[5] == files[6]);
     Ok(())
 }
 

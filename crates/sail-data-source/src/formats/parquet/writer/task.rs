@@ -29,6 +29,12 @@ use crate::listing::part_file::part_file_name;
 /// before the limits of its data page are checked.
 const MAX_WRITE_BATCH_SIZE: usize = 1024;
 
+/// The limit on the rows of a data page that the Arrow writer is given when
+/// the rows of a page are not limited. The header of a data page counts
+/// the values of the page with a 32-bit signed integer, so a page cannot
+/// have more rows than this.
+const UNLIMITED_PAGE_ROWS: usize = i32::MAX as usize;
+
 /// The description of the work of one Parquet writer task.
 pub struct ParquetWriteTask {
     pub store: Arc<dyn ObjectStore>,
@@ -209,10 +215,15 @@ impl FileFactory {
         if !skip_arrow_metadata {
             options.arrow_schema(&schema);
         }
-        // The limits of a data page are checked each time this number of rows
-        // has been written to a column. The number is at most the limit on the rows
+        // A limit of zero means that the rows of a data page are not limited,
+        // and the Arrow writer does not accept zero for either of the two values.
+        // The limits of a data page are checked each time a number of rows has been
+        // written to a column. That number is at most the limit on the rows
         // of a page, so that a page does not get more rows than a small limit allows.
-        let page_rows = options.global.data_page_row_count_limit.max(1);
+        let page_rows = match options.global.data_page_row_count_limit {
+            0 => UNLIMITED_PAGE_ROWS,
+            rows => rows,
+        };
         options.global.data_page_row_count_limit = page_rows;
         options.global.write_batch_size = page_rows.min(MAX_WRITE_BATCH_SIZE);
         let mut builder = WriterPropertiesBuilder::try_from(&options)?;
