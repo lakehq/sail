@@ -25,6 +25,10 @@ use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WrittenFile, delete_files, manifest_batch};
 use crate::listing::part_file::part_file_name;
 
+/// The largest number of rows that are written to a column
+/// before the limits of its data page are checked.
+const MAX_WRITE_BATCH_SIZE: usize = 1024;
+
 /// The description of the work of one Parquet writer task.
 pub struct ParquetWriteTask {
     pub store: Arc<dyn ObjectStore>,
@@ -205,6 +209,12 @@ impl FileFactory {
         if !skip_arrow_metadata {
             options.arrow_schema(&schema);
         }
+        // The limits of a data page are checked each time this number of rows
+        // has been written to a column. The number is at most the limit on the rows
+        // of a page, so that a page does not get more rows than a small limit allows.
+        let page_rows = options.global.data_page_row_count_limit.max(1);
+        options.global.data_page_row_count_limit = page_rows;
+        options.global.write_batch_size = page_rows.min(MAX_WRITE_BATCH_SIZE);
         let mut builder = WriterPropertiesBuilder::try_from(&options)?;
         if let Some(sorting) = task
             .sorting

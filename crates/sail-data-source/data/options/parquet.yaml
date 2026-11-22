@@ -421,26 +421,6 @@
         - option.dataPageSizeLimit
       parser: crate::options::parsers::parse_usize
 
-- key: write_batch_size
-  description: |
-    (Writing) The Parquet writer batch size in bytes.
-    Defaults to the Sail configuration option `parquet.write_batch_size`.
-  supported: true
-  rust_type: usize
-  scopes:
-    - write
-  origins:
-    - type: option
-      keys:
-        - write_batch_size
-        - writeBatchSize
-      parser: crate::options::parsers::parse_usize
-    - type: table_property
-      keys:
-        - option.write_batch_size
-        - option.writeBatchSize
-      parser: crate::options::parsers::parse_usize
-
 - key: writer_version
   description: |
     (Writing) The Parquet writer version. Valid values are `1.0` and `2.0`.
@@ -654,7 +634,9 @@
 
 - key: data_page_row_count_limit
   description: |
-    (Writing) The best-effort maximum number of rows in data page.
+    (Writing) The best-effort maximum number of rows in a data page.
+    The writer checks this limit every 1024 rows, or more often when the limit is smaller than 1024.
+    A page can exceed the limit by fewer rows than that interval.
     Defaults to the Sail configuration option `parquet.data_page_row_count_limit`.
   supported: true
   rust_type: usize

@@ -100,7 +100,6 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetWritePartialOptions> {
         Ok(ParquetWritePartialOptions {
             data_page_size_limit: Some(self.global.data_pagesize_limit),
-            write_batch_size: Some(self.global.write_batch_size),
             writer_version: Some(self.global.writer_version.to_string()),
             skip_arrow_metadata: Some(self.global.skip_arrow_metadata),
             compression: Some(self.global.compression.clone()),
@@ -135,7 +134,6 @@ impl ParquetWriteOptions {
     pub fn into_table_options(self) -> DataSourceResult<TableParquetOptions> {
         let ParquetWriteOptions {
             data_page_size_limit,
-            write_batch_size,
             writer_version,
             skip_arrow_metadata,
             compression,
@@ -260,7 +258,6 @@ impl ParquetWriteOptions {
         };
         let global = ParquetOptions {
             data_pagesize_limit: data_page_size_limit,
-            write_batch_size,
             writer_version,
             skip_arrow_metadata,
             created_by: SAIL_PARQUET_CREATED_BY.to_string(),
@@ -334,7 +331,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use datafusion_common::config::MaxRowGroupBytes;
+    use datafusion_common::config::{MaxRowGroupBytes, ParquetOptions};
     use datafusion_common::parquet_config::DFParquetWriterVersion;
     use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
     use sail_common_datafusion::datasource::OptionLayer;
@@ -451,7 +448,6 @@ mod tests {
 
         let kv = option_list(&[
             ("data_page_size_limit", "1024"),
-            ("write_batch_size", "1000"),
             ("writer_version", "2.0"),
             ("skip_arrow_metadata", "true"),
             ("compression", "snappy"),
@@ -481,7 +477,6 @@ mod tests {
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
-        assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(
             options.global.writer_version,
             DFParquetWriterVersion::from_str("2.0")?
@@ -720,6 +715,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
             ("encoding", "plain"),
+            ("write_batch_size", "16"),
             ("no_such_option", "1"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
@@ -729,6 +725,10 @@ mod tests {
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.encoding, None);
+        assert_eq!(
+            options.global.write_batch_size,
+            ParquetOptions::default().write_batch_size
+        );
 
         Ok(())
     }

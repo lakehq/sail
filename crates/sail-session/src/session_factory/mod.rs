@@ -53,7 +53,6 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.max_in_list_size = config.max_in_list_size;
     parquet.coerce_int96 = Some("us".to_string());
     parquet.data_pagesize_limit = config.data_page_size_limit;
-    parquet.write_batch_size = config.write_batch_size;
     parquet.writer_version =
         DFParquetWriterVersion::from_str(config.writer_version.as_str()).unwrap_or_default();
     parquet.skip_arrow_metadata = config.skip_arrow_metadata;

@@ -604,7 +604,6 @@ pub struct ParquetConfig {
     pub max_predicate_cache_size: usize,
     pub max_in_list_size: usize,
     pub data_page_size_limit: usize,
-    pub write_batch_size: usize,
     pub writer_version: String,
     pub skip_arrow_metadata: bool,
     pub compression: String,

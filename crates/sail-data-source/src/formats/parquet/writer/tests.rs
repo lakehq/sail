@@ -33,10 +33,12 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use datafusion::parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
 use datafusion::parquet::basic::Compression;
-use datafusion::parquet::file::metadata::{ParquetMetaData, SortingColumn};
+use datafusion::parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, SortingColumn};
 use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use datafusion::physical_expr::Distribution;
 use datafusion::physical_expr::expressions::Column;
@@ -491,6 +493,50 @@ async fn test_metrics() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_page_row_limit_is_checked_within_the_limit() -> Result<()> {
+    // The page limits of a column without levels and of a column with nulls
+    // are only checked each time a number of rows has been written.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, true),
+    ]));
+    let batch = |rows: i64| -> Result<RecordBatch> {
+        let a = Int64Array::from_iter_values(0..rows);
+        let b: Int64Array = (0..rows).map(|x| (x % 7 != 0).then_some(x)).collect();
+        Ok(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a), Arc::new(b)],
+        )?)
+    };
+    for (partition, (limit, rows, pages)) in
+        [(100, 5000, 50), (1, 3, 3), (0, 3, 3), (20000, 5000, 1)]
+            .into_iter()
+            .enumerate()
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), partition);
+        task.options.global.data_page_row_count_limit = limit;
+        run_task(task, &schema, vec![batch(rows)?]).await?;
+        let data = read_bytes(store.as_ref(), &file_name(partition, 0, ".parquet")).await?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            data,
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )?;
+        let metadata = Arc::clone(builder.metadata());
+        assert_eq!(metadata.num_row_groups(), 1);
+        let index = metadata
+            .offset_index()
+            .ok_or_else(|| internal_datafusion_err!("missing offset index"))?;
+        for column in &index[0] {
+            assert_eq!(column.page_locations().len(), pages, "limit {limit}");
+        }
+        let batches = builder.build()?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(concat_batches(&schema, &batches)?, batch(rows)?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_options_reach_file_metadata() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = Arc::new(Schema::new(vec![
@@ -803,6 +849,7 @@ fn reference_file(
 ) -> Result<Vec<u8>, datafusion::parquet::errors::ParquetError> {
     let mut options = options.clone();
     options.arrow_schema(&batch.schema());
+    options.global.write_batch_size = options.global.data_page_row_count_limit.clamp(1, 1024);
     let props = WriterPropertiesBuilder::try_from(&options)
         .map_err(|e| datafusion::parquet::errors::ParquetError::General(e.to_string()))?
         .build();
@@ -2011,6 +2058,7 @@ fn reference_file_of_batches(
     let schema = batches[0].schema();
     let mut options = options.clone();
     options.arrow_schema(&schema);
+    options.global.write_batch_size = options.global.data_page_row_count_limit.clamp(1, 1024);
     let props = WriterPropertiesBuilder::try_from(&options)?.build();
     let mut writer = ArrowWriter::try_new_with_options(
         vec![],
@@ -2039,7 +2087,7 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
     let mut by_rows = TableParquetOptions::default();
     by_rows.global.max_row_group_size = 3000;
     by_rows.global.data_pagesize_limit = 512;
-    by_rows.global.write_batch_size = 64;
+    by_rows.global.data_page_row_count_limit = 64;
     let mut by_bytes = TableParquetOptions::default();
     by_bytes.global.max_row_group_bytes = Some("65536".parse()?);
     by_bytes.global.compression = Some("snappy".to_string());
@@ -2188,7 +2236,7 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
         // without dictionaries and with small pages.
         options.global.dictionary_enabled = Some(false);
         options.global.data_pagesize_limit = 512;
-        options.global.write_batch_size = 16;
+        options.global.data_page_row_count_limit = 16;
         options.global.max_row_group_bytes = Some(limit.parse()?);
         cases.push((options, None));
     }
@@ -2339,7 +2387,7 @@ async fn check_encoding_with_random_settings(
         // without dictionaries and with small pages.
         options.global.dictionary_enabled = Some(false);
         options.global.data_pagesize_limit = 512;
-        options.global.write_batch_size = 16;
+        options.global.data_page_row_count_limit = 16;
         options.global.max_row_group_bytes = Some((5000 + rng.below(30000)).to_string().parse()?);
     }
     if rng.below(4) == 0 {
