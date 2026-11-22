@@ -718,26 +718,6 @@
         - option.bloomFilterNdv
       parser: crate::options::parsers::parse_optional_non_zero_u64
 
-- key: encoding_parallelism
-  description: |
-    (Writing) The maximum number of CPU cores that one write task uses to encode Parquet files.
-    A write task writes one partition of the data.
-    If the value is `0`, the limit is chosen automatically from the number of CPU cores
-    and the number of write tasks that run at the same time.
-    If the value is `1`, each write task encodes its files on a single CPU core.
-    The content of the files does not depend on this option.
-    Defaults to the Sail configuration option `parquet.encoding_parallelism`.
-  supported: true
-  rust_type: usize
-  scopes:
-    - write
-  origins:
-    - type: option
-      keys:
-        - encoding_parallelism
-        - encodingParallelism
-      parser: crate::options::parsers::parse_usize
-
 - key: max_open_files_per_task
   description: |
     (Writing) The maximum number of partition directories that one write task writes to

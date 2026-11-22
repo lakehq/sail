@@ -32,7 +32,6 @@ impl WriteFormat for ParquetWriteFormat {
         ctx: &dyn Session,
         input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let encoding_parallelism = self.options.encoding_parallelism;
         let max_open_files_per_task = self.options.max_open_files_per_task;
         // A limit on the rows of a file that is not positive means that there is no limit.
         let max_records_per_file = u64::try_from(self.options.max_records_per_file).unwrap_or(0);
@@ -84,7 +83,6 @@ impl WriteFormat for ParquetWriteFormat {
                 file_suffix,
                 ordering,
                 write_sorting_columns,
-                encoding_parallelism,
                 max_open_files_per_task,
             )?
             .with_file_limits(max_records_per_file, max_file_size),

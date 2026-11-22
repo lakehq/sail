@@ -82,7 +82,6 @@ pub struct ParquetWriteExec {
     file_suffix: String,
     ordering: Option<LexOrdering>,
     write_sorting_columns: bool,
-    encoding_parallelism: usize,
     max_open_files_per_task: NonZeroUsize,
     /// The maximum number of rows in each file, or zero when there is no limit.
     max_records_per_file: u64,
@@ -97,8 +96,6 @@ impl ParquetWriteExec {
     ///
     /// `ordering` is the ordering that each input partition must have.
     /// It is recorded in the file metadata when `write_sorting_columns` is set.
-    /// `encoding_parallelism` is the maximum number of threads that each task
-    /// uses to encode files, or zero when the number is chosen automatically.
     /// `max_open_files_per_task` is the number of files that each task keeps open
     /// at the same time when the data has partition columns.
     #[expect(clippy::too_many_arguments)]
@@ -112,7 +109,6 @@ impl ParquetWriteExec {
         file_suffix: String,
         ordering: Option<LexOrdering>,
         write_sorting_columns: bool,
-        encoding_parallelism: usize,
         max_open_files_per_task: NonZeroUsize,
     ) -> Result<Self> {
         if matches!(input.boundedness(), Boundedness::Unbounded { .. }) {
@@ -150,7 +146,6 @@ impl ParquetWriteExec {
             file_suffix,
             ordering,
             write_sorting_columns,
-            encoding_parallelism,
             max_open_files_per_task,
             max_records_per_file: 0,
             max_file_size: 0,
@@ -221,10 +216,6 @@ impl ParquetWriteExec {
 
     pub fn write_sorting_columns(&self) -> bool {
         self.write_sorting_columns
-    }
-
-    pub fn encoding_parallelism(&self) -> usize {
-        self.encoding_parallelism
     }
 
     pub fn max_open_files_per_task(&self) -> NonZeroUsize {
@@ -299,7 +290,6 @@ impl ExecutionPlan for ParquetWriteExec {
             self.file_suffix.clone(),
             self.ordering.clone(),
             self.write_sorting_columns,
-            self.encoding_parallelism,
             self.max_open_files_per_task,
         )?;
         Ok(Arc::new(

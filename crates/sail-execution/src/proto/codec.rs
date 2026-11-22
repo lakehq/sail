@@ -1491,7 +1491,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 file_suffix,
                 ordering,
                 write_sorting_columns,
-                encoding_parallelism,
                 max_open_files_per_task,
                 schema,
                 max_records_per_file,
@@ -1533,7 +1532,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_suffix,
                         ordering,
                         write_sorting_columns,
-                        encoding_parallelism as usize,
                         max_open_files_per_task,
                     )?
                     .with_schema(Arc::new(try_decode_schema(&schema)?))
@@ -3782,7 +3780,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
                     .transpose()?,
                 write_sorting_columns: write.write_sorting_columns(),
-                encoding_parallelism: write.encoding_parallelism() as u64,
                 max_open_files_per_task: write.max_open_files_per_task().get() as u64,
                 schema: try_encode_schema(write.data_schema().as_ref())?,
                 max_records_per_file: write.max_records_per_file(),
@@ -9912,11 +9909,11 @@ mod tests {
             ordering,
             write_sorting_columns,
             required_ordering,
-            encoding_parallelism,
+            max_records_per_file,
             max_open_files_per_task,
         ) in [
             (Some(ordering), true, required_ordering, 0, 100),
-            (None, false, vec![None], 3, 1),
+            (None, false, vec![None], 3000, 1),
         ] {
             let max_open_files_per_task = std::num::NonZeroUsize::new(max_open_files_per_task)
                 .ok_or_else(|| plan_datafusion_err!("invalid number of open files"))?;
@@ -9930,10 +9927,9 @@ mod tests {
                 ".snappy.parquet".to_string(),
                 ordering,
                 write_sorting_columns,
-                encoding_parallelism,
                 max_open_files_per_task,
             )?
-            .with_file_limits(encoding_parallelism as u64 * 1000, u64::MAX - 7);
+            .with_file_limits(max_records_per_file, u64::MAX - 7);
             let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
             let decoded = decoded
@@ -9949,12 +9945,8 @@ mod tests {
             assert_eq!(decoded.options(), &options);
             assert_eq!(decoded.file_suffix(), ".snappy.parquet");
             assert_eq!(decoded.write_sorting_columns(), write_sorting_columns);
-            assert_eq!(decoded.encoding_parallelism(), encoding_parallelism);
             assert_eq!(decoded.max_open_files_per_task(), max_open_files_per_task);
-            assert_eq!(
-                decoded.max_records_per_file(),
-                encoding_parallelism as u64 * 1000
-            );
+            assert_eq!(decoded.max_records_per_file(), max_records_per_file);
             assert_eq!(decoded.max_file_size(), u64::MAX - 7);
             assert_eq!(decoded.required_input_ordering(), required_ordering);
             assert_eq!(decoded.input().schema(), schema);
@@ -10021,7 +10013,6 @@ mod tests {
             ".parquet".to_string(),
             None,
             false,
-            0,
             std::num::NonZeroUsize::MIN,
         )?;
         assert_eq!(write.data_schema(), &planned);

@@ -804,19 +804,6 @@
     (the `parquet.max_row_group_size` option), so the bloom filter is never undersized.
   experimental: true
 
-- key: parquet.encoding_parallelism
-  type: number
-  default: "0"
-  description: |
-    (Writing) The maximum number of CPU cores that one write task uses to encode Parquet files.
-    A write task writes one partition of the data.
-    If the value is `0`, the limit is chosen automatically from the number of CPU cores
-    and the number of write tasks that run at the same time.
-    If the value is `1`, each write task encodes its files on a single CPU core.
-    In cluster mode, the limit applies to each write task on each worker.
-    The content of the files does not depend on this option.
-  experimental: true
-
 - key: parquet.write_success_file
   type: boolean
   default: "true"

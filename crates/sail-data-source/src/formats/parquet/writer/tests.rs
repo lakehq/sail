@@ -2726,7 +2726,6 @@ fn partitioned_write_plan(
         ".parquet".to_string(),
         None,
         false,
-        0,
         NonZeroUsize::new(100).ok_or_else(|| internal_datafusion_err!("zero"))?,
     )?;
     let mut config = ConfigOptions::default();
@@ -2911,7 +2910,6 @@ fn write_exec(
         ".zstd.parquet".to_string(),
         ordering,
         write_sorting_columns,
-        0,
         NonZeroUsize::MIN,
     )
 }
@@ -3244,7 +3242,6 @@ async fn test_canceled_write_removes_the_files_of_all_writer_tasks() -> Result<(
             ".zstd.parquet".to_string(),
             None,
             false,
-            0,
             NonZeroUsize::MIN,
         )?;
         let manifests = CoalesceBatchesExec::new(
@@ -3357,7 +3354,6 @@ async fn test_failed_or_canceled_write_stops_the_distribution_of_its_rows() -> R
                 ".parquet".to_string(),
                 None,
                 false,
-                0,
                 NonZeroUsize::MIN,
             )?
             .with_file_limits(1000, 0);
@@ -3498,7 +3494,6 @@ fn test_write_plan_validation() -> Result<()> {
         ".parquet".to_string(),
         None,
         false,
-        0,
         NonZeroUsize::MIN,
     );
     assert!(
@@ -3580,7 +3575,6 @@ async fn test_rows_require_column_in_files() -> Result<()> {
             ".parquet".to_string(),
             None,
             false,
-            0,
             NonZeroUsize::MIN,
         )?);
         let result = collect(commit_exec(writer)?, ctx.task_ctx()).await;
@@ -3614,7 +3608,6 @@ async fn test_rows_require_column_in_files() -> Result<()> {
         ".parquet".to_string(),
         None,
         false,
-        0,
         NonZeroUsize::MIN,
     )?);
     let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
@@ -3678,7 +3671,6 @@ async fn test_write_plan_writes_planned_schema() -> Result<()> {
             ".parquet".to_string(),
             None,
             false,
-            0,
             NonZeroUsize::MAX,
         )?;
         assert_eq!(writer.data_schema(), &input_schema);
@@ -3779,7 +3771,6 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
             ".parquet".to_string(),
             None,
             false,
-            3,
             max_open_files,
         )?);
         // The limits are kept when the plan is rewritten.
@@ -3791,7 +3782,6 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
         let writer = plan
             .downcast_ref::<ParquetWriteExec>()
             .ok_or_else(|| internal_datafusion_err!("unexpected plan"))?;
-        assert_eq!(writer.encoding_parallelism(), 3);
         assert_eq!(writer.max_open_files_per_task(), max_open_files);
 
         let output = collect(commit_exec(Arc::clone(&plan))?, ctx.task_ctx()).await?;

@@ -635,7 +635,6 @@ pub struct ParquetConfig {
         deserialize_with = "deserialize_non_zero"
     )]
     pub bloom_filter_ndv: Option<u64>,
-    pub encoding_parallelism: usize,
     pub max_open_files_per_task: NonZeroUsize,
     pub write_success_file: bool,
     pub max_records_per_file: i64,

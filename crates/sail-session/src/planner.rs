@@ -1618,7 +1618,6 @@ mod tests {
         ))?;
         let config = config.with_extension(registry).with_extension(Arc::new(
             sail_common_datafusion::session::parquet::ParquetWriteConfig::new(
-                0,
                 std::num::NonZeroUsize::MIN,
             ),
         ));
