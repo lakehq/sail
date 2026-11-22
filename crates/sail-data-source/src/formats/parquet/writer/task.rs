@@ -327,10 +327,32 @@ pub(super) struct DirectoryWriter {
 }
 
 /// A file that has all its rows and is being completed.
-struct ClosingFile {
+pub(super) struct ClosingFile {
     task: JoinHandle<Result<StagedFile>>,
     /// The memory that the file used when it received its last row.
     memory_size: usize,
+}
+
+impl ClosingFile {
+    /// Starts to complete the file.
+    fn start(factory: &FileFactory, writer: ParquetFileWriter) -> Self {
+        Self {
+            memory_size: writer.memory_size(),
+            task: factory.files.start_close(writer),
+        }
+    }
+
+    /// The memory that the task counts for the file until the file is staged.
+    pub fn memory_size(&self) -> usize {
+        self.memory_size
+    }
+
+    /// Waits until the file is staged.
+    pub async fn wait(self) -> Result<StagedFile> {
+        self.task
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    }
 }
 
 impl DirectoryWriter {
@@ -401,10 +423,7 @@ impl DirectoryWriter {
                 // of the file are encoded. Only one file is completed at a time.
                 self.wait_for_closing(written).await?;
                 if let Some(writer) = self.writer.take() {
-                    self.closing = Some(ClosingFile {
-                        memory_size: writer.memory_size(),
-                        task: factory.files.start_close(*writer),
-                    });
+                    self.closing = Some(ClosingFile::start(factory, *writer));
                 }
             }
             match rest {
@@ -428,11 +447,7 @@ impl DirectoryWriter {
     /// Waits for the file that is being completed.
     async fn wait_for_closing(&mut self, written: &mut Vec<StagedFile>) -> Result<()> {
         if let Some(closing) = self.closing.take() {
-            let file = closing
-                .task
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))??;
-            written.push(file);
+            written.push(closing.wait().await?);
         }
         Ok(())
     }
@@ -449,11 +464,12 @@ impl DirectoryWriter {
         Ok(())
     }
 
-    /// Starts to complete the files of the directory, and returns the tasks
-    /// that complete them. More rows for the directory go to a new file.
-    pub fn start_close(&mut self, factory: &FileFactory) -> Vec<JoinHandle<Result<StagedFile>>> {
-        let closing = self.closing.take().map(|x| x.task);
-        let writer = self.writer.take().map(|x| factory.files.start_close(*x));
+    /// Starts to complete the files of the directory, and returns the files
+    /// that are being completed. More rows for the directory go to a new file.
+    pub fn start_close(&mut self, factory: &FileFactory) -> Vec<ClosingFile> {
+        let closing = self.closing.take();
+        let writer = self.writer.take();
+        let writer = writer.map(|writer| ClosingFile::start(factory, *writer));
         closing.into_iter().chain(writer).collect()
     }
 }
@@ -484,10 +500,16 @@ impl TaskOutput {
         }
     }
 
-    async fn close(&mut self, factory: &FileFactory, written: &mut Vec<StagedFile>) -> Result<()> {
+    /// Completes the files. The reservation is kept up to date while rows are still written.
+    async fn close(
+        &mut self,
+        factory: &FileFactory,
+        written: &mut Vec<StagedFile>,
+        reservation: &MemoryReservation,
+    ) -> Result<()> {
         match self {
             Self::Directory(x) => x.close(factory, written).await,
-            Self::Partitioned(x) => x.close(factory, written).await,
+            Self::Partitioned(x) => x.close(factory, written, reservation).await,
         }
     }
 }
@@ -621,7 +643,7 @@ async fn write_files(
         // so that an empty result can still be written.
         output.open(&factory)?;
     }
-    output.close(&factory, &mut written).await?;
+    output.close(&factory, &mut written, &reservation).await?;
     reservation.free();
     for file in &written {
         metrics.record(file);

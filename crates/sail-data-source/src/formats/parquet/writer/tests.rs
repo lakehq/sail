@@ -4197,6 +4197,78 @@ async fn test_partitioned_task_that_fails_or_is_canceled_leaves_nothing() -> Res
     Ok(())
 }
 
+#[tokio::test]
+async fn test_partitioned_task_counts_the_memory_of_files_that_are_being_completed() -> Result<()> {
+    // The memory that the task has reserved when it waits, for the input and
+    // the task that the function returns for the object store.
+    async fn reserved(
+        input: impl FnOnce(&Arc<FaultStore>) -> (ParquetWriteTask, SendableRecordBatchStream),
+    ) -> Result<usize> {
+        let tasks = tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks();
+        let store = FaultStore::new();
+        // The file of the first key is not staged before the gate is opened.
+        let gate = store.hold_at("PART", "p=0/");
+        let (mut task, input) = input(&store);
+        task.publisher = store.publisher(Mode::Multipart);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut stream = Box::pin(write_partition(
+            task,
+            input,
+            MemoryConsumer::new("test").register(&pool),
+            ParquetWriteMetrics::new(&metrics, 0),
+        ));
+        let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
+        assert!(waiting.await.is_err());
+        let reserved = pool.reserved();
+        drop(stream);
+        gate.open();
+        wait_for_tasks(tasks).await?;
+        store.wait_for(&[]).await?;
+        assert_eq!(pool.reserved(), 0);
+        Ok(reserved)
+    }
+
+    let schema = keyed_batch(&[], 0)?.schema();
+    // Half of the size of 2,000 values of the column of the files.
+    let size = 1000 * size_of::<i64>();
+
+    // The task has an open file with one row, and it waits for its input.
+    let batch = keyed_batch(&[Some(1)], 0)?;
+    let one_row = reserved(|store| {
+        let task = fault_partition_task(store, Mode::Multipart, 2, true);
+        let input = test_stream_with_end(&schema, vec![batch], futures::stream::pending());
+        (task, input)
+    })
+    .await?;
+
+    // The file of the first key is being completed in addition to that.
+    let batch = keyed_batch(&[vec![Some(0); 2000], vec![Some(1)]].concat(), 0)?;
+    let completing = reserved(|store| {
+        let task = fault_partition_task(store, Mode::Multipart, 2, true);
+        let input = test_stream_with_end(&schema, vec![batch], futures::stream::pending());
+        (task, input)
+    })
+    .await?;
+    assert!(completing >= one_row + size, "{completing} {one_row}");
+
+    // The rows of the first key are sorted, and the task waits for their file
+    // when it has written the first rows of the next key after the end of its input.
+    let keys = [vec![Some(9)], vec![Some(0); 2000], vec![Some(1); 3000]].concat();
+    let batch = keyed_batch(&keys, 0)?;
+    let sorted = reserved(|store| {
+        let mut task = fault_partition_task(store, Mode::Multipart, 1, false);
+        let config = SessionConfig::new().with_batch_size(1000);
+        task.context = Arc::new(TaskContext::default().with_session_config(config));
+        (task, test_stream(&schema, vec![batch]))
+    })
+    .await?;
+    assert!(sorted >= one_row + size, "{sorted} {one_row}");
+    Ok(())
+}
+
 /// The parts of a file have the same size, and the file is the file
 /// that is written to an object store directly.
 #[tokio::test]

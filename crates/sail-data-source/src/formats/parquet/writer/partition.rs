@@ -16,6 +16,7 @@ use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
@@ -38,9 +39,8 @@ use datafusion_common::{
 use futures::StreamExt;
 use object_store::path::Path;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::task::JoinHandle;
 
-use crate::formats::parquet::writer::task::{DirectoryWriter, FileFactory};
+use crate::formats::parquet::writer::task::{ClosingFile, DirectoryWriter, FileFactory};
 use crate::listing::partition::DEFAULT_PARTITION_NAME;
 use crate::listing::staging::StagedFile;
 
@@ -658,7 +658,7 @@ pub(super) struct PartitionedWriter {
     /// The files that are being completed, in the order in which they received
     /// their last rows. The number of these files and of the directories that
     /// receive rows together is at most the number of directories that can be open.
-    closing: VecDeque<JoinHandle<Result<StagedFile>>>,
+    closing: VecDeque<ClosingFile>,
     overflow: Option<Overflow>,
 }
 
@@ -787,24 +787,28 @@ impl PartitionedWriter {
         written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         while self.closing.len() > limit {
-            if let Some(task) = self.closing.pop_front() {
-                let file = task
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))??;
-                written.push(file);
+            if let Some(file) = self.closing.pop_front() {
+                written.push(file.wait().await?);
             }
         }
         Ok(())
     }
 
+    /// The memory of the files in the open directories and of the files
+    /// that are being completed.
     pub fn memory_size(&self) -> usize {
-        self.open.values().map(|writer| writer.memory_size()).sum()
+        let open: usize = self.open.values().map(|writer| writer.memory_size()).sum();
+        let closing: usize = self.closing.iter().map(|file| file.memory_size()).sum();
+        open + closing
     }
 
+    /// Completes the files of the open directories, and writes the rows that were
+    /// sorted. The reservation follows the memory of the files while these rows are written.
     pub async fn close(
         &mut self,
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
+        reservation: &MemoryReservation,
     ) -> Result<()> {
         // The sorted rows are written to one directory at a time.
         let others = usize::from(self.overflow.is_some());
@@ -845,6 +849,10 @@ impl PartitionedWriter {
                     .await?;
                 start += length;
             }
+            let current = current
+                .as_ref()
+                .map_or(0, |(_, writer)| writer.memory_size());
+            reservation.try_resize(self.memory_size() + current)?;
         }
         if let Some((_, mut writer)) = current {
             self.start_close(&mut writer, factory, written, 0).await?;
