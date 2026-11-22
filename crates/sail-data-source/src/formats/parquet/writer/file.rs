@@ -13,6 +13,7 @@ use object_store::buffered::BufWriter;
 use object_store::path::Path;
 
 use crate::formats::parquet::writer::encoder::ColumnEncoder;
+use crate::formats::parquet::writer::resources::EncodeResources;
 use crate::listing::commit::WrittenFile;
 
 /// The maximum number of concurrent part uploads for one file.
@@ -28,12 +29,13 @@ pub struct ParquetFileWriter {
     inner: FileEncoder,
     location: Path,
     rows: u64,
+    resources: Arc<EncodeResources>,
 }
 
 enum FileEncoder {
     /// Encodes the file with content-defined chunking.
     Arrow(Box<AsyncArrowWriter<BufWriter>>),
-    /// Encodes the columns of the file one after another or in parallel.
+    /// Encodes the columns of the file in the writer task or in other tasks.
     Columns(Box<ColumnEncoder>),
 }
 
@@ -45,7 +47,7 @@ impl ParquetFileWriter {
         props: WriterProperties,
         skip_arrow_metadata: bool,
         buffer_size: usize,
-        lanes: usize,
+        resources: Arc<EncodeResources>,
     ) -> Result<Self> {
         let writer = BufWriter::with_capacity(store, location.clone(), buffer_size)
             .with_max_concurrency(MAX_UPLOAD_CONCURRENCY);
@@ -58,7 +60,7 @@ impl ParquetFileWriter {
                 schema,
                 props,
                 skip_arrow_metadata,
-                lanes,
+                Arc::clone(&resources),
             )?))
         } else {
             let options = ArrowWriterOptions::new()
@@ -72,22 +74,24 @@ impl ParquetFileWriter {
             inner,
             location,
             rows: 0,
+            resources,
         })
     }
 
     /// Writes a batch to the file.
-    /// Returns whether a row group was flushed during the call.
+    /// Returns whether a row group received its last row during the call.
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<bool> {
         let flushed = match &mut self.inner {
             FileEncoder::Arrow(writer) => {
+                let _timer = self.resources.elapsed_compute().timer();
                 let row_groups = writer.flushed_row_groups().len();
                 writer.write(batch).await?;
                 writer.flushed_row_groups().len() > row_groups
             }
             FileEncoder::Columns(writer) => {
-                let row_groups = writer.flushed_row_groups();
-                writer.write(batch).await?;
-                writer.flushed_row_groups() > row_groups
+                let row_groups = writer.row_groups();
+                writer.write_batch(batch).await?;
+                writer.row_groups() > row_groups
             }
         };
         self.rows += batch.num_rows() as u64;
@@ -99,7 +103,17 @@ impl ParquetFileWriter {
         self.rows
     }
 
-    /// The memory used by the data that has not been flushed as a row group.
+    /// The number of row groups that are being encoded.
+    #[cfg(test)]
+    pub fn row_groups_in_flight(&self) -> usize {
+        match &self.inner {
+            FileEncoder::Arrow(writer) => usize::from(writer.in_progress_rows() > 0),
+            FileEncoder::Columns(writer) => writer.row_groups_in_flight(),
+        }
+    }
+
+    /// The memory used by the data that has not been handed to the upload.
+    /// This does not include the input that waits to be encoded.
     pub fn memory_size(&self) -> usize {
         match &self.inner {
             FileEncoder::Arrow(writer) => writer.memory_size(),
@@ -111,6 +125,7 @@ impl ParquetFileWriter {
     pub async fn close(self) -> Result<WrittenFile> {
         let size = match self.inner {
             FileEncoder::Arrow(mut writer) => {
+                let _timer = self.resources.elapsed_compute().timer();
                 writer.finish().await?;
                 writer.bytes_written()
             }

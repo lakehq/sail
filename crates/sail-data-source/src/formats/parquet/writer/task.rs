@@ -15,10 +15,12 @@ use datafusion_common::{DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use object_store::ObjectStore;
 use object_store::path::Path;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
+use crate::formats::parquet::writer::resources::{EncodeResources, EncodeSettings};
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
 use crate::listing::commit::{WrittenFile, delete_files, manifest_batch};
 use crate::listing::part_file::part_file_name;
@@ -51,8 +53,8 @@ pub struct ParquetWriteTask {
     /// The number of files that the task keeps open at the same time
     /// when the data has partition columns.
     pub max_open_files: usize,
-    /// The maximum number of tasks that encode the columns of a file in parallel.
-    pub max_lanes: usize,
+    /// How the files of the task are encoded.
+    pub encode: EncodeSettings,
 }
 
 /// The metrics of one Parquet writer task.
@@ -117,8 +119,15 @@ impl AttemptFiles {
     /// running when the caller is canceled, and it removes the file if the
     /// attempt has been abandoned by the time the file is visible.
     async fn close(self: &Arc<Self>, writer: ParquetFileWriter) -> Result<WrittenFile> {
+        self.start_close(writer)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    }
+
+    /// Starts to complete a file as [`Self::close`] does, without waiting for it.
+    fn start_close(self: &Arc<Self>, writer: ParquetFileWriter) -> JoinHandle<Result<WrittenFile>> {
         let files = Arc::clone(self);
-        let task = tokio::spawn(async move {
+        tokio::spawn(async move {
             let file = writer.close().await?;
             let abandoned = {
                 let mut state = files.state();
@@ -131,9 +140,7 @@ impl AttemptFiles {
                 files.delete(vec![file.location.clone()]).await;
             }
             Ok(file)
-        });
-        task.await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
+        })
     }
 
     async fn delete(&self, files: Vec<Path>) {
@@ -182,7 +189,7 @@ pub(super) struct FileFactory {
     skip_arrow_metadata: bool,
     buffer_size: usize,
     max_rows_per_file: u64,
-    max_lanes: usize,
+    resources: Arc<EncodeResources>,
 }
 
 impl FileFactory {
@@ -191,6 +198,7 @@ impl FileFactory {
         files: Arc<AttemptFiles>,
         input_schema: &SchemaRef,
         schema: SchemaRef,
+        resources: Arc<EncodeResources>,
     ) -> Result<Self> {
         let mut options = task.options;
         let skip_arrow_metadata = options.global.skip_arrow_metadata;
@@ -217,7 +225,7 @@ impl FileFactory {
             skip_arrow_metadata,
             buffer_size: task.buffer_size,
             max_rows_per_file: task.max_rows_per_file as u64,
-            max_lanes: task.max_lanes,
+            resources,
         })
     }
 
@@ -236,8 +244,13 @@ impl FileFactory {
             self.props.clone(),
             self.skip_arrow_metadata,
             self.buffer_size,
-            self.max_lanes,
+            Arc::clone(&self.resources),
         )
+    }
+
+    /// The time that the task has spent on encoding.
+    pub fn elapsed_compute(&self) -> &Time {
+        self.resources.elapsed_compute()
     }
 }
 
@@ -258,7 +271,16 @@ fn sorting_columns(
 pub(super) struct DirectoryWriter {
     directory: Path,
     writer: Option<Box<ParquetFileWriter>>,
+    /// The file before the open file, while it is being completed.
+    closing: Option<ClosingFile>,
     next_counter: u32,
+}
+
+/// A file that has all its rows and is being completed.
+struct ClosingFile {
+    task: JoinHandle<Result<WrittenFile>>,
+    /// The memory that the file used when it received its last row.
+    memory_size: usize,
 }
 
 impl DirectoryWriter {
@@ -266,6 +288,7 @@ impl DirectoryWriter {
         Self {
             directory,
             writer: None,
+            closing: None,
             next_counter: 0,
         }
     }
@@ -290,13 +313,40 @@ impl DirectoryWriter {
         let writer = self.open(factory)?;
         let flushed = writer.write(batch).await?;
         if flushed && writer.rows() >= factory.max_rows_per_file {
-            self.close(factory, written).await?;
+            // The file is completed while the next file receives rows, so that
+            // the task does not stop reading its input until the row groups
+            // of the file are encoded. Only one file is completed at a time.
+            self.wait_for_closing(written).await?;
+            if let Some(writer) = self.writer.take() {
+                self.closing = Some(ClosingFile {
+                    memory_size: writer.memory_size(),
+                    task: factory.files.start_close(*writer),
+                });
+            }
         }
         Ok(())
     }
 
+    /// Whether the directory has received a file.
+    fn has_files(&self) -> bool {
+        self.next_counter > 0
+    }
+
     pub fn memory_size(&self) -> usize {
         self.writer.as_ref().map_or(0, |x| x.memory_size())
+            + self.closing.as_ref().map_or(0, |x| x.memory_size)
+    }
+
+    /// Waits for the file that is being completed.
+    async fn wait_for_closing(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+        if let Some(closing) = self.closing.take() {
+            let file = closing
+                .task
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))??;
+            written.push(file);
+        }
+        Ok(())
     }
 
     pub async fn close(
@@ -304,6 +354,7 @@ impl DirectoryWriter {
         factory: &FileFactory,
         written: &mut Vec<WrittenFile>,
     ) -> Result<()> {
+        self.wait_for_closing(written).await?;
         if let Some(writer) = self.writer.take() {
             written.push(factory.files.close(*writer).await?);
         }
@@ -434,19 +485,26 @@ async fn write_files(
         let output = PartitionedWriter::new(router, task.table_path.clone(), task.max_open_files);
         (TaskOutput::Partitioned(Box::new(output)), schema)
     };
-    let factory = FileFactory::try_new(task, files, &input_schema, schema)?;
+    // The input that waits to be encoded is counted separately from the memory
+    // of the encoders, and without a limit, since its size is limited by the
+    // read-ahead budget of the task.
+    let resources = Arc::new(EncodeResources::new(
+        task.encode.clone(),
+        reservation.new_empty(),
+        metrics.elapsed_compute.clone(),
+    ));
+    let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
             continue;
         }
-        let _timer = metrics.elapsed_compute.timer();
         output.write(&factory, &batch, &mut written).await?;
         reservation.try_resize(output.memory_size())?;
     }
     if let TaskOutput::Directory(output) = &mut output
         && partition == 0
-        && written.is_empty()
+        && !output.has_files()
         && !input_schema
             .fields()
             .iter()
@@ -458,10 +516,7 @@ async fn write_files(
         // writer cannot represent, so that an empty result can still be written.
         output.open(&factory)?;
     }
-    {
-        let _timer = metrics.elapsed_compute.timer();
-        output.close(&factory, &mut written).await?;
-    }
+    output.close(&factory, &mut written).await?;
     reservation.free();
     for file in &written {
         metrics.record(file);

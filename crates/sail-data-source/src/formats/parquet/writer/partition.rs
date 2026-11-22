@@ -349,7 +349,11 @@ impl PartitionedWriter {
         batch: &RecordBatch,
         written: &mut Vec<WrittenFile>,
     ) -> Result<()> {
-        for (key, data) in self.router.split(batch)? {
+        let parts = {
+            let _timer = factory.elapsed_compute().timer();
+            self.router.split(batch)?
+        };
+        for (key, data) in parts {
             self.clock += 1;
             if !self.open.contains_key(&key) {
                 if self.open.len() >= self.max_open_files {

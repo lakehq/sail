@@ -21,6 +21,7 @@ use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use object_store::path::Path;
 use uuid::Uuid;
 
+use crate::formats::parquet::writer::resources::EncodeSettings;
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
@@ -120,10 +121,10 @@ impl ParquetWriteExec {
         }
     }
 
-    /// The maximum number of tasks that encode the columns of a file in parallel.
+    /// The number of threads that a writer task may keep busy with encoding.
     /// The writer partitions run at the same time, so the cores are divided
     /// among the partitions.
-    fn max_lanes(&self) -> usize {
+    fn degree(&self) -> usize {
         if !self.options.global.allow_single_file_parallelism {
             return 1;
         }
@@ -271,7 +272,7 @@ impl ExecutionPlan for ParquetWriteExec {
             buffer_size: execution.objectstore_writer_buffer_size,
             max_rows_per_file: execution.soft_max_rows_per_output_file.get(),
             max_open_files: MAX_OPEN_FILES_PER_TASK,
-            max_lanes: self.max_lanes(),
+            encode: EncodeSettings::new(self.degree()),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());
