@@ -2181,6 +2181,84 @@ async fn test_rows_require_column_in_files() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_write_plan_writes_planned_schema() -> Result<()> {
+    // The input of a plan that was decoded on a worker can have fields without
+    // the metadata that the fields had when the write was planned.
+    let input_schema = partitioned_schema();
+    let extension = HashMap::from([(
+        "ARROW:extension:name".to_string(),
+        "arrow.parquet.variant".to_string(),
+    )]);
+    let planned = Arc::new(Schema::new_with_metadata(
+        input_schema
+            .fields()
+            .iter()
+            .map(|field| match field.name().as_str() {
+                "w" => field.as_ref().clone().with_metadata(extension.clone()),
+                _ => field.as_ref().clone(),
+            })
+            .collect::<Vec<_>>(),
+        HashMap::from([("planned".to_string(), "true".to_string())]),
+    ));
+    let batch = partitioned_batch(&[(1, 1, "x"), (2, 2, "y"), (3, 1, "x")])?;
+    // The second write uses the Arrow writer for the files.
+    let mut chunked = TableParquetOptions::default();
+    chunked.global.content_defined_chunking.enabled = true;
+    for (partition_columns, files, options) in [
+        (
+            vec![],
+            vec!["table/part-00000"],
+            TableParquetOptions::default(),
+        ),
+        (vec![], vec!["table/part-00000"], chunked),
+        (
+            vec!["a"],
+            vec!["table/a=1/part-00000", "table/a=2/part-00000"],
+            TableParquetOptions::default(),
+        ),
+    ] {
+        let (ctx, store) = memory_context()?;
+        let writer = ParquetWriteExec::try_new(
+            MemorySourceConfig::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&input_schema),
+                None,
+            )?,
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+            partition_columns.iter().map(|x| x.to_string()).collect(),
+            options,
+            ".parquet".to_string(),
+            None,
+            false,
+            0,
+            NonZeroUsize::MAX,
+        )?;
+        assert_eq!(writer.data_schema(), &input_schema);
+        let writer = Arc::new(writer.with_schema(Arc::clone(&planned)));
+        let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
+        assert_eq!(count_value(&output)?, vec![3]);
+        let written: Vec<_> = list_files(store.as_ref())
+            .await?
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|path| !path.ends_with("_SUCCESS"))
+            .collect();
+        assert_eq!(written.len(), files.len(), "{written:?}");
+        for (path, prefix) in written.iter().zip(files) {
+            assert!(path.starts_with(prefix), "{path}");
+            let (_, data) = read_parquet(read_bytes(store.as_ref(), path).await?)?;
+            let schema = data.schema();
+            assert_eq!(schema.field_with_name("w")?.metadata(), &extension);
+            assert_eq!(schema.metadata().get("planned"), Some(&"true".to_string()));
+            assert_eq!(schema.fields().len(), 4 - partition_columns.len());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_write_plan_passes_task_limits() -> Result<()> {
     let schema = partitioned_schema();
     let batches = vec![

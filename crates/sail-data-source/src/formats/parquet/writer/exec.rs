@@ -4,6 +4,7 @@ use std::fmt::Formatter;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -41,6 +42,10 @@ const MAX_ROWS_PER_FILE: usize = 50_000_000;
 #[derive(Debug)]
 pub struct ParquetWriteExec {
     input: Arc<dyn ExecutionPlan>,
+    /// The schema of the data to write, as it was planned.
+    /// The schema of the input can differ from it in the metadata of fields
+    /// when the plan has been decoded on a worker.
+    schema: SchemaRef,
     object_store_url: ObjectStoreUrl,
     table_path: Path,
     write_id: Uuid,
@@ -98,6 +103,7 @@ impl ParquetWriteExec {
         ));
         Ok(Self {
             input,
+            schema,
             object_store_url,
             table_path,
             write_id,
@@ -120,6 +126,7 @@ impl ParquetWriteExec {
     pub fn with_attempt(&self, attempt: usize) -> Self {
         Self {
             input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
             object_store_url: self.object_store_url.clone(),
             table_path: self.table_path.clone(),
             write_id: self.write_id,
@@ -136,8 +143,20 @@ impl ParquetWriteExec {
         }
     }
 
+    /// Returns the plan with the given schema of the data to write.
+    /// The schema must have the columns of the input.
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = schema;
+        self
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// The schema of the data to write.
+    pub fn data_schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     pub fn object_store_url(&self) -> &ObjectStoreUrl {
@@ -255,7 +274,10 @@ impl ExecutionPlan for ParquetWriteExec {
             self.encoding_parallelism,
             self.max_open_files_per_task,
         )?;
-        Ok(Arc::new(plan.with_attempt(self.attempt)))
+        Ok(Arc::new(
+            plan.with_schema(Arc::clone(&self.schema))
+                .with_attempt(self.attempt),
+        ))
     }
 
     fn execute(
@@ -263,11 +285,16 @@ impl ExecutionPlan for ParquetWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // The task writes the data with the schema of its input stream,
+        // which is the planned schema.
         let input: SendableRecordBatchStream =
             if partition < self.input.output_partitioning().partition_count() {
-                self.input.execute(partition, Arc::clone(&context))?
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&self.schema),
+                    self.input.execute(partition, Arc::clone(&context))?,
+                ))
             } else {
-                Box::pin(EmptyRecordBatchStream::new(self.input.schema()))
+                Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)))
             };
         let store = context.runtime_env().object_store(&self.object_store_url)?;
         let task = ParquetWriteTask {

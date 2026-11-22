@@ -1504,6 +1504,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_sorting_columns,
                 encoding_parallelism,
                 max_open_files_per_task,
+                schema,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1530,19 +1531,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     std::num::NonZeroUsize::new(max_open_files_per_task as usize).ok_or_else(
                         || plan_datafusion_err!("invalid number of open files for Parquet write"),
                     )?;
-                Ok(Arc::new(ParquetWriteExec::try_new(
-                    input,
-                    object_store_url,
-                    table_path,
-                    write_id,
-                    partition_columns,
-                    options,
-                    file_suffix,
-                    ordering,
-                    write_sorting_columns,
-                    encoding_parallelism as usize,
-                    max_open_files_per_task,
-                )?))
+                Ok(Arc::new(
+                    ParquetWriteExec::try_new(
+                        input,
+                        object_store_url,
+                        table_path,
+                        write_id,
+                        partition_columns,
+                        options,
+                        file_suffix,
+                        ordering,
+                        write_sorting_columns,
+                        encoding_parallelism as usize,
+                        max_open_files_per_task,
+                    )?
+                    .with_schema(Arc::new(try_decode_schema(&schema)?)),
+                ))
             }
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
                 input,
@@ -3790,6 +3794,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_sorting_columns: write.write_sorting_columns(),
                 encoding_parallelism: write.encoding_parallelism() as u64,
                 max_open_files_per_task: write.max_open_files_per_task().get() as u64,
+                schema: try_encode_schema(write.data_schema().as_ref())?,
             })
         } else if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
             NodeKind::FileWriteCommit(r#gen::FileWriteCommitExecNode {
@@ -9985,6 +9990,87 @@ mod tests {
             // The attempt is set by the task runner and is not part of the encoded plan.
             assert_eq!(decoded.attempt(), 0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_write_plan_keeps_planned_schema() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+
+        let metadata = |value: &str| HashMap::from([("key".to_string(), value.to_string())]);
+        let nested = Field::new("x", DataType::Int64, false).with_metadata(metadata("nested"));
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("s", DataType::Utf8, true),
+                Field::new("c", DataType::Struct(vec![nested].into()), false)
+                    .with_metadata(metadata("field")),
+            ],
+            metadata("schema"),
+        ));
+        // The field of the result of the function has metadata, which is not
+        // part of the function expression when the plan is encoded.
+        let variant = ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(ParseJson::default())),
+            vec![Arc::new(Column::new("s", 0))],
+            schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?;
+        let input = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(variant),
+                    alias: "v".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("c", 1)),
+                    alias: "c".to_string(),
+                },
+            ],
+            Arc::new(EmptyExec::new(schema)),
+        )?);
+        let planned = input.schema();
+        assert!(!planned.field(0).metadata().is_empty());
+        assert_eq!(planned.field(1).metadata(), &metadata("field"));
+        assert_eq!(planned.metadata(), &metadata("schema"));
+
+        let write = ParquetWriteExec::try_new(
+            input,
+            datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+            object_store::path::Path::from("warehouse/table"),
+            uuid::Uuid::from_u128(42),
+            vec![],
+            TableParquetOptions::default(),
+            ".parquet".to_string(),
+            None,
+            false,
+            0,
+            std::num::NonZeroUsize::MIN,
+        )?;
+        assert_eq!(write.data_schema(), &planned);
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<ParquetWriteExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet write"))?;
+        assert_eq!(decoded.data_schema(), &planned);
+        // The schema is kept when the plan is rewritten.
+        assert_eq!(decoded.with_attempt(1).data_schema(), &planned);
+        let rewritten = Arc::new(decoded.with_attempt(0)).replace_children(
+            vec![Arc::clone(decoded.input())],
+            datafusion::physical_plan::ReplaceChildrenOptions::new(
+                datafusion::physical_plan::ChildrenPropertiesMode::Recompute,
+            ),
+        )?;
+        let rewritten = rewritten
+            .downcast_ref::<ParquetWriteExec>()
+            .ok_or_else(|| plan_datafusion_err!("rewritten plan is not a Parquet write"))?;
+        assert_eq!(rewritten.data_schema(), &planned);
         Ok(())
     }
 
