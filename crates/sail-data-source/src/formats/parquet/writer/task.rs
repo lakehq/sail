@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::parquet::file::metadata::SortingColumn;
 use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
@@ -53,8 +53,10 @@ pub struct ParquetWriteTask {
     /// These columns are not written to the files.
     pub partition_columns: Vec<String>,
     pub options: TableParquetOptions,
-    /// The ordering of the input to record in the file metadata.
-    pub sorting: Option<LexOrdering>,
+    /// The ordering that the input is required to have.
+    pub ordering: Option<LexOrdering>,
+    /// Whether the ordering of the input is recorded in the file metadata.
+    pub write_sorting_columns: bool,
     /// The capacity of the upload buffer of each file.
     pub buffer_size: usize,
     /// The maximum number of rows in each file, or zero when there is no limit.
@@ -64,9 +66,13 @@ pub struct ParquetWriteTask {
     /// or zero when there is no limit. The size is checked when a row group
     /// has all its rows, so a file can be larger than this.
     pub max_file_size: u64,
-    /// The number of files that the task keeps open at the same time
-    /// when the data has partition columns.
+    /// The number of partition directories that the task writes to at the same
+    /// time when the data has partition columns. The rows of the other directories
+    /// are sorted and written when the input has ended.
     pub max_open_files: usize,
+    /// The context of the task, which has the memory pool and the temporary files
+    /// for the rows that are sorted.
+    pub context: Arc<TaskContext>,
     /// How the files of the task are encoded.
     pub encode: EncodeSettings,
 }
@@ -76,6 +82,8 @@ pub struct ParquetWriteMetrics {
     rows_written: Count,
     bytes_written: Count,
     files_written: Count,
+    /// The rows that were sorted by their partition key before they were written.
+    rows_sorted: Count,
     elapsed_compute: Time,
 }
 
@@ -85,6 +93,7 @@ impl ParquetWriteMetrics {
             rows_written: MetricBuilder::new(metrics).counter("rows_written", partition),
             bytes_written: MetricBuilder::new(metrics).counter("bytes_written", partition),
             files_written: MetricBuilder::new(metrics).counter("files_written", partition),
+            rows_sorted: MetricBuilder::new(metrics).counter("rows_sorted", partition),
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
         }
     }
@@ -233,8 +242,9 @@ impl FileFactory {
         options.global.write_batch_size = page_rows.min(MAX_WRITE_BATCH_SIZE);
         let mut builder = WriterPropertiesBuilder::try_from(&options)?;
         if let Some(sorting) = task
-            .sorting
+            .ordering
             .as_ref()
+            .filter(|_| task.write_sorting_columns)
             .and_then(|ordering| sorting_columns(ordering, input_schema, &schema))
         {
             builder = builder.set_sorting_columns(Some(sorting));
@@ -414,6 +424,14 @@ impl DirectoryWriter {
         }
         Ok(())
     }
+
+    /// Starts to complete the files of the directory, and returns the tasks
+    /// that complete them. More rows for the directory go to a new file.
+    pub fn start_close(&mut self, factory: &FileFactory) -> Vec<JoinHandle<Result<WrittenFile>>> {
+        let closing = self.closing.take().map(|x| x.task);
+        let writer = self.writer.take().map(|x| factory.files.start_close(*x));
+        closing.into_iter().chain(writer).collect()
+    }
 }
 
 /// The files that a writer task is writing.
@@ -521,7 +539,14 @@ async fn write_files(
     } else {
         let router = PartitionRouter::try_new(&input_schema, &task.partition_columns)?;
         let schema = Arc::clone(router.file_schema());
-        let output = PartitionedWriter::new(router, task.table_path.clone(), task.max_open_files);
+        let output = PartitionedWriter::new(
+            router,
+            task.table_path.clone(),
+            task.max_open_files,
+            task.ordering.clone(),
+            Arc::clone(&task.context),
+            metrics.rows_sorted.clone(),
+        );
         (TaskOutput::Partitioned(Box::new(output)), schema)
     };
     check_file_columns(schema.fields().iter().map(|field| field.as_ref()))?;

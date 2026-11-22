@@ -125,6 +125,59 @@ def test_parquet_partitioned_write_layout(spark, tmp_path):
     assert actual == [(i, i % 2) for i in range(20)]
 
 
+def check_partitioned_rows(spark, path, rows, keys):
+    files = data_files(path)
+    assert {str(f.parent) for f in files} == {f"p={i}" for i in range(keys)}
+    actual = sorted((r.id, r.p) for r in spark.read.schema("id LONG, p LONG").parquet(str(path)).collect())
+    assert actual == [(i, i % keys) for i in range(rows)]
+    return files
+
+
+def test_parquet_partitioned_write_file_count(spark, tmp_path):
+    rows, keys = 100_000, 500
+    df = spark.range(0, rows, 1, 4).selectExpr("id", f"id % {keys} AS p")
+
+    path = tmp_path / "default"
+    df.write.partitionBy("p").parquet(str(path))
+    files = check_partitioned_rows(spark, path, rows, keys)
+    if is_jvm_spark():
+        # Spark writes one file for each key in each task.
+        assert keys <= len(files) <= 4 * keys
+    else:
+        # The rows of each key are written by one task, however many tasks there are.
+        assert len(files) == keys
+    assert_success_marker(path)
+
+    # One partition is written by one task, which writes one file for each key.
+    path = tmp_path / "coalesce"
+    df.coalesce(1).write.partitionBy("p").parquet(str(path))
+    assert len(check_partitioned_rows(spark, path, rows, keys)) == keys
+
+    # The partitions that the query asks for are kept, and each of them has rows of every key.
+    path = tmp_path / "repartition"
+    df.repartition(3).write.partitionBy("p").parquet(str(path))
+    assert len(check_partitioned_rows(spark, path, rows, keys)) == 3 * keys
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail option")
+def test_parquet_partitioned_write_with_more_keys_than_open_files(spark, tmp_path):
+    rows, keys = 20_000, 500
+    df = spark.range(0, rows, 1, 4).selectExpr("id", f"id % {keys} AS p")
+    for name, df in [("one_task", df.coalesce(1)), ("tasks", df)]:
+        path = tmp_path / name
+        df.write.option("maxOpenFilesPerTask", 3).partitionBy("p").parquet(str(path))
+        assert len(check_partitioned_rows(spark, path, rows, keys)) == keys
+
+    # The rows of each key are next to each other in the sorted input.
+    path = tmp_path / "sorted"
+    df.orderBy("p", "id").write.option("maxOpenFilesPerTask", 1).partitionBy("p").parquet(str(path))
+    files = check_partitioned_rows(spark, path, rows, keys)
+    assert len(files) == keys
+    for file in files[:10]:
+        ids = pq.read_table(path / file).column("id").to_pylist()
+        assert ids == sorted(ids)
+
+
 def test_parquet_empty_write(spark, tmp_path):
     path = tmp_path / "empty"
     spark.createDataFrame([], schema="id LONG, value STRING").write.parquet(str(path))

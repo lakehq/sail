@@ -25,16 +25,19 @@ use datafusion::arrow::datatypes::{
     UnionMode,
 };
 use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    FairSpillPool, GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation,
+    UnboundedMemoryPool,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::{
@@ -44,14 +47,19 @@ use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, SortingColumn};
 use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
-use datafusion::physical_expr::Distribution;
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{Distribution, PhysicalExpr};
 use datafusion::physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, Time};
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, ReplaceChildrenOptions, collect,
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    ReplaceChildrenOptions, collect,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
@@ -66,6 +74,7 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
@@ -91,11 +100,13 @@ fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask 
         file_suffix: ".parquet".to_string(),
         partition_columns: vec![],
         options: TableParquetOptions::default(),
-        sorting: None,
+        ordering: None,
+        write_sorting_columns: false,
         buffer_size: 10 * 1024 * 1024,
         max_records_per_file: 0,
         max_file_size: 0,
         max_open_files: 100,
+        context: Arc::new(TaskContext::default()),
         encode: fixed_degree(1),
     }
 }
@@ -180,6 +191,31 @@ async fn run_task_with_pool(
         ParquetWriteMetrics::new(&metrics, partition),
     ))
     .await
+}
+
+/// Runs the writer task and returns the value of one of its metrics.
+async fn run_task_for_metric(
+    task: ParquetWriteTask,
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    metric: &str,
+) -> Result<usize> {
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let reservation = MemoryConsumer::new("test").register(&pool);
+    let metrics = ExecutionPlanMetricsSet::new();
+    let partition = task.partition;
+    read_manifest(write_partition(
+        task,
+        test_stream(schema, batches),
+        reservation,
+        ParquetWriteMetrics::new(&metrics, partition),
+    ))
+    .await?;
+    metrics
+        .clone_inner()
+        .sum_by_name(metric)
+        .map(|x| x.as_usize())
+        .ok_or_else(|| internal_datafusion_err!("missing metric {metric}"))
 }
 
 /// Reads the stream of a writer task to its end and returns the manifest.
@@ -694,7 +730,8 @@ async fn test_options_reach_file_metadata() -> Result<()> {
     task.options.global.created_by = "sail version test".to_string();
     task.options.global.compression = Some("snappy".to_string());
     task.options.global.max_row_group_size = 4;
-    task.sorting = Some(ordering);
+    task.ordering = Some(ordering);
+    task.write_sorting_columns = true;
     run_task(task, &schema, vec![batch.clone()]).await?;
     let name = file_name(0, 0, ".parquet");
     let (metadata, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
@@ -2005,27 +2042,26 @@ async fn test_partition_open_file_limit() -> Result<()> {
         partitioned_batch(&[(1, 1, "x")])?,
         partitioned_batch(&[(2, 2, "x")])?,
         partitioned_batch(&[(3, 1, "x")])?,
-        // The file of `a=2` is completed here since it was used least recently.
+        // The rows of `a=3` and `a=4` are sorted, since two directories are open.
         partitioned_batch(&[(4, 3, "x")])?,
-        partitioned_batch(&[(5, 1, "x")])?,
-        // The file of `a=3` is completed here, and `a=2` gets a second file.
-        partitioned_batch(&[(6, 2, "x"), (7, 1, "x")])?,
+        partitioned_batch(&[(5, 1, "x"), (8, 4, "x")])?,
+        partitioned_batch(&[(6, 2, "x"), (7, 1, "x"), (9, 3, "x")])?,
     ];
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
     task.max_open_files = 2;
-    let manifest = run_task(task, &schema, batches).await?;
+    let manifest = run_task(task, &schema, batches.clone()).await?;
     let files = list_files(store.as_ref()).await?;
-    let name =
-        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
+    // No file is completed to make room for another one, so each directory has one file.
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
     let mut rows = manifest_rows(&manifest)?;
     rows.sort();
     assert_eq!(
         rows,
         vec![
-            (0, 0, Some(name(1, 0)), files[0].1, 4),
-            (0, 0, Some(name(2, 0)), files[1].1, 1),
-            (0, 0, Some(name(2, 1)), files[2].1, 1),
-            (0, 0, Some(name(3, 0)), files[3].1, 1),
+            (0, 0, Some(name(1)), files[0].1, 4),
+            (0, 0, Some(name(2)), files[1].1, 2),
+            (0, 0, Some(name(3)), files[2].1, 2),
+            (0, 0, Some(name(4)), files[3].1, 1),
         ]
     );
     assert_eq!(files.len(), 4);
@@ -2037,10 +2073,490 @@ async fn test_partition_open_file_limit() -> Result<()> {
             Ok::<_, DataFusionError>(values.values().to_vec())
         }
     };
-    assert_eq!(read(name(1, 0)).await?, vec![1, 3, 5, 7]);
-    assert_eq!(read(name(2, 0)).await?, vec![2]);
-    assert_eq!(read(name(2, 1)).await?, vec![6]);
-    assert_eq!(read(name(3, 0)).await?, vec![4]);
+    assert_eq!(read(name(1)).await?, vec![1, 3, 5, 7]);
+    assert_eq!(read(name(2)).await?, vec![2, 6]);
+    assert_eq!(read(name(3)).await?, vec![4, 9]);
+    assert_eq!(read(name(4)).await?, vec![8]);
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = partition_task(store, 0, &["a"]);
+    task.max_open_files = 2;
+    assert_eq!(
+        run_task_for_metric(task, &schema, batches, "rows_sorted").await?,
+        3
+    );
+    Ok(())
+}
+
+/// A batch with the partition column `p`, which has the given keys, and the column `v`,
+/// which numbers the rows from the given value on.
+fn keyed_batch(keys: &[Option<i64>], start: i64) -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", DataType::Int64, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let p: Int64Array = keys.iter().copied().collect();
+    let v = Int64Array::from_iter_values(start..start + keys.len() as i64);
+    Ok(RecordBatch::try_new(
+        schema,
+        vec![Arc::new(p), Arc::new(v)],
+    )?)
+}
+
+/// Batches of the given number of rows, with the keys that the function returns for the rows.
+fn keyed_batches(
+    rows: usize,
+    batch_size: usize,
+    key: impl Fn(i64) -> Option<i64>,
+) -> Result<Vec<RecordBatch>> {
+    (0..rows)
+        .step_by(batch_size)
+        .map(|start| {
+            let end = (start + batch_size).min(rows);
+            let keys: Vec<_> = (start..end).map(|i| key(i as i64)).collect();
+            keyed_batch(&keys, start as i64)
+        })
+        .collect()
+}
+
+/// Checks that the store has one file for each key, in the directory of the key,
+/// and that the files have the rows of the batches.
+async fn check_one_file_per_key(store: &dyn ObjectStore, batches: &[RecordBatch]) -> Result<()> {
+    let mut expected: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for batch in batches {
+        let p = batch.column(0).as_primitive::<Int64Type>();
+        let v = batch.column(1).as_primitive::<Int64Type>();
+        for (p, v) in p.iter().zip(v.values()) {
+            let directory = match p {
+                Some(p) => format!("table/p={p}"),
+                None => "table/p=__HIVE_DEFAULT_PARTITION__".to_string(),
+            };
+            expected.entry(directory).or_default().push(*v);
+        }
+    }
+    let mut actual: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    let files = list_files(store).await?;
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|(file, _)| !file.ends_with("_SUCCESS"))
+        .collect();
+    for (file, _) in &files {
+        let (directory, _) = file
+            .rsplit_once('/')
+            .ok_or_else(|| internal_datafusion_err!("invalid file path: {file}"))?;
+        let (_, data) = read_parquet(read_bytes(store, file).await?)?;
+        assert_eq!(data.num_columns(), 1);
+        let rows = actual.entry(directory.to_string()).or_default();
+        rows.extend(data.column(0).as_primitive::<Int64Type>().values());
+    }
+    assert_eq!(files.len(), expected.len());
+    for rows in actual.values_mut().chain(expected.values_mut()) {
+        rows.sort();
+    }
+    assert!(actual == expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_writes_one_file_per_key() -> Result<()> {
+    // The keys of the rows in the order of the rows, the number of directories
+    // that can be open, and the number of rows that are sorted.
+    type Case = (&'static str, Box<dyn Fn(i64) -> Option<i64>>, usize, usize);
+    let rows = 20_000;
+    let cases: Vec<Case> = vec![
+        // Every key has an open directory.
+        (
+            "fewer keys than the limit",
+            Box::new(|i| Some(i * 7919 % 50)),
+            100,
+            0,
+        ),
+        (
+            "as many keys as the limit",
+            Box::new(|i| Some(i * 7919 % 100)),
+            100,
+            0,
+        ),
+        // The keys 0, 7919 % 1000, ... of the first rows have the open directories.
+        (
+            "more keys than the limit",
+            Box::new(|i| Some(i * 7919 % 1000)),
+            100,
+            18_000,
+        ),
+        (
+            "one open directory",
+            Box::new(|i| Some(i * 7919 % 1000)),
+            1,
+            19_980,
+        ),
+        // A tenth of the rows has one of 990 other keys than the 9 keys of most rows.
+        (
+            "skewed keys",
+            Box::new(|i| match i % 10 {
+                0 => Some(10 + (i / 10) * 7919 % 990),
+                _ => Some(i % 10),
+            }),
+            20,
+            // The first rows of the other keys open 11 directories, which get 3 rows each.
+            2_000 - 11 * 3,
+        ),
+        (
+            "keys without a value",
+            Box::new(|i| match i * 7919 % 300 {
+                0..100 => None,
+                key => Some(key),
+            }),
+            50,
+            // The rows without a value have one of the 50 directories that are open.
+            10_052,
+        ),
+    ];
+    for (name, key, max_open_files, rows_sorted) in cases {
+        let batches = keyed_batches(rows, 1024, key)?;
+        let schema = batches[0].schema();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+        task.max_open_files = max_open_files;
+        let sorted = run_task_for_metric(task, &schema, batches.clone(), "rows_sorted").await?;
+        check_one_file_per_key(store.as_ref(), &batches).await?;
+        assert_eq!(sorted, rows_sorted, "{name}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_clustered_input_is_not_sorted() -> Result<()> {
+    // The rows of each key are next to each other, also the rows without a key,
+    // which are the last rows.
+    let rows = 20_000;
+    let batches = keyed_batches(rows, 1024, |i| Some(i / 20).filter(|x| *x < 990))?;
+    let schema = batches[0].schema();
+    let ordering = |columns: &[(&str, usize)]| {
+        LexOrdering::new(columns.iter().map(|(name, index)| {
+            PhysicalSortExpr::new(
+                Arc::new(Column::new(name, *index)),
+                SortOptions::new(false, false),
+            )
+        }))
+    };
+    for (ordering, rows_sorted) in [
+        (ordering(&[("p", 0)]), 0),
+        (ordering(&[("p", 0), ("v", 1)]), 0),
+        // An ordering that does not start with the partition column
+        // does not put the rows of a key next to each other.
+        (ordering(&[("v", 1), ("p", 0)]), 19_980),
+        (None, 19_980),
+    ] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+        task.max_open_files = 1;
+        task.ordering = ordering.clone();
+        let sorted = run_task_for_metric(task, &schema, batches.clone(), "rows_sorted").await?;
+        check_one_file_per_key(store.as_ref(), &batches).await?;
+        assert_eq!(sorted, rows_sorted, "{ordering:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_clustered_input_with_repeated_key() -> Result<()> {
+    // The empty string and the missing value have the same directory, and other
+    // values are between them in the order of the input.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", DataType::Utf8, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec![
+                Some(""),
+                Some("a"),
+                Some("a"),
+                Some("b"),
+                None,
+            ])),
+            Arc::new(Int64Array::from_iter_values(0..5)),
+        ],
+    )?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+    task.ordering = LexOrdering::new([PhysicalSortExpr::new(
+        Arc::new(Column::new("p", 0)),
+        SortOptions::new(false, false),
+    )]);
+    run_task(task, &schema, vec![batch]).await?;
+    let mut rows = vec![];
+    for (file, _) in list_files(store.as_ref()).await? {
+        let (_, data) = read_parquet(read_bytes(store.as_ref(), &file).await?)?;
+        let values = data.column(0).as_primitive::<Int64Type>().values().to_vec();
+        rows.push((file, values));
+    }
+    // The second file of the directory does not replace the first file.
+    let name = |directory: &str, counter: usize| {
+        format!("table/p={directory}/part-00000-{WRITE_ID}-c{counter:03}.parquet")
+    };
+    assert_eq!(
+        rows,
+        vec![
+            (name("__HIVE_DEFAULT_PARTITION__", 0), vec![0]),
+            (name("__HIVE_DEFAULT_PARTITION__", 1), vec![4]),
+            (name("a", 0), vec![1, 2]),
+            (name("b", 0), vec![3]),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_sorted_keys_keep_input_ordering() -> Result<()> {
+    // The input is sorted by the column `v` in descending order, and the rows
+    // of all keys but the first one are sorted by their key before they are written.
+    let rows = 5_000_i64;
+    let p: Int64Array = (0..rows).map(|i| Some(i * 31 % 40)).collect();
+    let v: Int64Array = (0..rows).map(|i| Some(rows - i)).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", DataType::Int64, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(p), Arc::new(v)])?;
+    let batches: Vec<_> = (0..5).map(|i| batch.slice(i * 1000, 1000)).collect();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+    task.max_open_files = 1;
+    task.max_records_per_file = 50;
+    task.ordering = LexOrdering::new([PhysicalSortExpr::new(
+        Arc::new(Column::new("v", 1)),
+        SortOptions::new(true, false),
+    )]);
+    task.write_sorting_columns = true;
+    run_task(task, &schema, batches).await?;
+    let files = list_files(store.as_ref()).await?;
+    // Each directory has 125 rows in files of at most 50 rows.
+    assert_eq!(files.len(), 40 * 3);
+    let mut last: HashMap<String, i64> = HashMap::new();
+    let mut total = 0;
+    for (file, _) in files {
+        let (directory, _) = file
+            .rsplit_once('/')
+            .ok_or_else(|| internal_datafusion_err!("invalid file path: {file}"))?;
+        let (metadata, data) = read_parquet(read_bytes(store.as_ref(), &file).await?)?;
+        assert_eq!(
+            metadata.row_group(0).sorting_columns(),
+            Some(&vec![SortingColumn {
+                column_idx: 0,
+                descending: true,
+                nulls_first: false,
+            }])
+        );
+        // The files of a directory are listed in the order in which they were written.
+        for v in data.column(0).as_primitive::<Int64Type>().values() {
+            let last = last.entry(directory.to_string()).or_insert(i64::MAX);
+            assert!(*v < *last, "{file}");
+            *last = *v;
+            total += 1;
+        }
+    }
+    assert_eq!(total, rows);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_sorted_keys_use_temporary_files() -> Result<()> {
+    // The rows that are sorted do not fit in the memory pool of the task.
+    let rows = 400_000;
+    let batches = keyed_batches(rows, 8192, |i| Some(i * 7919 % 2000))?;
+    let schema = batches[0].schema();
+    let size: usize = batches.iter().map(|x| x.get_array_memory_size()).sum();
+    let limit = 2 * 1024 * 1024;
+    assert!(size > 2 * limit);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(limit)))
+        .build_arc()?;
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(64 * 1024)
+        .with_sort_in_place_threshold_bytes(0);
+    let context = TaskContext::default()
+        .with_session_config(config)
+        .with_runtime(Arc::clone(&runtime));
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+    task.max_open_files = 10;
+    task.context = Arc::new(context);
+    let sorted = run_task_for_metric(task, &schema, batches.clone(), "rows_sorted").await?;
+    assert_eq!(sorted, rows - 10 * 200);
+    check_one_file_per_key(store.as_ref(), &batches).await?;
+    assert_eq!(runtime.memory_pool.reserved(), 0);
+    Ok(())
+}
+
+/// Returns the plan that writes the input with the partition column `p`, after
+/// the distribution that the writer requires has been added to the plan.
+fn partitioned_write_plan(
+    input: Arc<dyn ExecutionPlan>,
+    target_partitions: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let writer = ParquetWriteExec::try_new(
+        input,
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+        vec!["p".to_string()],
+        TableParquetOptions::default(),
+        ".parquet".to_string(),
+        None,
+        false,
+        0,
+        NonZeroUsize::new(100).ok_or_else(|| internal_datafusion_err!("zero"))?,
+    )?;
+    let mut config = ConfigOptions::default();
+    config.execution.target_partitions = target_partitions;
+    EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)
+}
+
+/// Returns the input of the writer in the plan.
+fn writer_input(plan: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut plan = plan;
+    loop {
+        if let Some(writer) = plan.downcast_ref::<ParquetWriteExec>() {
+            return Ok(Arc::clone(writer.input()));
+        }
+        match plan.children().as_slice() {
+            [child] => plan = child,
+            _ => return Err(internal_datafusion_err!("missing writer in the plan")),
+        }
+    }
+}
+
+#[test]
+fn test_write_plan_distributes_rows_by_partition_columns() -> Result<()> {
+    let schema = keyed_batch(&[], 0)?.schema();
+    let source = |partitions: usize| -> Result<Arc<dyn ExecutionPlan>> {
+        let partitions = vec![vec![]; partitions];
+        Ok(MemorySourceConfig::try_new_exec(
+            &partitions,
+            Arc::clone(&schema),
+            None,
+        )?)
+    };
+    let p: Arc<dyn PhysicalExpr> = Arc::new(Column::new("p", 0));
+    let hash = |partitions: usize| Partitioning::Hash(vec![Arc::clone(&p)], partitions);
+
+    // The rows of each key are written by one task, whatever the partitions of the input are.
+    for input in [
+        source(4)?,
+        source(32)?,
+        Arc::new(RepartitionExec::try_new(
+            source(4)?,
+            Partitioning::RoundRobinBatch(16),
+        )?),
+        Arc::new(RepartitionExec::try_new(source(2)?, hash(4))?),
+    ] {
+        let input = writer_input(&partitioned_write_plan(input, 8)?)?;
+        let Some(repartition) = input.downcast_ref::<RepartitionExec>() else {
+            return Err(internal_datafusion_err!("missing repartition"));
+        };
+        assert_eq!(repartition.partitioning(), &hash(8));
+        // The plan has no other repartition by the partition columns below.
+        assert!(
+            !repartition.input().is::<RepartitionExec>()
+                || !matches!(
+                    repartition.input().output_partitioning(),
+                    Partitioning::Hash(_, _)
+                )
+        );
+    }
+
+    // A single task writes one file for each key without a repartition.
+    let input = writer_input(&partitioned_write_plan(source(1)?, 8)?)?;
+    assert!(input.is::<DataSourceExec>());
+
+    // The partitions that the query asks for are kept.
+    for partitioning in [
+        Partitioning::RoundRobinBatch(3),
+        Partitioning::UnknownPartitioning(1),
+        Partitioning::UnknownPartitioning(2),
+        hash(3),
+    ] {
+        let explicit: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
+            source(4)?,
+            partitioning.clone(),
+        ));
+        let input = writer_input(&partitioned_write_plan(Arc::clone(&explicit), 8)?)?;
+        assert!(input.is::<ExplicitRepartitionExec>(), "{partitioning}");
+        assert_eq!(
+            input.output_partitioning().partition_count(),
+            partitioning.partition_count()
+        );
+        // The partitions are also kept below a plan that keeps the partitions of its input.
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("p", 0)),
+                    alias: "p".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("v", 1)),
+                    alias: "v".to_string(),
+                },
+            ],
+            explicit,
+        )?);
+        let input = writer_input(&partitioned_write_plan(projection, 8)?)?;
+        assert!(input.is::<ProjectionExec>(), "{partitioning}");
+        assert_eq!(
+            input.output_partitioning().partition_count(),
+            partitioning.partition_count()
+        );
+    }
+
+    // A write without partition columns keeps the partitions of its input.
+    let writer = write_exec(&[vec![], vec![], vec![]], &schema, None, false)?;
+    let mut config = ConfigOptions::default();
+    config.execution.target_partitions = 8;
+    let plan = EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)?;
+    assert!(writer_input(&plan)?.is::<DataSourceExec>());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_write_plan_writes_one_file_per_key() -> Result<()> {
+    let rows = 40_000;
+    let batches = keyed_batches(rows, 1000, |i| match i * 7919 % 1001 {
+        1000 => None,
+        key => Some(key),
+    })?;
+    let schema = batches[0].schema();
+    for partitions in [1, 4, 32] {
+        let (ctx, store) = memory_context()?;
+        // Every input partition has rows of every key.
+        let mut input = vec![vec![]; partitions];
+        for (i, batch) in batches.iter().enumerate() {
+            input[i % partitions].push(batch.clone());
+        }
+        let source = MemorySourceConfig::try_new_exec(&input, Arc::clone(&schema), None)?;
+        let plan = partitioned_write_plan(source, 8)?;
+        let output = collect(plan, ctx.task_ctx()).await?;
+        assert_eq!(count_value(&output)?, vec![rows as u64]);
+        check_one_file_per_key(store.as_ref(), &batches).await?;
+    }
+
+    // The rows of a key are divided among the partitions that the query asks for.
+    let (ctx, store) = memory_context()?;
+    let source = MemorySourceConfig::try_new_exec(
+        std::slice::from_ref(&batches),
+        Arc::clone(&schema),
+        None,
+    )?;
+    let explicit = Arc::new(ExplicitRepartitionExec::new(
+        source,
+        Partitioning::RoundRobinBatch(3),
+    ));
+    let plan = partitioned_write_plan(explicit, 8)?;
+    collect(plan, ctx.task_ctx()).await?;
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(files.len() - 1, 3 * 1001);
     Ok(())
 }
 
@@ -2102,7 +2618,8 @@ async fn test_partition_sorting_columns() -> Result<()> {
     ])
     .ok_or_else(|| internal_datafusion_err!("empty ordering"))?;
     let mut task = partition_task(Arc::clone(&store), 0, &["a"]);
-    task.sorting = Some(ordering);
+    task.ordering = Some(ordering);
+    task.write_sorting_columns = true;
     run_task(task, &schema, vec![partitioned_batch(&[(1, 1, "x")])?]).await?;
     let files = list_files(store.as_ref()).await?;
     let (metadata, _) = read_parquet(read_bytes(store.as_ref(), &files[0].0).await?)?;
@@ -2658,13 +3175,10 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
         partitioned_batch(&[(2, 2, "x")])?,
         partitioned_batch(&[(3, 1, "x")])?,
     ];
-    let name =
-        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
-    for (max_open_files, expected) in [
-        // The file of `a=1` is completed when the row of `a=2` arrives.
-        (1, vec![name(1, 0), name(1, 1), name(2, 0)]),
-        (2, vec![name(1, 0), name(2, 0)]),
-    ] {
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
+    let expected = vec![name(1), name(2)];
+    // The row of `a=2` is sorted when one directory can be open.
+    for (max_open_files, rows_sorted) in [(1, 1), (2, 0)] {
         let (ctx, store) = memory_context()?;
         let max_open_files = NonZeroUsize::new(max_open_files)
             .ok_or_else(|| internal_datafusion_err!("invalid number of open files"))?;
@@ -2698,7 +3212,9 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
         assert_eq!(writer.encoding_parallelism(), 3);
         assert_eq!(writer.max_open_files_per_task(), max_open_files);
 
-        let output = collect(commit_exec(Arc::new(writer))?, ctx.task_ctx()).await?;
+        let writer = Arc::new(writer);
+        let plan: Arc<dyn ExecutionPlan> = Arc::clone(&writer) as _;
+        let output = collect(commit_exec(plan)?, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![3]);
         let files = list_files(store.as_ref()).await?;
         let files: Vec<_> = files
@@ -2707,6 +3223,11 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
             .filter(|path| !path.ends_with("_SUCCESS"))
             .collect();
         assert_eq!(files, expected);
+        let sorted = writer
+            .metrics()
+            .and_then(|x| x.sum_by_name("rows_sorted"))
+            .map(|x| x.as_usize());
+        assert_eq!(sorted, Some(rows_sorted));
     }
     Ok(())
 }

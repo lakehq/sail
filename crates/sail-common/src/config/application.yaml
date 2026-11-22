@@ -854,12 +854,17 @@
   type: number
   default: "100"
   description: |
-    (Writing) The maximum number of Parquet files that one write task keeps open
-    when the data is written with partition columns.
-    When the limit is reached, the file that has not received rows for the longest time is closed.
-    Rows that arrive later for the same partition directory are written to a new file.
-    A larger value gives fewer files when the data is not clustered by the partition columns.
-    A larger value also uses more memory, since each open file buffers the rows of one row group.
+    (Writing) The maximum number of partition directories that one write task writes to
+    at the same time when the data is written with partition columns.
+    The task keeps one Parquet file open in each of these directories.
+    The rows for other partition directories are sorted by their partition directory
+    and written after the task has read all its input.
+    So the number of files does not depend on this option: each write task writes one file
+    per partition directory, unless a limit on the rows or the size of a file is reached.
+    A larger value sorts fewer rows and uses more memory, since each open file buffers
+    the rows of one row group.
+    The sorted rows are kept in memory, or in temporary files when the memory pool has a limit.
+    No rows are sorted when the data is already sorted by the partition columns.
     The value must be greater than `0`.
   experimental: true
 

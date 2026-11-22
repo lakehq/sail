@@ -9,10 +9,14 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, PhysicalExpr};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, OrderingRequirements, PhysicalExpr,
+};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
@@ -21,6 +25,7 @@ use datafusion::physical_plan::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use object_store::path::Path;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::resources::EncodeSettings;
@@ -52,6 +57,29 @@ pub(super) fn effective_max_file_size(max_file_size: u64, buffer_size: usize) ->
     }
 }
 
+/// Returns whether the partitions of the plan are the partitions
+/// that the query asks for with a repartition or a coalesce.
+fn has_explicit_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let mut plan = plan;
+    loop {
+        if plan.is::<ExplicitRepartitionExec>() {
+            return true;
+        }
+        // The partitions are kept by the plans that compute each
+        // output partition from the input partition of the same index.
+        let partitions = plan.output_partitioning().partition_count();
+        match plan.children().as_slice() {
+            [child]
+                if !plan.is::<RepartitionExec>()
+                    && child.output_partitioning().partition_count() == partitions =>
+            {
+                plan = child
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Writes each input partition to Parquet files in a table directory.
 ///
 /// The input partitioning is kept. Each output partition has a single batch,
@@ -78,6 +106,8 @@ pub struct ParquetWriteExec {
     /// The target maximum size in bytes of each file, or zero when there is no limit.
     max_file_size: u64,
     attempt: usize,
+    /// The partition columns as expressions on the input.
+    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -109,11 +139,13 @@ impl ParquetWriteExec {
             return not_impl_err!("Parquet write does not support unbounded input");
         }
         let schema = input.schema();
-        for column in &partition_columns {
-            if schema.index_of(column).is_err() {
-                return plan_err!("partition column {column} does not exist in schema {schema}");
-            }
-        }
+        let partition_exprs = partition_columns
+            .iter()
+            .map(|column| match schema.index_of(column) {
+                Ok(index) => Ok(Arc::new(Column::new(column, index)) as Arc<dyn PhysicalExpr>),
+                Err(_) => plan_err!("partition column {column} does not exist in schema {schema}"),
+            })
+            .collect::<Result<Vec<_>>>()?;
         check_file_columns(
             schema
                 .fields()
@@ -145,6 +177,7 @@ impl ParquetWriteExec {
             max_records_per_file: 0,
             max_file_size: 0,
             attempt: 0,
+            partition_exprs,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -170,6 +203,7 @@ impl ParquetWriteExec {
             max_records_per_file: self.max_records_per_file,
             max_file_size: self.max_file_size,
             attempt,
+            partition_exprs: self.partition_exprs.clone(),
             properties: Arc::clone(&self.properties),
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -278,6 +312,19 @@ impl ExecutionPlan for ParquetWriteExec {
         vec![self.ordering.clone().map(Into::into)]
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        // The rows of each partition directory are written by one task, so that
+        // the number of files and the number of files that are open at the same time
+        // follow from the number of directories and not from the number of tasks.
+        // The partitions that the query asks for are kept, so that a query can
+        // divide the rows of a directory among several tasks and files.
+        if self.partition_exprs.is_empty() || has_explicit_partitions(&self.input) {
+            vec![Distribution::UnspecifiedDistribution]
+        } else {
+            vec![Distribution::KeyPartitioned(self.partition_exprs.clone())]
+        }
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
@@ -356,11 +403,13 @@ impl ExecutionPlan for ParquetWriteExec {
             file_suffix: self.file_suffix.clone(),
             partition_columns: self.partition_columns.clone(),
             options: self.options.clone(),
-            sorting: self.ordering.clone().filter(|_| self.write_sorting_columns),
+            ordering: self.ordering.clone(),
+            write_sorting_columns: self.write_sorting_columns,
             buffer_size: UPLOAD_BUFFER_SIZE,
             max_records_per_file: self.max_records_per_file,
             max_file_size: effective_max_file_size(self.max_file_size, UPLOAD_BUFFER_SIZE),
             max_open_files: self.max_open_files_per_task.get(),
+            context: Arc::clone(&context),
             encode: EncodeSettings::new(self.encoding_parallelism),
         };
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
