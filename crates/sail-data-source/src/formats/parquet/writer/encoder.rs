@@ -57,8 +57,11 @@ const TIME_SLICE: Duration = Duration::from_millis(10);
 /// takes at most this number of rows at a time, so larger batches are not combined.
 const SMALL_BATCH_ROWS: usize = 1024;
 
-/// The number of small batches that are combined at a time, so that a file
-/// never keeps more than a few of them as they are.
+/// The number of small batches that are combined at a time. This is the square
+/// root of [`SMALL_BATCH_ROWS`]: batches of one row are combined to batches of
+/// this number of rows, and this number of those are combined to a batch that
+/// is no longer small. So a row is copied twice at most, and a file keeps
+/// less than twice this number of small batches.
 const SMALL_BATCH_COUNT: usize = 32;
 
 /// Encodes a Parquet file.
@@ -164,6 +167,9 @@ struct MeasuredRows {
 #[derive(Default)]
 struct SmallBatches {
     batches: Vec<RecordBatch>,
+    /// The number of batches at the end that are as the file has received them.
+    /// The batches before them are combined batches.
+    received: usize,
     rows: usize,
     /// The expected size of the values of the batches. The file has less than
     /// [`SMALL_BATCH_ROWS`] rows in these batches, and they are counted with
@@ -472,13 +478,18 @@ impl ColumnEncoder {
         };
         self.small.rows += piece.num_rows();
         self.small.batches.push(piece);
+        self.small.received += 1;
         if self.small.rows >= SMALL_BATCH_ROWS || self.is_full() {
             return self.flush_small().await;
         }
-        if self.small.batches.len() >= SMALL_BATCH_COUNT
-            && let Some(batch) = combine(&self.small.batches)
-        {
-            self.small.batches = vec![batch];
+        if self.small.received >= SMALL_BATCH_COUNT {
+            let combined = self.small.batches.len().saturating_sub(self.small.received);
+            if let Some(batch) = self.small.batches.get(combined..).and_then(combine) {
+                self.small.batches.truncate(combined);
+                self.small.batches.push(batch);
+            }
+            // The batches are not combined again if they cannot be combined.
+            self.small.received = 0;
         }
         Ok(())
     }
