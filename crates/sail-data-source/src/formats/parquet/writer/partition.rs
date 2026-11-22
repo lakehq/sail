@@ -41,8 +41,8 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task::JoinHandle;
 
 use crate::formats::parquet::writer::task::{DirectoryWriter, FileFactory};
-use crate::listing::commit::WrittenFile;
 use crate::listing::partition::DEFAULT_PARTITION_NAME;
+use crate::listing::staging::StagedFile;
 
 /// The values of the partition columns, formatted for the directory names.
 type PartitionKey = Vec<String>;
@@ -611,7 +611,7 @@ pub(super) struct PartitionedWriter {
     /// The files that are being completed, in the order in which they received
     /// their last rows. The number of these files and of the open directories
     /// together is at most the number of directories that can be open.
-    closing: VecDeque<JoinHandle<Result<WrittenFile>>>,
+    closing: VecDeque<JoinHandle<Result<StagedFile>>>,
     overflow: Option<Overflow>,
 }
 
@@ -646,7 +646,7 @@ impl PartitionedWriter {
         &mut self,
         factory: &FileFactory,
         batch: &RecordBatch,
-        written: &mut Vec<WrittenFile>,
+        written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         let (parts, data) = {
             let _timer = factory.elapsed_compute().timer();
@@ -700,7 +700,7 @@ impl PartitionedWriter {
     async fn close_open(
         &mut self,
         factory: &FileFactory,
-        written: &mut Vec<WrittenFile>,
+        written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         let keys: Vec<_> = self.open.keys().cloned().collect();
         for key in keys {
@@ -721,7 +721,7 @@ impl PartitionedWriter {
         &mut self,
         writer: &mut DirectoryWriter,
         factory: &FileFactory,
-        written: &mut Vec<WrittenFile>,
+        written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         self.closing.extend(writer.start_close(factory));
         let limit = self.max_open_files.saturating_sub(self.open.len());
@@ -732,7 +732,7 @@ impl PartitionedWriter {
     async fn wait_for_closing(
         &mut self,
         limit: usize,
-        written: &mut Vec<WrittenFile>,
+        written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         while self.closing.len() > limit {
             if let Some(task) = self.closing.pop_front() {
@@ -752,7 +752,7 @@ impl PartitionedWriter {
     pub async fn close(
         &mut self,
         factory: &FileFactory,
-        written: &mut Vec<WrittenFile>,
+        written: &mut Vec<StagedFile>,
     ) -> Result<()> {
         self.close_open(factory, written).await?;
         let Some(overflow) = self.overflow.take() else {

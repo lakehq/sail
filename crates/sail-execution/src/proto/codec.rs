@@ -9937,8 +9937,7 @@ mod tests {
                 max_open_files_per_task,
             )?
             .with_file_limits(encoding_parallelism as u64 * 1000, u64::MAX - 7)
-            .with_input_partitions_kept(write_sorting_columns)
-            .with_attempt(2);
+            .with_input_partitions_kept(write_sorting_columns);
             let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
             let decoded = decoded
@@ -9968,8 +9967,6 @@ mod tests {
                 decoded.properties().output_partitioning().partition_count(),
                 3
             );
-            // The attempt is set by the task runner and is not part of the encoded plan.
-            assert_eq!(decoded.attempt(), 0);
         }
         Ok(())
     }
@@ -10035,14 +10032,13 @@ mod tests {
         assert_eq!(write.data_schema(), &planned);
         let codec = RemoteExecutionCodec;
         let bytes = try_encode_physical_plan(&codec, Arc::new(write))?;
-        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-        let decoded = decoded
+        let plan = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = plan
             .downcast_ref::<ParquetWriteExec>()
             .ok_or_else(|| plan_datafusion_err!("decoded plan is not a Parquet write"))?;
         assert_eq!(decoded.data_schema(), &planned);
         // The schema is kept when the plan is rewritten.
-        assert_eq!(decoded.with_attempt(1).data_schema(), &planned);
-        let rewritten = Arc::new(decoded.with_attempt(0)).replace_children(
+        let rewritten = Arc::clone(&plan).replace_children(
             vec![Arc::clone(decoded.input())],
             datafusion::physical_plan::ReplaceChildrenOptions::new(
                 datafusion::physical_plan::ChildrenPropertiesMode::Recompute,

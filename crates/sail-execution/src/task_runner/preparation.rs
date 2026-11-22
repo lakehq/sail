@@ -18,8 +18,6 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
-use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
-use sail_data_source::listing::commit::FileWriteCommitExec;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio_util::sync::CancellationToken;
@@ -29,7 +27,7 @@ use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::{RemoteExecutionCodec, proto_to_physical_plan};
 use crate::stream::accessor::TaskStreamFactory;
-use crate::task::definition::{TaskDefinition, TaskInput, TaskInputLocator, TaskOutput};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::TaskRunnerActor;
 
 pub(super) struct TaskPreparation {
@@ -62,7 +60,6 @@ impl TaskPreparation {
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
         let plan = self.rewrite_file_scans(plan)?;
-        let plan = rewrite_write_attempt(plan, key.attempt, &definition.inputs)?;
         let plan = self.rewrite_shuffle(
             key,
             &definition.inputs,
@@ -173,43 +170,6 @@ impl TaskPreparation {
     }
 }
 
-/// Tells the file writers in the plan which attempt of the task they run in.
-/// The writers use the attempt number in the file names, so that a retried
-/// task never writes to a file of an earlier attempt that may still be running.
-///
-/// The commit of a file write is told the attempt only when the task reads all
-/// its inputs from tasks that are running. The task belongs to the same task
-/// region as the writer tasks then, so the writer tasks are attempted again
-/// whenever the commit is, with the same attempt number, and the commit can
-/// remove the files of a failed attempt. An input that is stored is the output
-/// of a task region that has succeeded and that is not run again when the task
-/// of the commit is attempted again, so the commit must keep the files.
-fn rewrite_write_attempt(
-    plan: Arc<dyn ExecutionPlan>,
-    attempt: usize,
-    inputs: &[TaskInput],
-) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let inputs_are_running = inputs.iter().all(|input| match input.locator.as_ref() {
-        TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. } => true,
-        TaskInputLocator::Storage { .. } | TaskInputLocator::ShuffleService { .. } => false,
-    });
-    let result = plan.transform(|node| {
-        if let Some(write) = node.downcast_ref::<ParquetWriteExec>() {
-            return Ok(Transformed::yes(
-                Arc::new(write.with_attempt(attempt)) as Arc<dyn ExecutionPlan>
-            ));
-        }
-        if let Some(commit) = node.downcast_ref::<FileWriteCommitExec>() {
-            let commit = commit
-                .clone()
-                .with_attempt(inputs_are_running.then_some(attempt));
-            return Ok(Transformed::yes(Arc::new(commit) as Arc<dyn ExecutionPlan>));
-        }
-        Ok(Transformed::no(node))
-    });
-    Ok(result.data()?)
-}
-
 /// Releases the inputs the task never executed once its stream is dropped,
 /// which happens when the task succeeds, fails, or is canceled.
 fn release_unexecuted_on_drop(
@@ -295,106 +255,6 @@ mod tests {
             partition: 0,
             attempt: 0,
         }
-    }
-
-    #[test]
-    fn commit_attempt_is_set_when_inputs_are_running() -> Result<(), Box<dyn std::error::Error>> {
-        use datafusion::execution::object_store::ObjectStoreUrl;
-        use datafusion::physical_plan::empty::EmptyExec;
-        use sail_data_source::listing::commit::manifest_schema;
-
-        let commit = FileWriteCommitExec::new(
-            Arc::new(EmptyExec::new(manifest_schema())),
-            ObjectStoreUrl::parse("memory://")?,
-            object_store::path::Path::from("table"),
-            uuid::Uuid::from_u128(1),
-        )
-        .with_overwrite(true)
-        .with_success_file(false);
-        assert_eq!(commit.attempt(), Some(0));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(commit);
-        let input = |locator: TaskInputLocator| TaskInput {
-            stage: 0,
-            locator: Arc::new(locator),
-            replicated: false,
-        };
-        // The commit is attempted with the tasks whose output it reads while
-        // they run, and on its own when it reads an output that is stored.
-        for (inputs, running) in [
-            (vec![], true),
-            (vec![input(TaskInputLocator::Worker { keys: vec![] })], true),
-            (vec![input(TaskInputLocator::Driver { keys: vec![] })], true),
-            (
-                vec![input(TaskInputLocator::Storage { keys: vec![] })],
-                false,
-            ),
-            (
-                vec![input(TaskInputLocator::ShuffleService { channels: vec![] })],
-                false,
-            ),
-            (
-                vec![
-                    input(TaskInputLocator::Worker { keys: vec![] }),
-                    input(TaskInputLocator::Storage { keys: vec![] }),
-                ],
-                false,
-            ),
-        ] {
-            for attempt in [0, 2] {
-                let plan = rewrite_write_attempt(Arc::clone(&plan), attempt, &inputs)?;
-                let commit = plan
-                    .downcast_ref::<FileWriteCommitExec>()
-                    .ok_or("missing commit")?;
-                assert_eq!(commit.attempt(), running.then_some(attempt));
-                assert!(commit.overwrite());
-                assert!(!commit.write_success_file());
-                assert_eq!(commit.table_path().as_ref(), "table");
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn write_attempt_is_set_on_parquet_writers() -> Result<(), Box<dyn std::error::Error>> {
-        use datafusion::arrow::datatypes::{DataType, Field};
-        use datafusion::common::config::TableParquetOptions;
-        use datafusion::execution::object_store::ObjectStoreUrl;
-        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-        use datafusion::physical_plan::empty::EmptyExec;
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
-        let write = ParquetWriteExec::try_new(
-            Arc::new(EmptyExec::new(schema).with_partitions(2)),
-            ObjectStoreUrl::parse("memory://")?,
-            object_store::path::Path::from("table"),
-            uuid::Uuid::from_u128(1),
-            vec![],
-            TableParquetOptions::default(),
-            ".parquet".to_string(),
-            None,
-            false,
-            0,
-            std::num::NonZeroUsize::MIN,
-        )?;
-        assert_eq!(write.attempt(), 0);
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(Arc::new(write)));
-
-        for attempt in [0, 3] {
-            let plan = rewrite_write_attempt(Arc::clone(&plan), attempt, &[])?;
-            let coalesce = plan
-                .downcast_ref::<CoalescePartitionsExec>()
-                .ok_or("missing coalesce")?;
-            let write = coalesce
-                .input()
-                .downcast_ref::<ParquetWriteExec>()
-                .ok_or("missing writer")?;
-            assert_eq!(write.attempt(), attempt);
-            assert_eq!(
-                write.properties().output_partitioning().partition_count(),
-                2
-            );
-        }
-        Ok(())
     }
 
     #[tokio::test]

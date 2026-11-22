@@ -15,12 +15,11 @@ use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion_datasource::write::SharedBuffer;
-use object_store::buffered::BufWriter;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::formats::parquet::writer::lane::{Lane, LaneInput, assign_lanes, logical_size};
 use crate::formats::parquet::writer::resources::{EncodeResources, OpenFile};
+use crate::listing::staging::{Publish, StagedUpload, upload_error};
 
 /// The size of the encoded data of a file that is kept in memory
 /// before the data is handed to the upload.
@@ -50,7 +49,7 @@ pub(super) struct ColumnEncoder {
     writer: SerializedFileWriter<SharedBuffer>,
     /// The encoded data that has not been handed to the upload.
     buffer: SharedBuffer,
-    upload: BufWriter,
+    upload: StagedUpload,
     /// The maximum size of the data that is handed to the upload at a time.
     upload_chunk_size: usize,
     schema: SchemaRef,
@@ -83,7 +82,7 @@ enum SealedRowGroup {
 
 impl ColumnEncoder {
     pub fn try_new(
-        upload: BufWriter,
+        upload: StagedUpload,
         upload_chunk_size: usize,
         schema: SchemaRef,
         props: WriterProperties,
@@ -186,20 +185,17 @@ impl ColumnEncoder {
         self.write(batch).await
     }
 
-    /// Writes the remaining data and the footer, and completes the upload.
-    /// Returns the size of the file.
-    pub async fn finish(&mut self) -> Result<usize> {
+    /// Writes the remaining data and the footer, and uploads what remains.
+    /// Returns the size of the file and how the file is published.
+    pub async fn finish(&mut self) -> Result<(usize, Publish)> {
         self.flush().await?;
         while !self.sealed.is_empty() {
             self.append_next().await?;
         }
         self.writer.finish()?;
         upload_buffer(&self.buffer, &mut self.upload, self.upload_chunk_size, 0).await?;
-        self.upload
-            .shutdown()
-            .await
-            .map_err(|e| ParquetError::External(Box::new(e)))?;
-        Ok(self.writer.bytes_written())
+        let publish = self.upload.finish().await.map_err(upload_error)?;
+        Ok((self.writer.bytes_written(), publish))
     }
 
     // SPDX-SnippetBegin
@@ -442,7 +438,7 @@ impl SealedRowGroup {
 /// Hands the encoded data to the upload if the size of the data exceeds the threshold.
 async fn upload_buffer(
     buffer: &SharedBuffer,
-    upload: &mut BufWriter,
+    upload: &mut StagedUpload,
     chunk_size: usize,
     threshold: usize,
 ) -> Result<()> {
@@ -467,7 +463,7 @@ async fn upload_buffer(
         upload
             .put(data.slice(offset..end))
             .await
-            .map_err(|e| ParquetError::External(Box::new(e)))?;
+            .map_err(upload_error)?;
         offset = end;
     }
     Ok(())

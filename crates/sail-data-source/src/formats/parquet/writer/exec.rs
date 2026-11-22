@@ -34,6 +34,7 @@ use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
 use crate::listing::commit::manifest_schema;
+use crate::listing::staging::Publisher;
 
 /// The capacity in bytes of the upload buffer of each file.
 const UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
@@ -105,7 +106,6 @@ pub struct ParquetWriteExec {
     max_records_per_file: u64,
     /// The target maximum size in bytes of each file, or zero when there is no limit.
     max_file_size: u64,
-    attempt: usize,
     /// The partition columns as expressions on the input.
     partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// Whether the rows are written by the tasks of the input partitions that
@@ -179,39 +179,11 @@ impl ParquetWriteExec {
             max_open_files_per_task,
             max_records_per_file: 0,
             max_file_size: 0,
-            attempt: 0,
             partition_exprs,
             keeps_input_partitions: false,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         })
-    }
-
-    /// Returns the plan for a task attempt.
-    /// The attempt number is part of the file names, so that the files
-    /// of different attempts of the same partition never have the same name.
-    pub fn with_attempt(&self, attempt: usize) -> Self {
-        Self {
-            input: Arc::clone(&self.input),
-            schema: Arc::clone(&self.schema),
-            object_store_url: self.object_store_url.clone(),
-            table_path: self.table_path.clone(),
-            write_id: self.write_id,
-            partition_columns: self.partition_columns.clone(),
-            options: self.options.clone(),
-            file_suffix: self.file_suffix.clone(),
-            ordering: self.ordering.clone(),
-            write_sorting_columns: self.write_sorting_columns,
-            encoding_parallelism: self.encoding_parallelism,
-            max_open_files_per_task: self.max_open_files_per_task,
-            max_records_per_file: self.max_records_per_file,
-            max_file_size: self.max_file_size,
-            attempt,
-            partition_exprs: self.partition_exprs.clone(),
-            keeps_input_partitions: self.keeps_input_partitions,
-            properties: Arc::clone(&self.properties),
-            metrics: ExecutionPlanMetricsSet::new(),
-        }
     }
 
     /// Returns the plan with the given schema of the data to write.
@@ -300,10 +272,6 @@ impl ParquetWriteExec {
         self.max_open_files_per_task
     }
 
-    pub fn attempt(&self) -> usize {
-        self.attempt
-    }
-
     pub fn keeps_input_partitions(&self) -> bool {
         self.keeps_input_partitions
     }
@@ -390,8 +358,7 @@ impl ExecutionPlan for ParquetWriteExec {
         Ok(Arc::new(
             plan.with_schema(Arc::clone(&self.schema))
                 .with_file_limits(self.max_records_per_file, self.max_file_size)
-                .with_input_partitions_kept(self.keeps_input_partitions)
-                .with_attempt(self.attempt),
+                .with_input_partitions_kept(self.keeps_input_partitions),
         ))
     }
 
@@ -411,14 +378,13 @@ impl ExecutionPlan for ParquetWriteExec {
             } else {
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)))
             };
-        let store = context.runtime_env().object_store(&self.object_store_url)?;
+        let publisher = Publisher::try_new(&context, &self.object_store_url)?;
         let task = ParquetWriteTask {
-            store,
+            publisher,
             table_path: self.table_path.clone(),
             write_id: self.write_id,
             partition,
             partitions: self.properties.output_partitioning().partition_count(),
-            attempt: self.attempt,
             file_suffix: self.file_suffix.clone(),
             partition_columns: self.partition_columns.clone(),
             options: self.options.clone(),

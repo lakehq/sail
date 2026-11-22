@@ -1711,13 +1711,12 @@ mod tests {
         let (_, files) =
             write_range_to_parquet(None, spec::SaveMode::Append, &[], store.clone()).await?;
         assert_eq!(files.len(), 3, "{files:?}");
-        // The write fails when it has rows, and it leaves no file of its own.
-        // A write that overwrites keeps the data files of the table when it fails,
-        // and only the `_SUCCESS` file is deleted, which is done before the write starts.
+        // The write fails when it has rows, and it leaves the table as it was,
+        // with its `_SUCCESS` file, also when the write overwrites.
         assert_eq!(files[0], "table/_SUCCESS");
         for (mode, expected) in [
             (spec::SaveMode::Append, files.clone()),
-            (spec::SaveMode::Overwrite, files[1..].to_vec()),
+            (spec::SaveMode::Overwrite, files.clone()),
         ] {
             let result = write_range_to_parquet(None, mode, &["id"], store.clone()).await;
             assert!(

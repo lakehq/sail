@@ -8,22 +8,21 @@ use datafusion::parquet::arrow::AsyncArrowWriter;
 use datafusion::parquet::arrow::arrow_writer::ArrowWriterOptions;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion_common::Result;
-use object_store::ObjectStore;
-use object_store::buffered::BufWriter;
 use object_store::path::Path;
 
 use crate::formats::parquet::writer::encoder::ColumnEncoder;
 use crate::formats::parquet::writer::resources::EncodeResources;
-use crate::listing::commit::WrittenFile;
+use crate::listing::staging::{StagedFile, StagedUpload};
 
 /// The maximum number of concurrent part uploads for one file.
 /// Many files can be written at the same time, so this is lower than
 /// the default of the object store writer.
-const MAX_UPLOAD_CONCURRENCY: usize = 4;
+pub(super) const MAX_UPLOAD_CONCURRENCY: usize = 4;
 
 /// A Parquet file that is being written to an object store.
 ///
-/// The file becomes visible in the object store only when [`Self::close`] succeeds.
+/// The file is not visible in the object store when [`Self::close`] succeeds.
+/// It becomes visible when the staged file that is returned is published.
 /// Dropping the writer before that abandons the upload.
 pub struct ParquetFileWriter {
     inner: FileEncoder,
@@ -34,14 +33,17 @@ pub struct ParquetFileWriter {
 
 enum FileEncoder {
     /// Encodes the file with content-defined chunking.
-    Arrow(Box<AsyncArrowWriter<BufWriter>>),
+    Arrow(Box<AsyncArrowWriter<StagedUpload>>),
     /// Encodes the columns of the file in the writer task or in other tasks.
     Columns(Box<ColumnEncoder>),
 }
 
 impl ParquetFileWriter {
+    /// Creates the writer of the file at the location, with the upload
+    /// that was started for it. The encoded data is handed to the upload
+    /// in pieces of at most `buffer_size` bytes.
     pub fn try_new(
-        store: Arc<dyn ObjectStore>,
+        writer: StagedUpload,
         location: Path,
         schema: SchemaRef,
         props: WriterProperties,
@@ -49,8 +51,6 @@ impl ParquetFileWriter {
         buffer_size: usize,
         resources: Arc<EncodeResources>,
     ) -> Result<Self> {
-        let writer = BufWriter::with_capacity(store, location.clone(), buffer_size)
-            .with_max_concurrency(MAX_UPLOAD_CONCURRENCY);
         // Content-defined chunking keeps state across the row groups of a column,
         // which is only available in the Arrow writer.
         let inner = if props.content_defined_chunking().is_none() {
@@ -152,20 +152,22 @@ impl ParquetFileWriter {
         }
     }
 
-    /// Writes the remaining data and the footer, and completes the upload.
-    pub async fn close(self) -> Result<WrittenFile> {
-        let size = match self.inner {
+    /// Writes the remaining data and the footer, and uploads what remains.
+    pub async fn close(self) -> Result<StagedFile> {
+        let (size, publish) = match self.inner {
             FileEncoder::Arrow(mut writer) => {
                 let _timer = self.resources.elapsed_compute().timer();
                 writer.finish().await?;
-                writer.bytes_written()
+                let size = writer.bytes_written();
+                (size, writer.into_inner().finish().await?)
             }
             FileEncoder::Columns(mut writer) => writer.finish().await?,
         };
-        Ok(WrittenFile {
+        Ok(StagedFile {
             location: self.location,
             size: size as u64,
             num_rows: self.rows,
+            publish,
         })
     }
 }

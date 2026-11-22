@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, ListBuilder, RecordBatch, StringArray, StringBuilder, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -15,41 +17,62 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
 };
-use datafusion_common::cast::{as_string_array, as_uint64_array};
-use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
-use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt, stream};
+use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
+use datafusion_common::{
+    DataFusionError, Result, exec_datafusion_err, exec_err, internal_datafusion_err, internal_err,
+};
+use futures::{FutureExt, StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
-use sail_common_datafusion::error::InputIncompleteError;
+use sail_common_datafusion::error::CommitStateUnknownError;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::listing::part_file::parse_part_file_name;
+use crate::listing::staging::{Publish, Publisher, StagedFile, is_staged_name};
 
 /// The name of the empty file that marks a completed write.
 const SUCCESS_FILE_NAME: &str = "_SUCCESS";
 
-/// A data file that a writer task has completed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WrittenFile {
-    pub location: Path,
-    pub size: u64,
-    pub num_rows: u64,
-}
+/// The number of files that are published at the same time.
+///
+/// A file is published with one small request, and the commit publishes
+/// the files of all writer tasks, so the requests are sent concurrently.
+/// The client of an object store opens a connection for each request that
+/// is in flight, and it sends a request again when the object store asks
+/// it to slow down. The number is of the order of the part uploads that
+/// the writer tasks of one process have in flight during the write, which
+/// the client sustains, so the commit does not load the object store more
+/// than the write itself does.
+const PUBLISH_CONCURRENCY: usize = 64;
 
 /// The schema of the manifest that each writer task returns.
-/// The manifest has one row per completed file.
-/// A task that completed no file returns a single row with a null path.
-/// The row is required since the commit must see every writer partition,
-/// and an exchange between the writers and the commit drops empty batches.
+///
+/// The manifest has one row per file that the task has staged, with the way
+/// in which the file is published: `staged` is the location of the object
+/// that is renamed, or `upload_id` and `parts` identify the multipart upload
+/// that is completed. A task that staged no file returns a single row with
+/// a null path. The row is required since the commit must see every writer
+/// partition, and an exchange between the writers and the commit drops empty
+/// batches.
+///
+/// Each row has the number of writer partitions and the number of files of
+/// its task, so that the commit can tell whether it has received every row
+/// of every task. The end of the input does not show this.
 pub fn manifest_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("partition", DataType::UInt64, false),
         Field::new("partitions", DataType::UInt64, false),
-        Field::new("attempt", DataType::UInt64, false),
+        Field::new("files", DataType::UInt64, false),
         Field::new("path", DataType::Utf8, true),
         Field::new("size", DataType::UInt64, false),
         Field::new("num_rows", DataType::UInt64, false),
+        Field::new("staged", DataType::Utf8, true),
+        Field::new("upload_id", DataType::Utf8, true),
+        Field::new(
+            "parts",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        ),
     ]))
 }
 
@@ -57,8 +80,7 @@ pub fn manifest_schema() -> SchemaRef {
 pub fn manifest_batch(
     partition: usize,
     partitions: usize,
-    attempt: usize,
-    files: &[WrittenFile],
+    files: &[StagedFile],
 ) -> Result<RecordBatch> {
     let rows = files.len().max(1);
     let mut paths: Vec<Option<String>> = files
@@ -70,15 +92,63 @@ pub fn manifest_batch(
     sizes.resize(rows, 0);
     let mut num_rows: Vec<u64> = files.iter().map(|file| file.num_rows).collect();
     num_rows.resize(rows, 0);
+    let mut staged = StringBuilder::new();
+    let mut upload_ids = StringBuilder::new();
+    let mut parts = ListBuilder::new(StringBuilder::new());
+    for file in files {
+        match &file.publish {
+            Publish::Rename { staged: location } => {
+                staged.append_value(location.as_ref());
+                upload_ids.append_null();
+                parts.append_null();
+            }
+            Publish::Multipart {
+                upload_id,
+                parts: ids,
+            } => {
+                staged.append_null();
+                upload_ids.append_value(upload_id);
+                for id in ids {
+                    parts.values().append_value(id);
+                }
+                parts.append(true);
+            }
+        }
+    }
+    if files.is_empty() {
+        staged.append_null();
+        upload_ids.append_null();
+        parts.append_null();
+    }
     let columns: Vec<ArrayRef> = vec![
         Arc::new(UInt64Array::from(vec![partition as u64; rows])),
         Arc::new(UInt64Array::from(vec![partitions as u64; rows])),
-        Arc::new(UInt64Array::from(vec![attempt as u64; rows])),
+        Arc::new(UInt64Array::from(vec![files.len() as u64; rows])),
         Arc::new(StringArray::from(paths)),
         Arc::new(UInt64Array::from(sizes)),
         Arc::new(UInt64Array::from(num_rows)),
+        Arc::new(staged.finish()),
+        Arc::new(upload_ids.finish()),
+        Arc::new(parts.finish()),
     ];
     Ok(RecordBatch::try_new(manifest_schema(), columns)?)
+}
+
+/// Returns the staged files of the manifest of a writer task.
+#[cfg(test)]
+pub(crate) fn manifest_files(manifest: &RecordBatch) -> Result<Vec<StagedFile>> {
+    let mut files = vec![];
+    Manifests::default().add(manifest, &mut files)?;
+    Ok(files)
+}
+
+/// What a writer partition has reported so far.
+#[derive(Debug, Clone, Copy)]
+struct ReportedPartition {
+    /// The number of files of the manifest of the writer task.
+    files: u64,
+    /// The number of rows of the manifest that were received.
+    rows: u64,
 }
 
 /// The manifests of all writer tasks of a write.
@@ -86,277 +156,470 @@ pub fn manifest_batch(
 struct Manifests {
     /// The number of writer partitions.
     partitions: Option<u64>,
-    /// The attempt number of each writer partition.
-    attempts: HashMap<u64, u64>,
-    /// The partitions that completed no file.
-    empty_partitions: HashSet<u64>,
-    files: HashSet<Path>,
+    reported: HashMap<u64, ReportedPartition>,
+    locations: HashSet<Path>,
     num_rows: u64,
 }
 
 impl Manifests {
-    fn add(&mut self, manifest: &RecordBatch) -> Result<()> {
-        let partition = as_uint64_array(manifest.column(0))?;
-        let partitions = as_uint64_array(manifest.column(1))?;
-        let attempt = as_uint64_array(manifest.column(2))?;
-        let path = as_string_array(manifest.column(3))?;
-        let num_rows = as_uint64_array(manifest.column(5))?;
-        for i in 0..manifest.num_rows() {
-            let partition = partition.value(i);
-            let partitions = partitions.value(i);
-            let attempt = attempt.value(i);
-            if *self.partitions.get_or_insert(partitions) != partitions {
-                return internal_err!("writer tasks disagree on the number of partitions");
-            }
-            let known = self.attempts.insert(partition, attempt);
-            if known.is_some_and(|known| known != attempt) {
-                return internal_err!("writer partition {partition} has more than one attempt");
-            }
-            // Each task returns its manifest once, so a partition has either
-            // one row without a file or one row for each of its files.
-            let duplicate = if path.is_valid(i) {
-                let path = Path::parse(path.value(i))
-                    .map_err(|e| internal_datafusion_err!("invalid path in the manifest: {e}"))?;
-                self.empty_partitions.contains(&partition) || !self.files.insert(path)
-            } else {
-                known.is_some() || !self.empty_partitions.insert(partition)
-            };
-            if duplicate {
-                return internal_err!("writer partition {partition} has more than one manifest");
-            }
-            self.num_rows += num_rows.value(i);
-        }
-        Ok(())
-    }
-
-    /// Checks that the manifests of all writer partitions were received.
-    /// The end of the input does not show this, since the output of a failed
-    /// or canceled writer task can end in the same way as a complete output.
-    ///
-    /// The error says that the input is incomplete, so that the error of a writer
-    /// task that has failed is reported for the write instead of this error.
-    fn validate(&self) -> Result<()> {
-        let incomplete =
-            |message: String| DataFusionError::External(Box::new(InputIncompleteError(message)));
-        let Some(partitions) = self.partitions else {
-            return Err(incomplete(
-                "the write is incomplete: no writer task has reported its files".to_string(),
-            ));
+    /// Adds a manifest. The files of the manifest are added to `files`
+    /// also when the manifest is rejected, so that they can be removed.
+    fn add(&mut self, manifest: &RecordBatch, files: &mut Vec<StagedFile>) -> Result<()> {
+        let [
+            partition,
+            partitions,
+            file_count,
+            path,
+            size,
+            num_rows,
+            staged,
+            upload_id,
+            parts,
+        ] = manifest.columns()
+        else {
+            return internal_err!("invalid columns in the manifest");
         };
-        let received = self.attempts.len() as u64;
-        if received != partitions || self.attempts.keys().any(|x| *x >= partitions) {
-            return Err(incomplete(format!(
-                "the write is incomplete: {received} of {partitions} writer tasks have reported their files"
-            )));
+        let partition = as_uint64_array(partition)?;
+        let partitions = as_uint64_array(partitions)?;
+        let file_count = as_uint64_array(file_count)?;
+        let path = as_string_array(path)?;
+        let size = as_uint64_array(size)?;
+        let num_rows = as_uint64_array(num_rows)?;
+        let staged = as_string_array(staged)?;
+        let upload_id = as_string_array(upload_id)?;
+        let parts = as_list_array(parts)?;
+        let parse = |path: &str| {
+            Path::parse(path)
+                .map_err(|e| internal_datafusion_err!("invalid path in the manifest: {e}"))
+        };
+        let mut result = Ok(());
+        for i in 0..manifest.num_rows() {
+            let file = if path.is_null(i) {
+                None
+            } else {
+                let publish = if staged.is_valid(i) {
+                    Publish::Rename {
+                        staged: parse(staged.value(i))?,
+                    }
+                } else if upload_id.is_valid(i) && parts.is_valid(i) {
+                    let ids = parts.value(i);
+                    Publish::Multipart {
+                        upload_id: upload_id.value(i).to_string(),
+                        parts: as_string_array(&ids)?
+                            .iter()
+                            .map(|id| id.map(|id| id.to_string()))
+                            .collect::<Option<_>>()
+                            .ok_or_else(|| {
+                                internal_datafusion_err!("missing part in the manifest")
+                            })?,
+                    }
+                } else {
+                    return internal_err!("a file of the manifest cannot be published");
+                };
+                Some(StagedFile {
+                    location: parse(path.value(i))?,
+                    size: size.value(i),
+                    num_rows: num_rows.value(i),
+                    publish,
+                })
+            };
+            let check = self.check_row(
+                partition.value(i),
+                partitions.value(i),
+                file_count.value(i),
+                file.as_ref(),
+            );
+            files.extend(file);
+            result = result.and(check);
         }
+        result
+    }
+
+    fn check_row(
+        &mut self,
+        partition: u64,
+        partitions: u64,
+        files: u64,
+        file: Option<&StagedFile>,
+    ) -> Result<()> {
+        if *self.partitions.get_or_insert(partitions) != partitions {
+            return internal_err!("writer tasks disagree on the number of partitions");
+        }
+        if partition >= partitions {
+            return internal_err!(
+                "writer partition {partition} is not one of the {partitions} partitions of the write"
+            );
+        }
+        // Each task returns its manifest once, so a partition has either
+        // one row without a file or one row for each of its files.
+        let reported = self
+            .reported
+            .entry(partition)
+            .or_insert(ReportedPartition { files, rows: 0 });
+        reported.rows += 1;
+        let duplicate = reported.files != files
+            || reported.rows > files.max(1)
+            || file.is_some_and(|file| !self.locations.insert(file.location.clone()));
+        if duplicate {
+            return internal_err!("writer partition {partition} has more than one manifest");
+        }
+        if file.is_some() != (files > 0) {
+            return internal_err!("writer partition {partition} has an invalid manifest");
+        }
+        self.num_rows += file.map_or(0, |file| file.num_rows);
         Ok(())
     }
 
-    fn max_attempt(&self) -> u64 {
-        self.attempts.values().copied().max().unwrap_or(0)
+    /// Checks that all rows of the manifests of all writer partitions were
+    /// received. The end of the input does not show this, since the output
+    /// of a failed or canceled writer task can end in the same way as
+    /// a complete output. Nothing is published for a write that is incomplete.
+    fn validate(&self) -> Result<()> {
+        let Some(partitions) = self.partitions else {
+            return exec_err!(
+                "the write is incomplete: no writer task has reported its files. \
+                A writer task has failed or was canceled, and its error is in the logs of the task."
+            );
+        };
+        let complete = self
+            .reported
+            .values()
+            .filter(|reported| reported.rows == reported.files.max(1))
+            .count() as u64;
+        if complete != partitions {
+            return exec_err!(
+                "the write is incomplete: {complete} of {partitions} writer tasks have reported all their files. \
+                A writer task has failed or was canceled, and its error is in the logs of the task."
+            );
+        }
+        Ok(())
     }
 }
 
 /// Deletes the files. A file that does not exist is not an error.
-pub(crate) async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<()> {
-    delete_file_stream(store, stream::iter(files.into_iter().map(Ok)).boxed()).await
-}
-
-/// Deletes the files of the stream. A file that does not exist is not an error.
-async fn delete_file_stream(
-    store: &Arc<dyn ObjectStore>,
-    files: BoxStream<'static, object_store::Result<Path>>,
-) -> Result<()> {
-    let mut deleted = store.delete_stream(files);
-    while let Some(result) = deleted.next().await {
-        match result {
+/// All files are tried, and the first error is returned.
+async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<()> {
+    let mut deleted = store.delete_stream(stream::iter(files.into_iter().map(Ok)).boxed());
+    let mut result = Ok(());
+    while let Some(file) = deleted.next().await {
+        match file {
             Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => result = result.and(Err(e.into())),
         }
     }
-    Ok(())
+    result
 }
 
-/// Removes the files of a write that ends without success.
+/// The work of the commit of a write, and the staged files that the commit
+/// has received and not published.
 ///
-/// A writer task removes its own files unless its manifest was delivered, and
-/// the manifest can be delivered to a commit that fails or is canceled before
-/// it has read the manifest. The commit therefore removes the files of the
-/// write by their names when it ends before it has verified the manifests.
-///
-/// This is done only when the writer tasks are attempted again whenever the
-/// commit is, which is the case when the attempt is known. The files of later
-/// attempts are kept then, since a later attempt can be running already.
-/// When the commit can be attempted again on its own, it reads the manifests
-/// of the same files again, so the files must be kept.
-///
-/// A file is not removed if a writer task completes it and delivers its
-/// manifest after the directory was listed here, which can happen while
-/// the writer tasks of a failed write are being stopped.
-struct FailedWriteCleanup {
-    store: Arc<dyn ObjectStore>,
+/// The commit owns the staged files that it has received. It removes them
+/// when it ends before it has published them, also when it is canceled.
+struct WriteCommit {
+    publisher: Publisher,
     table_path: Path,
     write_id: Uuid,
-    /// The attempt that the commit shares with its writer tasks, if it does.
-    attempt: Option<u64>,
-}
-
-impl FailedWriteCleanup {
-    /// Removes the files now. The files are not removed again when this is dropped.
-    async fn run(mut self) {
-        if let Some(attempt) = self.attempt.take() {
-            Self::delete(&self.store, &self.table_path, self.write_id, attempt).await;
-        }
-    }
-
-    /// The write has all its files, which are kept from here on.
-    fn disarm(mut self) {
-        self.attempt = None;
-    }
-
-    async fn delete(store: &Arc<dyn ObjectStore>, table_path: &Path, write_id: Uuid, attempt: u64) {
-        let files = store
-            .list(Some(table_path))
-            .try_filter_map(move |meta| {
-                let delete = meta
-                    .location
-                    .filename()
-                    .and_then(parse_part_file_name)
-                    .is_some_and(|name| {
-                        name.write_id == write_id && name.attempt as u64 <= attempt
-                    });
-                futures::future::ready(Ok(delete.then_some(meta.location)))
-            })
-            .boxed();
-        if let Err(e) = delete_file_stream(store, files).await {
-            log::warn!("failed to delete the files of a failed write to {table_path}: {e}");
-        }
-    }
-}
-
-impl Drop for FailedWriteCleanup {
-    fn drop(&mut self) {
-        // The commit was canceled before it has verified the manifests.
-        let Some(attempt) = self.attempt.take() else {
-            return;
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let store = Arc::clone(&self.store);
-            let table_path = self.table_path.clone();
-            let write_id = self.write_id;
-            runtime.spawn(async move {
-                Self::delete(&store, &table_path, write_id, attempt).await;
-            });
-        }
-    }
-}
-
-/// Reads the manifests of all writer tasks.
-async fn read_manifests(mut input: SendableRecordBatchStream) -> Result<Manifests> {
-    let mut manifests = Manifests::default();
-    while let Some(manifest) = input.next().await {
-        manifests.add(&manifest?)?;
-    }
-    manifests.validate()?;
-    Ok(manifests)
-}
-
-/// Completes a write and returns the number of rows written.
-///
-/// A write that overwrites replaces the content of the table directory when
-/// all writer tasks have completed their files. The files that were in the
-/// directory before the write are kept until then, so that a write that fails
-/// does not remove them. The `_SUCCESS` file of the earlier content is removed
-/// before the writer tasks start, so that the file is present only when
-/// the directory has the files of exactly one completed write.
-async fn commit_file_write(
-    open_input: impl FnOnce() -> Result<SendableRecordBatchStream>,
-    store: Arc<dyn ObjectStore>,
-    table_path: Path,
-    write_id: Uuid,
+    /// Whether the write replaces the content of the table directory.
     overwrite: bool,
+    /// Whether the `_SUCCESS` file is written.
     write_success_file: bool,
-    attempt: Option<u64>,
-) -> Result<u64> {
-    let success_file = table_path.clone().join(SUCCESS_FILE_NAME);
-    if overwrite {
-        delete_files(&store, vec![success_file.clone()]).await?;
-    }
-    let cleanup = FailedWriteCleanup {
-        store: Arc::clone(&store),
-        table_path: table_path.clone(),
-        write_id,
-        attempt,
-    };
-    let result = match open_input() {
-        Ok(input) => read_manifests(input).await,
-        Err(e) => Err(e),
-    };
-    let mut manifests = match result {
-        Ok(manifests) => manifests,
-        Err(e) => {
-            // The writer tasks that are still running have been stopped,
-            // since the input has been dropped.
-            cleanup.run().await;
-            return Err(e);
+    received: Vec<StagedFile>,
+}
+
+impl WriteCommit {
+    /// Starts to remove the staged files that were received, if there are any.
+    /// The files are removed by a separate task, which is not canceled when
+    /// the commit is.
+    fn start_abort(&mut self) -> Option<JoinHandle<()>> {
+        let files = std::mem::take(&mut self.received);
+        if files.is_empty() {
+            return None;
         }
-    };
+        log::warn!(
+            "removing {} staged files of the write {} to {}, which is not committed",
+            files.len(),
+            self.write_id,
+            self.table_path
+        );
+        let runtime = tokio::runtime::Handle::try_current().ok()?;
+        let publisher = self.publisher.clone();
+        Some(runtime.spawn(async move { publisher.abort_all(&files).await }))
+    }
 
-    // The write has all its files from here on, and none of them is deleted
-    // if the rest of the commit fails.
-    cleanup.disarm();
-    //
-    // The write has files that are not in a manifest only if a writer task was
-    // attempted more than once. These are the files whose name has another
-    // attempt than the attempt that the writer partition has reported.
-    // The files of later attempts are kept, since such an attempt may be
-    // running when this attempt of the commit was canceled but has not
-    // stopped yet. A write that overwrites also removes everything that
-    // is not a file of the write.
-    //
-    // The files of the write are recognized by their names and not by the
-    // locations in the manifests, so that a file of the write is kept even
-    // when the object store lists its location in another form than the form
-    // in which the writer task has reported it.
-    let max_attempt = manifests.max_attempt();
-    if overwrite || max_attempt > 0 {
-        let attempts = std::mem::take(&mut manifests.attempts);
-        let files = store
-            .list(Some(&table_path))
-            .try_filter_map(move |meta| {
-                let name = meta
-                    .location
-                    .filename()
-                    .and_then(parse_part_file_name)
-                    .filter(|name| name.write_id == write_id);
-                let delete = match name {
-                    Some(name) => {
-                        let attempt = name.attempt as u64;
-                        attempt <= max_attempt
-                            && attempts.get(&(name.partition as u64)) != Some(&attempt)
-                    }
-                    None => overwrite,
+    /// Removes the staged files that were received.
+    async fn abort(&mut self) {
+        if let Some(task) = self.start_abort() {
+            // The files are removed whether or not the task is awaited.
+            let _ = task.await;
+        }
+    }
+
+    /// Completes the write, and returns the number of rows written.
+    async fn run(mut self, input: SendableRecordBatchStream) -> Result<u64> {
+        let count = match self.read_manifests(input).await {
+            Ok(count) => count,
+            Err(e) => {
+                self.abort().await;
+                return Err(e);
+            }
+        };
+        // The files are published by a separate task, which is not canceled
+        // when the commit is, so that the table directory is not left with
+        // a part of the write.
+        tokio::spawn(self.publish())
+            .await
+            .map_err(|e| exec_datafusion_err!("the commit of the write has not ended: {e}"))??;
+        Ok(count)
+    }
+
+    /// Reads the manifests of all writer tasks. Returns the number of rows written.
+    async fn read_manifests(&mut self, mut input: SendableRecordBatchStream) -> Result<u64> {
+        let mut manifests = Manifests::default();
+        while let Some(manifest) = input.next().await {
+            let added = manifest.and_then(|x| manifests.add(&x, &mut self.received));
+            if let Err(e) = added {
+                // The manifests that have arrived already are taken as well,
+                // so that their files are removed. The writer tasks that are
+                // running are stopped when the input is dropped, and they
+                // remove their files themselves.
+                while let Some(Some(Ok(manifest))) = input.next().now_or_never() {
+                    let _ = Manifests::default().add(&manifest, &mut self.received);
+                }
+                return Err(e);
+            }
+        }
+        manifests.validate()?;
+        Ok(manifests.num_rows)
+    }
+
+    /// Lists the content of the table directory that an overwrite replaces.
+    /// Returns the locations of the objects and whether the directory has
+    /// a `_SUCCESS` file, which is not among the locations.
+    ///
+    /// This is everything in the directory except for the objects that
+    /// the writes to the table have staged, since these can belong to a write
+    /// that is running. The files of this write are not in the directory yet.
+    async fn list_old_content(&self) -> Result<(Vec<Path>, bool)> {
+        let success_file = self.table_path.clone().join(SUCCESS_FILE_NAME);
+        let mut has_success_file = false;
+        let mut locations = vec![];
+        let mut objects = self.publisher.store().list(Some(&self.table_path));
+        while let Some(object) = objects.try_next().await? {
+            if object.location == success_file {
+                has_success_file = true;
+            } else if !object.location.filename().is_some_and(is_staged_name) {
+                locations.push(object.location);
+            }
+        }
+        Ok((locations, has_success_file))
+    }
+
+    /// Publishes the files at the indices. Returns the indices of the files
+    /// that are not published, each with its error.
+    async fn publish_files(
+        &self,
+        files: &[StagedFile],
+        indices: impl Iterator<Item = usize>,
+    ) -> Vec<(usize, DataFusionError)> {
+        stream::iter(indices)
+            .map(|i| async move {
+                let result = match files.get(i) {
+                    Some(file) => self.publisher.publish(file).await,
+                    None => internal_err!("missing staged file"),
                 };
-                futures::future::ready(Ok(delete.then_some(meta.location)))
+                result.err().map(|e| (i, e))
             })
-            .boxed();
-        delete_file_stream(&store, files).await?;
+            .buffer_unordered(PUBLISH_CONCURRENCY)
+            .filter_map(futures::future::ready)
+            .collect()
+            .await
     }
 
-    if write_success_file {
-        store.put(&success_file, PutPayload::default()).await?;
+    /// Makes the write visible. This must run to its end once it has started.
+    ///
+    /// The steps are in this order:
+    ///
+    ///   1. A write that overwrites lists the old content of the table
+    ///      directory and deletes its `_SUCCESS` file. A failure up to here
+    ///      leaves the table as it was, and the staged files are removed.
+    ///   2. The files are published. The files that are not published
+    ///      at first are tried once more when the other files have been
+    ///      tried, since the files are staged durably and a file can be
+    ///      published any number of times. If files remain, the files
+    ///      that were published are deleted, the others are removed,
+    ///      and the `_SUCCESS` file is written again if it was deleted.
+    ///      The table is then as it was, unless a reader has seen some of
+    ///      the files in the meantime, or unless the object store keeps
+    ///      deleted objects as versions.
+    ///   3. A write that overwrites deletes the old content.
+    ///   4. The `_SUCCESS` file is written.
+    ///
+    /// A failure after the files were published, or a failure to undo
+    /// a partial publication, leaves the table in a state that is reported
+    /// as unknown. Such a write is not attempted again, and the directory
+    /// has no `_SUCCESS` file.
+    ///
+    /// A write that overwrites deletes the old content only after the new
+    /// files are published. This is an intentional deviation from Spark, which
+    /// deletes the old content before the write starts. A Spark overwrite that
+    /// fails has lost the old content, and its readers see an empty or partial
+    /// table while it runs. Here the old content is kept unless the write
+    /// succeeds, and the readers see it until the files are published.
+    /// The cost is that a reader that lists the directory between steps 2
+    /// and 3 sees the old and the new rows together. This lasts as long as
+    /// it takes to publish the files and to delete the old content, which is
+    /// one small request for each file, with many requests at the same time.
+    async fn publish(mut self) -> Result<()> {
+        let files = std::mem::take(&mut self.received);
+        let store = Arc::clone(self.publisher.store());
+        let success_file = self.table_path.clone().join(SUCCESS_FILE_NAME);
+
+        let prepared = async {
+            if let Some(file) = files.iter().find(|file| !self.publisher.accepts(file)) {
+                return internal_err!(
+                    "the file {} is staged in another way than the commit publishes files: \
+                    the sessions of the writer tasks and of the commit do not have \
+                    the same kind of object store",
+                    file.location
+                );
+            }
+            if !self.overwrite {
+                return Ok((vec![], false));
+            }
+            let (old_content, has_success_file) = self.list_old_content().await?;
+            if has_success_file {
+                delete_files(&store, vec![success_file.clone()]).await?;
+            }
+            Ok((old_content, has_success_file))
+        };
+        let (old_content, had_success_file) = match prepared.await {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                self.received = files;
+                self.abort().await;
+                return Err(e);
+            }
+        };
+
+        let mut failed = self.publish_files(&files, 0..files.len()).await;
+        if !failed.is_empty() {
+            let indices: Vec<usize> = failed.iter().map(|(i, _)| *i).collect();
+            failed = self.publish_files(&files, indices.into_iter()).await;
+        }
+        if !failed.is_empty() {
+            return Err(self.undo(files, failed, had_success_file).await);
+        }
+
+        delete_files(&store, old_content).await.map_err(|e| {
+            commit_state_unknown(
+                "the files of the write are published, but the old content \
+                of the table directory could not be deleted",
+                e,
+            )
+        })?;
+        if self.write_success_file {
+            store
+                .put(&success_file, PutPayload::default())
+                .await
+                .map_err(|e| {
+                    commit_state_unknown(
+                        "the files of the write are published, \
+                        but the _SUCCESS file could not be written",
+                        e.into(),
+                    )
+                })?;
+        }
+        Ok(())
     }
-    Ok(manifests.num_rows)
+
+    /// Undoes a publication that has failed for some of the files,
+    /// and returns the error of the write.
+    async fn undo(
+        &self,
+        files: Vec<StagedFile>,
+        failed: Vec<(usize, DataFusionError)>,
+        restore_success_file: bool,
+    ) -> DataFusionError {
+        let store = self.publisher.store();
+        let success_file = self.table_path.clone().join(SUCCESS_FILE_NAME);
+        let unpublished: HashSet<usize> = failed.iter().map(|(i, _)| *i).collect();
+        let error = match failed.into_iter().next() {
+            Some((_, error)) => error,
+            None => internal_datafusion_err!("missing error of a file that is not published"),
+        };
+        log::warn!(
+            "{} of {} files of the write {} to {} could not be published, \
+            and the write is undone: {error}",
+            unpublished.len(),
+            files.len(),
+            self.write_id,
+            self.table_path
+        );
+        let (staged, published): (Vec<_>, Vec<_>) = files
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| unpublished.contains(i));
+        let staged: Vec<_> = staged.into_iter().map(|(_, file)| file).collect();
+        self.publisher.abort_all(&staged).await;
+        let published = published.into_iter().map(|(_, file)| file.location);
+        let undone = async {
+            delete_files(store, published.collect()).await?;
+            if restore_success_file {
+                store.put(&success_file, PutPayload::default()).await?;
+            }
+            Ok::<_, DataFusionError>(())
+        };
+        match undone.await {
+            Ok(()) => error.context(
+                "the files of the write could not be published, \
+                and the table directory is as it was before the write",
+            ),
+            Err(e) => {
+                // The directory can have some of the files of the write,
+                // so it must not have a `_SUCCESS` file.
+                if let Err(e) = delete_files(store, vec![success_file]).await {
+                    log::warn!(
+                        "failed to delete the _SUCCESS file of {}: {e}",
+                        self.table_path
+                    );
+                }
+                commit_state_unknown(
+                    format!(
+                        "the files of the write could not be published ({error}), \
+                        and the files that were published could not be deleted"
+                    ),
+                    e,
+                )
+            }
+        }
+    }
+}
+
+impl Drop for WriteCommit {
+    fn drop(&mut self) {
+        // The commit was canceled before it has published the files.
+        self.start_abort();
+    }
+}
+
+/// Returns the error of a commit that has changed the table directory and
+/// that has not completed. The error keeps the write from being attempted again.
+fn commit_state_unknown(message: impl Into<String>, source: DataFusionError) -> DataFusionError {
+    DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
+        message, source,
+    )))
 }
 
 /// Completes a listing table write after all writer tasks have finished.
 ///
-/// The input is the manifests of the writer tasks.
-/// The files of failed or superseded writer task attempts are deleted,
-/// and then an empty `_SUCCESS` file is written to the table directory,
-/// unless the write is not to have the file.
-/// A write that overwrites also deletes everything else in the table directory
-/// that is not a file of the write, before the `_SUCCESS` file is written.
+/// The input is the manifests of the writer tasks, which have staged
+/// the files of the write. Nothing of the write is visible to the readers
+/// of the table until the commit has received the manifests of all writer
+/// tasks. The commit then publishes the files, and writes an empty `_SUCCESS`
+/// file to the table directory, unless the write is not to have the file.
+/// A write that overwrites deletes the old content of the table directory
+/// when the files are published. A write that fails or is canceled before
+/// the files are published leaves the table directory as it was.
 /// The output is a single row with the number of rows written.
 #[derive(Debug, Clone)]
 pub struct FileWriteCommitExec {
@@ -368,10 +631,6 @@ pub struct FileWriteCommitExec {
     overwrite: bool,
     /// Whether the `_SUCCESS` file is written.
     write_success_file: bool,
-    /// The attempt of the task that runs the commit, when the writer tasks
-    /// are attempted again whenever the commit is. This is [`None`] when the
-    /// commit can be attempted again on its own.
-    attempt: Option<usize>,
     properties: Arc<PlanProperties>,
 }
 
@@ -395,22 +654,8 @@ impl FileWriteCommitExec {
             write_id,
             overwrite: false,
             write_success_file: true,
-            // The commit and the writer tasks are attempted once
-            // when the plan is not run by tasks.
-            attempt: Some(0),
             properties,
         }
-    }
-
-    /// Returns the plan for a task attempt. The attempt is [`None`] when
-    /// the writer tasks are not attempted again with the commit.
-    pub fn with_attempt(mut self, attempt: Option<usize>) -> Self {
-        self.attempt = attempt;
-        self
-    }
-
-    pub fn attempt(&self) -> Option<usize> {
-        self.attempt
     }
 
     /// Sets whether the write replaces the content of the table directory.
@@ -522,8 +767,7 @@ impl ExecutionPlan for FileWriteCommitExec {
                 self.write_id,
             )
             .with_overwrite(self.overwrite)
-            .with_success_file(self.write_success_file)
-            .with_attempt(self.attempt),
+            .with_success_file(self.write_success_file),
         ))
     }
 
@@ -539,28 +783,18 @@ impl ExecutionPlan for FileWriteCommitExec {
                 partition
             );
         }
-        let input = Arc::clone(&self.input);
-        let store = context.runtime_env().object_store(&self.object_store_url)?;
-        let table_path = self.table_path.clone();
-        let write_id = self.write_id;
-        let overwrite = self.overwrite;
-        let write_success_file = self.write_success_file;
-        let attempt = self.attempt.map(|x| x as u64);
+        let commit = WriteCommit {
+            publisher: Publisher::try_new(&context, &self.object_store_url)?,
+            table_path: self.table_path.clone(),
+            write_id: self.write_id,
+            overwrite: self.overwrite,
+            write_success_file: self.write_success_file,
+            received: vec![],
+        };
+        let input = self.input.execute(0, context)?;
         let schema = self.schema();
         let output = stream::once(async move {
-            // The writer tasks can start when the input is executed, which must
-            // not be before the commit has prepared the table directory.
-            let open_input = move || input.execute(0, context);
-            let count = commit_file_write(
-                open_input,
-                store,
-                table_path,
-                write_id,
-                overwrite,
-                write_success_file,
-                attempt,
-            )
-            .await?;
+            let count = commit.run(input).await?;
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
             Ok(RecordBatch::try_new(count_schema(), vec![count])?)
         });
@@ -570,1098 +804,835 @@ impl ExecutionPlan for FileWriteCommitExec {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Display;
-    use std::sync::Mutex;
-
-    use async_trait::async_trait;
     use bytes::Bytes;
-    use futures::stream::BoxStream;
-    use object_store::memory::InMemory;
-    use object_store::{
-        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-        PutMultipartOptions, PutOptions, PutResult,
-    };
 
     use super::*;
-    use crate::listing::part_file::part_file_name;
+    use crate::listing::testing::{FaultStore, Mode};
 
     const WRITE_ID: Uuid = Uuid::from_u128(1);
     const OTHER_WRITE_ID: Uuid = Uuid::from_u128(2);
 
-    /// An object store that records the requests it receives,
-    /// and that fails one of the requests when it is told to.
-    #[derive(Debug)]
-    struct RecordingStore {
-        inner: InMemory,
-        requests: Arc<Mutex<Vec<String>>>,
-        failure: Arc<Mutex<Option<(&'static str, usize)>>>,
-    }
-
-    impl RecordingStore {
-        fn new() -> Self {
-            Self {
-                inner: InMemory::new(),
-                requests: Arc::new(Mutex::new(vec![])),
-                failure: Arc::new(Mutex::new(None)),
-            }
-        }
-    }
-
-    fn record(requests: &Mutex<Vec<String>>, request: String) {
-        if let Ok(mut requests) = requests.lock() {
-            requests.push(request);
-        }
-    }
-
-    /// Returns an error if the request of the kind is the request that fails.
-    fn fail(
-        failure: &Mutex<Option<(&'static str, usize)>>,
-        kind: &'static str,
-    ) -> object_store::Result<()> {
-        let Ok(mut failure) = failure.lock() else {
-            return Ok(());
-        };
-        match failure.as_mut() {
-            Some((failing, remaining)) if *failing == kind => {
-                if *remaining > 0 {
-                    *remaining -= 1;
-                    return Ok(());
-                }
-            }
-            _ => return Ok(()),
-        }
-        *failure = None;
-        Err(object_store::Error::Generic {
-            store: "RecordingStore",
-            source: format!("{kind} failure").into(),
-        })
-    }
-
-    impl Display for RecordingStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "RecordingStore")
-        }
-    }
-
-    #[async_trait]
-    impl ObjectStore for RecordingStore {
-        async fn put_opts(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-            options: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            record(
-                &self.requests,
-                format!("PUT {location} {}", payload.content_length()),
-            );
-            fail(&self.failure, "PUT")?;
-            self.inner.put_opts(location, payload, options).await
-        }
-
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
-            options: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart_opts(location, options).await
-        }
-
-        async fn get_opts(
-            &self,
-            location: &Path,
-            options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            self.inner.get_opts(location, options).await
-        }
-
-        fn delete_stream(
-            &self,
-            locations: BoxStream<'static, object_store::Result<Path>>,
-        ) -> BoxStream<'static, object_store::Result<Path>> {
-            let requests = Arc::clone(&self.requests);
-            let failure = Arc::clone(&self.failure);
-            let locations = locations
-                .map(move |location| {
-                    let location = location?;
-                    record(&requests, format!("DELETE {location}"));
-                    fail(&failure, "DELETE")?;
-                    Ok(location)
-                })
-                .boxed();
-            self.inner.delete_stream(locations)
-        }
-
-        fn list(
-            &self,
-            prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            let prefix_text = prefix.map(|x| x.to_string()).unwrap_or_default();
-            record(&self.requests, format!("LIST {prefix_text}"));
-            if let Err(e) = fail(&self.failure, "LIST") {
-                return stream::once(async move { Err(e) }).boxed();
-            }
-            self.inner.list(prefix)
-        }
-
-        async fn list_with_delimiter(
-            &self,
-            prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            self.inner.list_with_delimiter(prefix).await
-        }
-
-        async fn copy_opts(
-            &self,
-            from: &Path,
-            to: &Path,
-            options: CopyOptions,
-        ) -> object_store::Result<()> {
-            self.inner.copy_opts(from, to, options).await
-        }
-    }
-
     struct TestWrite {
-        recording: Arc<RecordingStore>,
-        store: Arc<dyn ObjectStore>,
+        store: Arc<FaultStore>,
+        mode: Mode,
+        publisher: Publisher,
         /// Whether the commit writes the `_SUCCESS` file.
         success_file: bool,
     }
 
     impl TestWrite {
-        fn new() -> Self {
-            let recording = Arc::new(RecordingStore::new());
-            let store: Arc<dyn ObjectStore> = recording.clone();
+        fn new(mode: Mode) -> Self {
+            let store = FaultStore::new();
+            let publisher = store.publisher(mode);
             Self {
-                recording,
                 store,
+                mode,
+                publisher,
                 success_file: true,
             }
         }
 
-        /// Creates a file without recording the request.
-        async fn create(&self, path: &str) -> Result<WrittenFile> {
+        /// Stages a file of four bytes and ten rows as a writer task does.
+        async fn stage(&self, path: &str) -> Result<StagedFile> {
+            self.stage_with(path, "data", &self.publisher).await
+        }
+
+        async fn stage_with(
+            &self,
+            path: &str,
+            data: &'static str,
+            publisher: &Publisher,
+        ) -> Result<StagedFile> {
             let location = Path::from(path);
-            self.recording
-                .inner
-                .put(&location, Bytes::from_static(b"data").into())
-                .await?;
-            Ok(WrittenFile {
+            // The file has two parts.
+            let mut upload =
+                publisher.upload(&Path::from("table"), &WRITE_ID, location.clone(), 2, 4);
+            upload.put(Bytes::from_static(data.as_bytes())).await?;
+            let publish = upload.finish().await?;
+            Ok(StagedFile {
                 location,
-                size: 4,
+                size: data.len() as u64,
                 num_rows: 10,
+                publish,
             })
         }
 
-        async fn commit(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
-            self.commit_with(manifests, false).await
+        /// Creates an object that is in the table directory before the write.
+        async fn put(&self, path: &str) -> Result<()> {
+            let store = self.store.inner();
+            store.put(&Path::from(path), "old".into()).await?;
+            Ok(())
         }
 
-        async fn commit_with(
+        async fn read(&self, path: &str) -> Result<Bytes> {
+            let store = self.store.inner();
+            Ok(store.get(&Path::from(path)).await?.bytes().await?)
+        }
+
+        fn commit_future(
             &self,
             manifests: Vec<Result<RecordBatch>>,
             overwrite: bool,
-        ) -> Result<u64> {
-            self.commit_as(manifests, overwrite, Some(0)).await
+        ) -> impl Future<Output = Result<u64>> + Send + 'static {
+            self.commit_stream(stream::iter(manifests).boxed(), overwrite)
         }
 
-        async fn commit_as(
+        fn commit_stream(
             &self,
-            manifests: Vec<Result<RecordBatch>>,
+            manifests: futures::stream::BoxStream<'static, Result<RecordBatch>>,
             overwrite: bool,
-            attempt: Option<u64>,
-        ) -> Result<u64> {
-            let requests = Arc::clone(&self.recording.requests);
-            let open_input = move || {
-                record(&requests, "INPUT".to_string());
-                let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-                    manifest_schema(),
-                    stream::iter(manifests),
-                ));
-                Ok(input)
-            };
-            commit_file_write(
-                open_input,
-                Arc::clone(&self.store),
-                Path::from("table"),
-                WRITE_ID,
+        ) -> impl Future<Output = Result<u64>> + Send + 'static {
+            // Only the requests of the commit are of interest.
+            self.store.clear_requests();
+            let commit = WriteCommit {
+                publisher: self.publisher.clone(),
+                table_path: Path::from("table"),
+                write_id: WRITE_ID,
                 overwrite,
-                self.success_file,
-                attempt,
-            )
-            .await
+                write_success_file: self.success_file,
+                received: vec![],
+            };
+            let input = Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
+            commit.run(input)
         }
 
-        /// Makes a later request of the kind fail,
-        /// after the given number of requests of the kind.
-        fn fail(&self, kind: &'static str, after: usize) {
-            if let Ok(mut failure) = self.recording.failure.lock() {
-                *failure = Some((kind, after));
-            }
+        async fn commit(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
+            self.commit_future(manifests, false).await
         }
 
-        /// The requests to the object store, and `INPUT` for the point
-        /// at which the commit has started the writer tasks.
-        fn requests_and_input(&self) -> Vec<String> {
-            self.recording
-                .requests
-                .lock()
-                .map(|x| x.clone())
-                .unwrap_or_default()
+        async fn overwrite(&self, manifests: Vec<Result<RecordBatch>>) -> Result<u64> {
+            self.commit_future(manifests, true).await
         }
 
+        /// The requests of the commit, with the requests that publish files
+        /// in the order of their locations. These requests are concurrent.
         fn requests(&self) -> Vec<String> {
-            let mut requests = self.requests_and_input();
-            requests.retain(|x| x != "INPUT");
+            let mut requests = self.store.requests();
+            let publish = format!("{} ", self.mode.publish_request());
+            let mut published: Vec<_> = requests
+                .iter()
+                .filter(|x| x.starts_with(&publish))
+                .cloned()
+                .collect();
+            published.sort();
+            let mut published = published.into_iter();
+            for request in requests.iter_mut() {
+                if request.starts_with(&publish)
+                    && let Some(next) = published.next()
+                {
+                    *request = next;
+                }
+            }
             requests
         }
 
-        async fn files(&self) -> Result<Vec<String>> {
-            let mut files: Vec<_> = self
-                .recording
-                .inner
-                .list(None)
-                .map_ok(|meta| meta.location.to_string())
-                .try_collect()
-                .await?;
-            files.sort();
-            Ok(files)
+        /// The request that publishes the file at the path.
+        fn publish_request(&self, path: &str) -> String {
+            match self.mode {
+                Mode::Rename => format!("RENAME table/_staged-* {path}"),
+                Mode::Multipart => format!("COMPLETE {path}"),
+            }
+        }
+
+        /// The request that removes the staged file for the path.
+        fn abort_request(&self, path: &str) -> String {
+            match self.mode {
+                Mode::Rename => "DELETE table/_staged-*".to_string(),
+                Mode::Multipart => format!("ABORT {path}"),
+            }
+        }
+
+        /// The objects that the staged files occupy before they are published.
+        fn staged_objects(&self, files: usize) -> Vec<&'static str> {
+            match self.mode {
+                Mode::Rename => vec!["table/_staged-*"; files],
+                Mode::Multipart => vec![],
+            }
         }
     }
 
-    fn name(partition: usize, write_id: &Uuid, counter: u32, attempt: usize) -> String {
-        part_file_name(partition, write_id, counter, attempt, ".parquet")
+    fn manifest(partition: usize, partitions: usize, files: &[&StagedFile]) -> Result<RecordBatch> {
+        let files: Vec<StagedFile> = files.iter().map(|x| (*x).clone()).collect();
+        manifest_batch(partition, partitions, &files)
+    }
+
+    fn is_state_unknown(error: &DataFusionError) -> bool {
+        matches!(error, DataFusionError::External(e) if e.is::<CommitStateUnknownError>())
     }
 
     #[test]
-    fn test_manifest_batch() -> Result<()> {
+    fn test_manifest_round_trip() -> Result<()> {
         let files = vec![
-            WrittenFile {
-                location: Path::from("table/a"),
-                size: 1,
-                num_rows: 2,
-            },
-            WrittenFile {
-                location: Path::from("table/b"),
+            StagedFile {
+                location: Path::from("table/a.parquet"),
                 size: 3,
                 num_rows: 4,
+                publish: Publish::Rename {
+                    staged: Path::from("table/_staged-x"),
+                },
+            },
+            StagedFile {
+                location: Path::from("table/p=1/b.parquet"),
+                size: 5,
+                num_rows: 6,
+                publish: Publish::Multipart {
+                    upload_id: "upload".to_string(),
+                    parts: vec!["x".to_string(), String::new(), "z".to_string()],
+                },
+            },
+            StagedFile {
+                location: Path::from("table/c.parquet"),
+                size: 0,
+                num_rows: 0,
+                publish: Publish::Multipart {
+                    upload_id: String::new(),
+                    parts: vec![],
+                },
             },
         ];
-        let manifest = manifest_batch(5, 8, 6, &files)?;
-        assert_eq!(manifest.schema(), manifest_schema());
-        assert_eq!(manifest.num_rows(), 2);
+        let batch = manifest_batch(1, 2, &files)?;
+        assert_eq!(batch.schema(), manifest_schema());
+        assert_eq!(batch.num_rows(), 3);
         let mut manifests = Manifests::default();
-        manifests.add(&manifest)?;
-        manifests.add(&manifest_batch(7, 8, 0, &[])?)?;
-        assert_eq!(manifests.attempts, HashMap::from([(5, 6), (7, 0)]));
-        assert_eq!(
-            manifests.files,
-            files.into_iter().map(|x| x.location).collect()
-        );
-        assert_eq!(manifests.empty_partitions, HashSet::from([7]));
-        assert_eq!(manifests.num_rows, 6);
-        assert_eq!(manifests.max_attempt(), 6);
-        assert_eq!(manifests.partitions, Some(8));
+        let mut received = vec![];
+        manifests.add(&batch, &mut received)?;
+        assert_eq!(received, files);
+        assert_eq!(manifests.num_rows, 10);
+        // The other partition has not reported.
         assert!(manifests.validate().is_err());
-        Ok(())
+
+        // A task without files reports a single row without a file.
+        let batch = manifest_batch(0, 2, &[])?;
+        assert_eq!(batch.num_rows(), 1);
+        manifests.add(&batch, &mut received)?;
+        assert_eq!(received, files);
+        manifests.validate()
     }
 
     #[tokio::test]
-    async fn test_commit_without_retry_does_not_list() -> Result<()> {
-        let write = TestWrite::new();
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-            .await?;
-        let b = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 1, 0)))
-            .await?;
-        let c = write
-            .create(&format!("table/x=1/{}", name(2, &WRITE_ID, 0, 0)))
-            .await?;
-        // This file is not in a manifest, but no task was retried,
-        // so the directory is not inspected.
-        write
-            .create(&format!("table/{}", name(9, &WRITE_ID, 0, 0)))
-            .await?;
-        let count = write
-            .commit(vec![
-                manifest_batch(0, 3, 0, &[a, b]),
-                manifest_batch(1, 3, 0, &[]),
-                manifest_batch(2, 3, 0, &[c]),
-            ])
-            .await?;
-        assert_eq!(count, 30);
-        assert_eq!(write.requests(), vec!["PUT table/_SUCCESS 0"]);
-        assert_eq!(write.files().await?.len(), 5);
-        Ok(())
-    }
+    async fn test_commit_publishes_the_files_of_the_manifests() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/_SUCCESS").await?;
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/p=1/b.parquet").await?;
+            let c = write.stage("table/c.parquet").await?;
 
-    #[tokio::test]
-    async fn test_commit_of_empty_write() -> Result<()> {
-        let write = TestWrite::new();
-        let count = write.commit(vec![manifest_batch(0, 1, 0, &[])]).await?;
-        assert_eq!(count, 0);
-        assert_eq!(write.requests(), vec!["PUT table/_SUCCESS 0"]);
-        assert_eq!(write.files().await?, vec!["table/_SUCCESS"]);
-        Ok(())
-    }
+            // Nothing of the write is visible before the commit.
+            let mut expected = vec!["table/_SUCCESS"];
+            expected.extend(write.staged_objects(3));
+            expected.push("table/old.parquet");
+            assert_eq!(write.store.objects().await?, expected, "{mode:?}");
 
-    #[tokio::test]
-    async fn test_commit_after_retry_deletes_stale_files() -> Result<()> {
-        let write = TestWrite::new();
-        let stale = [
-            format!("table/{}", name(0, &WRITE_ID, 0, 0)),
-            format!("table/{}", name(1, &WRITE_ID, 0, 0)),
-            format!("table/{}", name(1, &WRITE_ID, 1, 1)),
-            format!("table/x=1/y=2/{}", name(0, &WRITE_ID, 0, 0)),
-        ];
-        for path in &stale {
-            write.create(path).await?;
-        }
-        let kept = [
-            // a later attempt that may still be running
-            format!("table/{}", name(0, &WRITE_ID, 0, 3)),
-            format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 0)),
-            format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 1)),
-            "table/data.parquet".to_string(),
-            format!("other/{}", name(0, &WRITE_ID, 0, 0)),
-        ];
-        for path in &kept {
-            write.create(path).await?;
-        }
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 2)))
-            .await?;
-        let b = write
-            .create(&format!("table/x=1/y=2/{}", name(0, &WRITE_ID, 0, 2)))
-            .await?;
-        // The task of this partition was not retried.
-        let c = write
-            .create(&format!("table/{}", name(2, &WRITE_ID, 0, 0)))
-            .await?;
-        let committed = [a.clone(), b.clone(), c.clone()];
-        let count = write
-            .commit(vec![
-                manifest_batch(0, 3, 2, &[a, b]),
-                manifest_batch(1, 3, 2, &[]),
-                manifest_batch(2, 3, 0, &[c]),
-            ])
-            .await?;
-        assert_eq!(count, 30);
-
-        let requests = write.requests();
-        assert_eq!(requests.first().map(|x| x.as_str()), Some("LIST table"));
-        assert_eq!(
-            requests.last().map(|x| x.as_str()),
-            Some("PUT table/_SUCCESS 0")
-        );
-        let mut deleted = requests[1..requests.len() - 1].to_vec();
-        deleted.sort();
-        let mut expected: Vec<_> = stale.iter().map(|x| format!("DELETE {x}")).collect();
-        expected.sort();
-        assert_eq!(deleted, expected);
-
-        let mut expected: Vec<_> = kept
-            .iter()
-            .cloned()
-            .chain(committed.iter().map(|x| x.location.to_string()))
-            .chain(["table/_SUCCESS".to_string()])
-            .collect();
-        expected.sort();
-        assert_eq!(write.files().await?, expected);
-        Ok(())
-    }
-
-    /// Creates the files of a write that fails in its attempt 1, and other files.
-    /// Returns the files of the attempts 0 and 1, the file of the attempt 2,
-    /// the other files, and the file that the first writer partition reports.
-    async fn create_files_of_failed_write(
-        write: &TestWrite,
-    ) -> Result<(Vec<String>, String, Vec<String>, WrittenFile)> {
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
-            .await?;
-        let earlier = vec![
-            a.location.to_string(),
-            // The manifests of these files are not received.
-            format!("table/{}", name(1, &WRITE_ID, 0, 1)),
-            format!("table/x=1/y=2/{}", name(2, &WRITE_ID, 3, 1)),
-            format!("table/{}", name(1, &WRITE_ID, 0, 0)),
-        ];
-        let later = format!("table/{}", name(1, &WRITE_ID, 0, 2));
-        let other = vec![
-            format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 0)),
-            "table/_SUCCESS".to_string(),
-            "table/old.parquet".to_string(),
-            format!("other/{}", name(0, &WRITE_ID, 0, 0)),
-        ];
-        for path in earlier[1..].iter().chain([&later]).chain(&other) {
-            write.create(path).await?;
-        }
-        Ok((earlier, later, other, a))
-    }
-
-    #[tokio::test]
-    async fn test_failed_commit_deletes_files_of_write() -> Result<()> {
-        // The input fails, or the input ends before all writer tasks have reported.
-        for failed_input in [true, false] {
-            let write = TestWrite::new();
-            let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
-            let mut manifests = vec![manifest_batch(0, 3, 1, &[a])];
-            if failed_input {
-                manifests.push(exec_err!("writer failure"));
-                manifests.push(manifest_batch(1, 3, 1, &[]));
-            }
-            let result = write.commit_as(manifests, false, Some(1)).await;
-            let message = if failed_input {
-                "writer failure"
-            } else {
-                "1 of 3 writer tasks"
-            };
-            assert!(
-                matches!(&result, Err(e) if e.to_string().contains(message)),
-                "{result:?}"
-            );
-            // The directory is listed once, and the files of the write are deleted
-            // whether a manifest was received for them or not. The file of a later
-            // attempt and the files that are not files of the write are kept.
-            let requests = write.requests();
-            assert_eq!(requests.first().map(|x| x.as_str()), Some("LIST table"));
-            let expected: Vec<_> = earlier.iter().map(|x| format!("DELETE {x}")).collect();
-            assert_eq!(sorted(requests[1..].to_vec()), sorted(expected));
-            let mut expected = other;
-            expected.push(later);
-            assert_eq!(write.files().await?, sorted(expected));
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_failed_commit_keeps_files_of_later_attempts() -> Result<()> {
-        let write = TestWrite::new();
-        let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
-        let result = write
-            .commit_as(
-                vec![manifest_batch(0, 3, 1, &[a]), exec_err!("writer failure")],
-                false,
-                Some(0),
-            )
-            .await;
-        assert!(result.is_err());
-        // The commit of the attempt 0 only deletes the file of the attempt 0.
-        assert_eq!(
-            write.requests(),
-            vec!["LIST table".to_string(), format!("DELETE {}", earlier[3])]
-        );
-        let mut expected = other;
-        expected.push(later);
-        expected.extend(earlier[..3].iter().cloned());
-        assert_eq!(write.files().await?, sorted(expected));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_failed_commit_that_is_attempted_alone_keeps_files() -> Result<()> {
-        // The writer tasks are not attempted again with the commit, so the next
-        // attempt of the commit reads the manifests of the same files.
-        let write = TestWrite::new();
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-            .await?;
-        let b = write
-            .create(&format!("table/x=1/{}", name(1, &WRITE_ID, 0, 0)))
-            .await?;
-        let files = vec![a.location.to_string(), b.location.to_string()];
-        for overwrite in [false, true] {
-            for manifests in [
+            let manifests = vec![
+                manifest(1, 3, &[&b]),
+                manifest(0, 3, &[&a, &c]),
+                manifest(2, 3, &[]),
+            ];
+            assert_eq!(write.commit(manifests).await?, 30);
+            // Each file takes one request, and the directory is not listed.
+            assert_eq!(
+                write.requests(),
                 vec![
-                    manifest_batch(0, 2, 0, std::slice::from_ref(&a)),
-                    exec_err!("input failure"),
+                    write.publish_request("table/a.parquet"),
+                    write.publish_request("table/c.parquet"),
+                    write.publish_request("table/p=1/b.parquet"),
+                    "PUT table/_SUCCESS 0".to_string(),
                 ],
-                vec![manifest_batch(0, 2, 0, std::slice::from_ref(&a))],
-            ] {
-                let result = write.commit_as(manifests, overwrite, None).await;
-                assert!(result.is_err());
-                assert!(
-                    write
-                        .requests()
-                        .iter()
-                        .all(|x| x == "DELETE table/_SUCCESS")
-                );
-                assert_eq!(write.files().await?, sorted(files.clone()));
-            }
-        }
-        let count = write
-            .commit_as(
+                "{mode:?}"
+            );
+            assert_eq!(
+                write.store.objects().await?,
                 vec![
-                    manifest_batch(0, 2, 0, std::slice::from_ref(&a)),
-                    manifest_batch(1, 2, 0, std::slice::from_ref(&b)),
+                    "table/_SUCCESS",
+                    "table/a.parquet",
+                    "table/c.parquet",
+                    "table/old.parquet",
+                    "table/p=1/b.parquet",
                 ],
-                true,
-                None,
-            )
-            .await?;
-        assert_eq!(count, 20);
-        let mut expected = files;
-        expected.push("table/_SUCCESS".to_string());
-        assert_eq!(write.files().await?, sorted(expected));
+                "{mode:?}"
+            );
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+            assert_eq!(write.read("table/a.parquet").await?.as_ref(), b"data");
+            assert_eq!(write.read("table/_SUCCESS").await?.as_ref(), b"");
+        }
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_canceled_commit_deletes_files_of_write() -> Result<()> {
-        for attempt in [Some(1), None] {
-            let write = TestWrite::new();
-            let (earlier, later, other, a) = create_files_of_failed_write(&write).await?;
-            // The input does not end after the first manifest.
-            let manifests = stream::iter(vec![manifest_batch(0, 3, 1, &[a])])
-                .chain(stream::pending())
-                .boxed();
-            let open_input = move || {
-                let input: SendableRecordBatchStream =
-                    Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
-                Ok(input)
-            };
-            let commit = commit_file_write(
-                open_input,
-                Arc::clone(&write.store),
-                Path::from("table"),
-                WRITE_ID,
-                false,
-                true,
-                attempt,
+    async fn test_commit_of_write_without_files() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let manifests = vec![manifest(0, 2, &[]), manifest(1, 2, &[])];
+            assert_eq!(write.commit(manifests).await?, 0);
+            assert_eq!(write.requests(), vec!["PUT table/_SUCCESS 0"]);
+
+            let mut write = TestWrite::new(mode);
+            write.success_file = false;
+            let a = write.stage("table/a.parquet").await?;
+            assert_eq!(write.commit(vec![manifest(0, 1, &[&a])]).await?, 10);
+            assert_eq!(
+                write.requests(),
+                vec![write.publish_request("table/a.parquet")]
             );
-            let canceled = tokio::time::timeout(std::time::Duration::from_millis(50), commit).await;
-            assert!(canceled.is_err());
-            let mut expected = other;
-            expected.push(later);
-            if attempt.is_none() {
-                expected.extend(earlier);
+            assert_eq!(write.store.objects().await?, vec!["table/a.parquet"]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_incomplete_manifests() -> Result<()> {
+        for mode in Mode::ALL {
+            for (case, message) in [
+                "2 of 3 writer tasks",
+                "1 of 2 writer tasks",
+                "no writer task has reported",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let write = TestWrite::new(mode);
+                write.put("table/_SUCCESS").await?;
+                write.put("table/old.parquet").await?;
+                let a = write.stage("table/a.parquet").await?;
+                let b = write.stage("table/b.parquet").await?;
+                let c = write.stage("table/c.parquet").await?;
+                let manifests = match case {
+                    // A task has not reported.
+                    0 => vec![manifest(0, 3, &[&a]), manifest(2, 3, &[&b, &c])],
+                    // A row of the manifest of a task with two files is missing.
+                    1 => vec![
+                        manifest(0, 2, &[&a]),
+                        Ok(manifest(1, 2, &[&b, &c])?.slice(0, 1)),
+                    ],
+                    _ => vec![],
+                };
+                let result = write.overwrite(manifests).await;
+                let error = match result {
+                    Err(DataFusionError::Execution(e)) => e,
+                    result => return internal_err!("unexpected result: {result:?}"),
+                };
+                assert!(error.contains("the write is incomplete"), "{error}");
+                assert!(error.contains(message), "{error}");
+                assert!(error.contains("its error is in the logs"), "{error}");
+                // The table is as it was, and the staged files that the commit
+                // has received are removed.
+                assert_eq!(write.store.count(mode.publish_request()), 0);
+                assert_eq!(write.store.count("PUT"), 0);
+                assert_eq!(write.store.count("LIST"), 0);
+                let mut expected = vec!["table/_SUCCESS"];
+                let missing = [0, 1, 3];
+                expected.extend(write.staged_objects(missing[case]));
+                expected.push("table/old.parquet");
+                assert_eq!(write.store.objects().await?, expected, "{mode:?} {message}");
+                let uploads = match mode {
+                    Mode::Rename => 0,
+                    Mode::Multipart => missing[case],
+                };
+                assert_eq!(write.store.open_uploads().len(), uploads);
             }
-            let expected = sorted(expected);
-            // The files are deleted by a task that is started when the commit is dropped.
-            for _ in 0..500 {
-                if write.files().await? == expected {
-                    break;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_duplicate_manifests() -> Result<()> {
+        for mode in Mode::ALL {
+            // Two attempts of a task use the same locations for their files.
+            let cases: Vec<(Vec<Vec<&str>>, _)> = vec![
+                (vec![vec!["a"], vec!["a"]], "more than one manifest"),
+                (vec![vec!["a", "b"], vec!["a"]], "more than one manifest"),
+                (vec![vec!["a"], vec![]], "more than one manifest"),
+                (vec![vec![], vec!["a"]], "more than one manifest"),
+                (vec![vec![], vec![]], "more than one manifest"),
+            ];
+            for (attempts, message) in cases {
+                let write = TestWrite::new(mode);
+                let mut manifests = vec![manifest(1, 2, &[])];
+                for attempt in &attempts {
+                    let mut files = vec![];
+                    for name in attempt {
+                        files.push(write.stage(&format!("table/{name}.parquet")).await?);
+                    }
+                    manifests.push(manifest(0, 2, &files.iter().collect::<Vec<_>>()));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                let result = write.commit(manifests).await;
+                assert!(
+                    matches!(&result, Err(DataFusionError::Internal(e)) if e.contains(message)),
+                    "{mode:?} {attempts:?} {result:?}"
+                );
+                // The files of both attempts are removed.
+                write.store.wait_for(&[]).await?;
+                assert_eq!(write.store.count(mode.publish_request()), 0);
             }
-            assert_eq!(write.files().await?, expected);
-            assert_eq!(write.requests().is_empty(), attempt.is_none());
-        }
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn test_commit_rejects_missing_manifests() -> Result<()> {
-        // The input ends without an error, but one writer partition has not reported.
-        let write = TestWrite::new();
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-            .await?;
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 3, 0, std::slice::from_ref(&a)),
-                manifest_batch(2, 3, 0, &[]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("2 of 3 writer tasks")),
-            "{result:?}"
-        );
-        // The error says that the input is incomplete, so that the error
-        // of a failed writer task is reported for the write instead.
-        let is_incomplete = |result: &Result<u64>| matches!(result, Err(DataFusionError::External(e)) if e.is::<InputIncompleteError>());
-        assert!(is_incomplete(&result), "{result:?}");
-        // The files of the write are deleted.
-        assert_eq!(
-            write.requests(),
-            vec!["LIST table".to_string(), format!("DELETE {}", a.location)]
-        );
-        assert_eq!(write.files().await?, Vec::<String>::new());
-
-        // no manifest at all
-        let write = TestWrite::new();
-        let result = write.commit(vec![]).await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("no writer task has reported")),
-            "{result:?}"
-        );
-        assert!(is_incomplete(&result), "{result:?}");
-        assert_eq!(write.files().await?, Vec::<String>::new());
-
-        // a partition index outside the range
-        let write = TestWrite::new();
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 2, 0, &[]),
-                manifest_batch(2, 2, 0, &[]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("the write is incomplete")),
-            "{result:?}"
-        );
-
-        // different numbers of partitions
-        let write = TestWrite::new();
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 2, 0, &[]),
-                manifest_batch(1, 3, 0, &[]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("disagree on the number of partitions")),
-            "{result:?}"
-        );
-        assert!(!is_incomplete(&result), "{result:?}");
-        assert_eq!(write.files().await?, Vec::<String>::new());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_commit_rejects_inconsistent_manifests() -> Result<()> {
-        async fn file(write: &TestWrite, counter: u32, attempt: usize) -> Result<WrittenFile> {
-            let path = format!("table/{}", name(0, &WRITE_ID, counter, attempt));
-            write.create(&path).await
-        }
-
-        // two attempts of the same partition
-        let write = TestWrite::new();
-        let a = file(&write, 0, 0).await?;
-        let b = file(&write, 0, 1).await?;
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 1, 0, &[a]),
-                manifest_batch(0, 1, 1, &[b]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("more than one attempt")),
-            "{result:?}"
-        );
-        assert!(!write.files().await?.contains(&"table/_SUCCESS".to_string()));
-
-        // the same manifest twice
-        let write = TestWrite::new();
-        let a = file(&write, 0, 0).await?;
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 1, 0, std::slice::from_ref(&a)),
-                manifest_batch(0, 1, 0, &[a]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("more than one manifest")),
-            "{result:?}"
-        );
-
-        // the same manifest twice for a partition without files
-        let write = TestWrite::new();
-        let result = write
-            .commit(vec![
-                manifest_batch(0, 1, 0, &[]),
-                manifest_batch(0, 1, 0, &[]),
-            ])
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("more than one manifest")),
-            "{result:?}"
-        );
-
-        // a manifest with files and a manifest without files
-        let write = TestWrite::new();
-        let a = file(&write, 0, 0).await?;
-        for manifests in [
-            vec![
-                manifest_batch(0, 1, 0, std::slice::from_ref(&a)),
-                manifest_batch(0, 1, 0, &[]),
-            ],
-            vec![manifest_batch(0, 1, 0, &[]), manifest_batch(0, 1, 0, &[a])],
-        ] {
+            // The same location in the manifests of two tasks.
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let other = write.stage("table/a.parquet").await?;
+            let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&other])];
             let result = write.commit(manifests).await;
             assert!(
-                matches!(&result, Err(e) if e.to_string().contains("more than one manifest")),
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("more than one manifest")),
                 "{result:?}"
             );
-        }
-        assert!(!write.files().await?.contains(&"table/_SUCCESS".to_string()));
-        Ok(())
-    }
+            write.store.wait_for(&[]).await?;
 
-    /// The content of a table directory before a write that overwrites,
-    /// and a file outside the directory.
-    const OLD_FILES: [&str; 6] = [
-        "table/_SUCCESS",
-        "table/.hidden",
-        "table/data.json",
-        "table/old.parquet",
-        "table/x=1/y=2/old.parquet",
-        "other/file",
-    ];
-
-    async fn create_old_files(write: &TestWrite) -> Result<Vec<String>> {
-        let mut files: Vec<String> = OLD_FILES.iter().map(|x| x.to_string()).collect();
-        // The files of an earlier write have the names of files of a write.
-        files.push(format!("table/{}", name(0, &OTHER_WRITE_ID, 0, 0)));
-        files.push(format!("table/x=1/{}", name(0, &OTHER_WRITE_ID, 0, 1)));
-        for file in &files {
-            write.create(file).await?;
-        }
-        files.sort();
-        Ok(files)
-    }
-
-    fn sorted(mut files: Vec<String>) -> Vec<String> {
-        files.sort();
-        files
-    }
-
-    #[tokio::test]
-    async fn test_overwrite_replaces_files_at_commit() -> Result<()> {
-        let write = TestWrite::new();
-        let old = create_old_files(&write).await?;
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-            .await?;
-        let b = write
-            .create(&format!("table/x=1/y=2/{}", name(1, &WRITE_ID, 0, 0)))
-            .await?;
-        let new = vec![a.location.to_string(), b.location.to_string()];
-        let count = write
-            .commit_with(
-                vec![manifest_batch(0, 2, 0, &[a]), manifest_batch(1, 2, 0, &[b])],
-                true,
-            )
-            .await?;
-        assert_eq!(count, 20);
-
-        // The `_SUCCESS` file of the earlier content is deleted before the
-        // writer tasks start, and the rest is deleted after they have ended.
-        let requests = write.requests_and_input();
-        assert_eq!(
-            requests[..3],
-            ["DELETE table/_SUCCESS", "INPUT", "LIST table"]
-        );
-        assert_eq!(
-            requests.last().map(|x| x.as_str()),
-            Some("PUT table/_SUCCESS 0")
-        );
-        let deleted = sorted(requests[3..requests.len() - 1].to_vec());
-        let expected: Vec<_> = old
-            .iter()
-            .filter(|x| x.starts_with("table/") && *x != "table/_SUCCESS")
-            .map(|x| format!("DELETE {x}"))
-            .collect();
-        assert_eq!(deleted, sorted(expected));
-
-        let mut expected = new;
-        expected.extend(["other/file".to_string(), "table/_SUCCESS".to_string()]);
-        assert_eq!(write.files().await?, sorted(expected));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_commit_without_success_file() -> Result<()> {
-        // The commit does everything but write the `_SUCCESS` file.
-        for overwrite in [false, true] {
-            let mut write = TestWrite::new();
-            write.success_file = false;
-            let old = create_old_files(&write).await?;
-            let stale = format!("table/{}", name(0, &WRITE_ID, 0, 0));
-            write.create(&stale).await?;
-            let a = write
-                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
-                .await?;
-            let new = a.location.to_string();
-            let count = write
-                .commit_as(vec![manifest_batch(0, 1, 1, &[a])], overwrite, Some(1))
-                .await?;
-            assert_eq!(count, 10);
-            let requests = write.requests();
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 3, &[&b])];
+            let result = write.commit(manifests).await;
             assert!(
-                requests.iter().all(|x| !x.starts_with("PUT")),
-                "{requests:?}"
-            );
-            assert!(requests.contains(&format!("DELETE {stale}")));
-            let mut expected: Vec<_> = if overwrite {
-                vec!["other/file".to_string()]
-            } else {
-                // The `_SUCCESS` file of an earlier write is kept
-                // by a write that does not overwrite.
-                old
-            };
-            expected.push(new);
-            assert_eq!(write.files().await?, sorted(expected));
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_overwrite_of_empty_directory() -> Result<()> {
-        let write = TestWrite::new();
-        let count = write
-            .commit_with(vec![manifest_batch(0, 1, 0, &[])], true)
-            .await?;
-        assert_eq!(count, 0);
-        assert_eq!(
-            write.requests_and_input(),
-            vec![
-                "DELETE table/_SUCCESS",
-                "INPUT",
-                "LIST table",
-                "PUT table/_SUCCESS 0"
-            ]
-        );
-        assert_eq!(write.files().await?, vec!["table/_SUCCESS"]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_failed_overwrite_keeps_old_files() -> Result<()> {
-        // The input fails, or the input ends before all writer tasks have reported.
-        for failed_input in [true, false] {
-            let write = TestWrite::new();
-            let old = create_old_files(&write).await?;
-            let a = write
-                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-                .await?;
-            let mut manifests = vec![manifest_batch(0, 2, 0, std::slice::from_ref(&a))];
-            if failed_input {
-                manifests.push(exec_err!("writer failure"));
-            }
-            let result = write.commit_with(manifests, true).await;
-            let message = if failed_input {
-                "writer failure"
-            } else {
-                "1 of 2 writer tasks"
-            };
-            assert!(
-                matches!(&result, Err(e) if e.to_string().contains(message)),
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("disagree on the number of partitions")),
                 "{result:?}"
             );
-            // Only the file of the write is deleted.
+            write.store.wait_for(&[]).await?;
+
+            // The task is not a task of the write.
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let result = write.commit(vec![manifest(1, 1, &[&a])]).await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("is not one of the 1 partitions")),
+                "{result:?}"
+            );
+            write.store.wait_for(&[]).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_removes_received_files_when_its_input_fails() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            // A manifest that has arrived when the commit fails is taken as well.
+            let manifests = vec![
+                manifest(0, 3, &[&a]),
+                exec_err!("writer failure"),
+                manifest(1, 3, &[&b]),
+            ];
+            let result = write.commit(manifests).await;
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains("writer failure")),
+                "{result:?}"
+            );
             assert_eq!(
-                write.requests_and_input(),
+                write.requests(),
                 vec![
-                    "DELETE table/_SUCCESS".to_string(),
-                    "INPUT".to_string(),
-                    "LIST table".to_string(),
-                    format!("DELETE {}", a.location)
+                    write.abort_request("table/a.parquet"),
+                    write.abort_request("table/b.parquet"),
                 ]
             );
-            let expected: Vec<_> = old
-                .iter()
-                .filter(|x| *x != "table/_SUCCESS")
-                .cloned()
-                .collect();
-            assert_eq!(write.files().await?, expected);
+            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_overwrite_does_not_start_writers_when_success_file_is_not_deleted() -> Result<()>
-    {
-        let write = TestWrite::new();
-        let old = create_old_files(&write).await?;
-        write.fail("DELETE", 0);
-        let result = write
-            .commit_with(vec![manifest_batch(0, 1, 0, &[])], true)
-            .await;
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains("DELETE failure")),
-            "{result:?}"
-        );
-        assert_eq!(write.requests_and_input(), vec!["DELETE table/_SUCCESS"]);
-        assert_eq!(write.files().await?, old);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_overwrite_keeps_new_files_when_commit_fails_after_writers() -> Result<()> {
-        // The listing fails, a deletion of an old file fails,
-        // or the `_SUCCESS` file is not written.
-        for (kind, after) in [("LIST", 0), ("DELETE", 1), ("DELETE", 3), ("PUT", 0)] {
-            let write = TestWrite::new();
-            let old = create_old_files(&write).await?;
-            let a = write
-                .create(&format!("table/{}", name(0, &WRITE_ID, 0, 0)))
-                .await?;
-            let b = write
-                .create(&format!("table/x=1/y=2/{}", name(1, &WRITE_ID, 0, 0)))
-                .await?;
-            let new = [a.location.to_string(), b.location.to_string()];
-            write.fail(kind, after);
-            let result = write
-                .commit_with(
-                    vec![manifest_batch(0, 2, 0, &[a]), manifest_batch(1, 2, 0, &[b])],
-                    true,
-                )
-                .await;
-            assert!(
-                matches!(&result, Err(e) if e.to_string().contains(&format!("{kind} failure"))),
-                "{kind} {result:?}"
+    async fn test_canceled_commit_removes_received_files() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            // The input does not end, so the commit waits for the other manifest.
+            let manifests = stream::iter(vec![manifest(0, 2, &[&a])])
+                .chain(stream::pending())
+                .boxed();
+            let commit = write.commit_stream(manifests, true);
+            let waiting = tokio::time::timeout(std::time::Duration::from_millis(50), commit);
+            assert!(waiting.await.is_err());
+            write.store.wait_for(&["table/old.parquet"]).await?;
+            assert_eq!(
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
             );
-            // No file of the write is deleted, and there is no `_SUCCESS` file.
-            let requests = write.requests();
-            for file in &new {
-                assert!(!requests.contains(&format!("DELETE {file}")), "{kind}");
-            }
-            let files = write.files().await?;
-            for file in &new {
-                assert!(files.contains(file), "{kind} {files:?}");
-            }
-            assert!(!files.contains(&"table/_SUCCESS".to_string()), "{kind}");
-            let old_files = files
-                .iter()
-                .filter(|x| x.starts_with("table/") && !new.contains(*x))
-                .count();
-            match (kind, after) {
-                // Nothing of the earlier content is deleted but its `_SUCCESS` file.
-                ("LIST", _) => assert_eq!(old_files, old.len() - 2),
-                // The deletion that fails is the second or the fourth deletion
-                // after the deletion of the `_SUCCESS` file.
-                ("DELETE", after) => assert!(old_files > old.len() - 2 - after - 1, "{files:?}"),
-                _ => assert_eq!(old_files, 0),
-            }
-            assert!(files.contains(&"other/file".to_string()));
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_overwrite_after_retry_lists_once() -> Result<()> {
-        let write = TestWrite::new();
-        let old = create_old_files(&write).await?;
-        let stale = [
-            format!("table/{}", name(0, &WRITE_ID, 0, 0)),
-            format!("table/x=1/{}", name(1, &WRITE_ID, 0, 0)),
-        ];
-        for path in &stale {
-            write.create(path).await?;
-        }
-        // a later attempt that may still be running
-        let later = format!("table/{}", name(0, &WRITE_ID, 0, 2));
-        write.create(&later).await?;
-        let a = write
-            .create(&format!("table/{}", name(0, &WRITE_ID, 0, 1)))
-            .await?;
-        let b = write
-            .create(&format!("table/x=1/{}", name(1, &WRITE_ID, 0, 1)))
-            .await?;
-        let new = vec![a.location.to_string(), b.location.to_string()];
-        write
-            .commit_with(
-                vec![manifest_batch(0, 2, 1, &[a]), manifest_batch(1, 2, 1, &[b])],
-                true,
-            )
-            .await?;
-        let requests = write.requests();
-        assert_eq!(requests.iter().filter(|x| x.starts_with("LIST")).count(), 1);
-        let deleted = sorted(
-            requests
-                .iter()
-                .filter(|x| x.starts_with("DELETE") && *x != "DELETE table/_SUCCESS")
-                .cloned()
-                .collect(),
-        );
-        let expected: Vec<_> = old
-            .iter()
-            .filter(|x| x.starts_with("table/") && *x != "table/_SUCCESS")
-            .chain(stale.iter())
-            .map(|x| format!("DELETE {x}"))
-            .collect();
-        assert_eq!(deleted, sorted(expected));
-        let mut expected = new;
-        expected.extend([
-            later,
-            "other/file".to_string(),
-            "table/_SUCCESS".to_string(),
-        ]);
-        assert_eq!(write.files().await?, sorted(expected));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_commit_keeps_files_in_directories_with_special_names() -> Result<()> {
-        use object_store::local::LocalFileSystem;
-
-        // The files of the write are kept whatever the form is in which
-        // the object store lists the locations of the files.
-        let directory = tempfile::tempdir()?;
-        let stores: [Arc<dyn ObjectStore>; 2] = [
-            Arc::new(InMemory::new()),
-            Arc::new(LocalFileSystem::new_with_prefix(directory.path())?),
-        ];
-        for store in stores {
-            for (overwrite, attempt) in [(true, 0), (true, 1), (false, 1)] {
-                let table = Path::from("table");
-                let mut written = vec![];
-                for (partition, value) in ["x=50% off", "x=a b", "x=é/y=%20", "x=a%2Fb"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    let mut location = table.clone();
-                    for part in value.split('/') {
-                        location = location.join(part);
-                    }
-                    let location = location.join(name(partition, &WRITE_ID, 0, attempt));
-                    store
-                        .put(&location, Bytes::from_static(b"data").into())
-                        .await?;
-                    written.push(WrittenFile {
-                        location,
-                        size: 4,
-                        num_rows: 1,
-                    });
-                }
-                let old = table.clone().join("x=50% off").join("old.parquet");
-                store.put(&old, Bytes::from_static(b"old").into()).await?;
-                let stale = table
-                    .clone()
-                    .join("x=a b")
-                    .join(name(1, &WRITE_ID, 0, attempt + 1));
-                store.put(&stale, Bytes::from_static(b"old").into()).await?;
-
-                let manifests: Vec<_> = written
-                    .iter()
-                    .enumerate()
-                    .map(|(partition, file)| {
-                        manifest_batch(partition, 4, attempt, std::slice::from_ref(file))
-                    })
-                    .collect();
-                let open_input = move || {
-                    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-                        manifest_schema(),
-                        stream::iter(manifests),
-                    ));
-                    Ok(input)
-                };
-                let count = commit_file_write(
-                    open_input,
-                    Arc::clone(&store),
-                    table.clone(),
-                    WRITE_ID,
-                    overwrite,
-                    true,
-                    Some(attempt as u64),
-                )
+    async fn test_canceled_commit_publishes_all_files_once_it_has_started() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let gate = write.store.hold(mode.publish_request());
+            let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&b])];
+            let mut commit = Box::pin(write.commit_future(manifests, true));
+            tokio::select! {
+                _ = &mut commit => return internal_err!("the commit must wait"),
+                _ = gate.wait_for(2) => {}
+            }
+            // The commit is canceled while the files are being published.
+            drop(commit);
+            gate.open();
+            write
+                .store
+                .wait_for(&["table/_SUCCESS", "table/a.parquet", "table/b.parquet"])
                 .await?;
-                assert_eq!(count, 4);
-                for file in &written {
-                    let data = store.get(&file.location).await?.bytes().await?;
-                    assert_eq!(data.as_ref(), b"data", "{store} {}", file.location);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_publishes_again_after_a_failure() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let c = write.stage("table/c.parquet").await?;
+            // The second request to publish a file fails once.
+            write.store.fail(mode.publish_request(), 1);
+            let manifests = vec![manifest(0, 1, &[&a, &b, &c])];
+            assert_eq!(write.commit(manifests).await?, 30);
+            assert_eq!(write.store.count(mode.publish_request()), 4);
+            // The location is checked after the failure.
+            assert_eq!(write.store.count("HEAD"), 1);
+            assert_eq!(write.store.count("DELETE"), 0);
+            assert_eq!(write.store.count("ABORT"), 0);
+            assert_eq!(
+                write.store.objects().await?,
+                vec![
+                    "table/_SUCCESS",
+                    "table/a.parquet",
+                    "table/b.parquet",
+                    "table/c.parquet"
+                ]
+            );
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+        }
+        Ok(())
+    }
+
+    /// A request that is sent again after its response was lost fails,
+    /// since the file is published already.
+    #[tokio::test]
+    async fn test_publish_accepts_a_file_that_is_published() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            write.store.lose_response(mode.publish_request(), 0);
+            let manifests = vec![manifest(0, 1, &[&a, &b])];
+            assert_eq!(write.commit(manifests).await?, 20);
+            assert_eq!(write.store.count(mode.publish_request()), 2);
+            assert_eq!(write.store.count("HEAD"), 1);
+            assert_eq!(
+                write.store.objects().await?,
+                vec!["table/_SUCCESS", "table/a.parquet", "table/b.parquet"]
+            );
+
+            // The file is published again.
+            write.publisher.publish(&a).await?;
+            assert_eq!(write.store.count(mode.publish_request()), 3);
+            assert_eq!(write.store.count("HEAD"), 2);
+            assert_eq!(write.read("table/a.parquet").await?.as_ref(), b"data");
+
+            // An object of another size at the location is not the file.
+            let mut other = a.clone();
+            other.size += 1;
+            assert!(write.publisher.publish(&other).await.is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_undoes_a_publication_that_fails() -> Result<()> {
+        for mode in Mode::ALL {
+            for overwrite in [false, true] {
+                let write = TestWrite::new(mode);
+                let old = [
+                    "table/_SUCCESS",
+                    "table/old.parquet",
+                    "table/p=1/old.parquet",
+                ];
+                for path in old {
+                    write.put(path).await?;
                 }
-                // The file of a later attempt is kept, and the file that is not
-                // a file of the write is kept unless the write overwrites.
-                assert!(store.head(&stale).await.is_ok());
-                assert_eq!(store.head(&old).await.is_ok(), !overwrite);
-                let files: Vec<_> = store.list(Some(&table)).try_collect().await?;
-                assert_eq!(files.len(), if overwrite { 6 } else { 7 }, "{files:?}");
-                delete_files(&store, files.into_iter().map(|x| x.location).collect()).await?;
+                let a = write.stage("table/a.parquet").await?;
+                let b = write.stage("table/b.parquet").await?;
+                let c = write.stage("table/c.parquet").await?;
+                write.store.fail_at(mode.publish_request(), "b.parquet");
+                let manifests = vec![manifest(0, 1, &[&a, &b, &c])];
+                let result = write.commit_future(manifests, overwrite).await;
+                let error = match result {
+                    Err(e) => e,
+                    Ok(_) => return internal_err!("the commit must fail"),
+                };
+                // The write can be attempted again.
+                assert!(!is_state_unknown(&error), "{error}");
+                let message = error.to_string();
+                assert!(message.contains("as it was before the write"), "{message}");
+                assert!(message.contains("failure"), "{message}");
+                // The file is tried twice. The files that were published are
+                // deleted, and the staged file is removed.
+                let requests = write.requests();
+                assert_eq!(write.store.count(mode.publish_request()), 4);
+                for request in [
+                    write.abort_request("table/b.parquet"),
+                    "DELETE table/a.parquet".to_string(),
+                    "DELETE table/c.parquet".to_string(),
+                ] {
+                    assert!(requests.contains(&request), "{request} {requests:?}");
+                }
+                assert_eq!(
+                    requests.contains(&"PUT table/_SUCCESS 0".to_string()),
+                    overwrite
+                );
+                assert_eq!(write.store.objects().await?, old, "{mode:?} {overwrite}");
+                assert_eq!(write.store.open_uploads(), Vec::<String>::new());
             }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_reports_unknown_state_when_it_cannot_be_undone() -> Result<()> {
+        for mode in Mode::ALL {
+            for overwrite in [false, true] {
+                let write = TestWrite::new(mode);
+                write.put("table/_SUCCESS").await?;
+                write.put("table/old.parquet").await?;
+                let a = write.stage("table/a.parquet").await?;
+                let b = write.stage("table/b.parquet").await?;
+                let c = write.stage("table/c.parquet").await?;
+                write.store.fail_at(mode.publish_request(), "b.parquet");
+                write.store.fail_at("DELETE", "a.parquet");
+                let manifests = vec![manifest(0, 1, &[&a, &b, &c])];
+                let result = write.commit_future(manifests, overwrite).await;
+                assert!(
+                    matches!(&result, Err(e) if is_state_unknown(e)),
+                    "{result:?}"
+                );
+                // The directory has a file of the write, and no `_SUCCESS` file.
+                assert_eq!(
+                    write.store.objects().await?,
+                    vec!["table/a.parquet", "table/old.parquet"],
+                    "{mode:?} {overwrite}"
+                );
+                assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_replaces_the_content_when_the_files_are_published() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            // The objects that another write has staged are kept, with the names
+            // that the object stores give them while they are written.
+            let staged = [
+                format!("table/_staged-{OTHER_WRITE_ID}-{OTHER_WRITE_ID}"),
+                format!("table/._staged-{OTHER_WRITE_ID}-{OTHER_WRITE_ID}.tmp"),
+            ];
+            let old = [
+                "table/.old.parquet.crc",
+                "table/_SUCCESS",
+                "table/_metadata",
+                "table/_started",
+                "table/old.parquet",
+                "table/p=1/old.parquet",
+            ];
+            for path in old.iter().copied().chain(staged.iter().map(|x| x.as_str())) {
+                write.put(path).await?;
+            }
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/p=1/b.parquet").await?;
+            let manifests = vec![manifest(0, 1, &[&a, &b])];
+            assert_eq!(write.overwrite(manifests).await?, 20);
+            // The old content is deleted after the files are published.
+            assert_eq!(
+                write.requests(),
+                vec![
+                    "LIST table".to_string(),
+                    "DELETE table/_SUCCESS".to_string(),
+                    write.publish_request("table/a.parquet"),
+                    write.publish_request("table/p=1/b.parquet"),
+                    "DELETE table/.old.parquet.crc".to_string(),
+                    "DELETE table/_metadata".to_string(),
+                    "DELETE table/_started".to_string(),
+                    "DELETE table/old.parquet".to_string(),
+                    "DELETE table/p=1/old.parquet".to_string(),
+                    "PUT table/_SUCCESS 0".to_string(),
+                ],
+                "{mode:?}"
+            );
+            assert_eq!(
+                write.store.objects().await?,
+                vec![
+                    "table/._staged-*.tmp",
+                    "table/_SUCCESS",
+                    "table/_staged-*",
+                    "table/a.parquet",
+                    "table/p=1/b.parquet",
+                ]
+            );
+            assert_eq!(write.read("table/_SUCCESS").await?.as_ref(), b"");
+
+            // A write without files leaves an empty table.
+            let mut write = TestWrite::new(mode);
+            write.success_file = false;
+            write.put("table/_SUCCESS").await?;
+            write.put("table/old.parquet").await?;
+            assert_eq!(write.overwrite(vec![manifest(0, 1, &[])]).await?, 0);
+            assert_eq!(write.store.objects().await?, Vec::<String>::new());
+
+            // The directory does not exist.
+            let write = TestWrite::new(mode);
+            assert_eq!(write.overwrite(vec![manifest(0, 1, &[])]).await?, 0);
+            assert_eq!(write.requests(), vec!["LIST table", "PUT table/_SUCCESS 0"]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_that_fails_before_it_publishes_keeps_the_table() -> Result<()> {
+        for mode in Mode::ALL {
+            for failure in ["LIST", "DELETE"] {
+                let write = TestWrite::new(mode);
+                let old = ["table/_SUCCESS", "table/old.parquet"];
+                for path in old {
+                    write.put(path).await?;
+                }
+                let a = write.stage("table/a.parquet").await?;
+                write.store.fail(failure, 0);
+                let result = write.overwrite(vec![manifest(0, 1, &[&a])]).await;
+                assert!(
+                    matches!(&result, Err(e) if !is_state_unknown(e) && e.to_string().contains("failure")),
+                    "{result:?}"
+                );
+                assert_eq!(write.store.objects().await?, old, "{mode:?} {failure}");
+                assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+                assert_eq!(write.store.count(mode.publish_request()), 0);
+            }
+
+            // A writer task fails, so the commit does not change the directory.
+            let write = TestWrite::new(mode);
+            write.put("table/_SUCCESS").await?;
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let manifests = vec![manifest(0, 2, &[&a]), exec_err!("writer failure")];
+            assert!(write.overwrite(manifests).await.is_err());
+            assert_eq!(
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
+            );
+            assert_eq!(
+                write.store.objects().await?,
+                vec!["table/_SUCCESS", "table/old.parquet"]
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_reports_unknown_state_when_it_fails_after_it_has_published() -> Result<()>
+    {
+        for mode in Mode::ALL {
+            // The old content cannot be deleted.
+            let write = TestWrite::new(mode);
+            write.put("table/_SUCCESS").await?;
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            write.store.fail_at("DELETE", "old.parquet");
+            let result = write.overwrite(vec![manifest(0, 1, &[&a])]).await;
+            assert!(
+                matches!(&result, Err(e) if is_state_unknown(e)),
+                "{result:?}"
+            );
+            assert_eq!(
+                write.store.objects().await?,
+                vec!["table/a.parquet", "table/old.parquet"]
+            );
+
+            // The `_SUCCESS` file cannot be written.
+            for overwrite in [false, true] {
+                let write = TestWrite::new(mode);
+                let a = write.stage("table/a.parquet").await?;
+                write.store.fail("PUT", 0);
+                let manifests = vec![manifest(0, 1, &[&a])];
+                let result = write.commit_future(manifests, overwrite).await;
+                assert!(
+                    matches!(&result, Err(e) if is_state_unknown(e)),
+                    "{result:?}"
+                );
+                assert_eq!(write.store.objects().await?, vec!["table/a.parquet"]);
+            }
+        }
+        Ok(())
+    }
+
+    /// An attempt of a writer task that the driver has given up on can complete
+    /// its files after the write is committed.
+    #[tokio::test]
+    async fn test_attempt_that_completes_after_the_commit_is_not_visible() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            // Another attempt of the task is uploading the same file.
+            let mut zombie = write.publisher.upload(
+                &Path::from("table"),
+                &WRITE_ID,
+                Path::from("table/a.parquet"),
+                2,
+                4,
+            );
+            zombie.put(Bytes::from_static(b"zom")).await?;
+            assert_eq!(write.commit(vec![manifest(0, 1, &[&a])]).await?, 10);
+            let committed = vec!["table/_SUCCESS", "table/a.parquet"];
+            assert_eq!(write.store.objects().await?, committed);
+
+            zombie.put(Bytes::from_static(b"bie")).await?;
+            zombie.finish().await?;
+            let mut expected = vec!["table/_SUCCESS"];
+            expected.extend(write.staged_objects(1));
+            expected.push("table/a.parquet");
+            assert_eq!(write.store.objects().await?, expected, "{mode:?}");
+            assert_eq!(write.read("table/a.parquet").await?.as_ref(), b"data");
+            // What the attempt has staged stays until it is removed by other
+            // means, since no commit receives its manifest.
+            assert_eq!(
+                write.store.open_uploads().len(),
+                usize::from(mode == Mode::Multipart)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commit_rejects_files_that_are_staged_in_another_way() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/_SUCCESS").await?;
+            let other = match mode {
+                Mode::Rename => Mode::Multipart,
+                Mode::Multipart => Mode::Rename,
+            };
+            let a = write
+                .stage_with("table/a.parquet", "data", &write.store.publisher(other))
+                .await?;
+            let b = write.stage("table/b.parquet").await?;
+            let result = write.overwrite(vec![manifest(0, 1, &[&a, &b])]).await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("staged in another way")),
+                "{result:?}"
+            );
+            // Nothing is published, and the directory is not changed.
+            assert_eq!(write.store.objects().await?, vec!["table/_SUCCESS"]);
+            assert_eq!(write.store.count("LIST"), 0);
+            // An upload cannot be aborted without the multipart upload interface.
+            assert_eq!(
+                write.store.open_uploads().len(),
+                usize::from(mode == Mode::Rename)
+            );
         }
         Ok(())
     }

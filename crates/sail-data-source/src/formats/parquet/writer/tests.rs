@@ -5,7 +5,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
@@ -72,10 +71,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-};
+use object_store::{ObjectStore, ObjectStoreExt};
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
@@ -87,19 +83,20 @@ use crate::formats::parquet::writer::resources::{ActiveWriter, EncodeResources, 
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
-use crate::listing::commit::{FileWriteCommitExec, manifest_schema};
+use crate::listing::commit::{FileWriteCommitExec, manifest_files, manifest_schema};
 use crate::listing::partition::pruned_partition_list;
+use crate::listing::staging::{Publisher, StagedUpload};
+use crate::listing::testing::{FaultStore, Mode};
 
 const WRITE_ID: Uuid = Uuid::from_u128(0x0f1e2d3c_4b5a_4978_8a9b_acbdcedfe0f1);
 
 fn test_task(store: Arc<dyn ObjectStore>, partition: usize) -> ParquetWriteTask {
     ParquetWriteTask {
-        store,
+        publisher: Publisher::Rename { store },
         table_path: Path::from("table"),
         write_id: WRITE_ID,
         partition,
         partitions: partition + 1,
-        attempt: 0,
         file_suffix: ".parquet".to_string(),
         partition_columns: vec![],
         options: TableParquetOptions::default(),
@@ -187,13 +184,46 @@ async fn run_task_with_pool(
     let reservation = MemoryConsumer::new("test").register(pool);
     let metrics = ExecutionPlanMetricsSet::new();
     let partition = task.partition;
-    read_manifest(write_partition(
+    let publisher = task.publisher.clone();
+    let manifest = read_manifest(write_partition(
         task,
         test_stream(schema, batches),
         reservation,
         ParquetWriteMetrics::new(&metrics, partition),
     ))
-    .await
+    .await?;
+    publish_manifest(&publisher, &manifest).await?;
+    Ok(manifest)
+}
+
+/// Publishes the files of the manifest of a writer task, as the commit of the write does.
+async fn publish_manifest(publisher: &Publisher, manifest: &RecordBatch) -> Result<()> {
+    for file in manifest_files(manifest)? {
+        publisher.publish(&file).await?;
+    }
+    Ok(())
+}
+
+/// Creates the writer of a file that is visible at the location when it is closed.
+fn file_writer(
+    store: Arc<dyn ObjectStore>,
+    location: Path,
+    schema: SchemaRef,
+    props: WriterProperties,
+    skip_arrow_metadata: bool,
+    buffer_size: usize,
+    resources: Arc<EncodeResources>,
+) -> Result<ParquetFileWriter> {
+    let upload = StagedUpload::direct(store, location.clone(), buffer_size);
+    ParquetFileWriter::try_new(
+        upload,
+        location,
+        schema,
+        props,
+        skip_arrow_metadata,
+        buffer_size,
+        resources,
+    )
 }
 
 /// Runs the writer task and returns the value of one of its metrics.
@@ -207,13 +237,15 @@ async fn run_task_for_metric(
     let reservation = MemoryConsumer::new("test").register(&pool);
     let metrics = ExecutionPlanMetricsSet::new();
     let partition = task.partition;
-    read_manifest(write_partition(
+    let publisher = task.publisher.clone();
+    let manifest = read_manifest(write_partition(
         task,
         test_stream(schema, batches),
         reservation,
         ParquetWriteMetrics::new(&metrics, partition),
     ))
     .await?;
+    publish_manifest(&publisher, &manifest).await?;
     metrics
         .clone_inner()
         .sum_by_name(metric)
@@ -230,22 +262,28 @@ async fn read_manifest(stream: impl Stream<Item = Result<RecordBatch>>) -> Resul
         .ok_or_else(|| internal_datafusion_err!("missing manifest"))
 }
 
-/// A row of the manifest: partition, attempt, path, size, and number of rows.
-type ManifestRow = (u64, u64, Option<String>, u64, u64);
+/// A row of the manifest: partition, path, size, and number of rows.
+type ManifestRow = (u64, Option<String>, u64, u64);
 
 fn manifest_rows(manifest: &RecordBatch) -> Result<Vec<ManifestRow>> {
     use datafusion_common::cast::{as_string_array, as_uint64_array};
 
     let partition = as_uint64_array(manifest.column(0))?;
-    let attempt = as_uint64_array(manifest.column(2))?;
+    let files = as_uint64_array(manifest.column(2))?;
     let path = as_string_array(manifest.column(3))?;
     let size = as_uint64_array(manifest.column(4))?;
     let num_rows = as_uint64_array(manifest.column(5))?;
     Ok((0..manifest.num_rows())
         .map(|i| {
+            // Each row has the number of files of the manifest.
+            let rows = if path.is_valid(i) {
+                manifest.num_rows()
+            } else {
+                0
+            };
+            assert_eq!(files.value(i), rows as u64);
             (
                 partition.value(i),
-                attempt.value(i),
                 path.is_valid(i).then(|| path.value(i).to_string()),
                 size.value(i),
                 num_rows.value(i),
@@ -303,7 +341,7 @@ async fn check_one_file_per_stream(store: Arc<dyn ObjectStore>) -> Result<()> {
     assert_eq!(files[0].0, name);
     assert_eq!(
         manifest_rows(&manifest)?,
-        vec![(3, 0, Some(name.clone()), files[0].1, 25)]
+        vec![(3, Some(name.clone()), files[0].1, 25)]
     );
     let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
     assert_eq!(data, int_batch(&schema, 0..25)?);
@@ -343,7 +381,7 @@ async fn test_upload_larger_than_buffer() -> Result<()> {
     let name = file_name(0, 0, ".parquet");
     assert_eq!(
         manifest_rows(&manifest)?,
-        vec![(0, 0, Some(name.clone()), files[0].1, 10000)]
+        vec![(0, Some(name.clone()), files[0].1, 10000)]
     );
     assert!(files[0].1 > 1024 * 10);
     let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
@@ -373,9 +411,9 @@ async fn test_row_limit_starts_new_file() -> Result<()> {
     assert_eq!(
         manifest_rows(&manifest)?,
         vec![
-            (1, 0, Some(first.clone()), files[0].1, 10),
-            (1, 0, Some(second.clone()), files[1].1, 10),
-            (1, 0, Some(third.clone()), files[2].1, 1),
+            (1, Some(first.clone()), files[0].1, 10),
+            (1, Some(second.clone()), files[1].1, 10),
+            (1, Some(third.clone()), files[2].1, 1),
         ]
     );
     let (metadata, data) = read_parquet(read_bytes(store.as_ref(), &first).await?)?;
@@ -409,16 +447,16 @@ async fn test_row_limit_divides_batches() -> Result<()> {
         task.max_records_per_file = limit;
         task.options.global.max_row_group_size = 100;
         let manifest = manifest_rows(&run_task(task, &schema, batches.clone()).await?)?;
-        let rows: Vec<_> = manifest.iter().map(|x| x.4).collect();
+        let rows: Vec<_> = manifest.iter().map(|x| x.3).collect();
         assert_eq!(rows, expected, "limit {limit}");
         // The files have the rows in the order of the input,
         // and the files are in that order by their names.
         let mut start = 0;
         for (counter, file) in manifest.iter().enumerate() {
             let name = file_name(0, counter, ".parquet");
-            assert_eq!(file.2.as_ref(), Some(&name));
+            assert_eq!(file.1.as_ref(), Some(&name));
             let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
-            let end = start + file.4 as i64;
+            let end = start + file.3 as i64;
             assert_eq!(data, int_batch(&schema, start..end)?);
             start = end;
         }
@@ -430,7 +468,7 @@ async fn test_row_limit_divides_batches() -> Result<()> {
     let mut task = test_task(Arc::clone(&store), 0);
     task.max_records_per_file = 1;
     let manifest = run_task(task, &schema, vec![int_batch(&schema, 0..3)?]).await?;
-    let rows: Vec<_> = manifest_rows(&manifest)?.iter().map(|x| x.4).collect();
+    let rows: Vec<_> = manifest_rows(&manifest)?.iter().map(|x| x.3).collect();
     assert_eq!(rows, vec![1, 1, 1]);
     Ok(())
 }
@@ -467,16 +505,16 @@ async fn test_file_size_limit_starts_new_file() -> Result<()> {
         let mut start = 0;
         for (counter, file) in manifest.iter().enumerate() {
             let name = file_name(0, counter, ".parquet");
-            assert_eq!(file.2.as_ref(), Some(&name));
+            assert_eq!(file.1.as_ref(), Some(&name));
             // The row group at which a file ends depends on the row groups
             // that are in the file when the size is checked.
-            assert_eq!(file.4 % 1000, 0);
+            assert_eq!(file.3 % 1000, 0);
             if counter + 1 < manifest.len() {
-                assert!(file.3 + 2 * row_group >= limit, "{chunking} {manifest:?}");
+                assert!(file.2 + 2 * row_group >= limit, "{chunking} {manifest:?}");
             }
-            assert!(file.3 <= limit + 2 * row_group, "{chunking} {manifest:?}");
+            assert!(file.2 <= limit + 2 * row_group, "{chunking} {manifest:?}");
             let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
-            let end = start + file.4 as i64;
+            let end = start + file.3 as i64;
             assert_eq!(data, int_batch(&schema, start..end)?);
             start = end;
         }
@@ -496,7 +534,7 @@ async fn test_row_limit_at_end_of_input() -> Result<()> {
     let files = list_files(store.as_ref()).await?;
     assert_eq!(
         manifest_rows(&manifest)?,
-        vec![(0, 0, Some(file_name(0, 0, ".parquet")), files[0].1, 10)]
+        vec![(0, Some(file_name(0, 0, ".parquet")), files[0].1, 10)]
     );
     assert_eq!(files.len(), 1);
     Ok(())
@@ -515,7 +553,7 @@ async fn test_empty_first_partition_writes_schema_file() -> Result<()> {
         let name = file_name(0, 0, ".parquet");
         assert_eq!(
             manifest_rows(&manifest)?,
-            vec![(0, 0, Some(name.clone()), files[0].1, 0)]
+            vec![(0, Some(name.clone()), files[0].1, 0)]
         );
         let (metadata, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
         assert_eq!(metadata.file_metadata().num_rows(), 0);
@@ -531,26 +569,25 @@ async fn test_empty_other_partition_writes_no_file() -> Result<()> {
     let schema = int_schema();
     for batches in [vec![], vec![int_batch(&schema, 0..0)?]] {
         let manifest = run_task(test_task(Arc::clone(&store), 2), &schema, batches).await?;
-        assert_eq!(manifest_rows(&manifest)?, vec![(2, 0, None, 0, 0)]);
+        assert_eq!(manifest_rows(&manifest)?, vec![(2, None, 0, 0)]);
         assert_eq!(list_files(store.as_ref()).await?, vec![]);
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn test_attempt_and_suffix_in_file_name() -> Result<()> {
+async fn test_suffix_in_file_name() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let schema = int_schema();
     let mut task = test_task(Arc::clone(&store), 12);
-    task.attempt = 2;
     task.file_suffix = ".zstd.parquet".to_string();
     let manifest = run_task(task, &schema, vec![int_batch(&schema, 0..3)?]).await?;
-    let name = format!("table/part-00012-{WRITE_ID}-c000-a2.zstd.parquet");
+    let name = format!("table/part-00012-{WRITE_ID}-c000.zstd.parquet");
     let files = list_files(store.as_ref()).await?;
     assert_eq!(files[0].0, name);
     assert_eq!(
         manifest_rows(&manifest)?,
-        vec![(12, 2, Some(name), files[0].1, 3)]
+        vec![(12, Some(name), files[0].1, 3)]
     );
     Ok(())
 }
@@ -617,13 +654,16 @@ async fn test_metrics() -> Result<()> {
     let schema = int_schema();
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let metrics = ExecutionPlanMetricsSet::new();
-    read_manifest(write_partition(
-        test_task(Arc::clone(&store), 0),
+    let task = test_task(Arc::clone(&store), 0);
+    let publisher = task.publisher.clone();
+    let manifest = read_manifest(write_partition(
+        task,
         test_stream(&schema, vec![int_batch(&schema, 0..3)?]),
         MemoryConsumer::new("test").register(&pool),
         ParquetWriteMetrics::new(&metrics, 0),
     ))
     .await?;
+    publish_manifest(&publisher, &manifest).await?;
     let files = list_files(store.as_ref()).await?;
     let metrics = metrics.clone_inner();
     let value = |name: &str| {
@@ -1084,7 +1124,6 @@ async fn test_arrow_types() -> Result<()> {
                     manifest_rows(&manifest)?,
                     vec![(
                         i as u64,
-                        0,
                         Some(name.clone()),
                         expected.len() as u64,
                         batch.num_rows() as u64
@@ -1837,10 +1876,10 @@ async fn test_partition_columns_are_not_written() -> Result<()> {
     assert_eq!(
         rows,
         vec![
-            (4, 0, Some(name("b=x/a=1")), files[0].1, 3),
-            (4, 0, Some(name("b=x/a=2")), files[1].1, 1),
-            (4, 0, Some(name("b=y/a=1")), files[2].1, 1),
-            (4, 0, Some(name("b=y/a=2")), files[3].1, 1),
+            (4, Some(name("b=x/a=1")), files[0].1, 3),
+            (4, Some(name("b=x/a=2")), files[1].1, 1),
+            (4, Some(name("b=y/a=1")), files[2].1, 1),
+            (4, Some(name("b=y/a=2")), files[3].1, 1),
         ]
     );
     let file_schema = Arc::new(schema.project(&[0, 2])?);
@@ -1864,7 +1903,7 @@ async fn test_partition_single_value_batch() -> Result<()> {
     let files = list_files(store.as_ref()).await?;
     assert_eq!(
         manifest_rows(&manifest)?,
-        vec![(0, 0, Some(name.clone()), files[0].1, 3)]
+        vec![(0, Some(name.clone()), files[0].1, 3)]
     );
     let (_, data) = read_parquet(read_bytes(store.as_ref(), &name).await?)?;
     assert_eq!(data, batch.project(&[0, 2])?);
@@ -2061,10 +2100,10 @@ async fn test_partition_open_file_limit() -> Result<()> {
     assert_eq!(
         rows,
         vec![
-            (0, 0, Some(name(1)), files[0].1, 4),
-            (0, 0, Some(name(2)), files[1].1, 2),
-            (0, 0, Some(name(3)), files[2].1, 2),
-            (0, 0, Some(name(4)), files[3].1, 1),
+            (0, Some(name(1)), files[0].1, 4),
+            (0, Some(name(2)), files[1].1, 2),
+            (0, Some(name(3)), files[2].1, 2),
+            (0, Some(name(4)), files[3].1, 1),
         ]
     );
     assert_eq!(files.len(), 4);
@@ -2616,7 +2655,7 @@ async fn test_partition_empty_input_writes_no_file() -> Result<()> {
     let schema = partitioned_schema();
     let task = partition_task(Arc::clone(&store), 0, &["a"]);
     let manifest = run_task(task, &schema, vec![partitioned_batch(&[])?]).await?;
-    assert_eq!(manifest_rows(&manifest)?, vec![(0, 0, None, 0, 0)]);
+    assert_eq!(manifest_rows(&manifest)?, vec![(0, None, 0, 0)]);
     assert_eq!(list_files(store.as_ref()).await?, vec![]);
     Ok(())
 }
@@ -2794,107 +2833,166 @@ async fn test_write_and_commit_plan_with_empty_input() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_failed_writer_leaves_no_success_file() -> Result<()> {
-    let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(Arc::new(GreedyMemoryPool::new(16)))
-        .build_arc()?;
-    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+/// A session with an object store that fails and holds requests, and with
+/// the multipart upload interface of the object store if the files are
+/// published with multipart uploads.
+fn fault_context(
+    mode: Mode,
+    runtime: RuntimeEnvBuilder,
+) -> Result<(SessionContext, Arc<FaultStore>)> {
+    use sail_common_datafusion::session::multipart::MultipartStoreProvider;
+
+    let store = FaultStore::new();
+    let mut config = SessionConfig::new();
+    if mode == Mode::Multipart {
+        let multipart = Arc::clone(&store);
+        config = config.with_extension(Arc::new(MultipartStoreProvider::new(move |_| {
+            Ok(Some(Arc::clone(&multipart) as _))
+        })));
+    }
+    let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc()?);
     ctx.register_object_store(
         ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::clone(&store),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
     );
-    let schema = int_schema();
-    // The table has files of an earlier write, and files of writer tasks of
-    // this write that have completed and handed over their manifests, which
-    // the commit has not read.
-    let old = vec![
-        "table/_SUCCESS".to_string(),
-        "table/old.parquet".to_string(),
-        format!(
-            "table/{}",
-            crate::listing::part_file::part_file_name(
-                0,
-                &Uuid::from_u128(77),
-                0,
-                0,
-                ".zstd.parquet"
-            )
-        ),
-    ];
-    for file in &old {
-        store.put(&Path::from(file.as_str()), "old".into()).await?;
+    Ok((ctx, store))
+}
+
+#[tokio::test]
+async fn test_write_and_commit_plan_stages_and_publishes_files() -> Result<()> {
+    for mode in Mode::ALL {
+        let (ctx, store) = fault_context(mode, RuntimeEnvBuilder::new())?;
+        let schema = int_schema();
+        let partitions = vec![
+            vec![int_batch(&schema, 0..5)?],
+            vec![int_batch(&schema, 5..12)?],
+        ];
+        let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
+        // Nothing is visible when the writer tasks have ended.
+        let gate = store.hold(mode.publish_request());
+        let plan = commit_exec(writer)?;
+        let commit = tokio::spawn(collect(plan, ctx.task_ctx()));
+        gate.wait_for(2).await;
+        let staged = match mode {
+            Mode::Rename => vec!["table/_staged-*", "table/_staged-*"],
+            Mode::Multipart => vec![],
+        };
+        assert_eq!(store.objects().await?, staged, "{mode:?}");
+        gate.open();
+        let output = commit
+            .await
+            .map_err(|e| internal_datafusion_err!("{e}"))??;
+        assert_eq!(count_value(&output)?, vec![12]);
+        let files = [
+            "table/_SUCCESS".to_string(),
+            file_name(0, 0, ".zstd.parquet"),
+            file_name(1, 0, ".zstd.parquet"),
+        ];
+        assert_eq!(store.objects().await?, files, "{mode:?}");
+        assert_eq!(store.open_uploads(), Vec::<String>::new());
+        let (_, data) = read_parquet(read_bytes(store.inner().as_ref(), &files[2]).await?)?;
+        assert_eq!(data, int_batch(&schema, 5..12)?);
+
+        // A small file takes three requests with a multipart upload,
+        // and the requests of a direct write and the rename otherwise.
+        let requests: Vec<_> = store
+            .requests()
+            .into_iter()
+            .filter(|x| x.contains("c000") && x.contains("part-00000"))
+            .map(|x| x.split(' ').next().unwrap_or_default().to_string())
+            .collect();
+        let expected = match mode {
+            Mode::Rename => vec!["RENAME"],
+            Mode::Multipart => vec!["CREATE", "PART", "COMPLETE"],
+        };
+        assert_eq!(requests, expected, "{mode:?}");
+        if mode == Mode::Rename {
+            assert_eq!(store.count("PUT"), 3);
+            assert_eq!(store.count("PUT_MULTIPART"), 0);
+        }
     }
-    let completed = vec![
-        vec![int_batch(&schema, 0..5)?],
-        vec![int_batch(&schema, 5..9)?],
-    ];
-    let writer = Arc::new(write_exec(&completed, &schema, None, false)?);
-    let other = SessionContext::new();
-    other.register_object_store(
-        ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::clone(&store),
-    );
-    collect(
-        Arc::new(CoalescePartitionsExec::new(writer)),
-        other.task_ctx(),
-    )
-    .await?;
-    assert_eq!(list_files(store.as_ref()).await?.len(), old.len() + 2);
-    let partitions = vec![vec![], vec![int_batch(&schema, 0..1000)?]];
-    let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
-    let result = collect(commit_exec(writer)?, ctx.task_ctx()).await;
-    assert!(matches!(
-        result.map_err(|e| e.find_root().strip_backtrace()),
-        Err(e) if e.contains("Resources exhausted")
-    ));
-    // The write leaves none of its files, and the other files are kept.
-    wait_for_files(store.as_ref(), &old).await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn test_commit_removes_files_of_earlier_attempt() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new_with_prefix(directory.path())?);
-    let ctx = SessionContext::new();
-    ctx.register_object_store(
-        ObjectStoreUrl::parse("memory://")?.as_ref(),
-        Arc::clone(&store),
-    );
-    let schema = int_schema();
-    let partitions = vec![
-        vec![int_batch(&schema, 0..5)?],
-        vec![int_batch(&schema, 5..12)?],
-    ];
-    let writer = write_exec(&partitions, &schema, None, false)?;
-    assert_eq!(writer.attempt(), 0);
+async fn test_failed_writer_leaves_the_table_as_it_was() -> Result<()> {
+    for mode in Mode::ALL {
+        let runtime =
+            RuntimeEnvBuilder::new().with_memory_pool(Arc::new(GreedyMemoryPool::new(16)));
+        let (ctx, store) = fault_context(mode, runtime)?;
+        let schema = int_schema();
+        let old = ["table/_SUCCESS", "table/old.parquet"];
+        for file in old {
+            store.inner().put(&Path::from(file), "old".into()).await?;
+        }
+        // The second writer task fails, and the first one has no rows.
+        let partitions = vec![vec![], vec![int_batch(&schema, 0..1000)?]];
+        let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
+        let commit = FileWriteCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(writer)),
+            ObjectStoreUrl::parse("memory://")?,
+            Path::from("table"),
+            WRITE_ID,
+        )
+        .with_overwrite(true);
+        let result = collect(Arc::new(commit), ctx.task_ctx()).await;
+        assert!(matches!(
+            result.map_err(|e| e.find_root().strip_backtrace()),
+            Err(e) if e.contains("Resources exhausted")
+        ));
+        // The table has its old content and its `_SUCCESS` file, and the write
+        // leaves nothing that it has staged.
+        store.wait_for(&old).await?;
+        assert_eq!(store.count(mode.publish_request()), 0);
+        assert_eq!(store.count("LIST"), 0);
+    }
+    Ok(())
+}
 
-    // The first attempt writes its files, but the write is not committed.
-    collect(Arc::new(writer.with_attempt(0)), ctx.task_ctx()).await?;
-    let files = list_files(store.as_ref()).await?;
-    assert_eq!(
-        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
-        vec![
-            file_name(0, 0, ".zstd.parquet"),
-            file_name(1, 0, ".zstd.parquet")
-        ]
-    );
+/// The tasks of a partition are attempted again when the write fails,
+/// and the files of all attempts have the same names.
+#[tokio::test]
+async fn test_write_that_is_attempted_again_publishes_one_attempt() -> Result<()> {
+    for mode in Mode::ALL {
+        let (ctx, store) = fault_context(mode, RuntimeEnvBuilder::new())?;
+        let schema = int_schema();
+        let partitions = vec![
+            vec![int_batch(&schema, 0..5)?],
+            vec![int_batch(&schema, 5..12)?],
+        ];
+        let writer = Arc::new(write_exec(&partitions, &schema, None, false)?);
 
-    let retry = Arc::new(writer.with_attempt(1));
-    assert_eq!(retry.attempt(), 1);
-    let output = collect(commit_exec(retry)?, ctx.task_ctx()).await?;
-    assert_eq!(count_value(&output)?, vec![12]);
-    let files = list_files(store.as_ref()).await?;
-    assert_eq!(
-        files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
-        vec![
-            "table/_SUCCESS".to_string(),
-            format!("table/part-00000-{WRITE_ID}-c000-a1.zstd.parquet"),
-            format!("table/part-00001-{WRITE_ID}-c000-a1.zstd.parquet"),
-        ]
-    );
+        // The first attempt stages its files, and its manifests reach no commit.
+        collect(
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&writer) as _)),
+            ctx.task_ctx(),
+        )
+        .await?;
+        let staged = match mode {
+            Mode::Rename => vec!["table/_staged-*", "table/_staged-*"],
+            Mode::Multipart => vec![],
+        };
+        assert_eq!(store.objects().await?, staged, "{mode:?}");
+
+        let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
+        assert_eq!(count_value(&output)?, vec![12]);
+        // The files of the first attempt are not visible. They stay as hidden
+        // objects or as open uploads, since nothing owns them.
+        let mut expected = vec!["table/_SUCCESS".to_string()];
+        expected.extend(staged.iter().map(|x| x.to_string()));
+        expected.push(file_name(0, 0, ".zstd.parquet"));
+        expected.push(file_name(1, 0, ".zstd.parquet"));
+        assert_eq!(store.objects().await?, expected, "{mode:?}");
+        let uploads = match mode {
+            Mode::Rename => vec![],
+            Mode::Multipart => vec![
+                file_name(0, 0, ".zstd.parquet"),
+                file_name(1, 0, ".zstd.parquet"),
+            ],
+        };
+        assert_eq!(store.open_uploads(), uploads);
+        assert_eq!(store.count(mode.publish_request()), 2);
+    }
     Ok(())
 }
 
@@ -3227,20 +3325,17 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
         )?);
         // The limits are kept when the plan is rewritten.
         let input = Arc::clone(writer.input());
-        let writer = writer.replace_children(
+        let plan = writer.replace_children(
             vec![input],
             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
-        let writer = writer
+        let writer = plan
             .downcast_ref::<ParquetWriteExec>()
-            .ok_or_else(|| internal_datafusion_err!("unexpected plan"))?
-            .with_attempt(0);
+            .ok_or_else(|| internal_datafusion_err!("unexpected plan"))?;
         assert_eq!(writer.encoding_parallelism(), 3);
         assert_eq!(writer.max_open_files_per_task(), max_open_files);
 
-        let writer = Arc::new(writer);
-        let plan: Arc<dyn ExecutionPlan> = Arc::clone(&writer) as _;
-        let output = collect(commit_exec(plan)?, ctx.task_ctx()).await?;
+        let output = collect(commit_exec(Arc::clone(&plan))?, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![3]);
         let files = list_files(store.as_ref()).await?;
         let files: Vec<_> = files
@@ -3311,26 +3406,6 @@ async fn test_write_and_commit_plan_without_input_partitions() -> Result<()> {
     Ok(())
 }
 
-/// Waits until the store has exactly the expected files.
-/// The files of an abandoned writer task are deleted in the background.
-async fn wait_for_files(store: &dyn ObjectStore, expected: &[String]) -> Result<()> {
-    let mut files = vec![];
-    for _ in 0..500 {
-        files = list_files(store)
-            .await?
-            .into_iter()
-            .map(|x| x.0)
-            .collect::<Vec<_>>();
-        if files == expected {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    Err(internal_datafusion_err!(
-        "expected files {expected:?} but found {files:?}"
-    ))
-}
-
 /// A task whose first file is complete after the second batch.
 fn two_file_task(store: Arc<dyn ObjectStore>) -> ParquetWriteTask {
     let mut task = test_task(store, 0);
@@ -3354,191 +3429,374 @@ fn write_stream(
     )
 }
 
-#[tokio::test]
-async fn test_failed_task_deletes_completed_files() -> Result<()> {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let schema = int_schema();
-    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-        Arc::clone(&schema),
-        futures::stream::iter(vec![
-            int_batch(&schema, 0..7),
-            int_batch(&schema, 7..14),
-            int_batch(&schema, 14..21),
-            Err(internal_datafusion_err!("input failure")),
-        ]),
-    ));
-    let mut stream = Box::pin(write_stream(two_file_task(Arc::clone(&store)), input));
-    let result = stream.next().await;
-    assert!(matches!(result, Some(Err(e)) if e.to_string().contains("input failure")));
-    assert!(stream.next().await.is_none());
-    wait_for_files(store.as_ref(), &[]).await
+/// A task that stages its files in the way of the mode,
+/// in an object store that fails and holds requests.
+fn fault_task(store: &Arc<FaultStore>, mode: Mode) -> ParquetWriteTask {
+    let mut task = two_file_task(Arc::clone(store) as Arc<dyn ObjectStore>);
+    task.publisher = store.publisher(mode);
+    task
 }
 
-#[tokio::test]
-async fn test_canceled_task_deletes_completed_files() -> Result<()> {
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let schema = int_schema();
-    // The input does not end, so the task waits for more data
-    // after it has completed its first file.
-    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-        Arc::clone(&schema),
-        futures::stream::iter(vec![
-            int_batch(&schema, 0..7),
-            int_batch(&schema, 7..14),
-            int_batch(&schema, 14..21),
-        ])
-        .chain(futures::stream::pending()),
-    ));
-    let mut stream = Box::pin(write_stream(two_file_task(Arc::clone(&store)), input));
-    let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
-    assert!(waiting.await.is_err());
-    wait_for_files(store.as_ref(), &[file_name(0, 0, ".parquet")]).await?;
-    drop(stream);
-    wait_for_files(store.as_ref(), &[]).await
-}
-
-#[tokio::test]
-async fn test_task_keeps_files_only_when_read_to_end() -> Result<()> {
-    let schema = int_schema();
-    let files = [file_name(0, 0, ".parquet"), file_name(0, 1, ".parquet")];
-    let input = |schema: &SchemaRef| -> Result<SendableRecordBatchStream> {
-        Ok(test_stream(
-            schema,
-            vec![
-                int_batch(schema, 0..7)?,
-                int_batch(schema, 7..14)?,
-                int_batch(schema, 14..21)?,
-            ],
-        ))
+/// The input of a task: the batches, and then an error or no end.
+fn task_input(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    fails: bool,
+) -> SendableRecordBatchStream {
+    let batches = futures::stream::iter(batches.into_iter().map(Ok));
+    let end: BoxStream<'static, Result<RecordBatch>> = if fails {
+        futures::stream::once(async { Err(internal_datafusion_err!("input failure")) }).boxed()
+    } else {
+        futures::stream::pending().boxed()
     };
-
-    // The reader stops after the manifest, so the manifest may not have been delivered.
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut stream = Box::pin(write_stream(
-        two_file_task(Arc::clone(&store)),
-        input(&schema)?,
-    ));
-    assert!(matches!(stream.next().await, Some(Ok(_))));
-    wait_for_files(store.as_ref(), &files).await?;
-    drop(stream);
-    wait_for_files(store.as_ref(), &[]).await?;
-
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut stream = Box::pin(write_stream(
-        two_file_task(Arc::clone(&store)),
-        input(&schema)?,
-    ));
-    assert!(matches!(stream.next().await, Some(Ok(_))));
-    assert!(stream.next().await.is_none());
-    drop(stream);
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    wait_for_files(store.as_ref(), &files).await
+    Box::pin(RecordBatchStreamAdapter::new(
+        Arc::clone(schema),
+        batches.chain(end),
+    ))
 }
 
-/// An object store that completes a write only when it is allowed to.
-#[derive(Debug)]
-struct GatedStore {
-    inner: InMemory,
-    started: tokio::sync::Notify,
-    gate: tokio::sync::Semaphore,
-    /// The number of completed writes.
-    completed: AtomicUsize,
+fn seven_row_batches(schema: &SchemaRef, batches: i64) -> Result<Vec<RecordBatch>> {
+    (0..batches)
+        .map(|i| int_batch(schema, 7 * i..7 * (i + 1)))
+        .collect()
 }
 
-impl std::fmt::Display for GatedStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GatedStore")
+/// Waits until the task has staged the number of files and nothing else.
+async fn wait_for_staged(store: &FaultStore, mode: Mode, files: usize) -> Result<()> {
+    let objects = match mode {
+        Mode::Rename => vec!["table/_staged-*"; files],
+        Mode::Multipart => vec![],
+    };
+    let uploads = match mode {
+        Mode::Rename => 0,
+        Mode::Multipart => files,
+    };
+    for _ in 0..2000 {
+        if store.objects().await? == objects && store.open_uploads().len() == uploads {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
+    Err(internal_datafusion_err!(
+        "expected {files} staged files but found the objects {:?} and the uploads {:?}",
+        store.objects().await?,
+        store.open_uploads()
+    ))
 }
 
-#[async_trait]
-impl ObjectStore for GatedStore {
-    async fn put_opts(
-        &self,
-        location: &Path,
-        payload: PutPayload,
-        options: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.started.notify_one();
-        let permit = self.gate.acquire().await;
-        drop(permit);
-        let result = self.inner.put_opts(location, payload, options).await;
-        self.completed.fetch_add(1, Ordering::SeqCst);
-        result
+#[tokio::test]
+async fn test_failed_task_removes_staged_files() -> Result<()> {
+    for mode in Mode::ALL {
+        let store = FaultStore::new();
+        let schema = int_schema();
+        // The first file is staged when the input fails,
+        // and the second file has rows.
+        let input = task_input(&schema, seven_row_batches(&schema, 3)?, true);
+        let mut stream = Box::pin(write_stream(fault_task(&store, mode), input));
+        let result = stream.next().await;
+        assert!(matches!(result, Some(Err(e)) if e.to_string().contains("input failure")));
+        assert!(stream.next().await.is_none());
+        // The first file is staged by a task that is not canceled,
+        // and it is removed when it is staged.
+        let removal = match mode {
+            Mode::Rename => "DELETE",
+            Mode::Multipart => "ABORT",
+        };
+        store.wait_for_requests(removal, 1).await?;
+        store.wait_for(&[]).await?;
+        let name = file_name(0, 0, ".parquet");
+        let expected = match mode {
+            Mode::Rename => vec![
+                "PUT table/_staged-*".to_string(),
+                "DELETE table/_staged-*".to_string(),
+            ],
+            Mode::Multipart => vec![
+                format!("CREATE {name}"),
+                format!("PART {name} 0"),
+                format!("ABORT {name}"),
+            ],
+        };
+        // The requests are compared without the size of the data.
+        let requests: Vec<_> = store
+            .requests()
+            .iter()
+            .zip(&expected)
+            .map(|(request, expected)| request.chars().take(expected.len()).collect::<String>())
+            .collect();
+        assert_eq!(store.requests().len(), expected.len(), "{mode:?}");
+        assert_eq!(requests, expected, "{mode:?}");
     }
+    Ok(())
+}
 
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
-        options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, options).await
+#[tokio::test]
+async fn test_canceled_task_removes_staged_files() -> Result<()> {
+    for mode in Mode::ALL {
+        let store = FaultStore::new();
+        let schema = int_schema();
+        // The input does not end, so the task waits for more data
+        // after it has staged its first file.
+        let input = task_input(&schema, seven_row_batches(&schema, 3)?, false);
+        let mut stream = Box::pin(write_stream(fault_task(&store, mode), input));
+        let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
+        assert!(waiting.await.is_err());
+        wait_for_staged(&store, mode, 1).await?;
+        drop(stream);
+        store.wait_for(&[]).await?;
     }
+    Ok(())
+}
 
-    async fn get_opts(
-        &self,
-        location: &Path,
-        options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.inner.get_opts(location, options).await
+#[tokio::test]
+async fn test_task_owns_staged_files_until_its_manifest_is_taken() -> Result<()> {
+    for mode in Mode::ALL {
+        let schema = int_schema();
+        let files = [file_name(0, 0, ".parquet"), file_name(0, 1, ".parquet")];
+
+        // The reader stops after the manifest, so the manifest may not have been taken.
+        let store = FaultStore::new();
+        let input = test_stream(&schema, seven_row_batches(&schema, 3)?);
+        let mut stream = Box::pin(write_stream(fault_task(&store, mode), input));
+        assert!(matches!(stream.next().await, Some(Ok(_))));
+        wait_for_staged(&store, mode, 2).await?;
+        drop(stream);
+        store.wait_for(&[]).await?;
+
+        // The reader reads the stream to its end, so the task leaves the files
+        // to the commit of the write.
+        let store = FaultStore::new();
+        let input = test_stream(&schema, seven_row_batches(&schema, 3)?);
+        let mut stream = Box::pin(write_stream(fault_task(&store, mode), input));
+        let manifest = match stream.next().await {
+            Some(Ok(manifest)) => manifest,
+            _ => return Err(internal_datafusion_err!("missing manifest")),
+        };
+        assert!(stream.next().await.is_none());
+        drop(stream);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        wait_for_staged(&store, mode, 2).await?;
+        // No reader sees the files before they are published.
+        publish_manifest(&store.publisher(mode), &manifest).await?;
+        assert_eq!(store.objects().await?, files);
+        assert_eq!(store.open_uploads(), Vec::<String>::new());
     }
+    Ok(())
+}
 
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
-        self.inner.delete_stream(locations)
+#[tokio::test]
+async fn test_canceled_task_removes_file_that_is_staged_later() -> Result<()> {
+    // The request that the task is waiting for when it is canceled.
+    for (mode, request) in [
+        (Mode::Rename, "PUT"),
+        (Mode::Multipart, "CREATE"),
+        (Mode::Multipart, "PART"),
+    ] {
+        let store = FaultStore::new();
+        let gate = store.hold(request);
+        let schema = int_schema();
+        let input = test_stream(&schema, vec![int_batch(&schema, 0..7)?]);
+        let mut task = fault_task(&store, mode);
+        task.max_records_per_file = 0;
+        let mut stream = Box::pin(write_stream(task, input));
+        tokio::select! {
+            _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
+            _ = gate.wait_for(1) => {}
+        }
+        drop(stream);
+        assert_eq!(store.objects().await?, Vec::<String>::new());
+
+        // The request ends after the cancellation, and what it has stored is removed.
+        gate.open();
+        let removal = match mode {
+            Mode::Rename => "DELETE",
+            Mode::Multipart => "ABORT",
+        };
+        for _ in 0..2000 {
+            if store.count(removal) == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert_eq!(store.count(removal), 1, "{mode:?} {request}");
+        store.wait_for(&[]).await?;
     }
+    Ok(())
+}
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
-    }
+/// Batches of values that are not compressed well, so that the parts
+/// of a file are uploaded while the file receives rows.
+fn large_batches(schema: &SchemaRef, batches: usize) -> Result<Vec<RecordBatch>> {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    (0..batches)
+        .map(|_| {
+            let values = (0..20_000).map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as i64
+            });
+            let column: ArrayRef = Arc::new(Int64Array::from_iter_values(values));
+            Ok(RecordBatch::try_new(Arc::clone(schema), vec![column])?)
+        })
+        .collect()
+}
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
+/// A task that uploads its files in parts of 256 KiB.
+fn large_file_task(store: &Arc<FaultStore>, mode: Mode) -> ParquetWriteTask {
+    let mut task = test_task(Arc::clone(store) as Arc<dyn ObjectStore>, 0);
+    task.publisher = store.publisher(mode);
+    task.buffer_size = 256 * 1024;
+    task.options.global.max_row_group_size = 20_000;
+    task
+}
 
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+/// The kind of the request that uploads a part of a file.
+fn part_request(mode: Mode) -> &'static str {
+    match mode {
+        // The object store uploads the parts of the object itself.
+        Mode::Rename => "PUT_MULTIPART",
+        Mode::Multipart => "PART",
     }
 }
 
 #[tokio::test]
-async fn test_canceled_task_deletes_file_that_completes_later() -> Result<()> {
-    let gated = Arc::new(GatedStore {
-        inner: InMemory::new(),
-        started: tokio::sync::Notify::new(),
-        gate: tokio::sync::Semaphore::new(0),
-        completed: AtomicUsize::new(0),
-    });
-    let store: Arc<dyn ObjectStore> = gated.clone();
+async fn test_task_that_fails_or_is_canceled_at_any_stage_leaves_nothing() -> Result<()> {
     let schema = int_schema();
-    let input = test_stream(&schema, vec![int_batch(&schema, 0..7)?]);
-    let mut stream = Box::pin(write_stream(test_task(Arc::clone(&store), 0), input));
-
-    // The task is canceled while the request that makes its file visible is running.
-    tokio::select! {
-        _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
-        _ = gated.started.notified() => {}
-    }
-    drop(stream);
-    assert_eq!(list_files(&gated.inner).await?, vec![]);
-
-    // The request completes after the cancellation, and the file is deleted.
-    gated.gate.add_permits(1);
-    for _ in 0..500 {
-        if gated.completed.load(Ordering::SeqCst) == 1 {
-            break;
+    for mode in Mode::ALL {
+        for fails in [true, false] {
+            // (the batches of the input, the rows of a file, whether parts
+            // are uploaded when the task ends, the files that are staged then)
+            for (batches, max_records_per_file, parts, staged) in [
+                // No part of the file is uploaded.
+                (1, 0, false, 0),
+                // Some parts of the file are uploaded.
+                (12, 0, true, 0),
+                // All parts of the first file are uploaded.
+                (13, 240_000, true, 1),
+            ] {
+                let case = format!("{mode:?} fails={fails} batches={batches}");
+                let store = FaultStore::new();
+                let mut task = large_file_task(&store, mode);
+                task.max_records_per_file = max_records_per_file;
+                let input = task_input(&schema, large_batches(&schema, batches)?, fails);
+                let mut stream = Box::pin(write_stream(task, input));
+                if fails {
+                    let result = stream.next().await;
+                    assert!(
+                        matches!(result, Some(Err(e)) if e.to_string().contains("input failure")),
+                        "{case}"
+                    );
+                } else {
+                    // The task is canceled when it has read its input.
+                    let waiting =
+                        tokio::time::timeout(std::time::Duration::from_millis(50), stream.next());
+                    assert!(waiting.await.is_err(), "{case}");
+                    let files = match mode {
+                        Mode::Rename => staged,
+                        // The upload of the file that receives rows is open.
+                        Mode::Multipart => usize::from(parts),
+                    };
+                    tokio::select! {
+                        _ = stream.next() => {
+                            return Err(internal_datafusion_err!("the task must wait"));
+                        }
+                        result = wait_for_staged(&store, mode, files) => result?,
+                    }
+                    drop(stream);
+                }
+                store.wait_for(&[]).await?;
+                assert_eq!(store.count(part_request(mode)) > 0, parts, "{case}");
+                if mode == Mode::Multipart {
+                    assert_eq!(store.count("CREATE"), usize::from(parts), "{case}");
+                    assert_eq!(store.count("ABORT"), usize::from(parts), "{case}");
+                }
+                assert_eq!(store.count("COMPLETE"), 0);
+                assert_eq!(store.count("RENAME"), 0);
+            }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(gated.completed.load(Ordering::SeqCst), 1);
-    wait_for_files(&gated.inner, &[]).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_task_removes_staged_files_when_a_request_fails() -> Result<()> {
+    let schema = int_schema();
+    // The request that fails is a request for the second file of the task,
+    // or the first request of its kind.
+    for (mode, request, second_file) in [
+        (Mode::Rename, "PUT_MULTIPART", 1),
+        (Mode::Multipart, "CREATE", 1),
+        (Mode::Multipart, "PART", 9),
+    ] {
+        for skip in [0, second_file] {
+            let store = FaultStore::new();
+            store.fail(request, skip);
+            let mut task = large_file_task(&store, mode);
+            task.max_records_per_file = 240_000;
+            let input = test_stream(&schema, large_batches(&schema, 30)?);
+            let result = read_manifest(write_stream(task, input)).await;
+            let message = format!("{request} failure");
+            assert!(
+                matches!(&result, Err(e) if e.to_string().contains(&message)),
+                "{mode:?} {request} {skip} {result:?}"
+            );
+            store.wait_for(&[]).await?;
+            assert_eq!(store.count("COMPLETE"), 0);
+            assert_eq!(store.count("RENAME"), 0);
+        }
+    }
+    Ok(())
+}
+
+/// The parts of a file have the same size, and the file is the file
+/// that is written to an object store directly.
+#[tokio::test]
+async fn test_large_file_is_staged_and_published() -> Result<()> {
+    let schema = int_schema();
+    let batches = large_batches(&schema, 12)?;
+    let mut contents = vec![];
+    for mode in Mode::ALL {
+        let store = FaultStore::new();
+        let task = large_file_task(&store, mode);
+        let manifest =
+            read_manifest(write_stream(task, test_stream(&schema, batches.clone()))).await?;
+        let name = file_name(0, 0, ".parquet");
+        // The file is not visible, and the upload is open.
+        wait_for_staged(&store, mode, 1).await?;
+        let rows = manifest_rows(&manifest)?;
+        assert_eq!(rows.len(), 1);
+        let size = rows[0].2;
+        if mode == Mode::Multipart {
+            let parts: Vec<_> = store
+                .requests()
+                .into_iter()
+                .filter(|x| x.starts_with("PART "))
+                .collect();
+            let count = size.div_ceil(256 * 1024) as usize;
+            assert!(count > 4, "{count}");
+            assert_eq!(parts.len(), count);
+            let mut expected: Vec<_> = (0..count)
+                .map(|i| {
+                    let length = (256 * 1024).min(size - 256 * 1024 * i as u64);
+                    format!("PART {name} {i} {length}")
+                })
+                .collect();
+            let mut parts = parts;
+            parts.sort();
+            expected.sort();
+            assert_eq!(parts, expected);
+            assert_eq!(store.count("CREATE"), 1);
+        }
+        publish_manifest(&store.publisher(mode), &manifest).await?;
+        assert_eq!(store.objects().await?, vec![name.clone()]);
+        assert_eq!(store.open_uploads(), Vec::<String>::new());
+        let data = read_bytes(store.inner().as_ref(), &name).await?;
+        assert_eq!(data.len() as u64, size);
+        let (_, written) = read_parquet(data.clone())?;
+        assert_eq!(written, concat_batches(&schema, &batches)?);
+        contents.push(data);
+    }
+    assert!(contents[0] == contents[1]);
     Ok(())
 }
 
@@ -3689,7 +3947,7 @@ async fn test_parallel_columns_write_the_same_file() -> Result<()> {
             let name = file_name(0, 0, ".parquet");
             assert_eq!(
                 manifest_rows(&manifest)?,
-                vec![(0, 0, Some(name.clone()), expected.len() as u64, rows as u64)],
+                vec![(0, Some(name.clone()), expected.len() as u64, rows as u64)],
                 "options {i} lanes {lanes}"
             );
             let data = read_bytes(store.as_ref(), &name).await?;
@@ -3725,10 +3983,10 @@ async fn test_parallel_columns_with_row_limit_and_partitions() -> Result<()> {
     assert_eq!(
         manifest,
         vec![
-            (0, 0, Some(name(0, 0)), files[0].1, 2000),
-            (0, 0, Some(name(0, 1)), files[1].1, 500),
-            (0, 0, Some(name(1, 0)), files[2].1, 2000),
-            (0, 0, Some(name(1, 1)), files[3].1, 500),
+            (0, Some(name(0, 0)), files[0].1, 2000),
+            (0, Some(name(0, 1)), files[1].1, 500),
+            (0, Some(name(1, 0)), files[2].1, 2000),
+            (0, Some(name(1, 1)), files[3].1, 500),
         ]
     );
     let directories = read_directories(store.as_ref()).await?;
@@ -3749,7 +4007,7 @@ async fn write_file_without_task(
     let mut options = options.clone();
     options.arrow_schema(&schema);
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-    let mut writer = ParquetFileWriter::try_new(
+    let mut writer = file_writer(
         Arc::clone(store),
         Path::from("file.parquet"),
         schema,
@@ -3880,7 +4138,7 @@ async fn test_columns_in_order_write_the_same_file() -> Result<()> {
         let manifest = run_task(task, &schema, batches.clone()).await?;
         assert_eq!(
             manifest_rows(&manifest)?,
-            vec![(0, 0, Some(name.clone()), expected.len() as u64, rows as u64)],
+            vec![(0, Some(name.clone()), expected.len() as u64, rows as u64)],
             "case {i}"
         );
         let data = read_bytes(store.as_ref(), &name).await?;
@@ -3935,7 +4193,7 @@ async fn test_file_writer_memory_size() -> Result<()> {
         .set_compression(Compression::UNCOMPRESSED)
         .set_max_row_group_row_count(Some(200_000))
         .build();
-    let mut writer = ParquetFileWriter::try_new(
+    let mut writer = file_writer(
         store,
         Path::from("file.parquet"),
         Arc::clone(&schema),
@@ -4077,7 +4335,7 @@ async fn test_encoding_writes_the_same_files_with_file_row_limit() -> Result<()>
     }
     // A file is completed when it has 1000 rows,
     // and the next file receives rows while the file is completed.
-    let rows: Vec<_> = outputs[0].0.iter().map(|x| x.4).collect();
+    let rows: Vec<_> = outputs[0].0.iter().map(|x| x.3).collect();
     assert_eq!(rows, vec![1000; 5]);
     for output in &outputs[1..] {
         assert!(output == &outputs[0]);
@@ -4119,7 +4377,7 @@ async fn test_row_groups_in_flight_and_waiting_input_are_limited() -> Result<()>
             encode_settings(4, Some(2), Some(window), Some(read_ahead_bytes)),
             &pool,
         );
-        let mut writer = ParquetFileWriter::try_new(
+        let mut writer = file_writer(
             Arc::clone(&store),
             Path::from("file.parquet"),
             Arc::clone(&schema),
@@ -4176,7 +4434,7 @@ async fn test_waiting_input_is_counted_by_the_size_of_its_values() -> Result<()>
     );
     let mut options = options.clone();
     options.arrow_schema(&schema);
-    let mut writer = ParquetFileWriter::try_new(
+    let mut writer = file_writer(
         Arc::clone(&store),
         Path::from("file.parquet"),
         Arc::clone(&schema),
@@ -4641,7 +4899,7 @@ async fn test_degree_is_limited_by_settings() -> Result<()> {
             max_degree,
             ..fixed_degree(8)
         };
-        let mut writer = ParquetFileWriter::try_new(
+        let mut writer = file_writer(
             Arc::clone(&store),
             Path::from("file.parquet"),
             Arc::clone(&schema),
@@ -4694,7 +4952,7 @@ async fn check_dropped_file_writer_releases_waiting_input() -> Result<()> {
         if byte_limit {
             props = props.set_max_row_group_bytes(Some(1024 * 1024 * 1024));
         }
-        let mut writer = ParquetFileWriter::try_new(
+        let mut writer = file_writer(
             Arc::clone(&store),
             Path::from("file.parquet"),
             Arc::clone(&schema),
@@ -4737,76 +4995,64 @@ async fn test_dropped_file_writer_releases_waiting_input_with_running_lanes() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_canceled_task_with_lanes_deletes_files_and_ends_tasks() -> Result<()> {
+async fn test_canceled_task_with_lanes_removes_staged_files_and_ends_tasks() -> Result<()> {
     let tasks = tokio::runtime::Handle::current()
         .metrics()
         .num_alive_tasks();
     for encode in encode_cases() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let store = FaultStore::new();
         let schema = int_schema();
         // The input does not end, so the task waits for more data after it
-        // has completed its first file, with row groups of the second file
+        // has staged its first file, with row groups of the second file
         // that are not in the file yet.
-        let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            futures::stream::iter(vec![
-                int_batch(&schema, 0..7),
-                int_batch(&schema, 7..14),
-                int_batch(&schema, 14..21),
-                int_batch(&schema, 21..23),
-            ])
-            .chain(futures::stream::pending()),
-        ));
-        let mut task = two_file_task(Arc::clone(&store));
+        let mut batches = seven_row_batches(&schema, 3)?;
+        batches.push(int_batch(&schema, 21..23)?);
+        let input = task_input(&schema, batches, false);
+        let mut task = fault_task(&store, Mode::Rename);
         task.encode = encode;
         let mut stream = Box::pin(write_stream(task, input));
         let waiting = tokio::time::timeout(std::time::Duration::from_millis(100), stream.next());
         assert!(waiting.await.is_err());
-        wait_for_files(store.as_ref(), &[file_name(0, 0, ".parquet")]).await?;
+        wait_for_staged(&store, Mode::Rename, 1).await?;
         drop(stream);
-        wait_for_files(store.as_ref(), &[]).await?;
+        store.wait_for(&[]).await?;
         wait_for_tasks(tasks).await?;
     }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_canceled_task_with_lanes_deletes_file_that_completes_later() -> Result<()> {
-    let gated = Arc::new(GatedStore {
-        inner: InMemory::new(),
-        started: tokio::sync::Notify::new(),
-        gate: tokio::sync::Semaphore::new(0),
-        completed: AtomicUsize::new(0),
-    });
-    let store: Arc<dyn ObjectStore> = gated.clone();
+async fn test_canceled_task_with_lanes_removes_file_that_is_staged_later() -> Result<()> {
+    let store = FaultStore::new();
+    let gate = store.hold("PUT");
     let schema = int_schema();
     let input = test_stream(
         &schema,
         vec![int_batch(&schema, 0..7)?, int_batch(&schema, 7..30)?],
     );
-    let mut task = test_task(Arc::clone(&store), 0);
-    task.options.global.max_row_group_size = 5;
+    let mut task = fault_task(&store, Mode::Rename);
+    task.max_records_per_file = 0;
     task.encode = fixed_degree(8);
     let mut stream = Box::pin(write_stream(task, input));
 
-    // The task is canceled while the request that makes its file visible is running.
+    // The task is canceled while the request that stores its file is running.
     tokio::select! {
         _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
-        _ = gated.started.notified() => {}
+        _ = gate.wait_for(1) => {}
     }
     drop(stream);
-    assert_eq!(list_files(&gated.inner).await?, vec![]);
+    assert_eq!(store.objects().await?, Vec::<String>::new());
 
-    // The request completes after the cancellation, and the file is deleted.
-    gated.gate.add_permits(1);
-    for _ in 0..500 {
-        if gated.completed.load(Ordering::SeqCst) == 1 {
+    // The request ends after the cancellation, and the object is deleted.
+    gate.open();
+    for _ in 0..2000 {
+        if store.count("DELETE") == 1 {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
-    assert_eq!(gated.completed.load(Ordering::SeqCst), 1);
-    wait_for_files(&gated.inner, &[]).await?;
+    assert_eq!(store.count("DELETE"), 1);
+    store.wait_for(&[]).await?;
     Ok(())
 }
 
@@ -4824,7 +5070,7 @@ async fn test_slow_input_does_not_keep_completed_row_groups() -> Result<()> {
         .set_compression(Compression::UNCOMPRESSED)
         .set_max_row_group_row_count(Some(100_000))
         .build();
-    let mut writer = ParquetFileWriter::try_new(
+    let mut writer = file_writer(
         Arc::clone(&store),
         Path::from("file.parquet"),
         three_int_schema(),
@@ -4891,7 +5137,9 @@ async fn test_task_does_not_poll_slow_input_while_waiting() -> Result<()> {
         let mut task = test_task(Arc::clone(&store), 0);
         task.options = options.clone();
         task.encode = encode.clone();
-        read_manifest(write_stream(task, input)).await?;
+        let publisher = task.publisher.clone();
+        let manifest = read_manifest(write_stream(task, input)).await?;
+        publish_manifest(&publisher, &manifest).await?;
         let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
         assert!(data == expected, "{encode:?}");
         // The input is polled when a batch is requested and when the batch is ready.
@@ -4968,7 +5216,7 @@ async fn test_degree_follows_active_writers_at_each_row_group() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let resources = test_resources(shared_settings(8, &active_writers), &pool);
-    let mut writer = ParquetFileWriter::try_new(
+    let mut writer = file_writer(
         Arc::clone(&store),
         Path::from("file.parquet"),
         Arc::clone(&schema),
@@ -5024,7 +5272,7 @@ async fn test_degree_is_divided_among_open_files_of_task() -> Result<()> {
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let resources = test_resources(fixed_degree(8), &pool);
     let open = |name: &str| {
-        ParquetFileWriter::try_new(
+        file_writer(
             Arc::clone(&store),
             Path::from(name),
             Arc::clone(&schema),
@@ -5324,7 +5572,7 @@ async fn test_arrow_type_support() -> Result<()> {
                     assert_eq!(files.len(), 1, "{data_type}");
                     assert_eq!(
                         manifest_rows(&manifest)?,
-                        vec![(0, 0, Some(name), files[0].1, rows as u64)],
+                        vec![(0, Some(name), files[0].1, rows as u64)],
                         "{data_type}"
                     );
                 }
