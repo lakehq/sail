@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::array::{
     Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeBinaryArray, Float64Array, Int32Array,
@@ -47,11 +49,15 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_datasource::ListingTableUrl;
-use futures::TryStreamExt;
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt, TryStreamExt};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
@@ -105,13 +111,22 @@ async fn run_task_with_pool(
     let reservation = MemoryConsumer::new("test").register(pool);
     let metrics = ExecutionPlanMetricsSet::new();
     let partition = task.partition;
-    write_partition(
+    read_manifest(write_partition(
         task,
         test_stream(schema, batches),
         reservation,
         ParquetWriteMetrics::new(&metrics, partition),
-    )
+    ))
     .await
+}
+
+/// Reads the stream of a writer task to its end and returns the manifest.
+async fn read_manifest(stream: impl Stream<Item = Result<RecordBatch>>) -> Result<RecordBatch> {
+    let mut manifests: Vec<_> = stream.try_collect().await?;
+    assert_eq!(manifests.len(), 1);
+    manifests
+        .pop()
+        .ok_or_else(|| internal_datafusion_err!("missing manifest"))
 }
 
 /// A row of the manifest: partition, attempt, path, size, and number of rows.
@@ -351,12 +366,12 @@ async fn test_failed_input_leaves_no_file() -> Result<()> {
     ));
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let metrics = ExecutionPlanMetricsSet::new();
-    let result = write_partition(
+    let result = read_manifest(write_partition(
         test_task(Arc::clone(&store), 0),
         input,
         MemoryConsumer::new("test").register(&pool),
         ParquetWriteMetrics::new(&metrics, 0),
-    )
+    ))
     .await;
     assert!(matches!(result, Err(e) if e.to_string().contains("input failure")));
     assert_eq!(list_files(store.as_ref()).await?, vec![]);
@@ -400,12 +415,12 @@ async fn test_metrics() -> Result<()> {
     let schema = int_schema();
     let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
     let metrics = ExecutionPlanMetricsSet::new();
-    write_partition(
+    read_manifest(write_partition(
         test_task(Arc::clone(&store), 0),
         test_stream(&schema, vec![int_batch(&schema, 0..3)?]),
         MemoryConsumer::new("test").register(&pool),
         ParquetWriteMetrics::new(&metrics, 0),
-    )
+    ))
     .await?;
     let files = list_files(store.as_ref()).await?;
     let metrics = metrics.clone_inner();
@@ -1614,5 +1629,235 @@ async fn test_write_and_commit_plan_without_input_partitions() -> Result<()> {
             file_name(0, 0, ".zstd.parquet")
         ]
     );
+    Ok(())
+}
+
+/// Waits until the store has exactly the expected files.
+/// The files of an abandoned writer task are deleted in the background.
+async fn wait_for_files(store: &dyn ObjectStore, expected: &[String]) -> Result<()> {
+    let mut files = vec![];
+    for _ in 0..500 {
+        files = list_files(store)
+            .await?
+            .into_iter()
+            .map(|x| x.0)
+            .collect::<Vec<_>>();
+        if files == expected {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    Err(internal_datafusion_err!(
+        "expected files {expected:?} but found {files:?}"
+    ))
+}
+
+/// A task whose first file is complete after the second batch.
+fn two_file_task(store: Arc<dyn ObjectStore>) -> ParquetWriteTask {
+    let mut task = test_task(store, 0);
+    task.max_rows_per_file = 10;
+    task.options.global.max_row_group_size = 5;
+    task
+}
+
+fn write_stream(
+    task: ParquetWriteTask,
+    input: SendableRecordBatchStream,
+) -> impl Stream<Item = Result<RecordBatch>> + Send {
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let metrics = ExecutionPlanMetricsSet::new();
+    write_partition(
+        task,
+        input,
+        MemoryConsumer::new("test").register(&pool),
+        ParquetWriteMetrics::new(&metrics, 0),
+    )
+}
+
+#[tokio::test]
+async fn test_failed_task_deletes_completed_files() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = int_schema();
+    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+        Arc::clone(&schema),
+        futures::stream::iter(vec![
+            int_batch(&schema, 0..7),
+            int_batch(&schema, 7..14),
+            int_batch(&schema, 14..21),
+            Err(internal_datafusion_err!("input failure")),
+        ]),
+    ));
+    let mut stream = Box::pin(write_stream(two_file_task(Arc::clone(&store)), input));
+    let result = stream.next().await;
+    assert!(matches!(result, Some(Err(e)) if e.to_string().contains("input failure")));
+    assert!(stream.next().await.is_none());
+    wait_for_files(store.as_ref(), &[]).await
+}
+
+#[tokio::test]
+async fn test_canceled_task_deletes_completed_files() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let schema = int_schema();
+    // The input does not end, so the task waits for more data
+    // after it has completed its first file.
+    let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+        Arc::clone(&schema),
+        futures::stream::iter(vec![
+            int_batch(&schema, 0..7),
+            int_batch(&schema, 7..14),
+            int_batch(&schema, 14..21),
+        ])
+        .chain(futures::stream::pending()),
+    ));
+    let mut stream = Box::pin(write_stream(two_file_task(Arc::clone(&store)), input));
+    let waiting = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next());
+    assert!(waiting.await.is_err());
+    wait_for_files(store.as_ref(), &[file_name(0, 0, ".parquet")]).await?;
+    drop(stream);
+    wait_for_files(store.as_ref(), &[]).await
+}
+
+#[tokio::test]
+async fn test_task_keeps_files_only_when_read_to_end() -> Result<()> {
+    let schema = int_schema();
+    let files = [file_name(0, 0, ".parquet"), file_name(0, 1, ".parquet")];
+    let input = |schema: &SchemaRef| -> Result<SendableRecordBatchStream> {
+        Ok(test_stream(
+            schema,
+            vec![
+                int_batch(schema, 0..7)?,
+                int_batch(schema, 7..14)?,
+                int_batch(schema, 14..21)?,
+            ],
+        ))
+    };
+
+    // The reader stops after the manifest, so the manifest may not have been delivered.
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut stream = Box::pin(write_stream(
+        two_file_task(Arc::clone(&store)),
+        input(&schema)?,
+    ));
+    assert!(matches!(stream.next().await, Some(Ok(_))));
+    wait_for_files(store.as_ref(), &files).await?;
+    drop(stream);
+    wait_for_files(store.as_ref(), &[]).await?;
+
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut stream = Box::pin(write_stream(
+        two_file_task(Arc::clone(&store)),
+        input(&schema)?,
+    ));
+    assert!(matches!(stream.next().await, Some(Ok(_))));
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    wait_for_files(store.as_ref(), &files).await
+}
+
+/// An object store that completes a write only when it is allowed to.
+#[derive(Debug)]
+struct GatedStore {
+    inner: InMemory,
+    started: tokio::sync::Notify,
+    gate: tokio::sync::Semaphore,
+    /// The number of completed writes.
+    completed: AtomicUsize,
+}
+
+impl std::fmt::Display for GatedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GatedStore")
+    }
+}
+
+#[async_trait]
+impl ObjectStore for GatedStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        options: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.started.notify_one();
+        let permit = self.gate.acquire().await;
+        drop(permit);
+        let result = self.inner.put_opts(location, payload, options).await;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        result
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        options: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+#[tokio::test]
+async fn test_canceled_task_deletes_file_that_completes_later() -> Result<()> {
+    let gated = Arc::new(GatedStore {
+        inner: InMemory::new(),
+        started: tokio::sync::Notify::new(),
+        gate: tokio::sync::Semaphore::new(0),
+        completed: AtomicUsize::new(0),
+    });
+    let store: Arc<dyn ObjectStore> = gated.clone();
+    let schema = int_schema();
+    let input = test_stream(&schema, vec![int_batch(&schema, 0..7)?]);
+    let mut stream = Box::pin(write_stream(test_task(Arc::clone(&store), 0), input));
+
+    // The task is canceled while the request that makes its file visible is running.
+    tokio::select! {
+        _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
+        _ = gated.started.notified() => {}
+    }
+    drop(stream);
+    assert_eq!(list_files(&gated.inner).await?, vec![]);
+
+    // The request completes after the cancellation, and the file is deleted.
+    gated.gate.add_permits(1);
+    for _ in 0..500 {
+        if gated.completed.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(gated.completed.load(Ordering::SeqCst), 1);
+    wait_for_files(&gated.inner, &[]).await?;
     Ok(())
 }

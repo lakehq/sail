@@ -149,7 +149,7 @@ impl Manifests {
 }
 
 /// Deletes the files. A file that does not exist is not an error.
-async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<()> {
+pub(crate) async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<()> {
     let files = stream::iter(files.into_iter().map(Ok)).boxed();
     let mut deleted = store.delete_stream(files);
     while let Some(result) = deleted.next().await {
@@ -179,8 +179,11 @@ async fn commit_file_write(
     let result = result.and_then(|()| manifests.validate());
     if let Err(e) = result {
         // Stop the writer tasks that are still running, and remove the files
-        // of the tasks that have completed. These files have names that no
-        // other attempt uses, so a later attempt of the write is not affected.
+        // of the tasks that have completed. A writer task removes its own files
+        // unless its manifest was delivered, so the commit is only responsible
+        // for the files in the manifests that it has received. These files have
+        // names that no other attempt uses, so a later attempt of the write is
+        // not affected.
         drop(input);
         let files = manifests.files.into_iter().collect();
         if let Err(cleanup) = delete_files(&store, files).await {

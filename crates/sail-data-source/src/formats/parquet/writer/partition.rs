@@ -353,7 +353,7 @@ impl PartitionedWriter {
             self.clock += 1;
             if !self.open.contains_key(&key) {
                 if self.open.len() >= self.max_open_files {
-                    self.close_least_recently_used(written).await?;
+                    self.close_least_recently_used(factory, written).await?;
                 }
                 let writer = match self.closed.remove(&key) {
                     Some(writer) => writer,
@@ -377,14 +377,18 @@ impl PartitionedWriter {
         Ok(())
     }
 
-    async fn close_least_recently_used(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+    async fn close_least_recently_used(
+        &mut self,
+        factory: &FileFactory,
+        written: &mut Vec<WrittenFile>,
+    ) -> Result<()> {
         let key = self
             .open
             .iter()
             .min_by_key(|(_, directory)| directory.last_used)
             .map(|(key, _)| key.clone());
         if let Some((key, mut directory)) = key.and_then(|key| self.open.remove_entry(&key)) {
-            directory.writer.close(written).await?;
+            directory.writer.close(factory, written).await?;
             self.closed.insert(key, directory.writer);
         }
         Ok(())
@@ -397,9 +401,13 @@ impl PartitionedWriter {
             .sum()
     }
 
-    pub async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+    pub async fn close(
+        &mut self,
+        factory: &FileFactory,
+        written: &mut Vec<WrittenFile>,
+    ) -> Result<()> {
         for (_, mut directory) in self.open.drain() {
-            directory.writer.close(written).await?;
+            directory.writer.close(factory, written).await?;
         }
         Ok(())
     }

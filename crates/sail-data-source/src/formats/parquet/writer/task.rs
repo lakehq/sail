@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -10,9 +10,9 @@ use datafusion::parquet::file::metadata::SortingColumn;
 use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time};
-use datafusion_common::Result;
 use datafusion_common::config::TableParquetOptions;
-use futures::StreamExt;
+use datafusion_common::{DataFusionError, Result};
+use futures::{Stream, StreamExt};
 use object_store::ObjectStore;
 use object_store::path::Path;
 use uuid::Uuid;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::formats::parquet::writer::file::ParquetFileWriter;
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
 use crate::formats::parquet::writer::sorting::lex_ordering_to_sorting_columns;
-use crate::listing::commit::{WrittenFile, manifest_batch};
+use crate::listing::commit::{WrittenFile, delete_files, manifest_batch};
 use crate::listing::part_file::part_file_name;
 
 /// The description of the work of one Parquet writer task.
@@ -78,8 +78,98 @@ impl ParquetWriteMetrics {
     }
 }
 
+/// The files that one attempt of a writer task has completed.
+///
+/// The attempt removes these files itself when it fails or is canceled,
+/// so that the table has no files of an attempt that did not report them.
+/// The file names are unique to the attempt, so this never affects the files
+/// of another attempt.
+struct AttemptFiles {
+    store: Arc<dyn ObjectStore>,
+    state: Mutex<AttemptFilesState>,
+}
+
+#[derive(Default)]
+struct AttemptFilesState {
+    completed: Vec<Path>,
+    /// Whether the attempt has ended without delivering its manifest.
+    abandoned: bool,
+}
+
+impl AttemptFiles {
+    fn new(store: Arc<dyn ObjectStore>) -> Self {
+        Self {
+            store,
+            state: Mutex::new(AttemptFilesState::default()),
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, AttemptFilesState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Completes a file.
+    ///
+    /// The file is completed in a separate task, since the requests that make
+    /// the file visible are not canceled when the caller is. The task keeps
+    /// running when the caller is canceled, and it removes the file if the
+    /// attempt has been abandoned by the time the file is visible.
+    async fn close(self: &Arc<Self>, writer: ParquetFileWriter) -> Result<WrittenFile> {
+        let files = Arc::clone(self);
+        let task = tokio::spawn(async move {
+            let file = writer.close().await?;
+            let abandoned = {
+                let mut state = files.state();
+                if !state.abandoned {
+                    state.completed.push(file.location.clone());
+                }
+                state.abandoned
+            };
+            if abandoned {
+                files.delete(vec![file.location.clone()]).await;
+            }
+            Ok(file)
+        });
+        task.await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    }
+
+    async fn delete(&self, files: Vec<Path>) {
+        if let Err(e) = delete_files(&self.store, files).await {
+            log::warn!("failed to delete the files of an abandoned write attempt: {e}");
+        }
+    }
+}
+
+/// Abandons the attempt of a writer task when dropped, unless disarmed.
+struct AbandonGuard {
+    files: Arc<AttemptFiles>,
+    armed: bool,
+}
+
+impl Drop for AbandonGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let completed = {
+            let mut state = self.files.state();
+            state.abandoned = true;
+            std::mem::take(&mut state.completed)
+        };
+        if completed.is_empty() {
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let files = Arc::clone(&self.files);
+            runtime.spawn(async move { files.delete(completed).await });
+        }
+    }
+}
+
 /// Creates the files of a writer task. All files have the same schema.
 pub(super) struct FileFactory {
+    files: Arc<AttemptFiles>,
     store: Arc<dyn ObjectStore>,
     write_id: Uuid,
     partition: usize,
@@ -95,6 +185,7 @@ pub(super) struct FileFactory {
 impl FileFactory {
     fn try_new(
         task: ParquetWriteTask,
+        files: Arc<AttemptFiles>,
         input_schema: &SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
@@ -112,6 +203,7 @@ impl FileFactory {
             builder = builder.set_sorting_columns(Some(sorting));
         }
         Ok(Self {
+            files,
             store: task.store,
             write_id: task.write_id,
             partition: task.partition,
@@ -193,7 +285,7 @@ impl DirectoryWriter {
         let writer = self.open(factory)?;
         let flushed = writer.write(batch).await?;
         if flushed && writer.rows() >= factory.max_rows_per_file {
-            self.close(written).await?;
+            self.close(factory, written).await?;
         }
         Ok(())
     }
@@ -202,9 +294,13 @@ impl DirectoryWriter {
         self.writer.as_ref().map_or(0, |x| x.memory_size())
     }
 
-    pub async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+    pub async fn close(
+        &mut self,
+        factory: &FileFactory,
+        written: &mut Vec<WrittenFile>,
+    ) -> Result<()> {
         if let Some(writer) = self.writer.take() {
-            written.push(writer.close().await?);
+            written.push(factory.files.close(*writer).await?);
         }
         Ok(())
     }
@@ -254,17 +350,68 @@ impl TaskOutput {
         }
     }
 
-    async fn close(&mut self, written: &mut Vec<WrittenFile>) -> Result<()> {
+    async fn close(&mut self, factory: &FileFactory, written: &mut Vec<WrittenFile>) -> Result<()> {
         match self {
-            Self::Directory(x) => x.close(written).await,
-            Self::Partitioned(x) => x.close(written).await,
+            Self::Directory(x) => x.close(factory, written).await,
+            Self::Partitioned(x) => x.close(factory, written).await,
         }
     }
 }
 
-/// Writes one input partition and returns the manifest of the task.
-pub async fn write_partition(
+/// Writes one input partition.
+///
+/// The stream has a single item, which is the manifest of the task.
+/// The files of the task are kept only if the stream is read to its end
+/// after the manifest. If the task fails, or if the stream is dropped before
+/// that, the files that the task has completed are deleted.
+pub fn write_partition(
     task: ParquetWriteTask,
+    input: SendableRecordBatchStream,
+    reservation: MemoryReservation,
+    metrics: ParquetWriteMetrics,
+) -> impl Stream<Item = Result<RecordBatch>> + Send {
+    enum State {
+        Write(
+            Box<(
+                ParquetWriteTask,
+                SendableRecordBatchStream,
+                MemoryReservation,
+                ParquetWriteMetrics,
+            )>,
+        ),
+        Written(AbandonGuard),
+        Failed,
+    }
+
+    let state = State::Write(Box::new((task, input, reservation, metrics)));
+    futures::stream::unfold(state, |state| async move {
+        match state {
+            State::Write(args) => {
+                let (task, input, reservation, metrics) = *args;
+                let files = Arc::new(AttemptFiles::new(Arc::clone(&task.store)));
+                let guard = AbandonGuard {
+                    files: Arc::clone(&files),
+                    armed: true,
+                };
+                match write_files(task, files, input, reservation, metrics).await {
+                    Ok(manifest) => Some((Ok(manifest), State::Written(guard))),
+                    Err(e) => Some((Err(e), State::Failed)),
+                }
+            }
+            State::Written(mut guard) => {
+                // The reader has received the manifest and asked for more.
+                guard.armed = false;
+                None
+            }
+            State::Failed => None,
+        }
+    })
+}
+
+/// Writes the files of one input partition and returns the manifest of the task.
+async fn write_files(
+    task: ParquetWriteTask,
+    files: Arc<AttemptFiles>,
     mut input: SendableRecordBatchStream,
     reservation: MemoryReservation,
     metrics: ParquetWriteMetrics,
@@ -282,7 +429,7 @@ pub async fn write_partition(
         let output = PartitionedWriter::new(router, task.table_path.clone(), task.max_open_files);
         (TaskOutput::Partitioned(Box::new(output)), schema)
     };
-    let factory = FileFactory::try_new(task, &input_schema, schema)?;
+    let factory = FileFactory::try_new(task, files, &input_schema, schema)?;
     let mut written = vec![];
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
@@ -308,7 +455,7 @@ pub async fn write_partition(
     }
     {
         let _timer = metrics.elapsed_compute.timer();
-        output.close(&mut written).await?;
+        output.close(&factory, &mut written).await?;
     }
     reservation.free();
     for file in &written {

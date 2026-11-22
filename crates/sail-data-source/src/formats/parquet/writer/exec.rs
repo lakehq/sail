@@ -18,7 +18,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
-use futures::stream;
 use object_store::path::Path;
 use uuid::Uuid;
 
@@ -264,7 +263,7 @@ impl ExecutionPlan for ParquetWriteExec {
         let reservation = MemoryConsumer::new(format!("{}[{partition}]", self.name()))
             .register(context.memory_pool());
         let metrics = ParquetWriteMetrics::new(&self.metrics, partition);
-        let output = stream::once(write_partition(task, input, reservation, metrics));
+        let output = write_partition(task, input, reservation, metrics);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,
