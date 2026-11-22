@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::NaiveDate;
 use datafusion::arrow::array::{
-    ArrayAccessor, ArrayRef, RecordBatch, StringArray, UInt32Array, downcast_dictionary_array,
+    ArrayAccessor, ArrayRef, RecordBatch, Scalar, StringArray, UInt32Array,
+    downcast_dictionary_array,
 };
 use datafusion::arrow::buffer::NullBuffer;
+use datafusion::arrow::compute::kernels::cmp::not_distinct;
 use datafusion::arrow::compute::kernels::zip::zip;
 use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -125,6 +127,12 @@ impl PartitionRouter {
             compute_partition_keys_by_row(&keys.slice(0, 0), &self.columns)?;
         }
         let values = KeyValues::try_new(&keys)?;
+        if has_one_key(&keys) {
+            return Ok(vec![KeyRows {
+                key: self.key(&values, 0)?,
+                rows: None,
+            }]);
+        }
         let converter = match &mut self.converter {
             Some(converter) => converter,
             converter @ None => {
@@ -214,6 +222,21 @@ impl PartitionRouter {
         }
         path
     }
+}
+
+/// Returns whether all rows of a non-empty batch are known to have the values
+/// of the partition columns that the first row has.
+///
+/// This is the case for every batch of a task that writes one partition
+/// directory, and it is found with a comparison of each column, which costs
+/// less than the conversion of the rows that tells the keys of a batch apart.
+/// A missing value is equal to a missing value only. The answer is no for
+/// a column type that the comparison does not support.
+fn has_one_key(keys: &RecordBatch) -> bool {
+    keys.columns().iter().all(|column| {
+        let first = Scalar::new(column.slice(0, 1));
+        not_distinct(column, &first).is_ok_and(|same| same.true_count() == column.len())
+    })
 }
 
 /// The partition columns of a batch, prepared for the formatting of their values.

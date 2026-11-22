@@ -1667,12 +1667,13 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             let mut zeroed = vec![];
             let mut filled = vec![];
             let mut null_ids = vec![];
-            // The second batch has the values in another order,
-            // and the last batch has a single row.
+            // The second batch has the values in another order, the third batch
+            // has a single row, and the last batch has rows with the same value.
             for (i, values) in [
                 Arc::clone(&values),
                 take(&values, &reversed, None)?,
                 values.slice(2, 1),
+                take(&values, &UInt32Array::from(vec![2; 4]), None)?,
             ]
             .into_iter()
             .enumerate()
@@ -1736,7 +1737,7 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             );
             assert_eq!(
                 expected.values().map(|x| x.len()).sum::<usize>(),
-                2 * rows + 1,
+                2 * rows + 5,
                 "{message}"
             );
         }
