@@ -593,7 +593,7 @@
   description: |
     (Writing) The target maximum size of each row group in bytes for the Parquet writer.
     When set, the writer flushes a row group when either this limit or `max_row_group_size` is reached,
-    whichever comes first. This is currently only honored when `allow_single_file_parallelism` is `false`.
+    whichever comes first.
     Setting this value to `0` means only the row count limit applies.
     Defaults to the Sail configuration option `parquet.max_row_group_bytes`.
   supported: true
@@ -761,7 +761,8 @@
 - key: allow_single_file_parallelism
   description: |
     (Writing) Whether to parallelize writing for each single Parquet file.
-    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    This option currently has no effect. Each Parquet file is written by a single writer,
+    and the files of different partitions are written in parallel.
     Defaults to the Sail configuration option `parquet.allow_single_file_parallelism`.
   supported: true
   rust_type: bool
@@ -782,8 +783,7 @@
 - key: maximum_parallel_row_group_writers
   description: |
     (Writing) The maximum number of row group writers to use for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    This option currently has no effect. The row groups of each Parquet file are written one at a time.
     Defaults to the Sail configuration option `parquet.maximum_parallel_row_group_writers`.
   supported: true
   rust_type: usize
@@ -804,8 +804,7 @@
 - key: maximum_buffered_record_batches_per_stream
   description: |
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    This option currently has no effect. The Parquet writer does not buffer record batches.
     Defaults to the Sail configuration option `parquet.maximum_buffered_record_batches_per_stream`.
   supported: true
   rust_type: usize

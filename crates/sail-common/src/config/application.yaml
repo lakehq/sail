@@ -758,7 +758,7 @@
   description: |
     (Writing) The target maximum size of each row group in bytes for the Parquet writer.
     When set, the writer flushes a row group when either this limit or `max_row_group_size` is reached,
-    whichever comes first. This is currently only honored when `allow_single_file_parallelism` is `false`.
+    whichever comes first.
     If the value is `0`, only the row count limit applies.
   experimental: true
 
@@ -825,7 +825,8 @@
   default: "true"
   description: |
     (Writing) Whether to parallelize writing for each single Parquet file.
-    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    This option currently has no effect. Each Parquet file is written by a single writer,
+    and the files of different partitions are written in parallel.
   experimental: true
 
 - key: parquet.maximum_parallel_row_group_writers
@@ -833,8 +834,7 @@
   default: "2"
   description: |
     (Writing) The maximum number of row group writers to use for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    This option currently has no effect. The row groups of each Parquet file are written one at a time.
   experimental: true
 
 - key: parquet.maximum_buffered_record_batches_per_stream
@@ -842,8 +842,7 @@
   default: "16"
   description: |
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    This option currently has no effect. The Parquet writer does not buffer record batches.
   experimental: true
 
 - key: parquet.content_defined_chunking.enabled
