@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+@spark-4.3
 Feature: to_base32() encodes a binary value as an RFC 4648 base32 string
 
   Rule: Basic usage

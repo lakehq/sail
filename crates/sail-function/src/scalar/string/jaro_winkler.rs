@@ -10,8 +10,6 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
-/// Jaro similarity below this value gets no prefix boost.
-const BOOST_THRESHOLD: f64 = 0.7;
 /// Scaling factor applied to the common prefix length.
 const SCALING_FACTOR: f64 = 0.1;
 /// Maximum common prefix length considered for the boost.
@@ -20,7 +18,9 @@ const MAX_PREFIX: usize = 4;
 /// Spark `jaro_winkler_similarity(str1, str2)`: similarity in `[0.0, 1.0]`, where `1.0` means
 /// the strings are identical.
 ///
-/// The implementation follows Apache Commons Text's `JaroWinklerSimilarity`.
+/// The implementation follows Spark's `ExpressionImplUtils.jaroWinklerSimilarity` rather than
+/// Apache Commons Text: strings are compared as UTF-16 code units, the first string is the one
+/// scanned for matches, and the prefix boost is applied to every non-zero similarity.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JaroWinklerSimilarity {
     signature: Signature,
@@ -82,70 +82,67 @@ fn jaro_winkler_similarity(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn compute_jaro_winkler(left: &str, right: &str) -> f64 {
-    if left == right {
+    // Spark compares UTF-16 code units (`String.charAt`), so a supplementary character counts as
+    // two units. Do the same to match its results.
+    let s1: Vec<u16> = left.encode_utf16().collect();
+    let s2: Vec<u16> = right.encode_utf16().collect();
+    let (len1, len2) = (s1.len(), s2.len());
+
+    if len1 == 0 && len2 == 0 {
         return 1.0;
     }
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
+    if len1 == 0 || len2 == 0 {
+        return 0.0;
+    }
 
-    // Work with the shorter string as `short` and the longer one as `long`.
-    let (short, long) = if left.len() > right.len() {
-        (&right, &left)
-    } else {
-        (&left, &right)
-    };
-
-    let range = (long.len() / 2).saturating_sub(1);
-    let mut short_match: Vec<Option<usize>> = vec![None; short.len()];
-    let mut long_matched = vec![false; long.len()];
+    let match_window = (len1.max(len2) / 2).saturating_sub(1);
+    let mut s1_matched = vec![false; len1];
+    let mut s2_matched = vec![false; len2];
     let mut matches = 0usize;
-    for (i, c) in short.iter().enumerate() {
-        let start = i.saturating_sub(range);
-        let end = (i + range + 1).min(long.len());
+    for i in 0..len1 {
+        let start = i.saturating_sub(match_window);
+        let end = (i + match_window + 1).min(len2);
         for j in start..end {
-            if !long_matched[j] && long[j] == *c {
-                short_match[i] = Some(j);
-                long_matched[j] = true;
-                matches += 1;
-                break;
+            if s2_matched[j] || s1[i] != s2[j] {
+                continue;
             }
+            s1_matched[i] = true;
+            s2_matched[j] = true;
+            matches += 1;
+            break;
         }
     }
     if matches == 0 {
         return 0.0;
     }
 
-    let short_chars = short_match
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.is_some())
-        .map(|(i, _)| short[i]);
-    let long_chars = long
-        .iter()
-        .zip(&long_matched)
-        .filter(|(_, matched)| **matched)
-        .map(|(c, _)| *c);
-    // Half the number of out-of-order matched characters. Commons Text keeps this as a
-    // fractional value (it does not round down), so the same is done here.
-    let half_transpositions = short_chars.zip(long_chars).filter(|(a, b)| a != b).count();
+    let mut transpositions = 0usize;
+    let mut k = 0usize;
+    for i in 0..len1 {
+        if !s1_matched[i] {
+            continue;
+        }
+        while !s2_matched[k] {
+            k += 1;
+        }
+        if s1[i] != s2[k] {
+            transpositions += 1;
+        }
+        k += 1;
+    }
 
-    let prefix = left
+    let m = matches as f64;
+    let jaro = (m / len1 as f64 + m / len2 as f64 + (m - transpositions as f64 / 2.0) / m) / 3.0;
+
+    let prefix = s1
         .iter()
-        .zip(right.iter())
+        .zip(s2.iter())
         .take(MAX_PREFIX)
         .take_while(|(a, b)| a == b)
         .count();
 
-    let m = matches as f64;
-    let jaro = (m / left.len() as f64
-        + m / right.len() as f64
-        + (m - half_transpositions as f64 / 2.0) / m)
-        / 3.0;
-    if jaro < BOOST_THRESHOLD {
-        jaro
-    } else {
-        jaro + SCALING_FACTOR * prefix as f64 * (1.0 - jaro)
-    }
+    // Spark applies the boost to every non-zero similarity (Commons Text only above 0.7).
+    jaro + prefix as f64 * SCALING_FACTOR * (1.0 - jaro)
 }
 
 #[cfg(test)]
@@ -221,9 +218,29 @@ mod tests {
         }
     }
 
+    /// Values recorded from Spark 4.3.0 (`SELECT jaro_winkler_similarity(...)`). They include
+    /// cases where Spark differs from Apache Commons Text: the prefix boost is applied even when
+    /// the Jaro score is below 0.7, and strings are compared as UTF-16 code units.
     #[test]
-    fn test_unicode_is_compared_by_character() {
-        assert_close(compute_jaro_winkler("café", "café"), 1.0);
-        assert!(compute_jaro_winkler("café", "cafe") > 0.8);
+    fn test_matches_spark_4_3_0() {
+        for (a, b, expected) in [
+            ("ab", "ac", 0.7),
+            ("abc", "abd", 0.8222222222222222),
+            ("abcd", "abxy", 0.7333333333333333),
+            ("DIXON", "DICKSONX", 0.8133333333333332),
+            ("DICKSONX", "DIXON", 0.8133333333333332),
+            ("JELLYFISH", "SMELLYFISH", 0.8962962962962964),
+            ("ab", "ba", 0.0),
+            ("crate", "trace", 0.7333333333333334),
+            ("dwayne", "duane", 0.8400000000000001),
+            ("abcdef", "azcdxf", 0.7999999999999999),
+            ("café", "cafe", 0.8833333333333334),
+            // A supplementary character is two UTF-16 code units.
+            ("\u{1F600}a", "\u{1F600}b", 0.8222222222222222),
+            ("\u{1F600}", "\u{1F601}", 0.7),
+            ("a\u{1F600}b", "a\u{1F601}b", 0.8666666666666667),
+        ] {
+            assert_eq!(compute_jaro_winkler(a, b), expected, "({a:?}, {b:?})");
+        }
     }
 }

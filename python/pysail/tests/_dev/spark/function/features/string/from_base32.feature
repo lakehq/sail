@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+@spark-4.3
 Feature: from_base32() decodes an RFC 4648 base32 string into binary
 
   Rule: Basic usage
