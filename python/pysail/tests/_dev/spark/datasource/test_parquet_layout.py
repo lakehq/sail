@@ -100,7 +100,8 @@ def test_parquet_partitioned_write_layout(spark, tmp_path):
     assert {str(f.parent) for f in files} == {"k=0", "k=1"}
     assert len(write_ids(path)) == 1
     assert_success_marker(path)
-    actual = sorted((r.id, r.k) for r in spark.read.parquet(str(path)).collect())
+    # The schema gives the type of the partition column, which is otherwise read as a string.
+    actual = sorted((r.id, r.k) for r in spark.read.schema("id LONG, k LONG").parquet(str(path)).collect())
     assert actual == [(i, i % 2) for i in range(20)]
 
 
@@ -121,21 +122,22 @@ def test_parquet_empty_partitioned_write(spark, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("compression", "suffix"),
+    ("compression", "suffix", "codec"),
     [
-        ("zstd", ".zstd.parquet"),
-        ("gzip", ".gz.parquet"),
-        ("snappy", ".snappy.parquet"),
-        ("lz4_raw", ".lz4raw.parquet"),
+        ("zstd", ".zstd.parquet", "ZSTD"),
+        ("gzip", ".gz.parquet", "GZIP"),
+        ("snappy", ".snappy.parquet", "SNAPPY"),
+        # PyArrow reports the LZ4_RAW codec as LZ4.
+        ("lz4_raw", ".lz4raw.parquet", "LZ4"),
     ],
 )
-def test_parquet_write_compression_in_file_name(spark, tmp_path, compression, suffix):
+def test_parquet_write_compression_in_file_name(spark, tmp_path, compression, suffix, codec):
     path = tmp_path / "compression"
     spark.range(0, 10, 1, 1).write.option("compression", compression).parquet(str(path))
     (file,) = data_files(path)
     assert _PART_FILE_RE.match(file.name) is not None
     assert file.name.endswith(f"-c000{suffix}")
-    assert pq.ParquetFile(path / file).metadata.row_group(0).column(0).compression.lower() == compression
+    assert pq.ParquetFile(path / file).metadata.row_group(0).column(0).compression == codec
 
 
 def test_parquet_write_uncompressed_file_name(spark, tmp_path):

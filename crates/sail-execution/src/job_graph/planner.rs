@@ -3095,12 +3095,18 @@ mod tests {
         use sail_data_source::listing::commit::FileWriteCommitExec;
         use sail_data_source::listing::delete::FileDeleteExec;
 
-        for partitions in [1, 2] {
-            let delete = Arc::new(FileDeleteExec::new(
+        // The physical optimizer wraps the deletion in `CooperativeExec`.
+        for (partitions, cooperative) in [(1, false), (2, false), (1, true), (2, true)] {
+            let delete: Arc<dyn ExecutionPlan> = Arc::new(FileDeleteExec::new(
                 ObjectStoreUrl::parse("memory://").unwrap(),
                 object_store::path::Path::from("table"),
                 Some(uuid::Uuid::from_u128(1)),
             ));
+            let delete = if cooperative {
+                Arc::new(CooperativeExec::new(delete))
+            } else {
+                delete
+            };
             let plan = Arc::new(BarrierExec::new(
                 vec![delete],
                 parquet_write_plan(partitions),
