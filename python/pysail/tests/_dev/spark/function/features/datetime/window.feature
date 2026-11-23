@@ -235,6 +235,8 @@ Feature: window() time-based windowing function
 
   Rule: Argument validation
 
+    # Sail and Spark report different error messages for these cases.
+    @sail-bug
     Scenario Outline: Argument validation: <case>
       When query
         """
@@ -243,9 +245,6 @@ Feature: window() time-based windowing function
         """
       Then query error <error>
 
-      # Spark reports these errors through WRONG_NUM_ARGS or DATATYPE_MISMATCH.
-      # Sail uses different wording.
-      @sail-bug
       Examples:
         | case                                                             | values                                       | cols | args                         | error                                                                |
         | window rejects a single argument                                 | TIMESTAMP '2021-01-01 00:00:00'              | b    | b                            | WRONG_NUM_ARGS.*window. requires .2, 3, 4. parameters but the actual number is 1 |
@@ -256,9 +255,13 @@ Feature: window() time-based windowing function
         | window rejects a non-timestamp time column                       | true                                         | b    | b, '5 minutes'               | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.*The first parameter requires the              |
         | window rejects a month-based duration (non-constant length)      | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '1 month'                 | Intervals greater than a month is not supported                                             |
 
-      Examples:
-        | case                                                                                  | values                          | cols | args                                    | error                                                  |
-        | window rejects a start time whose absolute value is not less than the slide duration | TIMESTAMP '2021-01-01 00:00:00' | b    | b, '10 minutes', '5 minutes', '5 minutes' | .*abs\\(start_time\\).*must be < the .*slide_duration.* |
+    Scenario: window rejects a start time whose absolute value is not less than the slide duration
+      When query
+        """
+        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
+        GROUP BY window(b, '10 minutes', '5 minutes', '5 minutes')
+        """
+      Then query error .*abs\(start_time\).*must be < the .*slide_duration.*
 
   Rule: Bounded plan size
 
