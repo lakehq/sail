@@ -30,7 +30,10 @@
 //! A writer task owns what it has staged until its manifest is taken, and it
 //! removes that when it fails or is canceled. The commit owns the files of
 //! every manifest that reaches its input, also when the commit is canceled,
-//! since it reads its input to the end in a task of its own. The remaining
+//! since it reads its input to the end in a task of its own. In a job whose
+//! tasks can be attempted again, the commit hands the files that it has
+//! received to the job, which publishes them when it has succeeded and
+//! removes them otherwise. The remaining
 //! cases leave objects behind that no reader can see: a process that is
 //! killed, a writer task that the driver has given up on and that completes
 //! later, and a manifest that never reaches a commit after its writer task

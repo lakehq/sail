@@ -3,14 +3,18 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::common::{
+    DataFusionError, Result, exec_datafusion_err, internal_datafusion_err, internal_err,
+};
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
+use futures::StreamExt;
 use sail_common::actor::ActorSystem;
 use sail_common_datafusion::extension::task_context_with_extension;
 use sail_common_datafusion::session::job::JobRunner;
-use sail_data_source::listing::commit::WriteCommitLedger;
+use sail_data_source::listing::commit::JobWrites;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
@@ -90,11 +94,93 @@ impl JobRunner for LocalJobRunner {
     }
 }
 
-/// Returns the task context of a job whose tasks can be attempted again.
-/// The job remembers the commits of its writes in the task context,
-/// which lives as long as the job.
-fn job_context(ctx: &SessionContext) -> Arc<TaskContext> {
-    task_context_with_extension(&ctx.task_ctx(), Arc::new(WriteCommitLedger::default()))
+/// The writes of a job, which are removed when this is dropped before the job
+/// runner has published or removed them.
+struct JobWritesGuard(Option<Arc<JobWrites>>);
+
+impl JobWritesGuard {
+    fn take(&mut self) -> Option<Arc<JobWrites>> {
+        self.0.take()
+    }
+}
+
+impl Drop for JobWritesGuard {
+    fn drop(&mut self) {
+        if let Some(writes) = self.take() {
+            // The files are removed whether or not the work is awaited.
+            drop(writes.abort());
+        }
+    }
+}
+
+/// Returns the output of a job, which ends when the writes of the job are
+/// published, or with the error of a write that cannot be published.
+///
+/// The tasks of a job do not publish the files of a write, see [`JobWrites`].
+/// The files are published here when the output has ended without an error
+/// and `confirm` has returned `true` after that. They are removed when
+/// the output returns an error, when `confirm` returns `false`, or when
+/// the returned stream is dropped before the output has ended.
+///
+/// The end of the output without an error means that the job has succeeded,
+/// unless the driver has stopped:
+///
+///   1. The output ends when the driver has dropped the `JobOutputManager` of
+///      the job and all its handles (`driver/output.rs`, `JobOutputStream`).
+///   2. The job scheduler drops the manager of a running job in three places
+///      (`driver/job_scheduler/core.rs`). `refresh_job` drops it when every task
+///      region has succeeded, which `update_task_regions` decides: the latest
+///      attempt of every task of the job has succeeded. Each attempt of a task
+///      reads the latest attempts of its inputs, and the task of a commit has
+///      recorded its files before it succeeds. `refresh_job` also drops it when
+///      a task region has failed, after it has put the error in the output with
+///      a handle. `stop` drops it without an error when the driver stops.
+///   3. The output also ends without an error when the driver stops in any
+///      other way, since the task that forwards the output belongs to
+///      the driver (`driver/output.rs`, `build_job_output`).
+///
+/// `confirm` therefore asks the driver for a reply to a message that is sent
+/// after the output has ended. A driver that has started to stop does not
+/// reply, and a driver that replies has not dropped the manager by stopping.
+fn publish_job_writes<F>(
+    output: SendableRecordBatchStream,
+    writes: Arc<JobWrites>,
+    confirm: impl FnOnce() -> F + Send + 'static,
+) -> SendableRecordBatchStream
+where
+    F: Future<Output = bool> + Send,
+{
+    let schema = output.schema();
+    let state = (output, JobWritesGuard(Some(writes)), confirm);
+    let output = futures::stream::unfold(Some(state), |state| async move {
+        let (mut output, mut guard, confirm) = state?;
+        match output.next().await {
+            Some(Ok(batch)) => Some((Ok(batch), Some((output, guard, confirm)))),
+            Some(Err(e)) => {
+                if let Some(writes) = guard.take() {
+                    writes.abort().await;
+                }
+                Some((Err(e), None))
+            }
+            None => {
+                let writes = guard.take()?;
+                // A job without writes ends here like its output.
+                if writes.is_empty() {
+                    return None;
+                }
+                let result = if confirm().await {
+                    writes.commit().await
+                } else {
+                    writes.abort().await;
+                    Err(exec_datafusion_err!(
+                        "the write is not committed: the driver has stopped before the job has ended"
+                    ))
+                };
+                result.err().map(|e| (Err(e), None))
+            }
+        }
+    });
+    Box::pin(RecordBatchStreamAdapter::new(schema, output))
 }
 
 pub struct ClusterJobRunner {
@@ -133,18 +219,28 @@ impl JobRunner for ClusterJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
+        // The tasks of the job can be attempted again, so the job publishes
+        // the files of its writes when it has succeeded.
+        let writes = Arc::new(JobWrites::default());
+        let context = task_context_with_extension(&ctx.task_ctx(), Arc::clone(&writes));
         let (tx, rx) = oneshot::channel();
         self.driver
             .send(DriverMessage::ExecuteJob {
                 plan,
-                context: job_context(ctx),
+                context,
                 result: tx,
             })
             .await
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        rx.await
+        let output = rx
+            .await
             .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
-            .map_err(|e| internal_datafusion_err!("{e}"))
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let driver = self.driver.clone();
+        // The driver replies to the activation, which has no effect on a driver
+        // that runs jobs, unless it has started to stop.
+        let confirm = move || async move { driver.activate().await.is_ok() };
+        Ok(publish_job_writes(output, writes, confirm))
     }
 
     async fn stop(&self) {
@@ -154,26 +250,156 @@ impl JobRunner for ClusterJobRunner {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::prelude::SessionConfig;
+    use datafusion::common::exec_err;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use futures::{TryStreamExt, stream};
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use sail_common_datafusion::extension::TaskAttempt;
+    use sail_data_source::listing::commit::{FileWriteCommitExec, manifest_batch, manifest_schema};
+    use uuid::Uuid;
 
     use super::*;
 
-    #[test]
-    fn each_job_has_its_own_write_commit_ledger() {
-        let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(7));
-        let ledger = |context: &TaskContext| {
-            context
-                .session_config()
-                .get_extension::<WriteCommitLedger>()
+    /// A job whose only task is the commit of a write without files.
+    struct TestJob {
+        writes: Arc<JobWrites>,
+        store: Arc<InMemory>,
+        /// The output of the task of the commit.
+        output: SendableRecordBatchStream,
+    }
+
+    impl TestJob {
+        fn try_new() -> Result<Self> {
+            let ctx = SessionContext::new();
+            let store = Arc::new(InMemory::new());
+            let url = ObjectStoreUrl::parse("memory://")?;
+            ctx.register_object_store(url.as_ref(), Arc::clone(&store) as Arc<dyn ObjectStore>);
+            let writes = Arc::new(JobWrites::default());
+            let context = task_context_with_extension(&ctx.task_ctx(), Arc::clone(&writes));
+            let context = task_context_with_extension(&context, Arc::new(TaskAttempt(0)));
+            let manifest = manifest_batch(0, 1, &[])?;
+            let input =
+                MemorySourceConfig::try_new_exec(&[vec![manifest]], manifest_schema(), None)?;
+            let commit =
+                FileWriteCommitExec::new(input, url, Path::from("table"), Uuid::from_u128(1));
+            let output = commit.execute(0, context)?;
+            Ok(Self {
+                writes,
+                store,
+                output,
+            })
+        }
+
+        async fn objects(&self) -> Result<Vec<String>> {
+            let objects = self.store.list(None);
+            Ok(objects
+                .map_ok(|object| object.location.to_string())
+                .try_collect()
+                .await?)
+        }
+    }
+
+    async fn rows(output: SendableRecordBatchStream) -> Result<usize> {
+        let batches: Vec<_> = output.try_collect().await?;
+        Ok(batches.iter().map(|batch| batch.num_rows()).sum())
+    }
+
+    #[tokio::test]
+    async fn writes_of_a_job_are_published_when_its_output_has_ended() -> Result<()> {
+        let job = TestJob::try_new()?;
+        let (schema, output) = (job.output.schema(), job.output);
+        // The task of the commit has ended, and the output of the job has not.
+        let (end, ended) = oneshot::channel::<()>();
+        let waiting = stream::once(ended).filter_map(|_| async { None });
+        let output = Box::pin(RecordBatchStreamAdapter::new(schema, output.chain(waiting)));
+        let mut output = publish_job_writes(output, Arc::clone(&job.writes), || async { true });
+        assert_eq!(output.try_next().await?.map(|x| x.num_rows()), Some(1));
+        let next = tokio::time::timeout(std::time::Duration::from_millis(50), output.try_next());
+        assert!(next.await.is_err());
+        assert!(!job.writes.is_empty());
+        let store = Arc::clone(&job.store);
+        assert_eq!(store.list(None).try_collect::<Vec<_>>().await?.len(), 0);
+
+        drop(end);
+        assert!(output.try_next().await?.is_none());
+        let objects = store.list(None).try_collect::<Vec<_>>().await?;
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].location.as_ref(), "table/_SUCCESS");
+        assert!(job.writes.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_of_a_job_that_fails_are_not_published() -> Result<()> {
+        let job = TestJob::try_new()?;
+        let (schema, output) = (job.output.schema(), job.output);
+        // The task of the commit has succeeded, and another task has failed.
+        let failure = stream::once(async { exec_err!("task failure") });
+        let output = Box::pin(RecordBatchStreamAdapter::new(schema, output.chain(failure)));
+        let output = publish_job_writes(output, Arc::clone(&job.writes), || async { true });
+        let result = rows(output).await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("task failure")),
+            "{result:?}"
+        );
+        assert!(job.writes.is_empty());
+        let store = Arc::clone(&job.store);
+        assert_eq!(store.list(None).try_collect::<Vec<_>>().await?.len(), 0);
+        Ok(())
+    }
+
+    /// The output of a job ends without an error when the driver stops.
+    #[tokio::test]
+    async fn writes_of_a_job_are_not_published_when_the_driver_has_stopped() -> Result<()> {
+        let job = TestJob::try_new()?;
+        let writes = Arc::clone(&job.writes);
+        let output = publish_job_writes(job.output, writes, || async { false });
+        let result = rows(output).await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("the driver has stopped")),
+            "{result:?}"
+        );
+        assert!(job.writes.is_empty());
+        let store = Arc::clone(&job.store);
+        assert_eq!(store.list(None).try_collect::<Vec<_>>().await?.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_of_a_job_whose_output_is_dropped_are_not_published() -> Result<()> {
+        let job = TestJob::try_new()?;
+        let writes = Arc::clone(&job.writes);
+        let mut output = publish_job_writes(job.output, writes, || async { true });
+        assert_eq!(output.try_next().await?.map(|x| x.num_rows()), Some(1));
+        assert!(!job.writes.is_empty());
+        drop(output);
+        assert!(job.writes.is_empty());
+        let store = Arc::clone(&job.store);
+        assert_eq!(store.list(None).try_collect::<Vec<_>>().await?.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn job_without_writes_ends_like_its_output() -> Result<()> {
+        let job = TestJob::try_new()?;
+        let asked = Arc::new(AtomicBool::new(false));
+        let confirm = {
+            let asked = Arc::clone(&asked);
+            move || async move {
+                asked.store(true, Ordering::Relaxed);
+                true
+            }
         };
-        assert!(ledger(&ctx.task_ctx()).is_none());
-        let (first, second) = (job_context(&ctx), job_context(&ctx));
-        // The task context of the job is the one of the session otherwise.
-        assert_eq!(first.session_config().batch_size(), 7);
-        assert_eq!(first.session_id(), ctx.session_id());
-        assert!(matches!(
-            (ledger(&first), ledger(&second)),
-            (Some(first), Some(second)) if !Arc::ptr_eq(&first, &second)
-        ));
+        // The task of the commit was not executed.
+        let schema = job.output.schema();
+        let output = Box::pin(RecordBatchStreamAdapter::new(schema, stream::empty()));
+        let output = publish_job_writes(output, Arc::clone(&job.writes), confirm);
+        assert_eq!(rows(output).await?, 0);
+        assert!(!asked.load(Ordering::Relaxed));
+        assert_eq!(job.objects().await?, Vec::<String>::new());
+        Ok(())
     }
 }

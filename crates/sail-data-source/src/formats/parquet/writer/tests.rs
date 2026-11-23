@@ -82,9 +82,7 @@ use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
 };
-use crate::listing::commit::{
-    FileWriteCommitExec, WriteCommitLedger, manifest_files, manifest_schema,
-};
+use crate::listing::commit::{FileWriteCommitExec, manifest_files, manifest_schema};
 use crate::listing::partition::pruned_partition_list;
 use crate::listing::staging::{Publisher, StagedUpload};
 use crate::listing::testing::{FaultStore, Mode};
@@ -2988,9 +2986,10 @@ fn commit_exec(writer: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>
     )))
 }
 
-/// The configuration of a job that remembers the commits of its writes.
+/// The configuration of a plan that is executed in one process and attempted
+/// once, whose commit publishes the files of the write itself.
 fn commit_config() -> SessionConfig {
-    SessionConfig::new().with_extension(Arc::new(WriteCommitLedger::default()))
+    SessionConfig::new()
 }
 
 fn memory_context() -> Result<(SessionContext, Arc<dyn ObjectStore>)> {

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use datafusion::arrow::array::{
@@ -21,11 +20,11 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, future, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
-use sail_common_datafusion::error::{CommitRequiresReplanningError, CommitStateUnknownError};
-use sail_common_datafusion::extension::task_context_with_extension;
+use sail_common_datafusion::error::CommitStateUnknownError;
+use sail_common_datafusion::extension::{TaskAttempt, task_context_with_extension};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -292,11 +291,13 @@ impl Manifests {
     /// received. The end of the input does not show this, since the output
     /// of a failed or canceled writer task can end in the same way as
     /// a complete output. Nothing is published for a write that is incomplete.
-    fn validate(&self) -> Result<()> {
+    /// The error is the description of what is missing.
+    fn validate(&self) -> Result<(), String> {
         let Some(partitions) = self.partitions else {
-            return exec_err!(
+            return Err(
                 "the write is incomplete: no writer task has reported its files. \
                 A writer task has failed or was canceled, and its error is in the logs of the task."
+                    .to_string(),
             );
         };
         let complete = self
@@ -305,10 +306,10 @@ impl Manifests {
             .filter(|reported| reported.rows == reported.files.max(1))
             .count() as u64;
         if complete != partitions {
-            return exec_err!(
+            return Err(format!(
                 "the write is incomplete: {complete} of {partitions} writer tasks have reported all their files. \
                 A writer task has failed or was canceled, and its error is in the logs of the task."
-            );
+            ));
         }
         Ok(())
     }
@@ -328,112 +329,197 @@ async fn delete_files(store: &Arc<dyn ObjectStore>, files: Vec<Path>) -> Result<
     result
 }
 
-/// How far the commit of a write has come in a job.
-#[derive(Debug, Clone)]
-enum CommitState {
-    /// An attempt of the commit has started to publish the files. It is still
-    /// running, or it has ended without a known result.
-    Publishing,
-    /// The write is committed, with the number of rows written.
-    Committed(u64),
-    /// An attempt of the commit could not publish the files, and the table
-    /// directory is as it was before. The staged files of the attempt, which
-    /// are identified by the fingerprint, are removed.
-    Undone { staged: u64, error: String },
-}
-
-/// The commits of the writes of a job.
+/// The writes of a job whose tasks can be attempted again.
 ///
-/// The task of a commit can be attempted again after an earlier attempt has
-/// published files, for example when the attempt was canceled while it was
-/// publishing, or when a writer task is lost after the write was committed.
-/// The file names of a write do not depend on the attempt, and two attempts
-/// of a write can divide the rows among the files in different ways. A second
-/// attempt must therefore not publish files, since it would add rows to
-/// the table or, for a write that overwrites, find the files of the first
-/// attempt as the old content.
+/// A task of such a job must not publish the files of a write. The tasks of
+/// a job run at the same time, and the output of a task that has failed or
+/// was canceled can end for its readers in the same way as a complete output.
+/// The writer tasks can therefore stage files that miss rows of a task that
+/// has failed before them, and the commit can receive the manifests of all
+/// writer tasks, before the job has learned of the failure. The task of
+/// the commit can also be attempted again after it has ended. Only the end of
+/// the job shows whether the files have all the rows: a job succeeds when
+/// the latest attempt of each of its tasks has succeeded.
 ///
-/// All attempts of a commit run in the process that schedules the tasks of
-/// the job, with the task context of the job. The job runner that attempts
-/// tasks again gives each job a ledger in that task context, so the ledger
-/// lives as long as the job. A plan that is executed without such a job
-/// runner is attempted once, and its commit has a ledger of its own.
-#[derive(Debug, Default)]
-pub struct WriteCommitLedger {
-    commits: Mutex<HashMap<Uuid, CommitState>>,
+/// The job runner therefore gives each job this object in the task context of
+/// the job. All attempts of the commit of a write run in the process of the job
+/// runner, with that task context. An attempt records here the staged files
+/// that it has received, and it does not publish them. The attempt with the
+/// greatest number replaces the others, whose files are removed. The job
+/// runner publishes the files of the writes when the job has succeeded,
+/// and removes them when the job has failed or is canceled. This is the same
+/// for every way in which the tasks of a job exchange their data.
+///
+/// A plan that is executed without such a job runner is attempted once, in
+/// one process, where an input that has failed returns its error and does
+/// not end. The commit of its write publishes the files itself when its
+/// input has ended.
+#[derive(Default)]
+pub struct JobWrites {
+    state: Mutex<JobWritesState>,
 }
 
-/// What an attempt of a commit does with its files.
-enum CommitStart {
-    /// The attempt is the first one that publishes the files of the write.
-    Publish,
-    /// The write is committed already, with the number of rows written.
-    Committed(u64),
+enum JobWritesState {
+    /// The job is running. The value has the latest attempt of the commit
+    /// of each write that has recorded its files.
+    Running(HashMap<Uuid, PreparedWrite>),
+    /// The job has ended, and its writes are published or removed.
+    Ended,
 }
 
-impl WriteCommitLedger {
-    /// Returns the ledger of the job that the task context belongs to,
-    /// or a new ledger if the task context is not the one of a job.
-    fn of(context: &TaskContext) -> Arc<Self> {
-        context
-            .session_config()
-            .get_extension::<Self>()
-            .unwrap_or_default()
+impl Default for JobWritesState {
+    fn default() -> Self {
+        Self::Running(HashMap::new())
+    }
+}
+
+/// What an attempt of the commit of a write has recorded for the end of the job.
+struct PreparedWrite {
+    /// The number of the attempt of the task of the commit.
+    attempt: usize,
+    commit: WriteCommit,
+    received: Received,
+}
+
+impl PreparedWrite {
+    /// Makes the write visible. This must run to its end once it has started.
+    async fn publish(self) -> Result<()> {
+        match self.received {
+            Received::Complete(received) => self.commit.publish(received.files).await,
+            // The job has succeeded although a writer task has not reported
+            // its files, which the job runner rules out.
+            Received::Incomplete(message) => exec_err!("{message}"),
+        }
     }
 
-    fn commits(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, CommitState>> {
-        self.commits.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Removes the staged files of the attempt, which are not published.
+    async fn remove(self) {
+        if let Received::Complete(received) = self.received {
+            self.commit.abort(received.files).await;
+        }
+    }
+}
+
+impl JobWrites {
+    /// Returns the writes of the job that the task context belongs to,
+    /// if the plan is executed for a job whose tasks can be attempted again.
+    pub fn of(context: &TaskContext) -> Option<Arc<Self>> {
+        context.session_config().get_extension::<Self>()
     }
 
-    /// Decides what an attempt of the commit of the write does with the staged
-    /// files that have the fingerprint.
-    fn start(&self, write_id: Uuid, staged: u64) -> Result<CommitStart> {
-        let mut commits = self.commits();
-        match commits.get(&write_id) {
-            None => {}
-            Some(CommitState::Committed(rows)) => return Ok(CommitStart::Committed(*rows)),
-            Some(CommitState::Publishing) => {
-                return Err(commit_state_unknown(
-                    "an earlier attempt of the commit of the write has started to publish \
-                    the files of the write, and it has not ended or its result is not known",
-                    None,
-                ));
-            }
-            // The writer tasks were attempted again, so the files can be published.
-            Some(CommitState::Undone { staged: undone, .. }) if *undone != staged => {}
-            Some(CommitState::Undone { error, .. }) => {
-                // The commit is attempted again with the files that the earlier
-                // attempt has removed, which cannot succeed.
-                return Err(DataFusionError::External(Box::new(
-                    CommitRequiresReplanningError(format!(
-                        "the files of the write could not be published, and the table \
-                        directory is as it was before the write: {error}"
-                    )),
-                )));
+    fn state(&self) -> std::sync::MutexGuard<'_, JobWritesState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether no write of the job has recorded its files.
+    pub fn is_empty(&self) -> bool {
+        match &*self.state() {
+            JobWritesState::Running(writes) => writes.is_empty(),
+            JobWritesState::Ended => true,
+        }
+    }
+
+    /// Records what an attempt of the commit of a write has received.
+    /// Returns whether the attempt is recorded, and the attempt whose staged
+    /// files the caller removes: the earlier attempt that is replaced, or
+    /// the given attempt when a later attempt is recorded already or when
+    /// the job has ended.
+    fn prepare(&self, write: PreparedWrite) -> (bool, Option<PreparedWrite>) {
+        let mut state = self.state();
+        let JobWritesState::Running(writes) = &mut *state else {
+            return (false, Some(write));
+        };
+        match writes.entry(write.commit.write_id) {
+            Entry::Occupied(entry) if entry.get().attempt >= write.attempt => (false, Some(write)),
+            Entry::Occupied(mut entry) => (true, Some(entry.insert(write))),
+            Entry::Vacant(entry) => {
+                entry.insert(write);
+                (true, None)
             }
         }
-        commits.insert(write_id, CommitState::Publishing);
-        Ok(CommitStart::Publish)
     }
 
-    fn end(&self, write_id: Uuid, state: CommitState) {
-        self.commits().insert(write_id, state);
+    /// Ends the job, and returns what its writes have recorded.
+    /// An attempt that comes later is not recorded.
+    fn end(&self) -> Vec<PreparedWrite> {
+        match std::mem::replace(&mut *self.state(), JobWritesState::Ended) {
+            JobWritesState::Running(writes) => {
+                let mut writes: Vec<_> = writes.into_values().collect();
+                writes.sort_by_key(|write| write.commit.write_id);
+                writes
+            }
+            JobWritesState::Ended => vec![],
+        }
+    }
+
+    /// Publishes the files of the writes of the job. The job runner calls
+    /// this once, when the job has succeeded, and reports the error to
+    /// the client of the job.
+    ///
+    /// The files are published by a separate task, which is not canceled when
+    /// the caller is, so that the table directory is not left with a part of
+    /// a write. A write that is canceled at that time is reported as canceled
+    /// to its client, and it is committed nevertheless when the process keeps
+    /// running. If a write is not published, the staged files of the writes
+    /// after it are removed.
+    pub async fn commit(&self) -> Result<()> {
+        let writes = self.end();
+        if writes.is_empty() {
+            return Ok(());
+        }
+        run_to_end(async move {
+            let mut result = Ok(());
+            for write in writes {
+                if result.is_ok() {
+                    result = write.publish().await;
+                } else {
+                    write.remove().await;
+                }
+            }
+            result
+        })
+        .await
+    }
+
+    /// Removes the staged files of the writes of the job. The job runner
+    /// calls this when the job has failed or is canceled.
+    ///
+    /// The files are removed by a separate task, which has started when this
+    /// returns, whether or not the returned work is awaited. The work ends
+    /// when the files are removed.
+    pub fn abort(&self) -> impl Future<Output = ()> + Send + 'static {
+        let writes = self.end();
+        let removal = match tokio::runtime::Handle::try_current() {
+            Ok(runtime) if !writes.is_empty() => Some(runtime.spawn(async move {
+                for write in writes {
+                    write.remove().await;
+                }
+            })),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("the staged files of the writes of a job are not removed: {e}");
+                None
+            }
+        };
+        async move {
+            if let Some(removal) = removal {
+                let _ = removal.await;
+            }
+        }
     }
 }
 
-/// Returns a value that identifies the staged files of an attempt of a write.
-fn staged_fingerprint(files: &[StagedFile]) -> u64 {
-    let mut staged: Vec<&str> = files
-        .iter()
-        .map(|file| match &file.publish {
-            Publish::Rename { staged } => staged.as_ref(),
-            Publish::Multipart { upload_id, .. } => upload_id.as_str(),
-        })
-        .collect();
-    staged.sort_unstable();
-    let mut hasher = DefaultHasher::new();
-    staged.hash(&mut hasher);
-    hasher.finish()
+/// Runs the work that makes a write visible in a task of its own, which is
+/// not canceled when the caller is. The state of the write is unknown if
+/// the task does not end.
+async fn run_to_end(work: impl Future<Output = Result<()>> + Send + 'static) -> Result<()> {
+    match tokio::spawn(work).await {
+        Ok(result) => result,
+        Err(e) => Err(commit_state_unknown(
+            "the task that publishes the files of the write has not ended",
+            Some(DataFusionError::External(Box::new(e))),
+        )),
+    }
 }
 
 /// The staged files of the manifests of all writer tasks of a write.
@@ -441,6 +527,15 @@ struct ReceivedManifests {
     /// The number of rows written.
     num_rows: u64,
     files: Vec<StagedFile>,
+}
+
+/// What the input of a commit has delivered when it has ended without an error.
+enum Received {
+    /// All rows of the manifests of all writer tasks.
+    Complete(ReceivedManifests),
+    /// Not all rows of the manifests, with the description of what is missing.
+    /// The staged files of the rows that were received are removed.
+    Incomplete(String),
 }
 
 /// Reads the manifests of all writer tasks to the end of the input, and
@@ -458,14 +553,14 @@ struct ReceivedManifests {
 /// tasks on the workers when the commit has failed or is canceled.
 /// The staged files are removed here when the input has failed, when
 /// a manifest is rejected, when the write is incomplete, or when the commit
-/// is gone at the end of the input. The commit receives the error after that.
+/// is gone at the end of the input. The commit receives the result after that.
 async fn read_manifests(
     mut input: SendableRecordBatchStream,
     publisher: Publisher,
     table_path: Path,
     write_id: Uuid,
     cancel: CancellationToken,
-    commit: oneshot::Sender<Result<ReceivedManifests>>,
+    commit: oneshot::Sender<Result<Received>>,
 ) {
     let mut manifests = Manifests::default();
     let mut files = vec![];
@@ -490,16 +585,23 @@ async fn read_manifests(
             publisher.abort_all(&files).await;
         }
     };
-    match result.and_then(|()| manifests.validate()) {
-        Ok(()) => {
+    let result = result.map(|()| manifests.validate());
+    match result {
+        Ok(Ok(())) => {
             let received = ReceivedManifests {
                 num_rows: manifests.num_rows,
                 files,
             };
             // The commit owns the files, unless it was canceled.
-            if let Err(Ok(received)) = commit.send(Ok(received)) {
+            if let Err(Ok(Received::Complete(received))) =
+                commit.send(Ok(Received::Complete(received)))
+            {
                 remove(received.files).await;
             }
+        }
+        Ok(Err(incomplete)) => {
+            remove(files).await;
+            let _ = commit.send(Ok(Received::Incomplete(incomplete)));
         }
         Err(e) => {
             remove(files).await;
@@ -510,7 +612,6 @@ async fn read_manifests(
 
 /// The work of the commit of a write.
 struct WriteCommit {
-    ledger: Arc<WriteCommitLedger>,
     publisher: Publisher,
     table_path: Path,
     write_id: Uuid,
@@ -525,11 +626,19 @@ impl WriteCommit {
     /// returns the work that completes the write with the number of rows
     /// written. `cancel` stops the writer tasks of the input that run in
     /// this process. They are stopped when the work ends or is dropped.
+    ///
+    /// Without a job, the work publishes the files when the input has ended.
+    /// For a job, with the number of the attempt of the task of the commit,
+    /// the work records the files for the end of the job, see [`JobWrites`].
+    /// It then has no number of rows, and no error, when the manifests are
+    /// incomplete: a writer task has failed or was canceled then, so the job
+    /// fails with the error of that task or attempts its tasks again.
     fn start(
         self,
         input: SendableRecordBatchStream,
         cancel: CancellationToken,
-    ) -> Result<impl Future<Output = Result<u64>> + Send + 'static> {
+        job: Option<(Arc<JobWrites>, usize)>,
+    ) -> Result<impl Future<Output = Result<Option<u64>>> + Send + 'static> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|e| {
             internal_datafusion_err!("the commit of a write is executed outside of a runtime: {e}")
         })?;
@@ -549,8 +658,47 @@ impl WriteCommit {
                 Ok(received) => received?,
                 Err(_) => return internal_err!("the manifests of the write were not read"),
             };
-            self.run(received).await
+            match (job, received) {
+                (Some((job, attempt)), received) => self.prepare(&job, attempt, received).await,
+                (None, Received::Complete(received)) => {
+                    let count = received.num_rows;
+                    run_to_end(self.publish(received.files)).await?;
+                    Ok(Some(count))
+                }
+                (None, Received::Incomplete(message)) => exec_err!("{message}"),
+            }
         })
+    }
+
+    /// Records what the attempt of the commit has received for the end of
+    /// the job, and returns the number of rows written if the manifests
+    /// are complete.
+    async fn prepare(
+        self,
+        job: &JobWrites,
+        attempt: usize,
+        received: Received,
+    ) -> Result<Option<u64>> {
+        let write_id = self.write_id;
+        let count = match &received {
+            Received::Complete(received) => Some(received.num_rows),
+            Received::Incomplete(_) => None,
+        };
+        let (recorded, other) = job.prepare(PreparedWrite {
+            attempt,
+            commit: self,
+            received,
+        });
+        if let Some(other) = other {
+            other.remove().await;
+        }
+        if !recorded {
+            return internal_err!(
+                "attempt {attempt} of the commit of the write {write_id} is not \
+                the latest attempt of a job that is running"
+            );
+        }
+        Ok(count)
     }
 
     /// Removes staged files that are not published. The files are removed
@@ -568,54 +716,6 @@ impl WriteCommit {
         let publisher = self.publisher.clone();
         // The files are removed whether or not the task is awaited.
         let _ = tokio::spawn(async move { publisher.abort_all(&files).await }).await;
-    }
-
-    /// Completes the write with the staged files of all writer tasks,
-    /// and returns the number of rows written.
-    async fn run(self, received: ReceivedManifests) -> Result<u64> {
-        let ReceivedManifests {
-            num_rows: count,
-            files,
-        } = received;
-        let staged = staged_fingerprint(&files);
-        match self.ledger.start(self.write_id, staged) {
-            Ok(CommitStart::Publish) => {}
-            Ok(CommitStart::Committed(count)) => {
-                // An earlier attempt has committed the write, so the files
-                // of this attempt are not needed.
-                self.abort(files).await;
-                return Ok(count);
-            }
-            Err(e) => {
-                self.abort(files).await;
-                return Err(e);
-            }
-        }
-        // The files are published by a separate task, which is not canceled
-        // when the commit is, so that the table directory is not left with
-        // a part of the write. The state of the commit in the job stays
-        // unknown if the task does not end.
-        let ledger = Arc::clone(&self.ledger);
-        let write_id = self.write_id;
-        let published = tokio::spawn(async move {
-            let result = self.publish(files).await;
-            match &result {
-                Ok(()) => ledger.end(write_id, CommitState::Committed(count)),
-                Err(e) if is_commit_state_unknown(e) => {}
-                Err(e) => {
-                    let error = e.to_string();
-                    ledger.end(write_id, CommitState::Undone { staged, error });
-                }
-            }
-            result
-        });
-        match published.await {
-            Ok(result) => result.map(|()| count),
-            Err(e) => Err(commit_state_unknown(
-                "the task that publishes the files of the write has not ended",
-                Some(DataFusionError::External(Box::new(e))),
-            )),
-        }
     }
 
     /// Lists the content of the table directory that an overwrite replaces.
@@ -686,7 +786,7 @@ impl WriteCommit {
     ///
     /// A failure after the files were published, or a failure to undo
     /// a partial publication, leaves the table in a state that is reported
-    /// as unknown. Such a write is not attempted again. The directory then
+    /// as unknown to the client of the write. The directory then
     /// has no `_SUCCESS` file of this write. A write that appends does not
     /// touch the `_SUCCESS` file of an earlier write before it writes its own,
     /// as in Spark, so that file can be present while the directory has
@@ -832,7 +932,8 @@ impl WriteCommit {
 }
 
 /// Returns the error of a commit that has changed the table directory and
-/// that has not completed. The error keeps the write from being attempted again.
+/// that has not completed. The client of the write receives the error, and nothing
+/// attempts the write again.
 fn commit_state_unknown(
     message: impl Into<String>,
     source: Option<DataFusionError>,
@@ -842,10 +943,6 @@ fn commit_state_unknown(
         Some(source) => CommitStateUnknownError::with_source(message, source),
         None => CommitStateUnknownError::from(message),
     }))
-}
-
-fn is_commit_state_unknown(error: &DataFusionError) -> bool {
-    matches!(error, DataFusionError::External(e) if e.is::<CommitStateUnknownError>())
 }
 
 /// Completes a listing table write after all writer tasks have finished.
@@ -870,8 +967,13 @@ fn is_commit_state_unknown(error: &DataFusionError) -> bool {
 /// client, and it is committed nevertheless when the process keeps running.
 /// If the process stops then, the directory has a part of the files.
 ///
-/// The [`WriteCommitLedger`] of the job keeps a second attempt of the commit
-/// from publishing the files of the write again.
+/// When the plan is executed for a job whose tasks can be attempted again,
+/// the commit does not publish the files. It records them in the [`JobWrites`]
+/// of the job, and the job runner publishes them when the job has succeeded.
+/// The output is the same row, and the client of the job receives the end of
+/// the output only after the files are published. The output has no row when
+/// a writer task has not reported its files, which is not an error of
+/// the commit: the job then fails with the error of the task that has failed.
 #[derive(Debug, Clone)]
 pub struct FileWriteCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -1034,8 +1136,17 @@ impl ExecutionPlan for FileWriteCommitExec {
                 partition
             );
         }
+        let job = match (JobWrites::of(&context), TaskAttempt::of(&context)) {
+            (Some(job), Some(attempt)) => Some((job, attempt)),
+            (Some(_), None) => {
+                return internal_err!(
+                    "{} is executed for a job without the attempt of its task",
+                    self.name()
+                );
+            }
+            (None, _) => None,
+        };
         let commit = WriteCommit {
-            ledger: WriteCommitLedger::of(&context),
             publisher: Publisher::try_new(&context, &self.object_store_url)?,
             table_path: self.table_path.clone(),
             write_id: self.write_id,
@@ -1047,13 +1158,16 @@ impl ExecutionPlan for FileWriteCommitExec {
         let cancel = CancellationToken::new();
         let input_context =
             task_context_with_extension(&context, Arc::new(WriteCancellation(cancel.clone())));
-        let commit = commit.start(self.input.execute(0, input_context)?, cancel)?;
+        let commit = commit.start(self.input.execute(0, input_context)?, cancel, job)?;
         let schema = self.schema();
         let output = stream::once(async move {
-            let count = commit.await?;
+            let Some(count) = commit.await? else {
+                return Ok(None);
+            };
             let count: ArrayRef = Arc::new(UInt64Array::from(vec![count]));
-            Ok(RecordBatch::try_new(count_schema(), vec![count])?)
-        });
+            Ok(Some(RecordBatch::try_new(count_schema(), vec![count])?))
+        })
+        .try_filter_map(|batch| future::ready(Ok(batch)));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
     }
 }
@@ -1072,7 +1186,6 @@ mod tests {
     const OTHER_WRITE_ID: Uuid = Uuid::from_u128(2);
 
     struct TestWrite {
-        ledger: Arc<WriteCommitLedger>,
         store: Arc<FaultStore>,
         mode: Mode,
         publisher: Publisher,
@@ -1085,7 +1198,6 @@ mod tests {
             let store = FaultStore::new();
             let publisher = store.publisher(mode);
             Self {
-                ledger: Arc::new(WriteCommitLedger::default()),
                 store,
                 mode,
                 publisher,
@@ -1153,10 +1265,36 @@ mod tests {
             manifests: impl FnOnce(CancellationToken) -> BoxStream<'static, Result<RecordBatch>>,
             overwrite: bool,
         ) -> BoxFuture<'static, Result<u64>> {
+            self.start(manifests, overwrite, None)
+                .map(|count| match count? {
+                    Some(count) => Ok(count),
+                    None => internal_err!("the commit has no number of rows"),
+                })
+                .boxed()
+        }
+
+        /// Starts an attempt of the commit for a job, which reads the manifests
+        /// from then on, and which has no number of rows when they are incomplete.
+        fn prepare(
+            &self,
+            job: &Arc<JobWrites>,
+            attempt: usize,
+            manifests: Vec<Result<RecordBatch>>,
+            overwrite: bool,
+        ) -> BoxFuture<'static, Result<Option<u64>>> {
+            let job = Some((Arc::clone(job), attempt));
+            self.start(|_| stream::iter(manifests).boxed(), overwrite, job)
+        }
+
+        fn start(
+            &self,
+            manifests: impl FnOnce(CancellationToken) -> BoxStream<'static, Result<RecordBatch>>,
+            overwrite: bool,
+            job: Option<(Arc<JobWrites>, usize)>,
+        ) -> BoxFuture<'static, Result<Option<u64>>> {
             // Only the requests of the commit are of interest.
             self.store.clear_requests();
             let commit = WriteCommit {
-                ledger: Arc::clone(&self.ledger),
                 publisher: self.publisher.clone(),
                 table_path: Path::from("table"),
                 write_id: WRITE_ID,
@@ -1166,7 +1304,7 @@ mod tests {
             let cancel = CancellationToken::new();
             let manifests = manifests(cancel.clone());
             let input = Box::pin(RecordBatchStreamAdapter::new(manifest_schema(), manifests));
-            match commit.start(input, cancel) {
+            match commit.start(input, cancel, job) {
                 Ok(commit) => commit.boxed(),
                 Err(e) => futures::future::ready(Err(e)).boxed(),
             }
@@ -1233,22 +1371,20 @@ mod tests {
     }
 
     fn is_state_unknown(error: &DataFusionError) -> bool {
-        is_commit_state_unknown(error)
+        matches!(error, DataFusionError::External(e) if e.is::<CommitStateUnknownError>())
     }
 
     #[test]
-    fn test_ledger_of_task_context() {
+    fn test_job_writes_of_task_context() {
         use datafusion::prelude::SessionConfig;
 
-        // The commits of a job are remembered in the task context of the job.
-        let job = Arc::new(WriteCommitLedger::default());
+        // The writes of a job are recorded in the task context of the job.
+        let job = Arc::new(JobWrites::default());
         let config = SessionConfig::new().with_extension(Arc::clone(&job));
         let context = TaskContext::default().with_session_config(config);
-        assert!(Arc::ptr_eq(&WriteCommitLedger::of(&context), &job));
-        // A plan that is executed without a job has one attempt.
-        let context = TaskContext::default();
-        let ledger = WriteCommitLedger::of(&context);
-        assert!(!Arc::ptr_eq(&ledger, &WriteCommitLedger::of(&context)));
+        assert!(matches!(JobWrites::of(&context), Some(x) if Arc::ptr_eq(&x, &job)));
+        // A plan that is executed without a job publishes the files of its write.
+        assert!(JobWrites::of(&TaskContext::default()).is_none());
     }
 
     #[test]
@@ -1297,7 +1433,8 @@ mod tests {
         assert_eq!(batch.num_rows(), 1);
         manifests.add(&batch, &mut received)?;
         assert_eq!(received, files);
-        manifests.validate()
+        assert_eq!(manifests.validate(), Ok(()));
+        Ok(())
     }
 
     #[tokio::test]
@@ -1945,131 +2082,259 @@ mod tests {
         Ok(())
     }
 
-    /// The commit of a write can be attempted again after an attempt
-    /// has published the files of the write.
+    /// The task of the commit of a job does not publish the files.
     #[tokio::test]
-    async fn test_second_commit_of_a_write_keeps_the_files_of_the_write() -> Result<()> {
+    async fn test_job_publishes_the_files_when_it_has_succeeded() -> Result<()> {
         for mode in Mode::ALL {
             for overwrite in [false, true] {
                 let write = TestWrite::new(mode);
+                write.put("table/_SUCCESS").await?;
                 write.put("table/old.parquet").await?;
                 let a = write.stage("table/a.parquet").await?;
                 let b = write.stage("table/b.parquet").await?;
-                let manifests = vec![manifest(0, 1, &[&a, &b])];
-                assert_eq!(write.commit_future(manifests, overwrite).await?, 20);
+                let job = Arc::new(JobWrites::default());
+                assert!(job.is_empty());
+                let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&b])];
+                assert_eq!(
+                    write.prepare(&job, 0, manifests, overwrite).await?,
+                    Some(20)
+                );
+                // The task has ended, and the table is as it was.
+                assert!(!job.is_empty());
+                assert_eq!(write.requests(), Vec::<String>::new());
+                let mut expected = vec!["table/_SUCCESS"];
+                expected.extend(write.staged_objects(2));
+                expected.push("table/old.parquet");
+                assert_eq!(write.store.objects().await?, expected);
+
+                job.commit().await?;
+                assert!(job.is_empty());
                 let mut committed = vec!["table/_SUCCESS", "table/a.parquet", "table/b.parquet"];
                 if !overwrite {
                     committed.push("table/old.parquet");
                 }
                 assert_eq!(write.store.objects().await?, committed);
-
-                // The writer tasks are attempted again, and the second attempt
-                // has one file, since it has divided the rows in another way.
-                let a = write.stage("table/a.parquet").await?;
-                let manifests = vec![manifest(0, 1, &[&a])];
-                let result = write.commit_future(manifests, overwrite).await;
-                assert_eq!(
-                    write.store.objects().await?,
-                    committed,
-                    "{mode:?} {overwrite} {result:?}"
-                );
                 assert_eq!(write.store.open_uploads(), Vec::<String>::new());
-                // The write is committed once, and its result is the result of the first attempt.
-                assert_eq!(result?, 20);
+                // The steps are the steps of a commit that publishes the files itself.
+                let requests = write.requests();
+                let first = if overwrite {
+                    "LIST table"
+                } else {
+                    mode.publish_request()
+                };
+                assert!(requests[0].starts_with(first), "{requests:?}");
+                assert_eq!(
+                    requests.last().map(|x| x.as_str()),
+                    Some("PUT table/_SUCCESS 0")
+                );
+                // The job is committed once.
+                job.commit().await?;
+                assert_eq!(write.requests(), requests);
             }
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_commit_is_attempted_again_after_it_was_undone() -> Result<()> {
+    async fn test_job_removes_the_files_when_it_has_failed() -> Result<()> {
         for mode in Mode::ALL {
             let write = TestWrite::new(mode);
+            write.put("table/_SUCCESS").await?;
             write.put("table/old.parquet").await?;
             let a = write.stage("table/a.parquet").await?;
-            let b = write.stage("table/b.parquet").await?;
-            write.store.fail_at(mode.publish_request(), "b.parquet");
-            let result = write.commit(vec![manifest(0, 1, &[&a, &b])]).await;
-            assert!(
-                matches!(&result, Err(e) if !is_state_unknown(e) && e.to_string().contains("failure")),
-                "{result:?}"
-            );
-            write.store.clear_faults();
-
-            // The commit is attempted again with the same manifests, whose files
-            // are removed. This cannot succeed, and it reports the first error.
-            let result = write.commit(vec![manifest(0, 1, &[&a, &b])]).await;
-            assert!(
-                matches!(&result, Err(DataFusionError::External(e))
-                    if e.is::<CommitRequiresReplanningError>() && e.to_string().contains("failure")),
-                "{result:?}"
-            );
-            assert_eq!(write.store.count(mode.publish_request()), 0);
-            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
-
-            // The writer tasks are attempted again with the commit.
-            let a = write.stage("table/a.parquet").await?;
-            let b = write.stage("table/b.parquet").await?;
-            assert_eq!(write.commit(vec![manifest(0, 1, &[&a, &b])]).await?, 20);
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 1, &[&a])];
+            assert_eq!(write.prepare(&job, 0, manifests, true).await?, Some(10));
+            job.abort().await;
+            assert!(job.is_empty());
             assert_eq!(
-                write.store.objects().await?,
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
+            );
+            let table = vec!["table/_SUCCESS", "table/old.parquet"];
+            assert_eq!(write.store.objects().await?, table);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+
+            // The files are removed also when the work is not awaited.
+            let a = write.stage("table/a.parquet").await?;
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 1, &[&a])];
+            assert_eq!(write.prepare(&job, 0, manifests, true).await?, Some(10));
+            drop(job.abort());
+            write.store.wait_for(&table).await?;
+
+            // An attempt that ends after the job removes its files.
+            let a = write.stage("table/a.parquet").await?;
+            let result = write
+                .prepare(&job, 1, vec![manifest(0, 1, &[&a])], true)
+                .await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("not the latest attempt")),
+                "{result:?}"
+            );
+            assert_eq!(write.store.objects().await?, table);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+            job.commit().await?;
+            assert_eq!(write.store.objects().await?, table);
+        }
+        Ok(())
+    }
+
+    /// The tasks of a job are attempted again after the task of the commit
+    /// has ended, for example when a task has failed whose output had ended
+    /// for the writer tasks like a complete output.
+    #[tokio::test]
+    async fn test_job_publishes_the_files_of_the_latest_attempt() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let publisher = &write.publisher;
+            let job = Arc::new(JobWrites::default());
+            // The attempts use the same locations for their files.
+            let first = write
+                .stage_with("table/a.parquet", "one", publisher)
+                .await?;
+            let extra = write.stage("table/b.parquet").await?;
+            let manifests = vec![manifest(0, 1, &[&first, &extra])];
+            assert_eq!(write.prepare(&job, 0, manifests, false).await?, Some(20));
+            let second = write
+                .stage_with("table/a.parquet", "two", publisher)
+                .await?;
+            let manifests = vec![manifest(0, 1, &[&second])];
+            assert_eq!(write.prepare(&job, 2, manifests, false).await?, Some(10));
+            // The files of the first attempt are removed.
+            let mut removed = write.requests();
+            removed.sort();
+            assert_eq!(
+                removed,
                 vec![
-                    "table/_SUCCESS",
-                    "table/a.parquet",
-                    "table/b.parquet",
-                    "table/old.parquet"
+                    write.abort_request("table/a.parquet"),
+                    write.abort_request("table/b.parquet"),
                 ]
             );
+            // An earlier attempt that ends later is not recorded.
+            let late = write
+                .stage_with("table/a.parquet", "late", publisher)
+                .await?;
+            let result = write
+                .prepare(&job, 1, vec![manifest(0, 1, &[&late])], false)
+                .await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("not the latest attempt")),
+                "{result:?}"
+            );
+            assert_eq!(
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
+            );
+
+            job.commit().await?;
+            let committed = vec!["table/_SUCCESS", "table/a.parquet"];
+            assert_eq!(write.store.objects().await?, committed);
+            assert_eq!(write.read("table/a.parquet").await?.as_ref(), b"two");
             assert_eq!(write.store.open_uploads(), Vec::<String>::new());
         }
         Ok(())
     }
 
+    /// A writer task that has failed can end its output like a complete output.
+    /// The commit of a job does not add an error to the error of that task.
     #[tokio::test]
-    async fn test_commit_is_attempted_again_while_an_attempt_publishes() -> Result<()> {
+    async fn test_incomplete_manifests_are_not_an_error_of_the_commit_of_a_job() -> Result<()> {
         for mode in Mode::ALL {
-            for overwrite in [false, true] {
-                let write = TestWrite::new(mode);
-                write.put("table/old.parquet").await?;
-                let a = write.stage("table/a.parquet").await?;
-                let gate = write.store.hold(mode.publish_request());
-                let mut commit =
-                    Box::pin(write.commit_future(vec![manifest(0, 1, &[&a])], overwrite));
-                tokio::select! {
-                    _ = &mut commit => return internal_err!("the commit must wait"),
-                    _ = gate.wait_for(1) => {}
-                }
-                // The attempt is canceled, and it keeps publishing.
-                drop(commit);
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 2, &[&a])];
+            assert_eq!(write.prepare(&job, 0, manifests, true).await?, None);
+            // The staged files that the commit has received are removed.
+            assert_eq!(
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
+            );
+            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
 
-                // The state of the write is not known to the second attempt,
-                // which publishes nothing and removes its files.
-                let b = write.stage("table/b.parquet").await?;
-                let result = write
-                    .commit_future(vec![manifest(0, 1, &[&b])], overwrite)
-                    .await;
-                assert!(
-                    matches!(&result, Err(e) if is_state_unknown(e)),
-                    "{result:?}"
-                );
-                assert_eq!(write.store.count(mode.publish_request()), 0);
+            // The job runner does not let such a job succeed. If it did,
+            // the write would fail, and nothing would be published.
+            let result = job.commit().await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Execution(e)) if e.contains("the write is incomplete")),
+                "{result:?}"
+            );
+            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
 
-                gate.open();
-                let mut committed = vec!["table/_SUCCESS", "table/a.parquet"];
-                if !overwrite {
-                    committed.push("table/old.parquet");
-                }
-                write.store.wait_for(&committed).await?;
+            // The tasks are attempted again, and the manifests are complete.
+            let job = Arc::new(JobWrites::default());
+            assert_eq!(write.prepare(&job, 0, vec![], true).await?, None);
+            let a = write.stage("table/a.parquet").await?;
+            let manifests = vec![manifest(0, 1, &[&a])];
+            assert_eq!(write.prepare(&job, 1, manifests, true).await?, Some(10));
+            job.commit().await?;
+            let committed = vec!["table/_SUCCESS", "table/a.parquet"];
+            assert_eq!(write.store.objects().await?, committed);
+        }
+        Ok(())
+    }
 
-                // The first attempt has committed the write, so a later attempt
-                // has its result.
-                let b = write.stage("table/b.parquet").await?;
-                let result = write
-                    .commit_future(vec![manifest(0, 1, &[&b])], overwrite)
-                    .await;
-                assert_eq!(result?, 10);
-                write.store.wait_for(&committed).await?;
+    #[tokio::test]
+    async fn test_job_reports_the_error_of_a_write_that_is_not_published() -> Result<()> {
+        for mode in Mode::ALL {
+            // The files cannot be published, and the publication is undone.
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 1, &[&a, &b])];
+            assert_eq!(write.prepare(&job, 0, manifests, false).await?, Some(20));
+            write.store.fail_at(mode.publish_request(), "b.parquet");
+            let result = job.commit().await;
+            assert!(
+                matches!(&result, Err(e) if !is_state_unknown(e) && e.to_string().contains("failure")),
+                "{result:?}"
+            );
+            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+
+            // The files are published, and the `_SUCCESS` file cannot be written.
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 1, &[&a])];
+            assert_eq!(write.prepare(&job, 0, manifests, false).await?, Some(10));
+            write.store.fail("PUT", 0);
+            let result = job.commit().await;
+            assert!(
+                matches!(&result, Err(e) if is_state_unknown(e)),
+                "{result:?}"
+            );
+            assert_eq!(write.store.objects().await?, vec!["table/a.parquet"]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_job_that_is_canceled_while_it_publishes_is_committed() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let job = Arc::new(JobWrites::default());
+            let manifests = vec![manifest(0, 1, &[&a, &b])];
+            assert_eq!(write.prepare(&job, 0, manifests, false).await?, Some(20));
+            let gate = write.store.hold(mode.publish_request());
+            let mut commit = Box::pin(job.commit());
+            tokio::select! {
+                _ = &mut commit => return internal_err!("the job must wait"),
+                _ = gate.wait_for(2) => {}
             }
+            drop(commit);
+            gate.open();
+            write
+                .store
+                .wait_for(&["table/_SUCCESS", "table/a.parquet", "table/b.parquet"])
+                .await?;
         }
         Ok(())
     }

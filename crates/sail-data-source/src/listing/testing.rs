@@ -243,15 +243,6 @@ impl FaultStore {
         });
     }
 
-    pub fn clear_faults(&self) {
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        state.faults.clear();
-    }
-
     /// Holds the requests of the kind until the gate is opened.
     pub fn hold(&self, kind: &'static str) -> Arc<Gate> {
         self.gate(kind, None)
