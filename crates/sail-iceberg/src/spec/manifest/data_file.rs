@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::spec::Datum;
 use crate::spec::types::values::Literal;
 
+/// Reserved Iceberg field ID for the data file path in position deletes.
+pub(crate) const DELETE_FILE_PATH_ID: i32 = 2_147_483_546;
+
 /// Content type of a data file.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]

@@ -2927,6 +2927,20 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn partition_statistics_updates_round_trip_through_rest_commit() -> serde_json::Result<()> {
+        for update in [
+            serde_json::json!({"action": "set-partition-statistics", "partition-statistics": {
+                "snapshot-id": 17, "statistics-path": "file:///stats.parquet", "file-size-in-bytes": 401
+            }}),
+            serde_json::json!({"action": "remove-partition-statistics", "snapshot-id": 17}),
+        ] {
+            let typed: crate::r#gen::TableUpdate = serde_json::from_value(update.clone())?;
+            assert_eq!(serde_json::to_value(typed)?, update);
+        }
+        Ok(())
+    }
+
     struct TestContext {
         name: String,
         server: MockServer,

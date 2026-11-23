@@ -545,3 +545,100 @@ def test_metadata_qualifiers_distinguish_catalogs(catalog_resolution_spark, tmp_
     finally:
         for table in tables:
             spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_procedures_on_table_without_snapshots(spark, tmp_path):
+    table = "empty_maintenance"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
+    try:
+        before = _latest_metadata_file(tmp_path)
+        with pytest.raises(Exception, match="Cannot find snapshot: -1"):
+            spark.sql(f"CALL system.ancestors_of('{table}')").collect()
+        assert spark.sql(f"CALL system.rewrite_data_files('{table}')").collect() == [(0, 0, 0, 0, 0)]
+        assert spark.sql(f"CALL system.rewrite_manifests('{table}')").collect() == [(0, 0)]
+        assert _latest_metadata_file(tmp_path) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rewrite_branch_name_is_case_sensitive(spark, tmp_path):
+    table = "rewrite_branch_name"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
+    try:
+        for value in range(2):
+            spark.sql(f"INSERT INTO {table} VALUES ({value})")  # noqa: S608
+        before = _latest_metadata_file(tmp_path)
+        with pytest.raises(Exception, match="branch"):
+            spark.sql(
+                f"CALL system.rewrite_data_files(table => '{table}', branch => 'MAIN', "
+                "options => map('rewrite-all', 'true'))"
+            ).collect()
+        assert _latest_metadata_file(tmp_path) == before
+        assert spark.table(table).orderBy("id").collect() == [(0,), (1,)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_rollback_timestamp_keeps_nearest_ancestor_on_tie(spark, tmp_path):
+    table = "rollback_timestamp_tie"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
+    try:
+        for value in range(3):
+            spark.sql(f"INSERT INTO {table} VALUES ({value})")  # noqa: S608
+
+        def set_times(metadata):
+            for snapshot, entry, seconds in zip(
+                metadata["snapshots"], metadata["snapshot-log"], [1, 1, 3], strict=True
+            ):
+                snapshot["timestamp-ms"] = entry["timestamp-ms"] = seconds * 1000
+
+        _edit_latest_metadata(tmp_path, set_times)
+        snapshots = _read_latest_metadata(tmp_path)["snapshots"]
+        result = spark.sql(f"CALL system.rollback_to_timestamp('{table}', timestamp_millis(2000))").first()
+        assert tuple(result) == (snapshots[2]["snapshot-id"], snapshots[1]["snapshot-id"])
+        assert spark.table(table).orderBy("id").collect() == [(0,), (1,)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.1/spark-extensions/src/test/java/org/apache/iceberg/spark/extensions/TestAncestorsOfProcedure.java#L85-L130
+def test_snapshot_procedures_on_diverged_history(spark, tmp_path):
+    table = "diverged_history"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
+    try:
+        for value in (1, 2, 3):
+            spark.sql(f"INSERT INTO {table} VALUES ({value})")  # noqa: S608
+        first, second, third = [s["snapshot-id"] for s in _read_latest_metadata(tmp_path)["snapshots"]]
+        spark.sql(f"CALL system.rollback_to_snapshot('{table}', {second})").collect()
+        spark.sql(f"INSERT INTO {table} VALUES (4)")  # noqa: S608
+        metadata = _read_latest_metadata(tmp_path)
+        fourth = metadata["current-snapshot-id"]
+        timestamps = {s["snapshot-id"]: s["timestamp-ms"] for s in metadata["snapshots"]}
+        for head in [third, fourth]:
+            rows = spark.sql(f"CALL system.ancestors_of(snapshot_id => {head}, table => '{table}')").collect()
+            assert rows == [(sid, timestamps[sid]) for sid in (head, second, first)]
+        spark.sql(f"ALTER TABLE {table} CREATE TAG old_head AS OF VERSION {third}")
+        result = spark.sql(f"CALL system.fast_forward('{table}', 'audit', 'old_head')").collect()
+        assert result == [("audit", None, third)]
+        before = _latest_metadata_file(tmp_path)
+        with pytest.raises(Exception, match="ancestor"):
+            spark.sql(f"CALL system.fast_forward('{table}', 'main', 'audit')").collect()
+        with pytest.raises(Exception, match="ancestor"):
+            spark.sql(f"CALL system.rollback_to_snapshot('{table}', {third})").collect()
+        assert _latest_metadata_file(tmp_path) == before
+        assert spark.table(table).orderBy("id").collect() == [(1,), (2,), (4,)]
+        result = spark.sql(f"CALL system.set_current_snapshot(table => '{table}', ref => 'audit')").collect()
+        assert result == [(fourth, third)]
+        assert spark.table(table).orderBy("id").collect() == [(1,), (2,), (3,)]
+        result = spark.sql(f"CALL system.rollback_to_snapshot('{table}', {second})").first()
+        assert tuple(result) == (third, second)
+        refs = _read_latest_metadata(tmp_path)["refs"]
+        assert refs["audit"]["snapshot-id"] == refs["old_head"]["snapshot-id"] == third
+        for call in (
+            f"rollback_to_timestamp('{table}', timestamp_millis({timestamps[second] + 100}))",
+            f"rollback_to_snapshot('{table}', {second})",
+        ):
+            assert tuple(spark.sql(f"CALL system.{call}").first()) == (second, second)
+        assert spark.table(table).orderBy("id").collect() == [(1,), (2,)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
