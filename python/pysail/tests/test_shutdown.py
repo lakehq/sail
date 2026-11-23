@@ -18,19 +18,29 @@ pytestmark = [
 
 
 @contextmanager
-def _server(protocol, mode, **env_vars):
-    command = [sys.executable, "-m", "pysail", protocol, "server", "--port", "0"]
-    env = {**os.environ, "SAIL_MODE": mode, "RUST_LOG": "sail_cli=info", **env_vars}
-    with subprocess.Popen(command, env=env, stderr=subprocess.PIPE, text=True) as server:
+def _sail_process(args, ready, **env_vars):
+    command = [sys.executable, "-m", "pysail", *args]
+    with subprocess.Popen(command, env={**os.environ, **env_vars}, stderr=subprocess.PIPE, text=True) as process:
         try:
-            for line in server.stderr:
-                if match := re.search(r"Starting the .* server on (127\.0\.0\.1:\d+)", line):
-                    yield server, match[1]
+            for line in process.stderr:
+                if match := re.search(ready, line):
+                    yield process, f"127.0.0.1:{match[1]}"
                     return
-            pytest.fail(f"{protocol} server exited during startup")
+            pytest.fail(f"{args[0]} exited during startup")
         finally:
-            if server.poll() is None:
-                server.kill()
+            if process.poll() is None:
+                process.kill()
+
+
+def _server(protocol, mode, **env_vars):
+    env = {"SAIL_MODE": mode, "RUST_LOG": "sail_cli=info", **env_vars}
+    return _sail_process([protocol, "server", "--port", "0"], r"Starting the .* server on 127\.0\.0\.1:(\d+)", **env)
+
+
+def _worker():
+    return _sail_process(
+        ["worker"], r"worker \d+ server is ready on port (\d+)", RUST_LOG="sail_execution::worker::actor=info"
+    )
 
 
 @pytest.mark.parametrize("mode", ["local", "local-cluster"])
@@ -102,11 +112,13 @@ def test_sigterm_closes_stalled_flight_connection():
         assert server.wait(timeout=12) == 0
 
 
-def test_sigterm_force_closes_connection_after_grace_period():
+@pytest.mark.parametrize("service", ["flight", "worker"])
+def test_sigterm_force_closes_connection_after_grace_period(service):
     import grpc
 
-    with _server("flight", "local") as (server, address), grpc.insecure_channel(address) as channel:
-        # A health watch shares the query transport and stays open independently of query cancellation.
+    process = _worker() if service == "worker" else _server("flight", "local")
+    with process as (server, address), grpc.insecure_channel(address) as channel:
+        # The watch stays open until the transport closes the connection.
         watch = channel.unary_stream("/grpc.health.v1.Health/Watch")(b"", timeout=20, wait_for_ready=True)
         assert next(watch)
         started = time.monotonic()
@@ -226,19 +238,8 @@ def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
 
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
 def test_worker_handles_signals_at_readiness(signum):
-    env = {**os.environ, "RUST_LOG": "sail_execution::worker::actor=info"}
-    command = [sys.executable, "-m", "pysail", "worker"]
-    with subprocess.Popen(command, env=env, stderr=subprocess.PIPE, text=True) as worker:
-        try:
-            for line in worker.stderr:
-                if "server is ready on port" in line:
-                    break
-            else:
-                pytest.fail("worker exited during startup")
-            worker.send_signal(signum)
-            status = worker.wait(timeout=10)
-            assert status == 0 or (signum == signal.SIGINT and status == -signal.SIGINT)
-            assert "server has stopped" in worker.stderr.read()
-        finally:
-            if worker.poll() is None:
-                worker.kill()
+    with _worker() as (worker, _address):
+        worker.send_signal(signum)
+        status = worker.wait(timeout=10)
+        assert status == 0 or (signum == signal.SIGINT and status == -signal.SIGINT)
+        assert "server has stopped" in worker.stderr.read()
