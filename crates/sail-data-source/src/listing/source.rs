@@ -54,6 +54,11 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
+    /// Whether a zero-byte file can produce a row during a scan.
+    fn reads_empty_files(&self) -> bool {
+        false
+    }
+
     fn configure_schema_inference(
         &mut self,
         _ctx: &dyn Session,

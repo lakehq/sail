@@ -19,6 +19,10 @@ pub struct BinaryReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for BinaryReadFormat {
+    fn reads_empty_files(&self) -> bool {
+        true
+    }
+
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,

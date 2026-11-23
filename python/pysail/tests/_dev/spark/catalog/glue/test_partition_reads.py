@@ -208,6 +208,41 @@ def test_registered_csv_partition_options(spark, moto_endpoint, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+def test_registered_binary_partition_reads_empty_file(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_binary_partition"
+    path = tmp_path / "partition"
+    path.mkdir()
+    (path / "empty.bin").touch()
+    glue.create_table(
+        DatabaseName="test_db",
+        TableInput={
+            "Name": name,
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {"spark.sql.sources.provider": "binaryFile"},
+            "StorageDescriptor": {
+                "Columns": [
+                    {"Name": "path", "Type": "string"},
+                    {"Name": "modificationTime", "Type": "timestamp"},
+                    {"Name": "length", "Type": "bigint"},
+                    {"Name": "content", "Type": "binary"},
+                ],
+                "Location": str(tmp_path),
+            },
+            "PartitionKeys": [{"Name": "p", "Type": "int"}],
+        },
+    )
+    try:
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={"Values": ["7"], "StorageDescriptor": {"Location": str(path)}},
+        )
+        assert spark.table(f"test_db.{name}").select("p", "length", "content").collect() == [(7, 0, b"")]
+    finally:
+        glue.delete_table(DatabaseName="test_db", Name=name)
+
+
 def test_registered_text_partitions(spark, moto_endpoint, tmp_path):
     glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
     name = "registered_text_partitions"

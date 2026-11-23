@@ -411,6 +411,7 @@ async fn list_files_for_scan<'a>(
         .as_ref()
         .filter(|_| !partition_fields.is_empty());
     let direct_only = source.config().direct_files_only();
+    let reads_empty_files = source.config().read_format.reads_empty_files();
     let registered = table_paths.iter().any(|(_, values)| values.is_some());
     let partition_schema = base_path
         .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
@@ -433,7 +434,7 @@ async fn list_files_for_scan<'a>(
                 let files = list_partition_files(table_path, store_ref, path_glob_filter)
                     .await?
                     .try_filter_map(move |object| async move {
-                        if object.size == 0
+                        if (object.size == 0 && !reads_empty_files)
                             || object.location.filename().is_some_and(is_metadata_file)
                         {
                             return Ok(None);

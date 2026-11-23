@@ -415,7 +415,9 @@ pub(super) async fn list_partition_files<'a>(
             .objects
             .into_iter()
             .filter(move |object| {
-                !has_hidden_path_component(url, &object.location)
+                // Object stores can return a directory marker for the prefix itself.
+                &object.location != url.prefix()
+                    && !has_hidden_path_component(url, &object.location)
                     && matches_path_glob_filter(filter, &object.location)
             })
             .map(Ok),
