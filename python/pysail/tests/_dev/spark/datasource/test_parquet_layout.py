@@ -298,7 +298,10 @@ def test_parquet_create_table_as_select_is_complete_when_it_returns(spark, tmp_p
     path = tmp_path / "ctas"
     failed = tmp_path / "ctas-failed"
     try:
-        spark.sql(f"CREATE TABLE parquet_layout_ctas USING parquet LOCATION '{path}' AS SELECT id FROM range(100)")
+        spark.sql(
+            f"CREATE TABLE parquet_layout_ctas USING parquet LOCATION '{path}' AS "  # noqa: S608
+            "SELECT id FROM range(100)"
+        )
         assert_success_marker(path)
         assert spark.table("parquet_layout_ctas").count() == 100
         spark.sql("INSERT INTO parquet_layout_ctas SELECT id FROM range(100, 150)")
@@ -307,9 +310,9 @@ def test_parquet_create_table_as_select_is_complete_when_it_returns(spark, tmp_p
 
         # The error is not always the one of the write in cluster mode, where the tasks
         # are attempted again and the table then exists.
-        with pytest.raises(Exception, match="write failure|already exists"):
+        with pytest.raises(Exception, match=r"write failure|already exists"):
             spark.sql(
-                f"CREATE TABLE parquet_layout_ctas_failed USING parquet LOCATION '{failed}' AS "
+                f"CREATE TABLE parquet_layout_ctas_failed USING parquet LOCATION '{failed}' AS "  # noqa: S608
                 "SELECT CASE WHEN id >= 0 THEN raise_error('write failure') ELSE id END AS id FROM range(10)"
             )
         assert not (failed / "_SUCCESS").exists()
