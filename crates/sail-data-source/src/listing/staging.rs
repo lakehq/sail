@@ -46,10 +46,16 @@
 //! seven days by itself.
 //!
 //! The location of a file is the same for every attempt of a writer task.
-//! This is safe since the object stores keep the multipart uploads to one
-//! location apart, and since nothing puts or deletes an object at the location
+//! This is safe since the parts of two uploads to one location are kept
+//! apart, and since nothing puts or deletes an object at the location
 //! of a file between the creation of its upload and its completion. Only
-//! the uploads that a commit has accepted are ever completed.
+//! the uploads that a commit has accepted are ever completed. Amazon S3 and
+//! Google Cloud Storage keep the parts apart by the identifier of the upload.
+//! Azure Blob Storage has no such identifier: the parts are blocks of the blob
+//! at the location, and two attempts stay apart only because the `object_store`
+//! crate gives every block a random identifier. A commit completes an upload
+//! with the identifiers of its own parts, so it never takes a block of another
+//! attempt as long as the identifiers differ.
 
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -883,6 +889,101 @@ mod tests {
             assert!(publisher.publish(&file).await.is_err());
             store.wait_for(&[]).await?;
         }
+        Ok(())
+    }
+
+    /// An object store whose multipart uploads have no identifier, as those of
+    /// Azure Blob Storage: the parts are blocks at the location with random
+    /// identifiers, and an upload is completed with a list of blocks.
+    #[derive(Debug, Default)]
+    struct BlockStore {
+        objects: object_store::memory::InMemory,
+        blocks: Mutex<std::collections::HashMap<(Path, String), Bytes>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MultipartStore for BlockStore {
+        async fn create_multipart(&self, _path: &Path) -> object_store::Result<MultipartId> {
+            Ok(String::new())
+        }
+
+        async fn put_part(
+            &self,
+            path: &Path,
+            _id: &MultipartId,
+            _part_idx: usize,
+            data: PutPayload,
+        ) -> object_store::Result<PartId> {
+            let content_id = Uuid::new_v4().simple().to_string();
+            let data = data.iter().flat_map(|x| x.iter().copied()).collect();
+            self.blocks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((path.clone(), content_id.clone()), data);
+            Ok(PartId { content_id })
+        }
+
+        async fn complete_multipart(
+            &self,
+            path: &Path,
+            _id: &MultipartId,
+            parts: Vec<PartId>,
+        ) -> object_store::Result<PutResult> {
+            let data: Vec<u8> = {
+                let blocks = self.blocks.lock().unwrap_or_else(PoisonError::into_inner);
+                parts
+                    .iter()
+                    .filter_map(|part| blocks.get(&(path.clone(), part.content_id.clone())))
+                    .flat_map(|x| x.iter().copied())
+                    .collect()
+            };
+            self.objects.put(path, data.into()).await
+        }
+
+        async fn abort_multipart(
+            &self,
+            _path: &Path,
+            _id: &MultipartId,
+        ) -> object_store::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attempts_at_one_location_stay_apart_without_an_upload_identifier() -> Result<()> {
+        let blocks = Arc::new(BlockStore::default());
+        let publisher = Publisher::Multipart {
+            store: Arc::new(object_store::memory::InMemory::new()),
+            multipart: Arc::clone(&blocks) as Arc<dyn MultipartStore>,
+        };
+        let location = Path::from("table/p=1/file.parquet");
+        let mut attempts = vec![];
+        for data in [&b"first attempt"[..], &b"second"[..]] {
+            let mut upload =
+                publisher.upload(&Path::from("table"), &WRITE_ID, location.clone(), 4, 4);
+            upload.put(Bytes::from_static(data)).await?;
+            attempts.push(upload.finish().await?);
+        }
+        let [
+            Publish::Multipart { upload_id, parts },
+            Publish::Multipart { parts: other, .. },
+        ] = attempts.as_slice()
+        else {
+            return internal_err!("unexpected uploads");
+        };
+        // The uploads have the same identifier, so only the identifiers
+        // of the parts tell the attempts apart.
+        assert_eq!(upload_id, "");
+        assert!(parts.iter().all(|part| !other.contains(part)));
+        let file = StagedFile {
+            location: location.clone(),
+            size: 13,
+            num_rows: 1,
+            publish: attempts.swap_remove(0),
+        };
+        publisher.publish(&file).await?;
+        let data = blocks.objects.get(&location).await?.bytes().await?;
+        assert_eq!(data.as_ref(), b"first attempt");
         Ok(())
     }
 
