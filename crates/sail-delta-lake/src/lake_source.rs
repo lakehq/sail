@@ -855,6 +855,7 @@ pub(crate) async fn plan_delta_write(
         table_url.clone(),
         object_store,
         lakehouse_planning_context,
+        delta_options.txn_app_id.is_some(),
     )
     .await
     {
@@ -874,6 +875,18 @@ pub(crate) async fn plan_delta_write(
                 .cloned()
         })
         .transpose()?;
+    if let (Some(snapshot), Some(app_id), Some(version)) = (
+        &table_snapshot,
+        &delta_options.txn_app_id,
+        delta_options.txn_version,
+    ) && snapshot
+        .transaction_version(app_id)?
+        .is_some_and(|recorded| recorded >= version)
+    {
+        return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+            output.schema(),
+        )));
+    }
     let table_properties = table_properties.into_iter().collect::<HashMap<_, _>>();
     // New table declarations retain Sail's option aliases; an existing table's custom
     // properties must not be reinterpreted when planning subsequent writes.
@@ -1013,11 +1026,12 @@ async fn open_delta_write_planning_table(
     table_url: Url,
     object_store: Arc<dyn object_store::ObjectStore>,
     lakehouse_table: Option<&LakehouseExecutionContext>,
+    require_transactions: bool,
 ) -> std::result::Result<DeltaTable, DeltaTableError> {
-    // Only partition columns and table existence are needed at planning time;
-    // skip replaying Add/Remove file actions unless a later physical plan needs them.
+    // Checksums may omit setTransactions. Replay the log for idempotent writes.
     let mut table_config = DeltaSnapshotConfig {
         require_files: false,
+        require_transactions,
         ..Default::default()
     };
 
