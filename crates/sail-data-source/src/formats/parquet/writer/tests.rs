@@ -6752,7 +6752,9 @@ async fn test_partitioned_rows_with_dictionaries_of_their_own_are_written() -> R
     let partitions: Vec<_> = batches.chunks(5).map(|x| x.to_vec()).collect();
     let input = MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
     let input = distribute_by_partition_columns(input, &["p".to_string()], 2)?;
-    // The rows are distributed without their dictionaries.
+    // The distributed rows have no dictionaries, and the distribution is the input
+    // of the plan that replaces them, so that the optimizer adds no repartition.
+    assert!(input.children()[0].is::<KeyDistributionExec>());
     assert!(
         !input
             .schema()

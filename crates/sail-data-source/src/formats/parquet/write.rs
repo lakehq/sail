@@ -106,11 +106,13 @@ impl WriteFormat for ParquetWriteFormat {
 /// Returns the input with its rows distributed by the partition columns, so that
 /// the rows of each partition directory are written by one task and to one file.
 ///
-/// The rows are distributed, and sorted when the write requires an ordering,
-/// with the values of dictionaries in place of the dictionaries, since
-/// the operators that do this combine batches, and batches with dictionaries
-/// of their own cannot always be combined. The writer returns the rows
-/// to the data types of the input.
+/// The distributed rows have the values of dictionaries in place of
+/// the dictionaries, since the sort of the rows that the write can require,
+/// and the sort in the writer, combine batches, and batches with dictionaries
+/// of their own cannot always be combined. The writer returns the rows to
+/// the data types of the input. The dictionaries are replaced above the
+/// distribution and not below it, where the optimizer would repartition
+/// the input of the computed columns and the partitions of the query would be lost.
 ///
 /// The number of files and the number of files that are open at the same time
 /// then follow from the number of directories and not from the number of tasks.
@@ -127,7 +129,6 @@ pub(super) fn distribute_by_partition_columns(
     if partition_columns.is_empty() {
         return Ok(input);
     }
-    let input = without_dictionary_columns(input)?;
     let schema = input.schema();
     let keys = partition_columns
         .iter()
@@ -136,7 +137,7 @@ pub(super) fn distribute_by_partition_columns(
             Err(_) => plan_err!("partition column {column} does not exist in schema {schema}"),
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(Arc::new(KeyDistributionExec::new(input, keys, partitions)))
+    without_dictionary_columns(Arc::new(KeyDistributionExec::new(input, keys, partitions)))
 }
 
 /// Returns the ordering of the input if the input is sorted by the query.

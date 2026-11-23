@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The rows of a partitioned write are distributed and sorted without their
-//! dictionaries, and the files are written with them.
+//! The rows of a partitioned write are sorted without their dictionaries,
+//! and the files are written with them.
 //!
-//! The operators that distribute and sort rows combine the batches that they
-//! receive. Batches with dictionaries of their own cannot always be combined,
-//! since the dictionary of the combined batch can have more values than
-//! the type of the keys can refer to, and a batch that is divided has
-//! the whole dictionary in each of its parts. So the plan of the write replaces
-//! each dictionary with its values before the rows are distributed, and
+//! A sort combines the batches that it receives. Batches with dictionaries
+//! of their own cannot always be combined, since the dictionary of the combined
+//! batch can have more values than the type of the keys can refer to, and
+//! a batch that the distribution of the rows has divided has the whole
+//! dictionary in each of its parts. So the plan of the write replaces each
+//! dictionary with its values after the rows are distributed, and
 //! the writer task returns the rows to the data types of the files.
 
 use std::sync::Arc;

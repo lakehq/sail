@@ -214,6 +214,27 @@ mod tests {
     }
 
     #[test]
+    fn test_columns_computed_from_distributed_rows_keep_partitions_of_query() -> Result<()> {
+        // The Parquet write computes columns from the rows that it has distributed.
+        // The optimizer repartitions the input of computed columns that has fewer
+        // partitions than the target, which the distribution never has, so the
+        // partitions of the query are kept when the distribution is removed.
+        let input = explicit(Partitioning::RoundRobinBatch(3))?;
+        let keys = vec![column("p", 0)];
+        let distribution = Arc::new(KeyDistributionExec::new(input, keys, TARGET_PARTITIONS));
+        let mut plan = projection(distribution)?;
+        let mut config = ConfigOptions::default();
+        config.execution.target_partitions = TARGET_PARTITIONS;
+        for rule in get_physical_optimizers(PhysicalOptimizerOptions::default()) {
+            plan = rule.optimize(plan, &config)?;
+        }
+        assert!(plan.is::<ProjectionExec>());
+        assert!(!plan.children()[0].is::<KeyDistributionExec>());
+        assert_eq!(plan.output_partitioning().partition_count(), 3);
+        Ok(())
+    }
+
+    #[test]
     fn test_key_distribution_of_input_without_explicit_partitions() -> Result<()> {
         assert_eq!(kept_partitions(source(4)?)?, None);
         assert_eq!(kept_partitions(source(32)?)?, None);
