@@ -197,13 +197,17 @@ pub(crate) fn cast_to_session_timestamp(
     data_type: &DataType,
     session_timezone: &Arc<str>,
 ) -> expr::Expr {
-    let label = sail_common_datafusion::utils::datetime::arrow_timezone_label(session_timezone);
-    let target = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(label.as_ref())));
+    let target = session_timestamp_type(session_timezone);
     match data_type {
         DataType::Timestamp(_, None) => cast_timestamp_ntz_to_ltz(value, session_timezone, false),
         DataType::Timestamp(_, Some(_)) if data_type != &target => cast(value, target),
         _ => value,
     }
+}
+
+fn session_timestamp_type(session_timezone: &str) -> DataType {
+    let label = sail_common_datafusion::utils::datetime::arrow_timezone_label(session_timezone);
+    DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(label.as_ref())))
 }
 
 /// A variadic function whose TIMESTAMP_NTZ and TIMESTAMP arguments are cast to their common type.
@@ -246,8 +250,6 @@ fn common_timestamp_type(
     right: &DataType,
     session_timezone: &Arc<str>,
 ) -> Option<(DataType, bool)> {
-    let session_timestamp =
-        || DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_timezone)));
     let field = |left: &FieldRef, right: &FieldRef| {
         common_timestamp_type(left.data_type(), right.data_type(), session_timezone).map(
             |(data_type, mixed)| {
@@ -267,10 +269,10 @@ fn common_timestamp_type(
         _ if left == right => Some((left.clone(), false)),
         (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
         | (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
-            Some((session_timestamp(), true))
+            Some((session_timestamp_type(session_timezone), true))
         }
         (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, Some(_))) => {
-            Some((session_timestamp(), false))
+            Some((session_timestamp_type(session_timezone), false))
         }
         (DataType::List(left), DataType::List(right)) => {
             field(left, right).map(|(field, mixed)| (DataType::List(field), mixed))
@@ -410,15 +412,13 @@ fn with_session_timestamps(
             .collect()
     }
     match data_type {
-        DataType::Timestamp(_, Some(_)) => {
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_timezone)))
-        }
+        DataType::Timestamp(_, Some(_)) => session_timestamp_type(session_timezone),
         DataType::Timestamp(_, None)
             if others
                 .iter()
                 .any(|other| matches!(other, DataType::Timestamp(_, Some(_)))) =>
         {
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_timezone)))
+            session_timestamp_type(session_timezone)
         }
         DataType::List(inner) => DataType::List(field(inner, &elements(others))),
         DataType::LargeList(inner) => DataType::LargeList(field(inner, &elements(others))),

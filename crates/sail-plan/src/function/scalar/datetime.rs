@@ -17,6 +17,7 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::{MICROS_PER_DAY, is_fixed_zero_offset_timezone};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -109,6 +110,10 @@ fn date_part_argument(
     part: Option<&str>,
     context: &FunctionContextInput,
 ) -> PlanResult<Expr> {
+    // Epoch counts elapsed seconds, independent of the session's wall clock.
+    if part.is_some_and(|p| p.trim_matches(['\'', '"']).eq_ignore_ascii_case("epoch")) {
+        return Ok(value);
+    }
     let value = if value.get_type(context.schema)?.is_string()
         && part.is_some_and(|p| {
             matches!(
@@ -117,7 +122,7 @@ fn date_part_argument(
             )
         }) {
         session_timestamp(value, context)?
-    } else if part.is_some_and(|part| !part.eq_ignore_ascii_case("epoch")) {
+    } else if part.is_some() {
         calendar_date_argument(value, context)?
     } else {
         value
@@ -1266,7 +1271,14 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
 }
 
 fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (part, date) = input.arguments.two()?;
+    let (mut part, date) = input.arguments.two()?;
+    if !matches!(&part, Expr::Literal(_, _))
+        && !part.is_volatile()
+        && !expr_contains_python_udf(&part)?
+        && let Ok(value) = LiteralEvaluator::new().evaluate(&part)
+    {
+        part = Expr::Literal(value, None);
+    }
     let field = match &part {
         Expr::Literal(value, _) => value.try_as_str().flatten(),
         _ => None,

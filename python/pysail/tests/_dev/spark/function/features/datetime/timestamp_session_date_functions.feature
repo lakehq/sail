@@ -206,3 +206,27 @@ Feature: Date functions read TIMESTAMP values in the session time zone
     Then query result
       | instant | wall                |
       | 0       | 1970-01-01 05:45:00 |
+
+  @sail-only
+  Scenario: Epoch extraction preserves the instant in a subminute session offset
+    Given config spark.sql.session.timeZone = +05:30:45
+    When query
+      """
+      SELECT date_part('epoch', timestamp_micros(0L)) AS epoch
+      """
+    Then query result
+      | epoch |
+      | 0.0   |
+
+  Scenario: Foldable date part fields use the same conversions as literal fields
+    Given config spark.sql.session.timeZone = Europe/Amsterdam
+    When query
+      """
+      SELECT date_part(concat('ho', 'ur'), s) AS local_hour,
+             date_part(concat('d', 'ay'), s) AS written_day,
+             date_part(concat('se', 'cond'), s) AS fractional_second
+      FROM (SELECT '2019-12-31 23:30:01.234567Z' AS s)
+      """
+    Then query result
+      | local_hour | written_day | fractional_second |
+      | 0          | 31          | 1.234567          |

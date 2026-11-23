@@ -19,10 +19,10 @@ use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, Volatility, cast, lit,
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
-use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
 use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
-use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ltz_to_ntz;
+use sail_function::scalar::datetime::date::Date;
 
 /// Converts the casts of TIMESTAMP_NTZ to TIMESTAMP, which type coercion adds, like Spark.
 ///
@@ -47,6 +47,16 @@ pub(crate) fn convert_session_timestamp_casts(
     let timezone = &arrow_timezone_label(timezone);
     let rewriter = Rewriter {
         session_timezone,
+        subminute_offset: if timezone.as_ref() == "UTC"
+            && !is_fixed_zero_offset_timezone(session_timezone)
+        {
+            match SparkZone::parse(session_timezone)? {
+                SparkZone::Fixed(offset) => Some(offset.local_minus_utc()),
+                SparkZone::Named(_) => None,
+            }
+        } else {
+            None
+        },
         timezone,
         converts: !is_fixed_zero_offset_timezone(session_timezone),
         config,
@@ -79,6 +89,7 @@ pub(crate) fn convert_session_timestamp_casts(
 struct Rewriter<'a> {
     session_timezone: &'a str,
     timezone: &'a str,
+    subminute_offset: Option<i32>,
     /// Whether casts to the session time zone convert, which they need for DST gaps and overlaps,
     /// and for a fixed offset near the ends of Chrono's range, where Arrow's cast panics.
     converts: bool,
@@ -88,11 +99,8 @@ struct Rewriter<'a> {
 }
 
 impl Rewriter<'_> {
-    fn uses_subminute_offset(&self) -> bool {
-        self.timezone == "UTC" && self.converts
-    }
-
     fn rewrite(&self, expr: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
+        let is_try = matches!(expr, Expr::TryCast(_));
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
                 if let Some(expr) = self.unwrap_date_cast(&left, op, &right, schema) {
@@ -169,11 +177,12 @@ impl Rewriter<'_> {
             Expr::Cast(Cast { expr: value, field })
             | Expr::TryCast(TryCast { expr: value, field })
                 if *field.data_type() == DataType::Date32
-                    && self.uses_subminute_offset()
+                    && let Some(offset) = self.subminute_offset
                     && matches!(value.get_type(schema)?, DataType::Timestamp(_, Some(_))) =>
             {
-                let wall = cast_timestamp_ltz_to_ntz(*value, self.session_timezone, false);
-                Ok(Transformed::yes(cast(wall, DataType::Date32)))
+                Ok(Transformed::yes(
+                    ScalarUDF::from(Date::new(is_try)).call(vec![*value, lit(offset)]),
+                ))
             }
             Expr::Cast(Cast { expr: value, field }) => {
                 if self.converts
@@ -252,7 +261,7 @@ impl Rewriter<'_> {
         };
         // A constant value is converted like any other cast, and the optimizer folds the
         // comparison, like Spark's constant folding before it unwraps casts.
-        if is_foldable_constant(value) || self.uses_subminute_offset() {
+        if is_foldable_constant(value) || self.subminute_offset.is_some() {
             return None;
         }
         let DataType::Timestamp(value_unit, None) = value.get_type(schema).ok()? else {
@@ -294,7 +303,7 @@ impl Rewriter<'_> {
         let DataType::Timestamp(unit, Some(label)) = value.get_type(schema).ok()? else {
             return None;
         };
-        if label.as_ref() == self.timezone || self.uses_subminute_offset() {
+        if label.as_ref() == self.timezone || self.subminute_offset.is_some() {
             return None;
         }
         let Some(ScalarValue::Date32(Some(days))) = self.constant_value(constant) else {

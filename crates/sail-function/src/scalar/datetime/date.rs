@@ -5,7 +5,7 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -34,6 +34,48 @@ impl Date {
 
     pub fn is_try(&self) -> bool {
         self.is_try
+    }
+
+    /// Compute the local epoch day directly. A valid date can be outside the range of a
+    /// timestamp after applying the session offset.
+    fn fixed_offset_date(
+        &self,
+        timestamp: ColumnarValue,
+        unit: TimeUnit,
+        offset_seconds: i32,
+    ) -> Result<ColumnarValue> {
+        let ticks_per_second: i128 = match unit {
+            TimeUnit::Second => 1,
+            TimeUnit::Millisecond => 1_000,
+            TimeUnit::Microsecond => 1_000_000,
+            TimeUnit::Nanosecond => 1_000_000_000,
+        };
+        let scalar = matches!(timestamp, ColumnarValue::Scalar(_));
+        let array = timestamp.to_array(1)?;
+        let ticks = datafusion::arrow::compute::cast(&array, &DataType::Int64)?;
+        let ticks = datafusion_common::cast::as_int64_array(&ticks)?;
+        let days = ticks
+            .iter()
+            .map(|value| {
+                let Some(value) = value else {
+                    return Ok(None);
+                };
+                let local = i128::from(value) + i128::from(offset_seconds) * ticks_per_second;
+                let day = local.div_euclid(86_400 * ticks_per_second);
+                match i32::try_from(day) {
+                    Ok(day) => Ok(Some(day)),
+                    Err(_) if self.is_try => Ok(None),
+                    Err(_) => exec_err!("[DATETIME_OVERFLOW] date out of range"),
+                }
+            })
+            .collect::<Result<Date32Array>>()?;
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &days, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(Arc::new(days)))
+        }
     }
 
     fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
@@ -88,6 +130,11 @@ impl ScalarUDFImpl for Date {
             }
             _ => return exec_err!("spark_date requires 1 or 2 arguments"),
         };
+        if let DataType::Timestamp(unit, Some(_)) = arg.data_type()
+            && let Some(ColumnarValue::Scalar(ScalarValue::Int32(Some(offset)))) = &format
+        {
+            return self.fixed_offset_date(arg, unit, *offset);
+        }
         let is_try = self.is_try;
         match (arg, format) {
             (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
