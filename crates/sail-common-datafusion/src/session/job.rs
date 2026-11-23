@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::task::Poll;
 
 use datafusion::common::{Result, exec_err};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
-use futures::{TryStreamExt, stream};
+use futures::stream;
 use tokio_util::sync::CancellationToken;
 
 use crate::extension::SessionExtension;
@@ -64,18 +65,30 @@ impl ServerShutdown {
 
     pub fn cancel_stream_on_shutdown(
         ctx: &SessionContext,
-        input: SendableRecordBatchStream,
+        mut input: SendableRecordBatchStream,
     ) -> SendableRecordBatchStream {
         let Some(shutdown) = ctx.state_ref().read().config().get_extension::<Self>() else {
             return input;
         };
         let schema = input.schema();
-        let stream = stream::try_unfold((input, shutdown), |(mut input, shutdown)| async move {
-            tokio::select! {
-                biased;
-                () = shutdown.cancelled() => exec_err!("query cancelled because the server is shutting down"),
-                batch = input.try_next() => Ok(batch?.map(|batch| (batch, (input, shutdown)))),
+        let mut cancelled = Box::pin(async move { shutdown.cancelled().await });
+        let mut done = false;
+        let stream = stream::poll_fn(move |cx| {
+            if done {
+                return Poll::Ready(None);
             }
+
+            if cancelled.as_mut().poll(cx).is_ready() {
+                // Deliver the error before dropping the input. Its cleanup may wait for a Python UDF.
+                done = true;
+                return Poll::Ready(Some(exec_err!(
+                    "query cancelled because the server is shutting down"
+                )));
+            }
+
+            let next = input.as_mut().poll_next(cx);
+            done = matches!(next, Poll::Ready(None));
+            next
         });
         Box::pin(RecordBatchStreamAdapter::new(schema, stream))
     }
