@@ -9,6 +9,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{Expr, LogicalPlan, Projection, TableSource, Window};
 use datafusion::optimizer::AnalyzerRule;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
+use sail_data_source::listing::RegisteredTableSource;
 use sail_data_source::listing::table::ListingTableSource;
 use sail_delta_lake::logical::table_source::DeltaTableSource;
 use sail_iceberg::logical::table_source::IcebergTableSource;
@@ -174,6 +175,7 @@ fn file_source_count(plan: &LogicalPlan) -> usize {
     match plan {
         LogicalPlan::TableScan(scan) => usize::from(
             scan.source.is::<ListingTableSource>()
+                || scan.source.is::<RegisteredTableSource>()
                 || scan.source.is::<DeltaTableSource>()
                 || scan.source.is::<IcebergTableSource>(),
         ),

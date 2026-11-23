@@ -46,6 +46,9 @@ pub struct ResolveLakehouseTableRequest {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct LakehouseResolvedTable {
+    /// File reader defaults from the catalog storage descriptor.
+    #[serde(default)]
+    pub file_read_options: Vec<(String, String)>,
     pub status: LakehouseStatusHints,
     pub execution: LakehouseExecutionContext,
     pub runtime: Option<LakehouseRuntimeAccess>,
@@ -223,6 +226,7 @@ pub fn resolve_lakehouse_table_status(
         scan,
     );
     LakehouseResolvedTable {
+        file_read_options: vec![],
         status: LakehouseStatusHints {
             lifecycle,
             format,
@@ -298,6 +302,7 @@ pub fn plan_lakehouse_create_from_requirement(
 
     LakehouseCreatePlan {
         table: LakehouseResolvedTable {
+            file_read_options: vec![],
             status: LakehouseStatusHints {
                 lifecycle,
                 format,

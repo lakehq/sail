@@ -13,7 +13,7 @@ use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, is_lakehouse_format,
 };
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
-use sail_data_source::listing::cast_catalog_partition_value;
+use sail_data_source::listing::{RegisteredTableSource, cast_catalog_partition_value};
 use sail_data_source::parse_absolute_directory_url;
 use url::Position;
 
@@ -28,6 +28,7 @@ impl PlanResolver<'_> {
         registry: &DataSourceRegistry,
         reference: &[String],
         format: &str,
+        file_read_options: Vec<(String, String)>,
         info: SourceInfo,
     ) -> PlanResult<Vec<Arc<dyn TableSource>>> {
         let partitions = if !info.partition_by.is_empty() && !is_lakehouse_format(format) {
@@ -60,12 +61,11 @@ impl PlanResolver<'_> {
         // Each file scan uses one reader and one object store. Most tables need only one scan.
         let mut groups = BTreeMap::new();
         for partition in partitions {
-            let location = partition.location.as_deref().ok_or_else(|| {
-                PlanError::invalid("catalog partition is missing its storage location")
-            })?;
-            let url = parse_absolute_directory_url(location).ok_or_else(|| {
-                PlanError::invalid(format!("invalid catalog partition location: {location}"))
-            })?;
+            let store = partition
+                .location
+                .as_deref()
+                .and_then(parse_absolute_directory_url)
+                .map(|url| url[..Position::BeforePath].to_string());
             if partition.values.len() != fields.len() {
                 return Err(PlanError::invalid(
                     "catalog partition value count does not match its columns",
@@ -87,17 +87,17 @@ impl PlanResolver<'_> {
             groups
                 .entry((
                     partition.format.unwrap_or_else(|| format.to_string()),
-                    url[..Position::BeforePath].to_string(),
+                    store,
                     partition.read_options,
                 ))
                 .or_insert_with(Vec::new)
                 .push(RegisteredPartition {
-                    location: url,
+                    location: partition.location,
                     values,
                 });
         }
         let mut scans = Vec::with_capacity(groups.len());
-        for ((format, _, read_options), partitions) in groups {
+        for ((partition_format, _, read_options), partitions) in groups {
             let mut info = info.clone();
             // Partition storage overrides table properties. Explicit query options come last.
             let index = info
@@ -109,11 +109,16 @@ impl PlanResolver<'_> {
                     items: read_options,
                 },
             );
-            let source = registry
-                .get_data_source(&format)?
-                .create_partitioned_source(&ctx, info, partitions)
-                .await?;
-            scans.push(source);
+            if partition_format == format && !file_read_options.is_empty() {
+                info.options.insert(
+                    0,
+                    OptionLayer::OptionList {
+                        items: file_read_options.clone(),
+                    },
+                );
+            }
+            let source = RegisteredTableSource::try_new(partition_format, info, partitions)?;
+            scans.push(Arc::new(source) as Arc<dyn TableSource>);
         }
         Ok(scans)
     }

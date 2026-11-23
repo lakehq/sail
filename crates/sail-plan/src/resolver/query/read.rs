@@ -346,6 +346,7 @@ impl PlanResolver<'_> {
                                     &data_source_registry,
                                     &catalog_reference,
                                     &format,
+                                    resolved.file_read_options,
                                     info,
                                 )
                                 .await?

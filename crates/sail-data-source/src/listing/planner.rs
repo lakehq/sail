@@ -43,7 +43,7 @@ use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::partition::qualified_partition_path;
-use crate::listing::registered::prepare_registered_scan;
+use crate::listing::registered::{RegisteredTableSource, prepare_registered_scan};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -98,12 +98,24 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.downcast_ref::<ListingTableSource>() else {
+        let filters = unnormalize_cols(scan.filters.clone());
+        let resolved;
+        let source = if let Some(registered) = scan.source.downcast_ref::<RegisteredTableSource>() {
+            let Some(source) = registered.resolve(session, &filters).await? else {
+                return Ok(Some(Arc::new(EmptyExec::new(Arc::clone(
+                    scan.projected_schema.inner(),
+                )))));
+            };
+            resolved = source;
+            &resolved
+        } else {
+            &scan.source
+        };
+        let Some(source) = source.downcast_ref::<ListingTableSource>() else {
             return Ok(None);
         };
 
         let projection = source.scan_projection(scan.projection.as_deref());
-        let filters = unnormalize_cols(scan.filters.clone());
         let limit = scan.fetch;
 
         let (partition_filters, filters) = source.split_partition_filters(filters);
@@ -111,9 +123,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let prepared = match source.registered_read {
-            Some(options) => {
-                Some(prepare_registered_scan(source, session, &partition_filters, options).await?)
-            }
+            Some(options) => Some(prepare_registered_scan(source, session, options).await?),
             None => None,
         };
         let (source, remaining_filters) = match &prepared {

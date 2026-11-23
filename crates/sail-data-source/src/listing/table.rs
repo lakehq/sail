@@ -90,17 +90,8 @@ impl ListingTableSource {
         }
     }
 
-    fn partition_column_names(&self) -> Vec<&str> {
-        self.config
-            .schema
-            .table_partition_cols()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect()
-    }
-
     pub(super) fn split_partition_filters(&self, filters: Vec<Expr>) -> (Vec<Expr>, Vec<Expr>) {
-        let names = self.partition_column_names();
+        let names = partition_column_names(&self.config.schema);
         filters
             .into_iter()
             .partition(|filter| can_be_evaluated_for_partition_pruning(&names, filter))
@@ -128,18 +119,31 @@ impl TableSource for ListingTableSource {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // Expressions can be used for partition pruning if they can be evaluated
-        // using only the partition columns and there are partition columns.
-        let partition_column_names = self.partition_column_names();
-
-        filters
-            .iter()
-            .map(|filter| {
-                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter) {
-                    return Ok(TableProviderFilterPushDown::Exact);
-                }
-                Ok(TableProviderFilterPushDown::Inexact)
-            })
-            .collect()
+        Ok(listing_filter_pushdown(&self.config.schema, filters))
     }
+}
+
+pub(super) fn partition_column_names(schema: &TableSchema) -> Vec<&str> {
+    schema
+        .table_partition_cols()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect()
+}
+
+pub(super) fn listing_filter_pushdown(
+    schema: &TableSchema,
+    filters: &[&Expr],
+) -> Vec<TableProviderFilterPushDown> {
+    let names = partition_column_names(schema);
+    filters
+        .iter()
+        .map(|filter| {
+            if can_be_evaluated_for_partition_pruning(&names, filter) {
+                TableProviderFilterPushDown::Exact
+            } else {
+                TableProviderFilterPushDown::Inexact
+            }
+        })
+        .collect()
 }

@@ -10,7 +10,7 @@ use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
 use url::Url;
 
-use crate::listing::registered::prune_paths;
+use crate::listing::registered::RegisteredTableSource;
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{is_direct_input, list_all_files, list_partition_files};
 
@@ -21,18 +21,10 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     let plan = state.optimize(&plan)?;
 
     // Collect the listing table sources referenced anywhere in the plan.
-    let mut configs = Vec::new();
+    let mut scans = Vec::new();
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node
-            && let Some(source) = scan.source.downcast_ref::<ListingTableSource>()
-        {
-            let mut config = source.config().clone();
-            if source.registered_read.is_some() {
-                let (filters, _) =
-                    source.split_partition_filters(unnormalize_cols(scan.filters.clone()));
-                prune_paths(&mut config, &state, &filters)?;
-            }
-            configs.push(config);
+        if let LogicalPlan::TableScan(scan) = node {
+            scans.push((scan.source.clone(), unnormalize_cols(scan.filters.clone())));
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -41,7 +33,19 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     // List each (path, filter) once so a repeated scan (e.g. `df.union(df)`) isn't re-listed.
     let mut listed: HashSet<(String, Option<String>, bool)> = HashSet::new();
 
-    for config in &configs {
+    for (source, filters) in scans {
+        let source = if let Some(registered) = source.downcast_ref::<RegisteredTableSource>() {
+            let Some(resolved) = registered.resolve(&state, &filters).await? else {
+                continue;
+            };
+            resolved
+        } else {
+            source
+        };
+        let Some(source) = source.downcast_ref::<ListingTableSource>() else {
+            continue;
+        };
+        let config = source.config();
         let path_glob_filter = config.path_glob_filter.as_ref();
         let direct_only = config.direct_files_only();
         for (table_path, values) in &config.table_paths {

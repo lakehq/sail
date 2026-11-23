@@ -220,9 +220,9 @@ pub struct BucketBy {
 }
 
 /// A literal catalog location and its values in declared partition column order.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RegisteredPartition {
-    pub location: url::Url,
+    pub location: Option<String>,
     pub values: Vec<datafusion_common::ScalarValue>,
 }
 

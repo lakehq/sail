@@ -408,7 +408,19 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .transpose()?;
         let paths = partitions
             .into_iter()
-            .map(|p| Ok((ListingTableUrl::try_new(p.location, None)?, Some(p.values))))
+            .map(|p| {
+                let location = p.location.ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "catalog partition is missing its storage location"
+                    )
+                })?;
+                let url = crate::parse_absolute_directory_url(&location).ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "invalid catalog partition location: {location}"
+                    )
+                })?;
+                Ok((ListingTableUrl::try_new(url, None)?, Some(p.values)))
+            })
             .collect::<Result<_>>()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: paths,

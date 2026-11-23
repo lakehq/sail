@@ -89,11 +89,25 @@ def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
                     "StorageDescriptor": {"Location": location, **json_format},
                 },
             )
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName="registered_partition_reads",
+            PartitionInput={
+                "Values": ["11", "2025-03", "unsupported"],
+                "StorageDescriptor": {
+                    "Location": str(root / "orc"),
+                    "InputFormat": "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat",
+                },
+            },
+        )
         selected = spark.table(table).where("p IS NULL")
         assert selected.select("id").collect() == [(2,)]
         assert [unquote(uri) for uri in selected.inputFiles()] == [unquote((json_dir / "data.json").as_uri())]
         with pytest.raises(Exception, match="unavailable"):
             spark.table(table).where("p = 10").collect()
+
+        with pytest.raises(Exception, match="orc"):
+            spark.table(table).where("p = 11").collect()
 
         glue.create_partition(
             DatabaseName="test_db",
@@ -169,6 +183,44 @@ def test_registered_csv_partition_options(spark, moto_endpoint, tmp_path):
                         },
                     },
                 },
+            )
+        assert spark.table(table).orderBy("p").collect() == [(1, "a|b", 1), (2, "a;b", 2)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_registered_csv_inherits_table_serde(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_csv_inherits_table_serde"
+    table = f"test_db.{name}"
+    glue.create_table(
+        DatabaseName="test_db",
+        TableInput={
+            "Name": name,
+            "TableType": "EXTERNAL_TABLE",
+            "PartitionKeys": [{"Name": "p", "Type": "int"}],
+            "StorageDescriptor": {
+                "Columns": [{"Name": "id", "Type": "int"}, {"Name": "value", "Type": "string"}],
+                "Location": str(tmp_path),
+                "SerdeInfo": {
+                    "SerializationLibrary": "org.apache.hadoop.hive.serde2.OpenCSVSerde",
+                    "Parameters": {"separatorChar": "|", "quoteChar": "'"},
+                },
+            },
+        },
+    )
+    try:
+        for p, separator in [(1, "|"), (2, ";")]:
+            path = tmp_path / str(p)
+            path.mkdir()
+            (path / "data.csv").write_text(f"{p}{separator}'a{separator}b'\n")
+            descriptor = {"Location": str(path)}
+            if p == 2:
+                descriptor["SerdeInfo"] = {"Parameters": {"separatorChar": separator}}
+            glue.create_partition(
+                DatabaseName="test_db",
+                TableName=name,
+                PartitionInput={"Values": [str(p)], "StorageDescriptor": descriptor},
             )
         assert spark.table(table).orderBy("p").collect() == [(1, "a|b", 1), (2, "a;b", 2)]
     finally:
