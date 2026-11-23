@@ -381,6 +381,10 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         Ok(Arc::new(source))
     }
 
+    fn supports_registered_partitions(&self) -> bool {
+        true
+    }
+
     async fn create_partitioned_source(
         &self,
         ctx: &dyn Session,

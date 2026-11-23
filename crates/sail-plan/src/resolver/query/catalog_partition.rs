@@ -3,14 +3,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use datafusion::datasource::empty::EmptyTable;
-use datafusion::datasource::provider_as_source;
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
+use sail_catalog::hive_format::HiveStorageFormat;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::datasource::{
     DataSourceRegistry, OptionLayer, RegisteredPartition, SourceInfo,
-    get_partition_columns_and_file_schema, is_lakehouse_format,
+    get_partition_columns_and_file_schema,
 };
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_data_source::listing::{RegisteredTableSource, cast_catalog_partition_value};
@@ -31,7 +30,13 @@ impl PlanResolver<'_> {
         file_read_options: Vec<(String, String)>,
         info: SourceInfo,
     ) -> PlanResult<Vec<Arc<dyn TableSource>>> {
-        let partitions = if !info.partition_by.is_empty() && !is_lakehouse_format(format) {
+        // A registered non-file provider owns its reads. An unsupported Hive file format
+        // can still have readable partitions with explicit storage descriptors.
+        let partitions = if !info.partition_by.is_empty()
+            && registry.get_data_source_if_registered(format)?.map_or_else(
+                || HiveStorageFormat::from_format(format).is_ok(),
+                |s| s.supports_registered_partitions(),
+            ) {
             manager
                 .file_partitions_for_scan(reference, info.partition_by.len())
                 .await?
@@ -53,9 +58,11 @@ impl PlanResolver<'_> {
             .as_ref()
             .ok_or_else(|| PlanError::internal("missing catalog schema"))?;
         if partitions.is_empty() {
-            return Ok(vec![provider_as_source(Arc::new(EmptyTable::new(
-                Arc::new(schema.clone()),
-            )))]);
+            return Ok(vec![Arc::new(RegisteredTableSource::try_new(
+                format.to_string(),
+                info,
+                vec![],
+            )?)]);
         }
         let (fields, _) = get_partition_columns_and_file_schema(schema, info.partition_by.clone())?;
         // Each file scan uses one reader and one object store. Most tables need only one scan.
@@ -86,7 +93,7 @@ impl PlanResolver<'_> {
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
             groups
                 .entry((
-                    partition.format.unwrap_or_else(|| format.to_string()),
+                    partition.format.resolve(format),
                     store,
                     partition.read_options,
                 ))

@@ -9,8 +9,8 @@ use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
     CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
-    plain_lakehouse_create_table_metadata_requirement,
+    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace,
+    PartitionFileFormat, PartitionTransform, plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -1163,7 +1163,7 @@ impl CatalogProvider for HmsCatalogProvider {
                 read_options: vec![],
                 location: crate::convert::table_location(&metadata)
                     .map(sail_catalog::hive_format::file_source_location),
-                format: Some(crate::convert::resolve_data_source_format(
+                format: PartitionFileFormat::Explicit(crate::convert::resolve_data_source_format(
                     metadata.parameters.as_ref(),
                     metadata.sd.as_ref(),
                 )),
@@ -1224,10 +1224,9 @@ impl CatalogProvider for HmsCatalogProvider {
                 CatalogFilePartition {
                     read_options: vec![],
                     values: partition.values.unwrap_or_default(),
-                    format: Some(crate::convert::resolve_data_source_format(
-                        None,
-                        partition.sd.as_ref(),
-                    )),
+                    format: PartitionFileFormat::Explicit(
+                        crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
+                    ),
                     location: partition
                         .sd
                         .and_then(|sd| sd.location)

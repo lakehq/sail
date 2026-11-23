@@ -326,13 +326,32 @@ impl From<&AlterTableOptions>
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum PartitionFileFormat {
+    Inherit,
+    Explicit(String),
+    /// Hive text input/output classes without a SerDe to distinguish CSV, JSON, or text.
+    HiveText,
+}
+
+impl PartitionFileFormat {
+    pub fn resolve(self, table_format: &str) -> String {
+        match self {
+            Self::Explicit(format) => format,
+            Self::HiveText if !matches!(table_format, "csv" | "json" | "text" | "textfile") => {
+                "textfile".to_string()
+            }
+            Self::Inherit | Self::HiveText => table_format.to_string(),
+        }
+    }
+}
+
 /// A registered file-table partition. Values follow the table's partition-column order.
 #[derive(Debug, Clone)]
 pub struct CatalogFilePartition {
     pub values: Vec<String>,
     pub location: Option<String>,
-    /// Absent when the partition inherits the table format.
-    pub format: Option<String>,
+    pub format: PartitionFileFormat,
     /// Reader options declared in the partition storage descriptor.
     pub read_options: Vec<(String, String)>,
 }

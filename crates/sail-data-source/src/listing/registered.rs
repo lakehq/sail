@@ -56,6 +56,9 @@ impl RegisteredTableSource {
         session: &dyn Session,
         filters: &[Expr],
     ) -> Result<Option<Arc<dyn TableSource>>> {
+        if self.partitions.is_empty() {
+            return Ok(None);
+        }
         let partitions = self.prune_partitions(session, filters)?;
         if partitions.is_empty() {
             return Ok(None);

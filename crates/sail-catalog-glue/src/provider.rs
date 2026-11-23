@@ -10,7 +10,7 @@ use aws_sdk_glue::types::{
     Partition, StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::hive_format::HiveDetectedFormat;
+use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
 use sail_catalog::lakehouse::{
     LakehouseResolvedTable, ResolveLakehouseTableRequest, resolve_lakehouse_table_status,
 };
@@ -18,7 +18,7 @@ use sail_catalog::provider::{
     AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
     CreateTableMetadataRequirement, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode,
-    Namespace,
+    Namespace, PartitionFileFormat,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -483,19 +483,26 @@ fn csv_read_options(storage: Option<&StorageDescriptor>) -> Vec<(String, String)
 }
 
 fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
+    let storage = partition.storage_descriptor();
+    let serde = storage
+        .and_then(|sd| sd.serde_info())
+        .and_then(|s| s.serialization_library());
+    let input = storage.and_then(|sd| sd.input_format());
+    let output = storage.and_then(|sd| sd.output_format());
+    let text = HiveStorageFormat::textfile();
+    let format = if serde.is_none() && input.is_none() && output.is_none() {
+        PartitionFileFormat::Inherit
+    } else if serde.is_none()
+        && input.is_none_or(|i| i == text.input_format)
+        && output.is_none_or(|o| o == text.output_format)
+    {
+        PartitionFileFormat::HiveText
+    } else {
+        PartitionFileFormat::Explicit(hive_storage_format(storage))
+    };
     CatalogFilePartition {
-        read_options: csv_read_options(partition.storage_descriptor()),
-        format: partition
-            .storage_descriptor()
-            .filter(|sd| {
-                sd.input_format().is_some()
-                    || sd.output_format().is_some()
-                    || sd
-                        .serde_info()
-                        .and_then(|serde| serde.serialization_library())
-                        .is_some()
-            })
-            .map(|sd| hive_storage_format(Some(sd))),
+        read_options: csv_read_options(storage),
+        format,
         location: partition
             .storage_descriptor
             .and_then(|sd| sd.location)

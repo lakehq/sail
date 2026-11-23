@@ -23,7 +23,11 @@ def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
         f"PARTITIONED BY (p, day, label) LOCATION '{root.as_uri()}'"
     )
     try:
-        assert spark.table(table).collect() == []
+        empty = spark.table(table)
+        assert empty.collect() == []
+        assert empty.where("p = 7").inputFiles() == []
+        with pytest.raises(Exception, match="MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION"):
+            empty.alias("a").join(empty.alias("b"), "id", "left").selectExpr("input_file_name()").collect()
         parquet_dir = tmp_path / "outside[1]"
         parquet_dir.mkdir()
         pq.write_table(pa.table({"id": [1], "p": [999]}), parquet_dir / "data.parquet")
@@ -216,6 +220,7 @@ def test_registered_csv_inherits_table_serde(spark, moto_endpoint, tmp_path):
             (path / "data.csv").write_text(f"{p}{separator}'a{separator}b'\n")
             descriptor = {"Location": str(path)}
             if p == 2:
+                descriptor["InputFormat"] = "org.apache.hadoop.mapred.TextInputFormat"
                 descriptor["SerdeInfo"] = {"Parameters": {"separatorChar": separator}}
             glue.create_partition(
                 DatabaseName="test_db",
@@ -225,3 +230,30 @@ def test_registered_csv_inherits_table_serde(spark, moto_endpoint, tmp_path):
         assert spark.table(table).orderBy("p").collect() == [(1, "a|b", 1), (2, "a;b", 2)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.spark(version=">=4.1", reason="Uses the Python range data source with filter pushdown")
+def test_partitioned_python_table_keeps_its_reader(spark, moto_endpoint):
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
+    spark.dataSource.register(RangeDataSource)
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_python_table"
+    glue.create_table(
+        DatabaseName="test_db",
+        TableInput={
+            "Name": name,
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {
+                "spark.sql.sources.provider": RangeDataSource.name(),
+                "option.start": "42",
+                "option.end": "43",
+            },
+            "StorageDescriptor": {"Columns": []},
+            "PartitionKeys": [{"Name": "id", "Type": "bigint"}],
+        },
+    )
+    try:
+        assert spark.table(f"test_db.{name}").collect() == [(42,)]
+    finally:
+        glue.delete_table(DatabaseName="test_db", Name=name)

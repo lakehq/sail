@@ -498,6 +498,11 @@ pub trait DataSource: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
+    /// Whether catalog partition metadata controls ordinary reads of this data source.
+    fn supports_registered_partitions(&self) -> bool {
+        false
+    }
+
     /// Creates a file source for registered partitions in one object store.
     async fn create_partitioned_source(
         &self,
@@ -544,6 +549,11 @@ impl DataSourceRegistry {
     }
 
     pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
+        self.get_data_source_if_registered(name)?
+            .ok_or_else(|| missing_data_source_error(name))
+    }
+
+    pub fn get_data_source_if_registered(&self, name: &str) -> Result<Option<Arc<dyn DataSource>>> {
         let sources = self
             .sources
             .read()
@@ -558,10 +568,7 @@ impl DataSourceRegistry {
             | "org.apache.spark.sql.execution.datasources.json.jsonfileformat" => "json",
             _ => &normalized,
         };
-        sources
-            .get(canonical)
-            .cloned()
-            .ok_or_else(|| missing_data_source_error(name))
+        Ok(sources.get(canonical).cloned())
     }
 
     pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
