@@ -333,4 +333,6 @@ pub struct CatalogFilePartition {
     pub location: Option<String>,
     /// Absent when the partition inherits the table format.
     pub format: Option<String>,
+    /// Reader options declared in the partition storage descriptor.
+    pub read_options: Vec<(String, String)>,
 }

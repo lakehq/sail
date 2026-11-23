@@ -413,7 +413,28 @@ fn hive_storage_format(storage: Option<&StorageDescriptor>) -> String {
 }
 
 fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
+    let serde = partition
+        .storage_descriptor()
+        .and_then(|sd| sd.serde_info());
+    let csv_parameters = serde
+        .filter(|serde| {
+            serde.serialization_library() == Some("org.apache.hadoop.hive.serde2.OpenCSVSerde")
+        })
+        .and_then(|serde| serde.parameters());
+    let read_options = [
+        ("separatorChar", "delimiter"),
+        ("quoteChar", "quote"),
+        ("escapeChar", "escape"),
+    ]
+    .into_iter()
+    .filter_map(|(property, option)| {
+        csv_parameters?
+            .get(property)
+            .map(|value| (option.to_string(), value.clone()))
+    })
+    .collect();
     CatalogFilePartition {
+        read_options,
         format: partition
             .storage_descriptor()
             .filter(|sd| {

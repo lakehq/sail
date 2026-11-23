@@ -27,6 +27,7 @@ def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
         parquet_dir = tmp_path / "outside[1]"
         parquet_dir.mkdir()
         pq.write_table(pa.table({"id": [1], "p": [999]}), parquet_dir / "data.parquet")
+        (parquet_dir / "empty.parquet").touch()
         nested_stale = parquet_dir / "p=stale"
         nested_stale.mkdir()
         pq.write_table(pa.table({"id": [100]}), nested_stale / "data.parquet")
@@ -70,6 +71,7 @@ def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
         assert frame.where("p IS NULL").select("id").collect() == [(2,)]
         assert {unquote(uri) for uri in frame.inputFiles()} == {
             unquote((parquet_dir / "data.parquet").as_uri()),
+            unquote((parquet_dir / "empty.parquet").as_uri()),
             unquote((json_dir / "data.json").as_uri()),
             unquote((second_dir / "data.parquet").as_uri()),
         }
@@ -139,5 +141,35 @@ def test_registered_decimal_with_nested_directory(spark, moto_endpoint, tmp_path
             assert parent.inputFiles() == [(root / "data.json").as_uri()]
         finally:
             nested.chmod(mode)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_registered_csv_partition_options(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    table = "test_db.registered_csv_partitions"
+    spark.sql(
+        f"CREATE TABLE {table} (id INT, value STRING, p INT) USING parquet PARTITIONED BY (p) LOCATION '{tmp_path.as_uri()}'"
+    )
+    try:
+        for p, delimiter in [(1, "|"), (2, ";")]:
+            path = tmp_path / str(p)
+            path.mkdir()
+            (path / "part.csv").write_text(f"{p}{delimiter}'a{delimiter}b'\n")
+            glue.create_partition(
+                DatabaseName="test_db",
+                TableName="registered_csv_partitions",
+                PartitionInput={
+                    "Values": [str(p)],
+                    "StorageDescriptor": {
+                        "Location": str(path),
+                        "SerdeInfo": {
+                            "SerializationLibrary": "org.apache.hadoop.hive.serde2.OpenCSVSerde",
+                            "Parameters": {"separatorChar": delimiter, "quoteChar": "'"},
+                        },
+                    },
+                },
+            )
+        assert spark.table(table).orderBy("p").collect() == [(1, "a|b", 1), (2, "a;b", 2)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

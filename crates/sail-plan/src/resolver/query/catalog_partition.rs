@@ -9,8 +9,8 @@ use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::datasource::{
-    DataSourceRegistry, RegisteredPartition, SourceInfo, get_partition_columns_and_file_schema,
-    is_lakehouse_format,
+    DataSourceRegistry, OptionLayer, RegisteredPartition, SourceInfo,
+    get_partition_columns_and_file_schema, is_lakehouse_format,
 };
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_data_source::listing::cast_catalog_partition_value;
@@ -88,6 +88,7 @@ impl PlanResolver<'_> {
                 .entry((
                     partition.format.unwrap_or_else(|| format.to_string()),
                     url[..Position::BeforePath].to_string(),
+                    partition.read_options,
                 ))
                 .or_insert_with(Vec::new)
                 .push(RegisteredPartition {
@@ -96,10 +97,21 @@ impl PlanResolver<'_> {
                 });
         }
         let mut scans = Vec::with_capacity(groups.len());
-        for ((format, _), partitions) in groups {
+        for ((format, _, read_options), partitions) in groups {
+            let mut info = info.clone();
+            // Partition storage overrides table properties. Explicit query options come last.
+            let index = info
+                .options
+                .partition_point(|layer| matches!(layer, OptionLayer::TablePropertyList { .. }));
+            info.options.insert(
+                index,
+                OptionLayer::OptionList {
+                    items: read_options,
+                },
+            );
             let source = registry
                 .get_data_source(&format)?
-                .create_partitioned_source(&ctx, info.clone(), partitions)
+                .create_partitioned_source(&ctx, info, partitions)
                 .await?;
             scans.push(source);
         }

@@ -1160,6 +1160,7 @@ impl CatalogProvider for HmsCatalogProvider {
             let metadata = self.fetch_hms_table(database, table).await?;
             return Ok(Some(vec![CatalogFilePartition {
                 values: vec![],
+                read_options: vec![],
                 location: crate::convert::table_location(&metadata)
                     .map(sail_catalog::hive_format::file_source_location),
                 format: Some(crate::convert::resolve_data_source_format(
@@ -1221,6 +1222,7 @@ impl CatalogProvider for HmsCatalogProvider {
                 .await?;
             partitions.extend(batch.into_iter().map(|partition| {
                 CatalogFilePartition {
+                    read_options: vec![],
                     values: partition.values.unwrap_or_default(),
                     format: Some(crate::convert::resolve_data_source_format(
                         None,

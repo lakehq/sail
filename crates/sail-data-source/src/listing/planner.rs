@@ -415,13 +415,17 @@ async fn list_files_for_scan<'a>(
     } else {
         (filters, partition_cols_ref)
     };
-    let file_list = future::try_join_all(table_paths.iter().map(
-        |(table_path, registered_values)| async move {
+    let meta_fetch_concurrency: usize =
+        ctx.config_options().execution.meta_fetch_concurrency.into();
+    let file_list = stream::iter(table_paths.iter())
+        .map(|(table_path, registered_values)| async move {
             if let Some(values) = registered_values {
                 let files = list_partition_files(table_path, store_ref, path_glob_filter)
                     .await?
                     .try_filter_map(move |object| async move {
-                        if object.location.filename().is_some_and(is_metadata_file) {
+                        if object.size == 0
+                            || object.location.filename().is_some_and(is_metadata_file)
+                        {
                             return Ok(None);
                         }
                         let mut file = PartitionedFile::from(object)
@@ -467,23 +471,19 @@ async fn list_files_for_scan<'a>(
                 files.boxed()
             };
             Ok::<_, datafusion_common::DataFusionError>(files)
-        },
-    ))
-    .await?;
+        })
+        .buffered(meta_fetch_concurrency)
+        .try_flatten_unordered(meta_fetch_concurrency);
 
-    let meta_fetch_concurrency: usize =
-        ctx.config_options().execution.meta_fetch_concurrency.into();
     // Spark enumerates each input separately for a flat table. Partitioned and recursive
     // scans instead work from one list of distinct leaf files.
     let deduplicate = !registered
         && table_paths.len() > 1
         && (source.config().recursive_file_lookup || !partition_fields.is_empty());
     let mut seen = HashSet::new();
-    let file_list = stream::iter(file_list)
-        .flatten_unordered(meta_fetch_concurrency)
-        .try_filter(|file| {
-            future::ready(!deduplicate || seen.insert(file.object_meta.location.clone()))
-        });
+    let file_list = file_list.try_filter(|file| {
+        future::ready(!deduplicate || seen.insert(file.object_meta.location.clone()))
+    });
 
     let files = file_list
         .map(|part_file| async {
