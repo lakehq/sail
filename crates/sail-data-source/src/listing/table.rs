@@ -14,7 +14,7 @@ use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::partition::BasePathPartitions;
 use crate::listing::source::ReadFormat;
-use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::utils::{SchemaSampling, can_be_evaluated_for_partition_pruning};
 use crate::url::PathGlobFilter;
 
 #[derive(Clone, Debug)]
@@ -34,6 +34,22 @@ pub struct ListingTableSourceConfig {
     pub compression: CompressionTypeVariant,
 }
 
+impl ListingTableSourceConfig {
+    pub(super) fn direct_files_only(&self) -> bool {
+        self.table_paths
+            .first()
+            .is_some_and(|(_, values)| values.is_some())
+            || (self.base_path.is_some() && self.schema.table_partition_cols().is_empty())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RegisteredReadOptions {
+    pub sampling: SchemaSampling,
+    pub format: &'static str,
+    pub case_sensitive: bool,
+}
+
 /// A [`TableSource`] that represents reading one or more files via listing.
 ///
 /// This is a logical representation of the listing files data source,
@@ -42,6 +58,7 @@ pub struct ListingTableSourceConfig {
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
     output_schema: SchemaRef,
+    pub(super) registered_read: Option<RegisteredReadOptions>,
 }
 
 impl ListingTableSource {
@@ -54,7 +71,13 @@ impl ListingTableSource {
         Ok(Self {
             config,
             output_schema,
+            registered_read: None,
         })
+    }
+
+    pub(super) fn with_registered_read(mut self, options: RegisteredReadOptions) -> Self {
+        self.registered_read = Some(options);
+        self
     }
 
     pub(super) fn scan_projection(&self, projection: Option<&[usize]>) -> Option<Vec<usize>> {
@@ -65,6 +88,22 @@ impl ListingTableSource {
             (Some(indices), None) => Some(indices.clone()),
             (None, projection) => projection.map(<[_]>::to_vec),
         }
+    }
+
+    fn partition_column_names(&self) -> Vec<&str> {
+        self.config
+            .schema
+            .table_partition_cols()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect()
+    }
+
+    pub(super) fn split_partition_filters(&self, filters: Vec<Expr>) -> (Vec<Expr>, Vec<Expr>) {
+        let names = self.partition_column_names();
+        filters
+            .into_iter()
+            .partition(|filter| can_be_evaluated_for_partition_pruning(&names, filter))
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
@@ -91,13 +130,7 @@ impl TableSource for ListingTableSource {
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         // Expressions can be used for partition pruning if they can be evaluated
         // using only the partition columns and there are partition columns.
-        let partition_column_names = self
-            .config
-            .schema
-            .table_partition_cols()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
+        let partition_column_names = self.partition_column_names();
 
         filters
             .iter()

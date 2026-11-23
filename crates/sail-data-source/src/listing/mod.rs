@@ -4,6 +4,7 @@ pub mod delete;
 pub mod input_files;
 mod partition;
 pub mod planner;
+mod registered;
 pub mod source;
 pub mod table;
 pub mod utils;

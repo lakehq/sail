@@ -179,6 +179,7 @@ pub(super) async fn sample_listing_files<'a>(
     path_glob_filter: Option<&PathGlobFilter>,
     base_path: Option<&BasePathOptions>,
     recursive: bool,
+    registered: bool,
     sampling: SchemaSampling,
 ) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
     const SAMPLE_SIZE: usize = 10;
@@ -204,6 +205,11 @@ pub(super) async fn sample_listing_files<'a>(
             let start = objects.len();
             let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
             while let Some(file) = files.try_next().await? {
+                // A registered partition owns the files directly in its storage directory.
+                // Child directories can belong to other partitions or contain unregistered data.
+                if registered && !is_direct_input(url, &file.location) {
+                    continue;
+                }
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
                 let name = file.location.filename().unwrap_or_default();
                 let metadata_file = is_metadata_file(name);
@@ -213,7 +219,7 @@ pub(super) async fn sample_listing_files<'a>(
                     // Even empty and filtered files participate in partition discovery.
                     discovery.observe(url, &file.location, Some(base))?
                 } else {
-                    if !recursive && selected && file.size > 0 {
+                    if !recursive && !registered && selected && file.size > 0 {
                         discovery.observe(url, &file.location, None)?;
                     }
                     true

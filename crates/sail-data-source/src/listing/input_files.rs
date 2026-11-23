@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
 use std::collections::HashSet;
 
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::logical_expr::{LogicalPlan, TableScan};
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
 use url::Url;
 
+use crate::listing::registered::prune_paths;
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{is_direct_input, list_all_files};
 
@@ -20,14 +21,18 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     let plan = state.optimize(&plan)?;
 
     // Collect the listing table sources referenced anywhere in the plan.
-    let mut listing_sources: Vec<ListingTableSource> = vec![];
+    let mut configs = Vec::new();
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(TableScan { source, .. }) = node {
-            // Upcast to `Any` to downcast to the concrete source.
-            let source: &dyn Any = source.as_ref();
-            if let Some(listing) = source.downcast_ref::<ListingTableSource>() {
-                listing_sources.push(listing.clone());
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<ListingTableSource>()
+        {
+            let mut config = source.config().clone();
+            if source.registered_read.is_some() {
+                let (filters, _) =
+                    source.split_partition_filters(unnormalize_cols(scan.filters.clone()));
+                prune_paths(&mut config, &state, &filters)?;
             }
+            configs.push(config);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -36,11 +41,10 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     // List each (path, filter) once so a repeated scan (e.g. `df.union(df)`) isn't re-listed.
     let mut listed: HashSet<(String, Option<String>, bool)> = HashSet::new();
 
-    for source in &listing_sources {
-        let path_glob_filter = source.config().path_glob_filter.as_ref();
-        let direct_only = source.config().base_path.is_some()
-            && source.config().schema.table_partition_cols().is_empty();
-        for (table_path, _) in &source.config().table_paths {
+    for config in &configs {
+        let path_glob_filter = config.path_glob_filter.as_ref();
+        let direct_only = config.direct_files_only();
+        for (table_path, _) in &config.table_paths {
             if !listed.insert((
                 table_path.as_str().to_string(),
                 path_glob_filter.map(|filter| filter.as_str().to_string()),

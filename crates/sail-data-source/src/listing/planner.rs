@@ -25,7 +25,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{DFSchema, Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{DFSchema, Statistics, internal_err, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
@@ -36,17 +36,18 @@ use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::partition::qualified_partition_path;
+use crate::listing::registered::prepare_registered_scan;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, is_direct_input,
-    is_metadata_file, matches_path_glob_filter,
+    has_hidden_path_component, is_direct_input, is_metadata_file, matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -104,30 +105,29 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let filters = unnormalize_cols(scan.filters.clone());
         let limit = scan.fetch;
 
-        let partition_column_names = source
-            .config()
-            .schema
-            .table_partition_cols()
-            .iter()
-            .map(|col| col.name().as_str())
-            .collect::<Vec<_>>();
-
-        let (partition_filters, filters): (Vec<_>, Vec<_>) =
-            filters.iter().cloned().partition(|filter| {
-                can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
-            });
+        let (partition_filters, filters) = source.split_partition_filters(filters);
 
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
+        let prepared = match source.registered_read {
+            Some(options) => {
+                Some(prepare_registered_scan(source, session, &partition_filters, options).await?)
+            }
+            None => None,
+        };
+        let (source, remaining_filters) = match &prepared {
+            Some(prepared) => (prepared, &[][..]),
+            None => (source, partition_filters.as_slice()),
+        };
         let ListFilesResult {
             mut file_groups,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
-        } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
+        } = list_files_for_scan(source, session, remaining_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
         if file_groups.is_empty() {
-            let projected_schema = project_schema(table_schema, projection.as_ref())?;
+            let projected_schema = Arc::clone(scan.projected_schema.inner());
             return Ok(Some(Arc::new(EmptyExec::new(projected_schema))));
         }
 
@@ -207,7 +207,23 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )
             .await?;
 
-        Ok(Some(DataSourceExec::from_data_source(config)))
+        let plan = DataSourceExec::from_data_source(config);
+        let names = scan.projected_schema.fields();
+        if prepared.is_some()
+            && !plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .eq(names.iter().map(|f| f.name()))
+        {
+            let names = names
+                .iter()
+                .map(|field| field.name().clone())
+                .collect::<Vec<_>>();
+            return Ok(Some(rename_physical_plan(plan, &names)?));
+        }
+        Ok(Some(plan))
     }
 }
 
@@ -383,7 +399,7 @@ async fn list_files_for_scan<'a>(
         .base_path
         .as_ref()
         .filter(|_| !partition_fields.is_empty());
-    let direct_only = source.config().base_path.is_some() && partition_fields.is_empty();
+    let direct_only = source.config().direct_files_only();
     let registered = table_paths.iter().any(|(_, values)| values.is_some());
     let partition_schema = (registered || base_path.is_some())
         .then(|| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
