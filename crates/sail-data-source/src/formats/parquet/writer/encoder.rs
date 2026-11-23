@@ -22,6 +22,7 @@ use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion_datasource::write::SharedBuffer;
+use sail_common_datafusion::data_type::contains_dictionary;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::task::JoinHandle;
 
@@ -118,6 +119,10 @@ pub(super) struct ColumnEncoder {
     /// The last rows of the row group that receives rows, when they have arrived
     /// in batches of few rows that are not combined yet.
     small: SmallBatches,
+    /// Whether batches of few rows are combined. They are not when a column
+    /// is a dictionary or has a dictionary at any depth, since batches with
+    /// different dictionaries cannot always be combined into one batch.
+    combines_small: bool,
     /// The rows of the row group that receives rows which no job has received.
     pending: Slab,
     /// The row group that receives rows, once it has column writers.
@@ -323,6 +328,10 @@ impl ColumnEncoder {
             }
         }
         let slab_bytes = resources.slab_bytes(schema.fields().len());
+        let combines_small = !schema
+            .fields()
+            .iter()
+            .any(|field| contains_dictionary(field.data_type()));
         Ok(Self {
             writer,
             buffer,
@@ -332,6 +341,7 @@ impl ColumnEncoder {
             upload_chunk_size: upload_chunk_size.max(1),
             schema,
             small: SmallBatches::default(),
+            combines_small,
             pending: Slab::default(),
             open: None,
             sealed: VecDeque::new(),
@@ -418,7 +428,7 @@ impl ColumnEncoder {
         let mut rest = batch.clone();
         while rest.num_rows() > 0 {
             let mut rows = rest.num_rows().min(self.row_group_room());
-            if rows < SMALL_BATCH_ROWS {
+            if rows < SMALL_BATCH_ROWS && self.combines_small {
                 // The size of the values of each batch is not computed, since that
                 // takes longer than the batch does once the batches are combined.
                 let row_bytes = match self.input_rows {

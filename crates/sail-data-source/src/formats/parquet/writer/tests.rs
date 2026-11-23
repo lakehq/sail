@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray,
-    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int32Array, Int64Array,
+    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int8Array, Int32Array, Int64Array,
     Int64Builder, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
     LargeListViewArray, ListArray, ListViewArray, MapBuilder, NullArray, PrimitiveArray,
     RecordBatch, RecordBatchOptions, RunArray, StringArray, StringBuilder, StringViewArray,
@@ -70,6 +70,7 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::data_type::contains_dictionary;
 use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
@@ -4621,6 +4622,16 @@ fn combined_batches(batches: &[RecordBatch], row_group_rows: usize) -> Result<Ve
         Ok(())
     }
 
+    // Batches with dictionaries are not combined.
+    if let Some(first) = batches.first()
+        && first
+            .schema()
+            .fields()
+            .iter()
+            .any(|field| contains_dictionary(field.data_type()))
+    {
+        return Ok(batches.to_vec());
+    }
     let mut out = vec![];
     let mut small = vec![];
     // The rows of the row group, and those of them that are in parts with few rows.
@@ -5489,6 +5500,77 @@ fn test_logical_size_of_arrays() -> Result<()> {
     let fixed = FixedSizeListArray::try_new(field, 3, Arc::new(values), None)?;
     assert_eq!(logical_size(&fixed), 300 * 8);
     assert_eq!(logical_size(&fixed.slice(10, 20)), 60 * 8);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_small_batches_with_dictionaries_of_their_own_are_written() -> Result<()> {
+    // Each batch has a dictionary of its own with 100 values, for a column of
+    // dictionary values with 8-bit keys and for a column of lists of such values.
+    // The 40 batches have 4,000 dictionary values together, which is more than
+    // keys of 8 bits can refer to, so the batches cannot be combined.
+    let dictionary = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+    let item = Arc::new(Field::new_list_field(dictionary.clone(), false));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("d", dictionary, false),
+        Field::new("l", DataType::FixedSizeList(Arc::clone(&item), 1), false),
+    ]));
+    let batches = (0..40)
+        .map(|batch| {
+            let values: StringArray = (0..100).map(|x| Some(format!("{batch}-{x}"))).collect();
+            let dictionary = || {
+                let keys = Int8Array::from_iter_values((0..200).map(|x| (x % 100) as i8));
+                DictionaryArray::new(keys, Arc::new(values.clone()))
+            };
+            let d: ArrayRef = Arc::new(dictionary());
+            let l: ArrayRef = Arc::new(FixedSizeListArray::try_new(
+                Arc::clone(&item),
+                1,
+                Arc::new(dictionary()),
+                None,
+            )?);
+            Ok(RecordBatch::try_new(Arc::clone(&schema), vec![d, l])?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let expected: Vec<_> = (0..40)
+        .flat_map(|batch| (0..200).map(move |x| format!("{batch}-{}", x % 100)))
+        .collect();
+    for budget in budget_cases(&batches) {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut task = test_task(Arc::clone(&store), 0);
+        task.budget = budget;
+        run_task(task, &schema, batches.clone()).await?;
+        let data = read_bytes(store.as_ref(), &file_name(0, 0, ".parquet")).await?;
+        // The file has the values of the batches in the order of the rows.
+        // The values are read as strings, since the dictionary of a row group
+        // has more values than the keys of the columns can refer to.
+        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+        let reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)?.build()?;
+        let mut flat = vec![];
+        let mut nested = vec![];
+        for batch in reader {
+            let batch = batch?;
+            let column = cast(batch.column(0), &DataType::Utf8)?;
+            flat.extend(
+                column
+                    .as_string::<i32>()
+                    .iter()
+                    .flatten()
+                    .map(str::to_string),
+            );
+            let column = cast(batch.column(1).as_list::<i32>().values(), &DataType::Utf8)?;
+            nested.extend(
+                column
+                    .as_string::<i32>()
+                    .iter()
+                    .flatten()
+                    .map(str::to_string),
+            );
+        }
+        assert!(flat == expected);
+        assert!(nested == expected);
+    }
     Ok(())
 }
 

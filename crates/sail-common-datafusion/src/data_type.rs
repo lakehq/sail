@@ -18,6 +18,32 @@ use serde_json::json;
 
 use crate::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
+/// Returns whether the data type is a dictionary or has a dictionary at any depth.
+///
+/// Arrays of such a type cannot always be combined into one array: each array
+/// can have its own dictionary, and the dictionary of the combined array can
+/// have more values than the type of the keys can refer to.
+pub fn contains_dictionary(data_type: &adt::DataType) -> bool {
+    use adt::DataType;
+    match data_type {
+        DataType::Dictionary(_, _) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => contains_dictionary(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_dictionary(field.data_type())),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| contains_dictionary(field.data_type())),
+        DataType::RunEndEncoded(_, values) => contains_dictionary(values.data_type()),
+        _ => false,
+    }
+}
+
 /// Converts spec data types, fields, and schemas to Arrow without query state.
 pub struct DataTypeResolver {
     pub session_timezone: Arc<str>,

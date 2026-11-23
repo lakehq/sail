@@ -192,7 +192,10 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use datafusion::arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch};
+    use datafusion::arrow::array::{
+        ArrayRef, AsArray, DictionaryArray, FixedSizeListArray, Int8Array, Int64Array, RecordBatch,
+        StringArray,
+    };
     use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Schema, SchemaRef};
     use datafusion::execution::config::SessionConfig;
     use datafusion::physical_expr::expressions::Column;
@@ -296,6 +299,112 @@ mod tests {
         assert_eq!(seen.len(), 50);
         assert!(full > 0);
         assert_eq!(rows, 3 * BATCHES * ROWS);
+        Ok(())
+    }
+
+    /// An input partition whose batches each have a dictionary of their own
+    /// with 100 values, for a column of dictionary values with 8-bit keys
+    /// and for a column of lists of such values.
+    #[derive(Debug)]
+    struct DictionaryInput {
+        schema: SchemaRef,
+        start: i64,
+    }
+
+    impl DictionaryInput {
+        fn schema() -> SchemaRef {
+            let dictionary =
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("d", dictionary.clone(), false),
+                Field::new(
+                    "l",
+                    DataType::FixedSizeList(Arc::new(Field::new_list_field(dictionary, false)), 1),
+                    false,
+                ),
+            ]))
+        }
+    }
+
+    impl PartitionStream for DictionaryInput {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let (schema, start) = (Arc::clone(&self.schema), self.start);
+            let batches = futures::stream::iter(0..20).map(move |i| {
+                let batch = start + i;
+                let values: StringArray = (0..100).map(|x| Some(format!("{batch}-{x}"))).collect();
+                let dictionary = || {
+                    let keys = Int8Array::from_iter_values((0..ROWS).map(|x| (x % 100) as i8));
+                    DictionaryArray::new(keys, Arc::new(values.clone()))
+                };
+                let k: ArrayRef = Arc::new(Int64Array::from_iter_values(0..ROWS as i64));
+                let d: ArrayRef = Arc::new(dictionary());
+                let field = Arc::new(Field::new_list_field(d.data_type().clone(), false));
+                let l: ArrayRef = Arc::new(FixedSizeListArray::try_new(
+                    field,
+                    1,
+                    Arc::new(dictionary()),
+                    None,
+                )?);
+                Ok(RecordBatch::try_new(Arc::clone(&schema), vec![k, d, l])?)
+            });
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                batches,
+            ))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_batches_with_dictionaries_of_their_own_are_not_combined() -> Result<()> {
+        // The 60 batches have 6,000 dictionary values together, which is more
+        // than keys of 8 bits can refer to, so the batches cannot be combined.
+        let schema = DictionaryInput::schema();
+        let partitions = (0..3)
+            .map(|i| {
+                Arc::new(DictionaryInput {
+                    schema: Arc::clone(&schema),
+                    start: i * 20,
+                }) as Arc<dyn PartitionStream>
+            })
+            .collect();
+        let input = StreamingTableExec::try_new(schema, partitions, None, [], false, None)?;
+        let keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("k", 0))];
+        let plan = KeyDistributionExec::new(Arc::new(input), keys, 8);
+        let context = Arc::new(TaskContext::default());
+        let streams = (0..8)
+            .map(|i| plan.execute(i, Arc::clone(&context)))
+            .collect::<Result<Vec<_>>>()?;
+        let outputs = futures::future::try_join_all(
+            streams
+                .into_iter()
+                .map(|stream| tokio::spawn(stream.try_collect::<Vec<_>>())),
+        )
+        .await
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?;
+        let mut rows = 0;
+        let mut values = HashSet::new();
+        for batches in outputs {
+            for batch in batches? {
+                rows += batch.num_rows();
+                // The values of both columns are the values of the input.
+                let flat = batch.column(1).as_any_dictionary();
+                let list = batch.column(2).as_fixed_size_list();
+                let nested = list.values().as_any_dictionary();
+                for dictionary in [flat, nested] {
+                    let strings = dictionary.values().as_string::<i32>();
+                    for key in dictionary.normalized_keys() {
+                        values.insert(strings.value(key).to_string());
+                    }
+                }
+            }
+        }
+        assert_eq!(rows, 60 * ROWS);
+        assert_eq!(values.len(), 60 * 100);
         Ok(())
     }
 

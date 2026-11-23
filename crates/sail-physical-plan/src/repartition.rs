@@ -30,6 +30,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err, plan_err};
 use futures::{FutureExt, Stream, StreamExt};
+use sail_common_datafusion::data_type::contains_dictionary;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
     DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
@@ -206,7 +207,13 @@ enum RowPartitioner {
 /// collected for all input partitions together, so that the rows that are held
 /// do not grow with the number of input partitions. A batch with at least half
 /// of the batch size is sent as it is, without another copy of its rows.
+///
+/// The rows are sent as they are divided, without being collected, when
+/// a column is a dictionary or has a dictionary at any depth, since batches
+/// with different dictionaries cannot always be combined into one batch.
 struct HashOutputs {
+    /// Whether the rows of an output partition are collected into batches.
+    collected: bool,
     rows: Vec<Mutex<BatchCoalescer>>,
     /// The number of input partitions whose rows have not all been divided.
     inputs: AtomicUsize,
@@ -222,7 +229,12 @@ impl HashOutputs {
                 )
             })
             .collect();
+        let collected = !schema
+            .fields()
+            .iter()
+            .any(|field| contains_dictionary(field.data_type()));
         Self {
+            collected,
             rows,
             inputs: AtomicUsize::new(inputs),
         }
@@ -234,6 +246,12 @@ impl HashOutputs {
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
+        if !self.collected {
+            return match batch {
+                Some(batch) => f(partition, batch),
+                None => Ok(()),
+            };
+        }
         let Some(rows) = self.rows.get(partition) else {
             return internal_err!("repartition has no output partition {partition}");
         };
