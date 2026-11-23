@@ -14,6 +14,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, plan_err};
 use sail_physical_plan::key_distribution::KeyDistributionExec;
 
+use crate::formats::parquet::writer::dictionary::without_dictionary_columns;
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::listing::commit::FileWriteCommitExec;
 use crate::listing::source::{ListingSinkInput, WriteFormat};
@@ -67,6 +68,8 @@ impl WriteFormat for ParquetWriteFormat {
             Some(sort_order) => (Some(LexOrdering::from(sort_order)), true),
             None => (sorted_input_ordering(&input), false),
         };
+        // The files have the data types of the input of the write.
+        let schema = input.schema();
         let input = distribute_by_partition_columns(
             input,
             &partition_columns,
@@ -85,6 +88,7 @@ impl WriteFormat for ParquetWriteFormat {
                 write_sorting_columns,
                 max_open_files_per_task,
             )?
+            .try_with_schema(schema)?
             .with_file_limits(max_records_per_file, max_file_size),
         );
         Ok(Arc::new(
@@ -102,6 +106,12 @@ impl WriteFormat for ParquetWriteFormat {
 /// Returns the input with its rows distributed by the partition columns, so that
 /// the rows of each partition directory are written by one task and to one file.
 ///
+/// The rows are distributed, and sorted when the write requires an ordering,
+/// with the values of dictionaries in place of the dictionaries, since
+/// the operators that do this combine batches, and batches with dictionaries
+/// of their own cannot always be combined. The writer returns the rows
+/// to the data types of the input.
+///
 /// The number of files and the number of files that are open at the same time
 /// then follow from the number of directories and not from the number of tasks.
 /// The rows are distributed unless the input has a single partition, is already
@@ -109,7 +119,7 @@ impl WriteFormat for ParquetWriteFormat {
 /// repartition or coalesce of the query, which the physical optimizer decides
 /// on the optimized plan. A query can therefore divide the rows of a directory
 /// among several tasks and files with a repartition.
-fn distribute_by_partition_columns(
+pub(super) fn distribute_by_partition_columns(
     input: Arc<dyn ExecutionPlan>,
     partition_columns: &[String],
     partitions: usize,
@@ -117,6 +127,7 @@ fn distribute_by_partition_columns(
     if partition_columns.is_empty() {
         return Ok(input);
     }
+    let input = without_dictionary_columns(input)?;
     let schema = input.schema();
     let keys = partition_columns
         .iter()

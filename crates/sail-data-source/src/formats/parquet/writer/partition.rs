@@ -8,16 +8,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::NaiveDate;
 use datafusion::arrow::array::{
-    Array, ArrayAccessor, ArrayRef, AsArray, FixedSizeListArray, GenericListArray,
-    GenericListViewArray, MapArray, OffsetSizeTrait, RecordBatch, RecordBatchOptions, Scalar,
-    StringArray, StructArray, UInt32Array, downcast_dictionary_array,
+    ArrayAccessor, ArrayRef, RecordBatch, Scalar, StringArray, UInt32Array,
+    downcast_dictionary_array,
 };
-use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::kernels::cmp::not_distinct;
 use datafusion::arrow::compute::kernels::zip::zip;
-use datafusion::arrow::compute::{can_cast_types, cast, is_not_null, take_record_batch};
-use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::memory_pool::{MemoryPool, MemoryReservation};
@@ -42,7 +40,6 @@ use datafusion_common::{
 };
 use futures::StreamExt;
 use object_store::path::Path;
-use sail_common_datafusion::data_type::{contains_dictionary, without_dictionaries};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::formats::parquet::writer::task::{
@@ -520,15 +517,8 @@ impl PartitionStream for OverflowInput {
 ///
 /// The sort uses the memory pool and the temporary files of the session,
 /// so it writes its rows to temporary files when the memory pool is limited.
-///
-/// The sort combines the batches that it receives. Batches with dictionaries
-/// of their own cannot always be combined, since the dictionary of the combined
-/// batch can have more values than the type of the keys can refer to. So the
-/// rows are sorted with the values in place of each dictionary, and
-/// [`with_dictionaries`] returns the rows to the data types of the input.
 struct Overflow {
-    /// The schema of the rows that are sorted, which is the schema of the input
-    /// without dictionaries and with the column of the partition key.
+    /// The schema of the input with the column of the partition key.
     schema: SchemaRef,
     /// The input of the sort, until the sorted rows are read.
     sender: Option<Sender<Result<RecordBatch>>>,
@@ -549,23 +539,7 @@ impl Overflow {
         ordering: Option<&LexOrdering>,
         context: &Arc<TaskContext>,
     ) -> Result<Self> {
-        // An ordering on an expression is evaluated for the data types of the input,
-        // so the rows of such an input are sorted as they are.
-        let plain = ordering.is_none_or(|ordering| {
-            ordering
-                .iter()
-                .all(|x| x.expr.downcast_ref::<Column>().is_some())
-        });
-        let mut fields: Vec<_> = input_schema
-            .fields()
-            .iter()
-            .map(|field| match without_dictionary_type(field.data_type()) {
-                Some(data_type) if plain => {
-                    Arc::new(field.as_ref().clone().with_data_type(data_type))
-                }
-                _ => Arc::clone(field),
-            })
-            .collect();
+        let mut fields = input_schema.fields().to_vec();
         fields.push(Arc::new(Field::new(
             OVERFLOW_KEY_COLUMN,
             DataType::UInt32,
@@ -629,17 +603,7 @@ impl Overflow {
                 id
             }
         };
-        let mut columns = rows
-            .columns()
-            .iter()
-            .zip(self.schema.fields())
-            .map(
-                |(column, field)| match column.data_type() == field.data_type() {
-                    true => Ok(Arc::clone(column)),
-                    false => cast(column, field.data_type()),
-                },
-            )
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut columns = rows.columns().to_vec();
         columns.push(Arc::new(UInt32Array::from(vec![id; rows.num_rows()])));
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
         let Some(sender) = &self.sender else {
@@ -686,168 +650,6 @@ impl Overflow {
             .get(id as usize)
             .ok_or_else(|| internal_datafusion_err!("unknown partition key in the sorted rows"))
     }
-}
-
-/// Returns the data type with the type of the values in place of each
-/// dictionary at any depth, if the data type has a dictionary and its arrays
-/// can be converted to that data type and back.
-fn without_dictionary_type(data_type: &DataType) -> Option<DataType> {
-    if !contains_dictionary(data_type) {
-        return None;
-    }
-    let plain = without_dictionaries(data_type);
-    (can_cast_types(data_type, &plain) && can_cast_types(&plain, data_type)).then_some(plain)
-}
-
-/// Returns the rows with the data types of the schema, which differ from
-/// the data types of the rows in their dictionaries only.
-///
-/// The rows are returned in several batches when one dictionary cannot refer
-/// to the values of all rows. One row always has a dictionary, since the row
-/// had one in the input.
-pub(super) fn with_dictionaries(rows: RecordBatch, schema: &SchemaRef) -> Result<Vec<RecordBatch>> {
-    if rows.schema_ref().fields() == schema.fields() {
-        return Ok(vec![rows]);
-    }
-    let mut batches = vec![];
-    // The rows that are not converted, with the last rows first.
-    let mut rest = vec![rows];
-    while let Some(rows) = rest.pop() {
-        let columns = rows
-            .columns()
-            .iter()
-            .zip(schema.fields())
-            .map(|(column, field)| with_dictionary(column, field.data_type()))
-            .collect::<Result<Vec<_>, _>>();
-        match columns {
-            Ok(columns) => {
-                let options = RecordBatchOptions::new().with_row_count(Some(rows.num_rows()));
-                let schema = Arc::clone(schema);
-                batches.push(RecordBatch::try_new_with_options(
-                    schema, columns, &options,
-                )?);
-            }
-            Err(ArrowError::DictionaryKeyOverflowError) if rows.num_rows() > 1 => {
-                let half = rows.num_rows() / 2;
-                rest.push(rows.slice(half, rows.num_rows() - half));
-                rest.push(rows.slice(0, half));
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(batches)
-}
-
-/// Returns the array with the data type, which differs from the data type
-/// of the array in its dictionaries only.
-///
-/// A dictionary is created for the values that the rows of the array refer to,
-/// and not for all values of an array that the array is a slice of. The values
-/// of an array of runs are not divided, so all its values are in the dictionary.
-fn with_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef, ArrowError> {
-    if array.data_type() == data_type {
-        return Ok(Arc::clone(array));
-    }
-    match data_type {
-        DataType::List(field) => list_with_dictionary::<i32>(array, field),
-        DataType::LargeList(field) => list_with_dictionary::<i64>(array, field),
-        DataType::ListView(field) => list_view_with_dictionary::<i32>(array, field),
-        DataType::LargeListView(field) => list_view_with_dictionary::<i64>(array, field),
-        DataType::FixedSizeList(field, size) => {
-            let list = array.as_fixed_size_list();
-            let values = with_dictionary(list.values(), field.data_type())?;
-            let list = FixedSizeListArray::try_new_with_length(
-                Arc::clone(field),
-                *size,
-                values,
-                list.nulls().cloned(),
-                list.len(),
-            )?;
-            Ok(Arc::new(list))
-        }
-        DataType::Map(field, sorted) => {
-            let map = array.as_map();
-            let (start, offsets) = rebased_offsets(map.offsets());
-            let length = offsets.last().map_or(0, |x| x.as_usize());
-            let entries: ArrayRef = Arc::new(map.entries().slice(start, length));
-            let entries = with_dictionary(&entries, field.data_type())?;
-            let map = MapArray::try_new(
-                Arc::clone(field),
-                offsets,
-                entries.as_struct().clone(),
-                map.nulls().cloned(),
-                *sorted,
-            )?;
-            Ok(Arc::new(map))
-        }
-        DataType::Struct(fields) => {
-            let values = array.as_struct();
-            let columns = values
-                .columns()
-                .iter()
-                .zip(fields)
-                .map(|(column, field)| with_dictionary(column, field.data_type()))
-                .collect::<Result<Vec<_>, _>>()?;
-            let values = StructArray::try_new_with_length(
-                fields.clone(),
-                columns,
-                values.nulls().cloned(),
-                values.len(),
-            )?;
-            Ok(Arc::new(values))
-        }
-        _ => cast(array, data_type),
-    }
-}
-
-/// Returns the offset of the first value of a list array in the array of its
-/// values, and the offsets of the lists from that value on.
-fn rebased_offsets<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> (usize, OffsetBuffer<O>) {
-    let start = offsets.first().map_or(0, |x| x.as_usize());
-    (start, OffsetBuffer::from_lengths(offsets.lengths()))
-}
-
-fn list_with_dictionary<O: OffsetSizeTrait>(
-    array: &ArrayRef,
-    field: &Arc<Field>,
-) -> Result<ArrayRef, ArrowError> {
-    let list = array.as_list::<O>();
-    let (start, offsets) = rebased_offsets(list.offsets());
-    let length = offsets.last().map_or(0, |x| x.as_usize());
-    let values = list.values().slice(start, length);
-    let values = with_dictionary(&values, field.data_type())?;
-    let list =
-        GenericListArray::try_new(Arc::clone(field), offsets, values, list.nulls().cloned())?;
-    Ok(Arc::new(list))
-}
-
-fn list_view_with_dictionary<O: OffsetSizeTrait>(
-    array: &ArrayRef,
-    field: &Arc<Field>,
-) -> Result<ArrayRef, ArrowError> {
-    let list = array.as_list_view::<O>();
-    // The lists can be anywhere in the array of their values.
-    let ranges = || list.offsets().iter().zip(list.sizes().iter());
-    let start = ranges().map(|(x, _)| x.as_usize()).min().unwrap_or(0);
-    let end = ranges()
-        .map(|(x, size)| x.as_usize() + size.as_usize())
-        .max()
-        .unwrap_or(0);
-    let values = list.values().slice(start, end - start);
-    let values = with_dictionary(&values, field.data_type())?;
-    let offsets: ScalarBuffer<O> = list
-        .offsets()
-        .iter()
-        .map(|x| O::usize_as(x.as_usize() - start))
-        .collect();
-    let list = GenericListViewArray::try_new(
-        Arc::clone(field),
-        offsets,
-        list.sizes().clone(),
-        values,
-        list.nulls().cloned(),
-    )?;
-    Ok(Arc::new(list))
 }
 
 /// Writes the files of a writer task into one directory per partition key.
@@ -1078,10 +880,9 @@ impl PartitionedWriter {
                         &mut current.insert((id, DirectoryWriter::new(directory))).1
                     }
                 };
-                let rows = data.slice(start, length);
-                for rows in with_dictionaries(rows, self.router.file_schema())? {
-                    writer.write(factory, &rows, written).await?;
-                }
+                writer
+                    .write(factory, &data.slice(start, length), written)
+                    .await?;
                 start += length;
             }
             let size = |writer: &Option<(u32, DirectoryWriter)>, files: &Self| {

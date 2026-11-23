@@ -1534,7 +1534,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         write_sorting_columns,
                         max_open_files_per_task,
                     )?
-                    .with_schema(Arc::new(try_decode_schema(&schema)?))
+                    .try_with_schema(Arc::new(try_decode_schema(&schema)?))?
                     .with_file_limits(max_records_per_file, max_file_size),
                 ))
             }

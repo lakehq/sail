@@ -72,10 +72,11 @@ use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
+use crate::formats::parquet::write::distribute_by_partition_columns;
+use crate::formats::parquet::writer::dictionary::with_dictionaries;
 use crate::formats::parquet::writer::encoder::{logical_size, row_group_byte_limit};
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
-use crate::formats::parquet::writer::partition::with_dictionaries;
 use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
@@ -3710,7 +3711,7 @@ async fn test_write_plan_writes_planned_schema() -> Result<()> {
             NonZeroUsize::MAX,
         )?;
         assert_eq!(writer.data_schema(), &input_schema);
-        let writer = Arc::new(writer.with_schema(Arc::clone(&planned)));
+        let writer = Arc::new(writer.try_with_schema(Arc::clone(&planned))?);
         let output = collect(commit_exec(writer)?, ctx.task_ctx()).await?;
         assert_eq!(count_value(&output)?, vec![3]);
         let written: Vec<_> = list_files(store.as_ref())
@@ -6651,11 +6652,12 @@ fn test_rows_are_returned_to_dictionaries_at_the_limit_of_the_keys() -> Result<(
 }
 
 #[tokio::test]
-async fn test_partition_sorted_keys_with_dictionaries_of_their_own_are_written() -> Result<()> {
+async fn test_partitioned_rows_with_dictionaries_of_their_own_are_written() -> Result<()> {
     // Each batch has dictionaries of its own, with as many values as the keys
-    // of 8 bits can refer to. The rows of the last two partition keys are sorted,
-    // and each of these keys has rows of all batches, which refer to more values
-    // than one dictionary can have.
+    // of 8 bits can refer to. The rows are distributed by the partition column
+    // and sorted by it in the plan, and the rows of the last two partition keys
+    // of a task are sorted in the task as well. Each key has rows of all batches,
+    // which refer to more values than one dictionary can have.
     let int8 = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
     let uint8 = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8));
     let item = Arc::new(Field::new_list_field(int8.clone(), true));
@@ -6746,15 +6748,59 @@ async fn test_partition_sorted_keys_with_dictionaries_of_their_own_are_written()
             expected.entry(directory).or_default().push(line);
         }
     }
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
-    task.max_open_files = 10;
-    let sorted = run_task_for_metric(task, &schema, batches, "rows_sorted").await?;
-    assert_eq!(sorted, 20 * 2 * (rows / keys));
+    let (ctx, store) = memory_context()?;
+    let partitions: Vec<_> = batches.chunks(5).map(|x| x.to_vec()).collect();
+    let input = MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+    let input = distribute_by_partition_columns(input, &["p".to_string()], 2)?;
+    // The rows are distributed without their dictionaries.
+    assert!(
+        !input
+            .schema()
+            .fields()
+            .iter()
+            .any(|x| contains_dictionary(x.data_type()))
+    );
+    let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("p", 0)))]);
+    let writer = ParquetWriteExec::try_new(
+        input,
+        ObjectStoreUrl::parse("memory://")?,
+        Path::from("table"),
+        WRITE_ID,
+        vec!["p".to_string()],
+        TableParquetOptions::default(),
+        ".parquet".to_string(),
+        ordering,
+        false,
+        NonZeroUsize::new(3).ok_or_else(|| internal_datafusion_err!("zero"))?,
+    )?
+    .try_with_schema(Arc::clone(&schema))?;
+    let mut config = ConfigOptions::default();
+    config.execution.target_partitions = 2;
+    let plan = EnsureRequirements::new().optimize(commit_exec(Arc::new(writer))?, &config)?;
+    let plan = SanityCheckPlan::new().optimize(plan, &config)?;
+    let display = datafusion::physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    assert!(display.contains("SortExec"), "{display}");
+    assert!(display.contains("KeyDistributionExec"), "{display}");
+    let output = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(count_value(&output)?, vec![20 * rows as u64]);
     let mut actual = DirectoryRows::new();
     let files = list_files(store.as_ref()).await?;
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|(file, _)| !file.ends_with("_SUCCESS"))
+        .collect();
     assert_eq!(files.len(), keys);
     for (file, _) in files {
+        // The files have the data types of the input.
+        let data = read_bytes(store.as_ref(), &file).await?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data)?;
+        assert_eq!(
+            builder.schema().fields()[..],
+            schema.fields()[1..],
+            "{file}"
+        );
         let (directory, _) = file
             .rsplit_once('/')
             .ok_or_else(|| internal_datafusion_err!("invalid file path: {file}"))?;

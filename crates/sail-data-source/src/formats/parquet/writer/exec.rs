@@ -72,7 +72,8 @@ pub struct ParquetWriteExec {
     input: Arc<dyn ExecutionPlan>,
     /// The schema of the data to write, as it was planned.
     /// The schema of the input can differ from it in the metadata of fields
-    /// when the plan has been decoded on a worker.
+    /// when the plan has been decoded on a worker, and the input can have
+    /// the values of dictionaries in place of the dictionaries.
     schema: SchemaRef,
     object_store_url: ObjectStoreUrl,
     table_path: Path,
@@ -156,9 +157,18 @@ impl ParquetWriteExec {
 
     /// Returns the plan with the given schema of the data to write.
     /// The schema must have the columns of the input.
-    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+    /// Sets the schema of the data to write, whose columns are the columns
+    /// of the input in the same order.
+    pub fn try_with_schema(mut self, schema: SchemaRef) -> Result<Self> {
+        check_file_columns(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !self.partition_columns.contains(field.name()))
+                .map(|field| field.as_ref()),
+        )?;
         self.schema = schema;
-        self
+        Ok(self)
     }
 
     /// Returns the plan with the given limits on the rows and the size in bytes
@@ -293,7 +303,7 @@ impl ExecutionPlan for ParquetWriteExec {
             self.max_open_files_per_task,
         )?;
         Ok(Arc::new(
-            plan.with_schema(Arc::clone(&self.schema))
+            plan.try_with_schema(Arc::clone(&self.schema))?
                 .with_file_limits(self.max_records_per_file, self.max_file_size),
         ))
     }

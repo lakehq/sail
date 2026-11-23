@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::formats::parquet::writer::dictionary::with_dictionaries;
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
 use crate::formats::parquet::writer::partition::{PartitionRouter, PartitionedWriter};
 use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
@@ -235,9 +236,9 @@ pub(super) struct FileFactory {
     files: Arc<TaskFiles>,
     partition: usize,
     file_suffix: String,
-    schema: SchemaRef,
     /// Whether the files are in partition directories.
     partitioned: bool,
+    schema: SchemaRef,
     props: WriterProperties,
     skip_arrow_metadata: bool,
     buffer_size: usize,
@@ -285,8 +286,8 @@ impl FileFactory {
             files,
             partition: task.partition,
             file_suffix: task.file_suffix,
-            schema,
             partitioned: !task.partition_columns.is_empty(),
+            schema,
             props: builder.build(),
             skip_arrow_metadata,
             buffer_size: task.buffer_size,
@@ -412,13 +413,26 @@ impl DirectoryWriter {
         }
     }
 
+    /// Writes rows to the files of the directory. The rows have the data types
+    /// of the files, or the values of dictionaries in place of the dictionaries.
     pub async fn write(
         &mut self,
         factory: &FileFactory,
         batch: &RecordBatch,
         written: &mut Vec<StagedFile>,
     ) -> Result<()> {
-        let mut batch = batch.clone();
+        for batch in with_dictionaries(batch.clone(), &factory.schema)? {
+            self.write_rows(factory, batch, written).await?;
+        }
+        Ok(())
+    }
+
+    async fn write_rows(
+        &mut self,
+        factory: &FileFactory,
+        mut batch: RecordBatch,
+        written: &mut Vec<StagedFile>,
+    ) -> Result<()> {
         loop {
             let writer = self.open(factory)?;
             // The rows that the file cannot take are written to the next file,
