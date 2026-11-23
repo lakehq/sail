@@ -335,7 +335,9 @@ impl ColumnEncoder {
             Some(bytes) => (bytes, usize::MAX),
             None => (usize::MAX, COLUMN_CHUNK_BYTES),
         };
-        let buffer = SharedBuffer::new(UPLOAD_THRESHOLD);
+        // The buffer grows with the data of the file, so that a small file
+        // does not have a buffer of the size of the threshold.
+        let buffer = SharedBuffer::new(0);
         let options = ArrowWriterOptions::new()
             .with_properties(props)
             .with_skip_arrow_metadata(skip_arrow_metadata);
