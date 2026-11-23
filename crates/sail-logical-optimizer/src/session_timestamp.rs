@@ -12,7 +12,7 @@ use datafusion::common::config::ConfigOptions;
 use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::expr::{Cast, InList};
+use datafusion_expr::expr::{Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
@@ -20,7 +20,9 @@ use datafusion_expr::{
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ltz_to_ntz;
 
 /// Converts the casts of TIMESTAMP_NTZ to TIMESTAMP, which type coercion adds, like Spark.
 ///
@@ -41,10 +43,12 @@ pub(crate) fn convert_session_timestamp_casts(
     let Some(timezone) = config.execution.time_zone.as_deref() else {
         return Ok(plan);
     };
+    let session_timezone = timezone;
     let timezone = &arrow_timezone_label(timezone);
     let rewriter = Rewriter {
+        session_timezone,
         timezone,
-        converts: !is_fixed_zero_offset_timezone(timezone),
+        converts: !is_fixed_zero_offset_timezone(session_timezone),
         config,
         simplifier: OnceCell::new(),
     };
@@ -73,6 +77,7 @@ pub(crate) fn convert_session_timestamp_casts(
 }
 
 struct Rewriter<'a> {
+    session_timezone: &'a str,
     timezone: &'a str,
     /// Whether casts to the session time zone convert, which they need for DST gaps and overlaps,
     /// and for a fixed offset near the ends of Chrono's range, where Arrow's cast panics.
@@ -83,6 +88,10 @@ struct Rewriter<'a> {
 }
 
 impl Rewriter<'_> {
+    fn uses_subminute_offset(&self) -> bool {
+        self.timezone == "UTC" && self.converts
+    }
+
     fn rewrite(&self, expr: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
@@ -139,6 +148,33 @@ impl Rewriter<'_> {
                     negated,
                 }))),
             },
+            // Scalar functions may acquire string casts during type coercion, after the Spark
+            // resolver has handled explicit casts. Render their timestamps in the same zone.
+            Expr::Cast(Cast { expr: value, field })
+            | Expr::TryCast(TryCast { expr: value, field })
+                if field.data_type().is_string() && has_timestamp(&value.get_type(schema)?) =>
+            {
+                let timezone = Some(Arc::from(self.session_timezone));
+                let udf = match field.data_type() {
+                    DataType::LargeUtf8 => {
+                        ScalarUDF::from(ToLargeUtf8::new().with_timezone(timezone))
+                    }
+                    DataType::Utf8View => {
+                        ScalarUDF::from(ToUtf8View::new().with_timezone(timezone))
+                    }
+                    _ => ScalarUDF::from(ToUtf8::new().with_timezone(timezone)),
+                };
+                Ok(Transformed::yes(udf.call(vec![*value])))
+            }
+            Expr::Cast(Cast { expr: value, field })
+            | Expr::TryCast(TryCast { expr: value, field })
+                if *field.data_type() == DataType::Date32
+                    && self.uses_subminute_offset()
+                    && matches!(value.get_type(schema)?, DataType::Timestamp(_, Some(_))) =>
+            {
+                let wall = cast_timestamp_ltz_to_ntz(*value, self.session_timezone, false);
+                Ok(Transformed::yes(cast(wall, DataType::Date32)))
+            }
             Expr::Cast(Cast { expr: value, field }) => {
                 if self.converts
                     && let DataType::Timestamp(unit, Some(label)) = field.data_type()
@@ -197,7 +233,7 @@ impl Rewriter<'_> {
     /// The TIMESTAMP_NTZ values, which are microseconds, as TIMESTAMP in the session time zone.
     fn session_timestamp(&self, value: Expr, label: &Arc<str>) -> Expr {
         ScalarUDF::from(ConvertTz::cast(false).with_output_timezone(Some(Arc::clone(label))))
-            .call(vec![lit(self.timezone), lit("UTC"), value])
+            .call(vec![lit(self.session_timezone), lit("UTC"), value])
     }
 
     /// Returns the TIMESTAMP_NTZ value under `cast_expr` and the wall-clock time of `constant`
@@ -216,7 +252,7 @@ impl Rewriter<'_> {
         };
         // A constant value is converted like any other cast, and the optimizer folds the
         // comparison, like Spark's constant folding before it unwraps casts.
-        if is_foldable_constant(value) {
+        if is_foldable_constant(value) || self.uses_subminute_offset() {
             return None;
         }
         let DataType::Timestamp(value_unit, None) = value.get_type(schema).ok()? else {
@@ -258,7 +294,7 @@ impl Rewriter<'_> {
         let DataType::Timestamp(unit, Some(label)) = value.get_type(schema).ok()? else {
             return None;
         };
-        if label.as_ref() == self.timezone {
+        if label.as_ref() == self.timezone || self.uses_subminute_offset() {
             return None;
         }
         let Some(ScalarValue::Date32(Some(days))) = self.constant_value(constant) else {
@@ -363,8 +399,8 @@ fn has_timestamp_cast(plan: &LogicalPlan) -> Result<bool> {
             found = matches!(
                 expr,
                 Expr::Cast(Cast { field, .. })
-                    if has_timestamp(field.data_type()) || *field.data_type() == DataType::Date32
-            );
+                    if has_timestamp(field.data_type()) || field.data_type().is_string() || *field.data_type() == DataType::Date32
+            ) || matches!(expr, Expr::TryCast(TryCast { field, .. }) if field.data_type().is_string() || *field.data_type() == DataType::Date32);
             Ok(if found {
                 TreeNodeRecursion::Stop
             } else {

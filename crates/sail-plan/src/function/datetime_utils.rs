@@ -124,7 +124,7 @@ pub(crate) fn has_constant_offset(timezone: &str) -> bool {
         || matches!(timezone, "EST" | "MST" | "HST")
 }
 
-fn is_interval(data_type: &DataType) -> bool {
+pub(super) fn is_interval(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::Duration(TimeUnit::Microsecond)
@@ -197,7 +197,8 @@ pub(crate) fn cast_to_session_timestamp(
     data_type: &DataType,
     session_timezone: &Arc<str>,
 ) -> expr::Expr {
-    let target = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_timezone)));
+    let label = sail_common_datafusion::utils::datetime::arrow_timezone_label(session_timezone);
+    let target = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(label.as_ref())));
     match data_type {
         DataType::Timestamp(_, None) => cast_timestamp_ntz_to_ltz(value, session_timezone, false),
         DataType::Timestamp(_, Some(_)) if data_type != &target => cast(value, target),

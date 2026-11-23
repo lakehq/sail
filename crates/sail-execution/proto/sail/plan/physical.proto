@@ -313,6 +313,8 @@ message ExtendedScalarUdf {
     UuidCastUdf uuid_cast = 41;
     SparkIntervalUdf spark_interval = 42;
     SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
+    SparkToJsonUdf spark_to_json = 44;
+    SparkToJsonUdf variant_to_json = 45;
   }
 }
 
@@ -395,6 +397,10 @@ message ExplodeUdf {
 
 message XpathTypedUdf {
   string name = 1;
+}
+
+message SparkToJsonUdf {
+  string session_timezone = 1;
 }
 
 message SparkToXmlUdf {

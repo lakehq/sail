@@ -10,7 +10,7 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::json::{
-    FromJson, SchemaOfJson, json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf,
+    FromJson, SchemaOfJson, ToJson, json_as_text_udf, json_length_udf, json_object_keys_udf,
 };
 
 use crate::error::{PlanError, PlanResult};
@@ -108,15 +108,18 @@ fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
     json_object_keys_udf().call(vec![json_data])
 }
 
-fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+fn to_json(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // to_json accepts 1 or 2 arguments:
     // - to_json(expr) - convert expr to JSON string
     // - to_json(expr, options) - convert expr to JSON string with options
     // Note: the ToJson UDF detects Variant inputs and delegates to variant_to_json,
     // which ignores any options provided.
     // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
-    match args.len() {
-        1 | 2 => Ok(to_json_udf().call(args)),
+    match input.arguments.len() {
+        1 | 2 => Ok(ScalarUDF::from(ToJson::new(
+            input.function_context.plan_config.session_timezone.clone(),
+        ))
+        .call(input.arguments)),
         n => Err(PlanError::invalid(format!(
             "to_json expects 1 or 2 arguments, got {n}"
         ))),
@@ -181,6 +184,6 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("json_object_keys", F::unary(json_object_keys)),
         ("json_tuple", F::custom(json_tuple)),
         ("schema_of_json", F::udf(SchemaOfJson::new())),
-        ("to_json", F::var_arg(to_json)),
+        ("to_json", F::custom(to_json)),
     ]
 }

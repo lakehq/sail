@@ -17,6 +17,7 @@ use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8Vi
 use sail_function::scalar::datetime::interval::DayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::timestamp::Timestamp;
+use sail_function::scalar::datetime::timestamp_add_interval::TimestampAddInterval;
 use sail_function::scalar::math::abs::Abs;
 use sail_function::scalar::math::bin::Bin;
 use sail_function::scalar::math::bround::BRound;
@@ -42,9 +43,45 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::datetime_utils::{
-    session_timestamp_interval_arithmetic, session_timestamp_subtraction,
+    is_interval, session_timestamp_interval_arithmetic, session_timestamp_subtraction,
     with_timestamp_ntz_coercion,
 };
+
+fn try_interval_arithmetic(input: ScalarFunctionInput, subtract: bool) -> PlanResult<Expr> {
+    let (left, right) = input.arguments.two()?;
+    let context = input.function_context;
+    let left_type = left.get_type(context.schema)?;
+    let right_type = right.get_type(context.schema)?;
+    let (timestamp, label, interval) = match (&left_type, &right_type) {
+        (DataType::Timestamp(TimeUnit::Microsecond, label), ty) if is_interval(ty) => {
+            (left, label, right)
+        }
+        (ty, DataType::Timestamp(TimeUnit::Microsecond, label)) if !subtract && is_interval(ty) => {
+            (right, label, left)
+        }
+        _ => {
+            let udf = if subtract {
+                ScalarUDF::from(TrySubtract::new())
+            } else {
+                ScalarUDF::from(TryAdd::new())
+            };
+            return Ok(udf.call(vec![left, right]));
+        }
+    };
+    let zone = if label.is_some() {
+        context.plan_config.session_timezone.as_ref()
+    } else {
+        "UTC"
+    };
+    Ok(
+        ScalarUDF::from(TimestampAddInterval::try_variant()).call(vec![
+            timestamp,
+            interval,
+            lit(zone),
+            lit(subtract),
+        ]),
+    )
+}
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -854,11 +891,17 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
-        ("try_add", F::udf(TryAdd::new())),
+        (
+            "try_add",
+            F::custom(|input| try_interval_arithmetic(input, false)),
+        ),
         ("try_divide", F::udf(TryDiv::new())),
         ("try_multiply", F::udf(TryMult::new())),
         ("try_mod", F::udf(TryMod::new())),
-        ("try_subtract", F::udf(TrySubtract::new())),
+        (
+            "try_subtract",
+            F::custom(|input| try_interval_arithmetic(input, true)),
+        ),
         ("unhex", F::udf(UnHex::new())),
         ("uniform", F::udf(Uniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
