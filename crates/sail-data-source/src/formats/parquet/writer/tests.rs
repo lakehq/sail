@@ -6823,3 +6823,43 @@ async fn test_partitioned_rows_with_dictionaries_of_their_own_are_written() -> R
     assert!(actual == expected);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_jobs_are_counted_as_waiting_when_they_are_created() -> Result<()> {
+    // The files start no more jobs while the jobs that wait for their turn are
+    // as many as the queue allows. A job is counted before its task has run,
+    // since many files would otherwise start jobs at the same time, each with
+    // the column writers of a row group. The test has one thread, so no task
+    // of a job runs before the writer task waits.
+    // The batch has more rows than the batches that are combined before they are encoded.
+    let batch = three_int_batch(0..2000)?;
+    let budget =
+        EncodeBudget::with_slab_bytes(TEST_BUDGET, largest_batch(std::slice::from_ref(&batch)));
+    let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer = file_writer(
+        Arc::clone(&store),
+        Path::from("table/file.parquet"),
+        three_int_schema(),
+        WriterProperties::builder().build(),
+        true,
+        1024 * 1024,
+        test_resources(Arc::clone(&budget), &pool),
+    )?;
+    assert_eq!(budget.waiting_jobs(), 0);
+    // The batch has the size of a slab, so the file starts a job for each column.
+    writer.write(&batch).await?;
+    assert_eq!(budget.waiting_jobs(), 3);
+    // The queue of the one thread has room for one job, so the file starts
+    // the jobs of the next slab only when the jobs that waited have had their
+    // turn. The jobs of the next slab continue with the column writers of
+    // the jobs before them, which have ended, and they are counted when
+    // their tasks run and they wait for a turn.
+    writer.write(&batch).await?;
+    assert_eq!(budget.waiting_jobs(), 0);
+    writer.close().await?;
+    assert_eq!(budget.waiting_jobs(), 0);
+    let data = read_bytes(store.as_ref(), "table/file.parquet").await?;
+    assert_eq!(read_parquet(data)?.1.num_rows(), 4000);
+    Ok(())
+}

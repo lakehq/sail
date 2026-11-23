@@ -96,16 +96,16 @@ pub struct EncodeBudget {
 }
 
 /// Counts a job as waiting for its turn to encode until this is dropped.
-struct Waiting<'a>(&'a EncodeBudget);
+pub(super) struct Waiting(Arc<EncodeBudget>);
 
-impl<'a> Waiting<'a> {
-    fn new(budget: &'a EncodeBudget) -> Self {
+impl Waiting {
+    fn new(budget: &Arc<EncodeBudget>) -> Self {
         budget.waiting.fetch_add(1, Ordering::AcqRel);
-        Self(budget)
+        Self(Arc::clone(budget))
     }
 }
 
-impl Drop for Waiting<'_> {
+impl Drop for Waiting {
     fn drop(&mut self) {
         self.0.waiting.fetch_sub(1, Ordering::AcqRel);
         self.0.turn.notify_one();
@@ -175,6 +175,12 @@ impl EncodeBudget {
     fn slab_bytes(&self, columns: usize) -> usize {
         self.slab_bytes
             .min(columns.max(1).saturating_mul(self.column_slab_bytes))
+    }
+
+    /// The number of jobs that are counted as waiting for their turn to encode.
+    #[cfg(test)]
+    pub(super) fn waiting_jobs(&self) -> usize {
+        self.waiting.load(Ordering::Acquire)
     }
 
     /// The part of the budget that is in use. This can be more than the size
@@ -285,11 +291,21 @@ impl EncodeResources {
         }
     }
 
+    /// Counts a job as waiting for its turn to encode, from the time when
+    /// the job is created. A job that is created for a column without a job
+    /// waits for nothing but its turn, and a file must not start more jobs
+    /// before the job is counted, which the task of the job would do only
+    /// when a thread runs it.
+    pub(super) fn waiting(&self) -> Waiting {
+        Waiting::new(&self.budget)
+    }
+
     /// Waits until a job may encode. The job may encode until the returned
     /// value is dropped. A job must not wait for anything but its turn
-    /// on a thread while it has the value.
-    pub(super) async fn job(&self) -> Result<OwnedSemaphorePermit> {
-        let _waiting = Waiting::new(&self.budget);
+    /// on a thread while it has the value. The job is counted as waiting
+    /// from here on unless it has been counted since it was created.
+    pub(super) async fn job(&self, waiting: Option<Waiting>) -> Result<OwnedSemaphorePermit> {
+        let _waiting = waiting.unwrap_or_else(|| self.waiting());
         Arc::clone(&self.budget.jobs)
             .acquire_owned()
             .await

@@ -26,7 +26,7 @@ use sail_common_datafusion::data_type::contains_dictionary;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::task::JoinHandle;
 
-use crate::formats::parquet::writer::resources::{Charge, EncodeResources};
+use crate::formats::parquet::writer::resources::{Charge, EncodeResources, Waiting};
 use crate::listing::staging::{Publish, StagedUpload, upload_error};
 
 /// The size of the encoded data of a file that is kept in memory
@@ -751,9 +751,15 @@ impl ColumnEncoder {
             let charge = charge
                 .as_mut()
                 .map(|x| x.split(column_bytes.next().unwrap_or(0)));
-            if let ColumnState::Running(job) = &column {
-                job.followed.store(true, Ordering::Release);
-            }
+            // A job of a column without a job waits for its turn only, and it
+            // is counted here, before the files start more jobs.
+            let waiting = match &column {
+                ColumnState::Idle(_) => Some(resources.waiting()),
+                ColumnState::Running(job) => {
+                    job.followed.store(true, Ordering::Release);
+                    None
+                }
+            };
             let followed = Arc::new(AtomicBool::new(false));
             let context = JobContext {
                 resources: Arc::clone(&resources),
@@ -762,7 +768,15 @@ impl ColumnEncoder {
                 index,
                 followed: Arc::clone(&followed),
             };
-            let job = encode_column(column, Arc::clone(field), arrays, charge, last, context);
+            let job = encode_column(
+                column,
+                Arc::clone(field),
+                arrays,
+                charge,
+                last,
+                context,
+                waiting,
+            );
             open.columns.push(ColumnState::Running(Job {
                 task: tokio::spawn(job),
                 followed,
@@ -929,6 +943,7 @@ async fn encode_column(
     charge: Option<Charge>,
     last: bool,
     context: JobContext,
+    waiting: Option<Waiting>,
 ) -> Result<ColumnOutput> {
     // The job continues in the turn of the job of the column before it,
     // if that job has passed its turn on. The columns of a slab are small
@@ -937,7 +952,7 @@ async fn encode_column(
     let (mut writers, turn) = column.writers().await?;
     let turn = match turn {
         Some(turn) => turn,
-        None => context.resources.job().await?,
+        None => context.resources.job(waiting).await?,
     };
     let mut slice = TimeSlice::start();
     for array in arrays {
