@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
@@ -43,10 +44,32 @@ use crate::resolver::state::{
 };
 
 impl PlanResolver<'_> {
+    // Box the read future so every level of a nested query can poll the resolver
+    // without reserving stack space for catalog lookup and partition planning.
+    #[async_recursion]
+    pub(super) async fn resolve_query_read(
+        &self,
+        read_type: spec::ReadType,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        match read_type {
+            spec::ReadType::NamedTable(table) => {
+                self.resolve_query_read_named_table(*table, state).await
+            }
+            spec::ReadType::Udtf(udtf) => self.resolve_query_read_udtf(*udtf, state).await,
+            spec::ReadType::DataSource(source) => {
+                self.resolve_query_read_data_source(*source, state).await
+            }
+            spec::ReadType::DynamicTable(table) => {
+                self.resolve_query_read_dynamic_table(*table, state).await
+            }
+        }
+    }
+
     /// Resolves a named table or view reference into a logical plan node.
     /// Looks up the name in the catalog and produces the appropriate plan
     /// depending on whether it's a table, view, or temporary view.
-    pub(super) async fn resolve_query_read_named_table(
+    async fn resolve_query_read_named_table(
         &self,
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
@@ -403,7 +426,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_query_read_dynamic_table(
+    async fn resolve_query_read_dynamic_table(
         &self,
         table: spec::ReadDynamicTable,
         state: &mut PlanResolverState,
@@ -535,7 +558,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_query_read_udtf(
+    async fn resolve_query_read_udtf(
         &self,
         udtf: spec::ReadUdtf,
         state: &mut PlanResolverState,
@@ -673,7 +696,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_query_read_data_source(
+    async fn resolve_query_read_data_source(
         &self,
         mut source: spec::ReadDataSource,
         state: &mut PlanResolverState,
