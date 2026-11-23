@@ -67,6 +67,14 @@ const JOBS_PER_THREAD: usize = 1;
 /// 2.13 s, 2.00 s and 2.01 s with 8.6 to 8.7 GiB, and 600 million rows of
 /// 4 columns in 100 partition directories 5.97 s with 7.1 GiB, 5.96 s with
 /// 7.2 GiB, 5.82 s with 12.1 GiB, and 5.85 s with 12.1 GiB.
+///
+/// These numbers are from a version that counted a job as waiting when
+/// its task first ran. A job is now counted when it is created, which was
+/// measured with one waiting job only: 20 million rows of 16 columns in 100
+/// partition directories for each of 48 tasks took 5.49 s with 7.1 GiB instead
+/// of 5.71 s with 18.0 GiB, 60 million rows of 16 columns in 48 files 1.35 s
+/// with 9.8 GiB instead of 1.41 s with 13.5 GiB, and 10 million rows of 121
+/// columns in one file 1.92 s instead of 1.86 s.
 const QUEUE_PER_JOB: usize = 1;
 
 /// The memory that the Parquet files of this process may use for their input
