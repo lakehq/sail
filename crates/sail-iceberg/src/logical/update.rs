@@ -17,7 +17,7 @@ use sail_logical_plan::row_level::{
 use crate::logical::merge::ensure_merge_metadata_columns;
 use crate::logical::row_level::{select_copy_on_write_rows, target_write_state, write_effects};
 
-pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
+pub(crate) fn expand_update_node(mut info: UpdateInfo, counts: bool) -> Result<LogicalPlan> {
     let (mode, snapshot_id) = target_write_state(&info.target_plan, RowLevelCommand::Update)?;
     super::row_level::validate_row_level_columns(
         &info.input_schema,
@@ -81,7 +81,11 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         expanded.target().clone(),
         Arc::new(datafusion_common::DFSchema::empty()),
     )
-    .with_output(CommandOutput::Empty)
+    .with_output(if counts {
+        CommandOutput::AffectedRows
+    } else {
+        CommandOutput::Empty
+    })
     .with_expected_snapshot_id(Some(snapshot_id));
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(node),

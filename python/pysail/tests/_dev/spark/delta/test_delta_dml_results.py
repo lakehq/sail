@@ -250,3 +250,16 @@ def test_delta_delete_missing_metadata_counts(spark, tmp_path, known_stats, pred
         else ([(4,), (5,), (6,)] if predicate == "p = 'a'" else [(1,), (3,), (4,), (5,), (6,)])
     )
     assert spark.sql(f"SELECT v FROM {target} ORDER BY v").collect() == remaining
+
+
+def test_replace_where_result_counts_input_rows(spark, tmp_path):
+    key = "sail.execution.return_write_metrics"
+    with _table(spark, tmp_path) as table:
+        _seed(spark, tmp_path)
+        spark.conf.set(key, "true")
+        try:
+            frame = spark.sql(f"INSERT INTO {table} REPLACE WHERE id = 2 SELECT 2, 42")
+            assert frame.collect() == [(1,)]
+            assert _rows(spark, table) == [(1, 10), (2, 42), (3, 30), (9, 90)]
+        finally:
+            spark.conf.unset(key)

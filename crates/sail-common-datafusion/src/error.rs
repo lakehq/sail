@@ -9,6 +9,10 @@ use datafusion_common::DataFusionError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Debug, Error)]
+#[error("Schema not found: {0}")]
+pub struct SchemaNotFoundError(pub String);
+
 /// An error with a cause received from a remote worker.
 #[derive(Debug, Clone, Error)]
 #[error("remote error: {cause}")]
@@ -104,6 +108,7 @@ pub enum CommonErrorCause {
     FormatAvro(String),
     Plan(String),
     Schema(String),
+    SchemaNotFound(String),
     Configuration(String),
     Execution(String),
     DeltaTable(String),
@@ -136,6 +141,7 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::FormatAvro(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Schema(x)
+            | CommonErrorCause::SchemaNotFound(x)
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x)
@@ -234,6 +240,10 @@ impl CommonErrorCause {
 
         if let Some(cause) = Py::extract(error) {
             return Self::Python(cause);
+        }
+
+        if let Some(e) = error.downcast_ref::<SchemaNotFoundError>() {
+            return Self::SchemaNotFound(e.0.clone());
         }
 
         if let Some(e) = error.downcast_ref::<RemoteError>() {

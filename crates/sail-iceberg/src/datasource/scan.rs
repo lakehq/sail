@@ -336,13 +336,13 @@ impl IcebergScan {
         self
     }
 
-    pub(crate) async fn metadata_delete_paths(
+    pub(crate) async fn metadata_delete_files(
         &self,
         session: &dyn Session,
         predicate: &Expr,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<(Vec<String>, Option<u64>)>> {
         if self.snapshot.is_none() {
-            return Ok(Some(Vec::new()));
+            return Ok(Some((Vec::new(), Some(0))));
         }
         let table_url = Url::parse(&self.table_uri)
             .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
@@ -358,13 +358,27 @@ impl IcebergScan {
             &self.partition_specs,
             files,
         );
-        Ok(selected.all_rows_match.then(|| {
-            selected
-                .candidates
-                .into_iter()
-                .map(|file| file.data_file.file_path)
-                .collect()
-        }))
+        if !selected.all_rows_match {
+            return Ok(None);
+        }
+        let rows = if !selected.candidates.is_empty()
+            && manifests
+                .entries()
+                .iter()
+                .any(|m| m.content == ManifestContentType::Deletes)
+        {
+            None
+        } else {
+            selected.candidates.iter().try_fold(0u64, |sum, file| {
+                sum.checked_add(file.data_file.record_count())
+            })
+        };
+        let paths = selected
+            .candidates
+            .into_iter()
+            .map(|file| file.data_file.file_path)
+            .collect();
+        Ok(Some((paths, rows)))
     }
 
     pub(crate) async fn predicate_overwrite_paths(

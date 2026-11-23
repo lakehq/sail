@@ -168,6 +168,29 @@ impl IcebergActionSummary {
         })
     }
 
+    pub(crate) fn metadata_delete(deleted: Option<u64>) -> Self {
+        Self {
+            deleted,
+            ..Self::new(IcebergOperation::Delete)
+        }
+    }
+
+    pub(crate) fn affected_counts(&self) -> Result<[i64; 4]> {
+        let count = |rows: Option<u64>| -> Result<i64> {
+            rows.map(i64::try_from)
+                .transpose()
+                .map(|v| v.unwrap_or(-1))
+                .map_err(|_| exec_datafusion_err!("Iceberg command row count overflow"))
+        };
+        let affected = add_count(add_count(self.updated, self.deleted)?, self.inserted)?;
+        Ok([
+            count(affected)?,
+            count(self.updated)?,
+            count(self.deleted)?,
+            count(self.inserted)?,
+        ])
+    }
+
     pub(crate) fn properties(&self) -> ActionSummaryProperties {
         let counts = match self.operation {
             IcebergOperation::Insert => vec![("spark.insert.num-inserted-rows", self.inserted)],
