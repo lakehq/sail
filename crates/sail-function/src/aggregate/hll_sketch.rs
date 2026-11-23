@@ -18,17 +18,17 @@ use crate::utils::hll_sketch::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllSketchAggFunction {
+pub struct HllSketchAgg {
     signature: Signature,
 }
 
-impl Default for HllSketchAggFunction {
+impl Default for HllSketchAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllSketchAggFunction {
+impl HllSketchAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -39,7 +39,7 @@ impl HllSketchAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllSketchAggFunction {
+impl AggregateUDFImpl for HllSketchAgg {
     fn name(&self) -> &str {
         "hll_sketch_agg"
     }
@@ -71,17 +71,17 @@ impl AggregateUDFImpl for HllSketchAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllUnionAggFunction {
+pub struct HllUnionAgg {
     signature: Signature,
 }
 
-impl Default for HllUnionAggFunction {
+impl Default for HllUnionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllUnionAggFunction {
+impl HllUnionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -92,7 +92,7 @@ impl HllUnionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllUnionAggFunction {
+impl AggregateUDFImpl for HllUnionAgg {
     fn name(&self) -> &str {
         "hll_union_agg"
     }

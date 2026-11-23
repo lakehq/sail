@@ -30,7 +30,7 @@ data:
   protocol:
     minReaderVersion: 1
     minWriterVersion: 2
-  tableSizeBytes: 1459
+  tableSizeBytes: 1445
 ---
 name: "test_delta_log_contains_checksum_files_and_latest_checksum_matches_snapshot"
 data:
@@ -67,4 +67,4 @@ data:
     - inCommitTimestamp
     - appendOnly
     - invariants
-  tableSizeBytes: 1459
+  tableSizeBytes: 1445

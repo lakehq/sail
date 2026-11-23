@@ -16,13 +16,13 @@
 /// This produces the same sequence of random numbers as Spark's
 /// `org.apache.spark.util.random.XORShiftRandom` for a given seed.
 #[derive(Debug, Clone)]
-pub struct SparkXorShiftRandom {
+pub struct XorShiftRandom {
     seed: i64,
     next_next_gaussian: f64,
     have_next_next_gaussian: bool,
 }
 
-impl SparkXorShiftRandom {
+impl XorShiftRandom {
     /// Create a new RNG with the given seed.
     ///
     /// The seed is hashed using MurmurHash3, matching Spark's behavior.
@@ -359,7 +359,7 @@ mod tests {
             0.8799444982255561,
             0.6553338995859576,
         ];
-        let mut rng = SparkXorShiftRandom::new(42);
+        let mut rng = XorShiftRandom::new(42);
         assert_eq!(expected.map(|_| rng.next_gaussian()), expected);
     }
 
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_spark_xorshift_seed_1() {
-        let mut rng = SparkXorShiftRandom::new(1);
+        let mut rng = XorShiftRandom::new(1);
         for expected in SPARK_XORSHIFT_SEED_1 {
             let actual = rng.next_double();
             assert!(
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_spark_xorshift_seed_24() {
-        let mut rng = SparkXorShiftRandom::new(24);
+        let mut rng = XorShiftRandom::new(24);
         for expected in SPARK_XORSHIFT_SEED_24 {
             let actual = rng.next_double();
             assert!(
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_spark_xorshift_gaussian_seed_42() {
-        let mut rng = SparkXorShiftRandom::new(42);
+        let mut rng = XorShiftRandom::new(42);
         for expected in SPARK_XORSHIFT_GAUSSIAN_SEED_42 {
             let actual = rng.next_gaussian();
             assert!(

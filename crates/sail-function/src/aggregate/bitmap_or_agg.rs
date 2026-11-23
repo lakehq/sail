@@ -18,25 +18,25 @@ use super::utils::BITMAP_NUM_BYTES;
 /// Input values shorter than `BITMAP_NUM_BYTES` are zero-padded on the right.
 /// The result is always a binary value of `BITMAP_NUM_BYTES` bytes.
 #[derive(PartialEq, Eq, Hash)]
-pub struct BitmapOrAggFunction {
+pub struct BitmapOrAgg {
     signature: Signature,
 }
 
-impl Debug for BitmapOrAggFunction {
+impl Debug for BitmapOrAgg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BitmapOrAggFunction")
+        f.debug_struct("BitmapOrAgg")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for BitmapOrAggFunction {
+impl Default for BitmapOrAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BitmapOrAggFunction {
+impl BitmapOrAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(vec![DataType::Binary], Volatility::Immutable),
@@ -44,7 +44,7 @@ impl BitmapOrAggFunction {
     }
 }
 
-impl AggregateUDFImpl for BitmapOrAggFunction {
+impl AggregateUDFImpl for BitmapOrAgg {
     fn name(&self) -> &str {
         "bitmap_or_agg"
     }

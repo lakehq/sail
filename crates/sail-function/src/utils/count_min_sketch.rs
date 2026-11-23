@@ -12,7 +12,7 @@ const PRIME_MODULUS: i64 = (1i64 << 31) - 1;
 const COUNT_MIN_SKETCH_VERSION: i32 = 1;
 
 #[derive(Debug)]
-pub(crate) struct SparkCountMinSketch {
+pub(crate) struct CountMinSketchState {
     depth: usize,
     width: usize,
     total_count: i64,
@@ -20,7 +20,7 @@ pub(crate) struct SparkCountMinSketch {
     table: Vec<i64>,
 }
 
-impl SparkCountMinSketch {
+impl CountMinSketchState {
     pub(crate) fn new(eps: f64, confidence: f64, seed: i32) -> Result<Self> {
         validate_parameters(eps, confidence)?;
         let width = (2.0 / eps).ceil();

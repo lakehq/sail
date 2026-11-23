@@ -44,6 +44,7 @@ async-stream = "0.3.6"
 lazy_static = "1.5.1"
 once_cell = "1.21.4"
 icu_casemap = "2.2.0"
+icu_properties = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_bytes = "0.11.19"
 serde_json = { version = "1.0.150", features = ["preserve_order", "raw_value"] }
@@ -54,7 +55,7 @@ xee-xpath-ast = "0.1.4"
 xee-xpath-compiler = "0.1.5"
 xee-xpath-lexer = "0.1.4"
 xot = "0.31.2"
-quick-xml = "0.39.4"
+quick-xml = "0.42.0"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
 monostate = "1.0.2"
@@ -78,6 +79,7 @@ proc-macro2 = "1.0.106"
 prettyplease = "0.3.0"
 phf = { version = "0.14.0", features = ["macros"] }
 either = "1.16.0"
+bigdecimal = "0.4.10"
 num-bigint = "0.5.1"
 rand = "0.10.1"
 rand_distr = "0.6.0"
@@ -123,7 +125,7 @@ roaring = "0.12.0"
 datasketches = { version = "0.6.0", features = ["hll", "theta"] }
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
-chumsky = { version = "0.13.0", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.14.2", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
@@ -212,7 +214,8 @@ arrow-schema = { version = "59.2.0", features = ["serde", "canonical_extension_t
 arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
 arrow-pyarrow = { version = "59.2.0" }
 arrow-select = { version = "59.2.0" }
-parquet = { version = "59.2.0" }
+parquet = { version = "59.2.0", features = ["arrow_canonical_extension_types"] }
+orc-rust = { version = "0.9.0", default-features = false }
 parquet-variant = { version = "59.2.0" }
 parquet-variant-compute = { version = "59.2.0" }
 parquet-variant-json = { version = "59.2.0" }

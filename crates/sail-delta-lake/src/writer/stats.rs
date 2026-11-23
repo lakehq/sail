@@ -21,6 +21,7 @@ use parquet_variant::{ObjectBuilder, VariantBuilder};
 
 use crate::conversion::ScalarExt;
 use crate::deletion_vector::z85;
+use crate::spec::utils::encode_path;
 use crate::spec::{
     Add, ColumnCountStat, ColumnName, ColumnValueStat, DeltaError as DeltaTableError, StatValue,
     Stats,
@@ -56,7 +57,7 @@ pub fn create_add(
         .as_millis() as i64;
 
     Ok(Add {
-        path,
+        path: encode_path(&path),
         size,
         partition_values: partition_values
             .iter()

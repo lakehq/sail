@@ -189,6 +189,7 @@ impl ScanByAddsStreamState {
             .ensure_data_read_supported()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let session_state = SessionStateBuilder::new()
+            .with_session_id(self.context.session_id())
             .with_config(self.context.session_config().clone())
             .with_runtime_env(self.context.runtime_env().clone())
             .build();

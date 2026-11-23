@@ -14,17 +14,17 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkMapEntries {
+pub struct MapEntries {
     signature: Signature,
 }
 
-impl Default for SparkMapEntries {
+impl Default for MapEntries {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkMapEntries {
+impl MapEntries {
     pub fn new() -> Self {
         Self {
             signature: Signature::new(
@@ -35,7 +35,7 @@ impl SparkMapEntries {
     }
 }
 
-impl ScalarUDFImpl for SparkMapEntries {
+impl ScalarUDFImpl for MapEntries {
     fn name(&self) -> &str {
         "map_entries"
     }

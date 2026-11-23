@@ -18,6 +18,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
@@ -104,10 +105,7 @@ pub(super) async fn create_data_scan(
     session: &dyn Session,
     mut config: FileScanConfig,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let parquet = config
-        .file_source
-        .downcast_ref::<ParquetSource>()
-        .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
+    let parquet = config.file_source.downcast_ref::<ParquetSource>();
     // Explicit partitioning or preserved order prevents row-group repartitioning, so leave
     // footer reads to execution. Row-level delete scans set these flags and may be discarded
     // when the planner chooses a metadata-only delete, which must not read Parquet files.
@@ -115,14 +113,21 @@ pub(super) async fn create_data_scan(
     // can choose a metadata-only delete.
     // WARNING: Do not remove this guard; eager footer reads will break metadata-only deletes
     // when data files are unavailable.
-    if config.output_partitioning.is_none() && !config.preserve_order {
+    if config.output_partitioning.is_none()
+        && !config.preserve_order
+        && let Some(parquet) = parquet
+    {
         let store = session
             .runtime_env()
             .object_store(&config.object_store_url)?;
-        let metadata_cache = session
-            .runtime_env()
-            .cache_manager
-            .get_file_metadata_cache();
+        let metadata_cache = scoped_file_metadata_cache(
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+            &config.object_store_url,
+            session.session_id(),
+        );
         config.file_groups = load_parquet_scan_metadata(
             config.file_groups,
             &store,
@@ -214,16 +219,18 @@ pub(crate) fn create_data_scan_with_partition_defaults(
     }
 
     let target = config.projected_schema()?;
-    let parquet = config
-        .file_source
-        .downcast_ref::<ParquetSource>()
-        .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
+    let original_source = config.file_source.clone();
     let mut scans = Vec::with_capacity(groups.len());
     for (defaults, file_groups) in groups {
         let table_schema =
-            TableSchema::builder(defaults.schema(parquet.table_schema().file_schema())?)
-                .with_table_partition_cols(parquet.table_schema().table_partition_cols().to_vec())
-                .with_virtual_columns(parquet.table_schema().virtual_columns().clone())
+            TableSchema::builder(defaults.schema(original_source.table_schema().file_schema())?)
+                .with_table_partition_cols(
+                    original_source
+                        .table_schema()
+                        .table_partition_cols()
+                        .to_vec(),
+                )
+                .with_virtual_columns(original_source.table_schema().virtual_columns().clone())
                 .build();
         // Preserve whole-file partitions without advertising compatible hash
         // partitioning: interleaving these scans would reset file-local row offsets.
@@ -231,20 +238,31 @@ pub(crate) fn create_data_scan_with_partition_defaults(
             .output_partitioning
             .as_ref()
             .map(|_| Partitioning::UnknownPartitioning(file_groups.len()));
-        let mut source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(parquet.table_parquet_options().clone());
-        if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
-            source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
-        }
-        if let Some(predicate) = parquet.filter() {
-            source = source.with_predicate(predicate);
-        }
-        let source = match parquet.projection() {
-            Some(projection) => source
-                .try_pushdown_projection(projection)?
-                .ok_or_else(|| internal_datafusion_err!("Cannot project Iceberg Parquet scan"))?,
-            None => Arc::new(source),
-        };
+        let source: Arc<dyn FileSource> =
+            if let Some(parquet) = original_source.downcast_ref::<ParquetSource>() {
+                let mut source = ParquetSource::new(table_schema)
+                    .with_table_parquet_options(parquet.table_parquet_options().clone());
+                if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
+                    source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
+                }
+                if let Some(predicate) = parquet.filter() {
+                    source = source.with_predicate(predicate);
+                }
+                match parquet.projection() {
+                    Some(projection) => {
+                        source.try_pushdown_projection(projection)?.ok_or_else(|| {
+                            internal_datafusion_err!("Cannot project Iceberg Parquet scan")
+                        })?
+                    }
+                    None => Arc::new(source),
+                }
+            } else if let Some(imported) =
+                original_source.downcast_ref::<super::imported_source::IcebergImportedFileSource>()
+            {
+                imported.with_schema(table_schema)?
+            } else {
+                return Err(internal_datafusion_err!("Unsupported Iceberg file source"));
+            };
         let unknown =
             datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
         let mut statistics = sail_common_datafusion::statistics::aggregate_statistics(
@@ -308,4 +326,96 @@ pub(crate) fn create_data_scan_with_partition_defaults(
         )),
         None => scan,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+    use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_datasource::PartitionedFile;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
+    use parquet::arrow::ArrowWriter;
+
+    use super::*;
+    use crate::datasource::data_file_last_modified;
+
+    fn parquet_file(column: &str) -> Result<Vec<u8>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None)?;
+        writer.write(&batch)?;
+        Ok(writer.into_inner()?)
+    }
+
+    #[tokio::test]
+    async fn sessions_sharing_the_footer_cache_read_their_own_memory_files() -> Result<()> {
+        // Each session has its own in-memory store, so a file at the same path and size in
+        // another session must not reuse the cached footer, even with a fixed last_modified.
+        let shared =
+            CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
+        let url = ObjectStoreUrl::parse("memory://")?;
+        let path = Path::from("warehouse/table/data/file.parquet");
+        let files = [parquet_file("a")?, parquet_file("b")?];
+        assert_eq!(files[0].len(), files[1].len());
+
+        for (file, column) in files.into_iter().zip(["a", "b"]) {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let size = file.len() as u64;
+            store.put(&path, PutPayload::from(file)).await?;
+            let runtime = RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    CacheManagerConfig::default()
+                        .with_file_metadata_cache(Some(Arc::clone(&shared))),
+                )
+                .build_arc()?;
+            runtime.register_object_store(url.as_ref(), Arc::clone(&store));
+            let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+            let state = ctx.state();
+
+            let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+            let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+                store,
+                scoped_file_metadata_cache(
+                    state.runtime_env().cache_manager.get_file_metadata_cache(),
+                    &url,
+                    state.session_id(),
+                ),
+            ));
+            let source = ParquetSource::new(TableSchema::from(schema))
+                .with_parquet_file_reader_factory(reader_factory);
+            let file = PartitionedFile::new_from_meta(ObjectMeta {
+                location: path.clone(),
+                last_modified: data_file_last_modified(Some(1)),
+                size,
+                e_tag: None,
+                version: None,
+            });
+            let config = FileScanConfigBuilder::new(url.clone(), Arc::new(source))
+                .with_file_group(FileGroup::new(vec![file]))
+                .build();
+
+            let scan = create_data_scan(&state, config).await?;
+            let batches = collect(scan, state.task_ctx()).await?;
+            let values = batches
+                .iter()
+                .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().iter())
+                .collect::<Vec<_>>();
+            assert_eq!(values, vec![Some(1), Some(2), Some(3)], "column {column}");
+        }
+        // Execution reuses the footer read at planning in the same session, and sessions do not
+        // share it.
+        assert_eq!(shared.len(), 2);
+        Ok(())
+    }
 }

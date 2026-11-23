@@ -737,7 +737,7 @@ fn reorder_spark_columns(
 /// 2. Only tables without a datasource marker are classified from their Hive
 ///    SerDe/InputFormat/OutputFormat metadata.
 /// 3. If neither is present or detectable, the format is `unknown`.
-fn resolve_data_source_format(
+pub(crate) fn resolve_data_source_format(
     parameters: Option<&HashMap<String, String>>,
     storage: Option<&StorageDescriptor>,
 ) -> String {

@@ -345,7 +345,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::DayTimeInterval(dt::DayTimeInterval {
                         start_field: Some(0),
-                        end_field: None,
+                        end_field: Some(0),
                         type_variation_reference: 0,
                     })),
                 },
@@ -385,7 +385,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::DayTimeInterval(dt::DayTimeInterval {
                         start_field: Some(1),
-                        end_field: None,
+                        end_field: Some(1),
                         type_variation_reference: 0,
                     })),
                 },
@@ -415,7 +415,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::DayTimeInterval(dt::DayTimeInterval {
                         start_field: Some(2),
-                        end_field: None,
+                        end_field: Some(2),
                         type_variation_reference: 0,
                     })),
                 },
@@ -435,7 +435,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::DayTimeInterval(dt::DayTimeInterval {
                         start_field: Some(3),
-                        end_field: None,
+                        end_field: Some(3),
                         type_variation_reference: 0,
                     })),
                 },
@@ -445,7 +445,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::YearMonthInterval(dt::YearMonthInterval {
                         start_field: Some(0),
-                        end_field: None,
+                        end_field: Some(0),
                         type_variation_reference: 0,
                     })),
                 },
@@ -465,7 +465,7 @@ mod tests {
                 sc::DataType {
                     kind: Some(dt::Kind::YearMonthInterval(dt::YearMonthInterval {
                         start_field: Some(1),
-                        end_field: None,
+                        end_field: Some(1),
                         type_variation_reference: 0,
                     })),
                 },

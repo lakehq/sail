@@ -199,3 +199,7 @@ pub fn parse_optional_u64(key: &str, value: &str) -> DataSourceResult<Option<u64
             cause: None,
         })
 }
+
+pub fn parse_optional_non_zero_u64(key: &str, value: &str) -> DataSourceResult<Option<u64>> {
+    Ok(parse_optional_u64(key, value)?.filter(|n| *n != 0))
+}

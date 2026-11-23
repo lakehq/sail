@@ -4,7 +4,7 @@ use super::{FastAppendAction, Transaction};
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::{FormatVersion, ManifestContentType, PartitionSpec, Schema};
 
-pub(crate) fn format_version_for_schema(schema: &Schema) -> FormatVersion {
+pub fn format_version_for_schema(schema: &Schema) -> FormatVersion {
     if schema.fields().iter().any(|field| {
         field.field_type.requires_format_v3()
             || field.initial_default.is_some()

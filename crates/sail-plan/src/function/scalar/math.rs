@@ -13,32 +13,30 @@ use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
-use sail_function::scalar::conversion::spark_to_string::{
-    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
-};
+use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
+use sail_function::scalar::datetime::interval::DayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
-use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp::Timestamp;
+use sail_function::scalar::math::abs::Abs;
+use sail_function::scalar::math::bin::Bin;
+use sail_function::scalar::math::bround::BRound;
+use sail_function::scalar::math::ceil_floor::{Ceil, Floor};
+use sail_function::scalar::math::conv::Conv;
+use sail_function::scalar::math::div::Div;
+use sail_function::scalar::math::negative::Negative;
+use sail_function::scalar::math::pmod::Pmod;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
-use sail_function::scalar::math::spark_abs::SparkAbs;
-use sail_function::scalar::math::spark_bin::SparkBin;
-use sail_function::scalar::math::spark_bround::SparkBRound;
-use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
-use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkDiv;
-use sail_function::scalar::math::spark_negative::SparkNegative;
-use sail_function::scalar::math::spark_pmod::SparkPmod;
-use sail_function::scalar::math::spark_signum::SparkSignum;
-use sail_function::scalar::math::spark_sqrt::SparkSqrt;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_div::SparkTryDiv;
-use sail_function::scalar::math::spark_try_mod::SparkTryMod;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
-use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::math::spark_unhex::SparkUnHex;
-use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::math::signum::Signum;
+use sail_function::scalar::math::sqrt::Sqrt;
+use sail_function::scalar::math::try_add::TryAdd;
+use sail_function::scalar::math::try_div::TryDiv;
+use sail_function::scalar::math::try_mod::TryMod;
+use sail_function::scalar::math::try_mult::TryMult;
+use sail_function::scalar::math::try_subtract::TrySubtract;
+use sail_function::scalar::math::unhex::UnHex;
+use sail_function::scalar::math::uniform::Uniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -55,19 +53,19 @@ fn add_day_time_interval_to_string(
     session_timezone: Arc<str>,
     ansi_mode: bool,
 ) -> PlanResult<Expr> {
-    let timestamp = ScalarUDF::from(SparkTimestamp::try_new(
+    let timestamp = ScalarUDF::from(Timestamp::try_new(
         Some(session_timezone),
         ansi_mode,
         false,
     )?)
     .call(vec![string]);
     let calendar_interval =
-        ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
+        ScalarUDF::from(DayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
     let shifted = timestamp + calendar_interval;
     match string_type {
-        DataType::Utf8 => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![shifted])),
-        DataType::LargeUtf8 => Ok(ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![shifted])),
-        DataType::Utf8View => Ok(ScalarUDF::from(SparkToUtf8View::new()).call(vec![shifted])),
+        DataType::Utf8 => Ok(ScalarUDF::from(ToUtf8::new()).call(vec![shifted])),
+        DataType::LargeUtf8 => Ok(ScalarUDF::from(ToLargeUtf8::new()).call(vec![shifted])),
+        DataType::Utf8View => Ok(ScalarUDF::from(ToUtf8View::new()).call(vec![shifted])),
         data_type => Err(PlanError::internal(format!(
             "expected string type for interval arithmetic, got {data_type}"
         ))),
@@ -473,8 +471,8 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
         }
         // Keep the original operands intact through grouping and aggregate extraction.
-        // SparkDiv's normal argument coercion handles resolved numeric and interval types.
-        _ => ScalarUDF::from(SparkDiv::new()).call(vec![dividend, divisor]),
+        // Div's normal argument coercion handles resolved numeric and interval types.
+        _ => ScalarUDF::from(Div::new()).call(vec![dividend, divisor]),
     };
 
     Ok(cast(div_expr, DataType::Int64))
@@ -577,9 +575,9 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
         arguments
     };
     let func = if matches!(name.to_lowercase().trim(), "ceil") {
-        Arc::new(ScalarUDF::from(SparkCeil::new(ansi_mode)))
+        Arc::new(ScalarUDF::from(Ceil::new(ansi_mode)))
     } else {
-        Arc::new(ScalarUDF::from(SparkFloor::new(ansi_mode)))
+        Arc::new(ScalarUDF::from(Floor::new(ansi_mode)))
     };
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func,
@@ -616,7 +614,7 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
 }
 
 fn spark_sqrt(arg: Expr) -> Expr {
-    ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
+    ScalarUDF::from(Sqrt::new()).call(vec![cast(arg, DataType::Float64)])
 }
 
 /// Modulo operation with division-by-zero handling.
@@ -664,25 +662,25 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
+    let udf = ScalarUDF::from(Abs::new(ansi_mode));
     Ok(udf.call(input.arguments))
 }
 
 fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkBin::new(ansi_mode));
+    let udf = ScalarUDF::from(Bin::new(ansi_mode));
     Ok(udf.call(input.arguments))
 }
 
 fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkPmod::new(ansi_mode));
+    let udf = ScalarUDF::from(Pmod::new(ansi_mode));
     Ok(udf.call(input.arguments))
 }
 
 /// Negate a numeric literal at planning time so a constant operand stays a
 /// literal (some functions, e.g. `ceil`/`floor` target scale, require a literal
-/// argument and run before the optimizer would fold a `SparkNegative` call).
+/// argument and run before the optimizer would fold a `Negative` call).
 /// Returns `None` when the value is not a foldable numeric literal or the
 /// negation overflows (e.g. `-INT_MIN`), leaving such cases to the runtime UDF.
 fn negate_literal(arg: &Expr) -> Option<Expr> {
@@ -743,7 +741,7 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 /// Spark unary minus / `negative(x)`. Duration negation goes through
-/// `NegateDuration`; everything else uses `SparkNegative`, which honors the ANSI
+/// `NegateDuration`; everything else uses `Negative`, which honors the ANSI
 /// overflow semantics with `ansi_mode` baked at planning time.
 fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr {
     match arg.get_type(schema) {
@@ -752,11 +750,10 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         Ok(DataType::Duration(_)) => ScalarUDF::from(NegateDuration::new()).call(vec![arg]),
         // Spark's unary minus coerces strings to DOUBLE before negating. The
         // cast honors ANSI mode: an invalid string is NULL under ANSI off and
-        // errors under ANSI on. (Without this, the `SparkNegative` signature
+        // errors under ANSI on. (Without this, the `Negative` signature
         // would coerce the string to an interval instead.)
         Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            ScalarUDF::from(SparkNegative::new(ansi_mode))
-                .call(vec![string_to_double(arg, ansi_mode)])
+            ScalarUDF::from(Negative::new(ansi_mode)).call(vec![string_to_double(arg, ansi_mode)])
         }
         // Floating-point negation never overflows and is identical in both ANSI
         // modes, so use the native (vectorized, foldable) operator.
@@ -768,7 +765,7 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         // (`-INT_MIN`) can't fold and falls through to the runtime UDF.
         _ => match negate_literal(&arg) {
             Some(folded) => folded,
-            None => ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![arg]),
+            None => ScalarUDF::from(Negative::new(ansi_mode)).call(vec![arg]),
         },
     }
 }
@@ -804,11 +801,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("atan2", F::binary(double2(expr_fn::atan2))),
         ("atanh", F::unary(double(expr_fn::atanh))),
         ("bin", F::custom(spark_bin)),
-        ("bround", F::udf(SparkBRound::new())),
+        ("bround", F::udf(BRound::new())),
         ("cbrt", F::unary(double(expr_fn::cbrt))),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
-        ("conv", F::udf(SparkConv::new())),
+        ("conv", F::udf(Conv::new())),
         ("cos", F::unary(double(expr_fn::cos))),
         ("cosh", F::unary(double(expr_fn::cosh))),
         ("cot", F::unary(double(expr_fn::cot))),
@@ -850,20 +847,20 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("rint", F::unary(rint)),
         ("round", F::custom(spark_round)),
         ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
-        ("sign", F::udf(SparkSignum::new())),
-        ("signum", F::udf(SparkSignum::new())),
+        ("sign", F::udf(Signum::new())),
+        ("signum", F::udf(Signum::new())),
         ("sin", F::unary(double(expr_fn::sin))),
         ("sinh", F::unary(double(expr_fn::sinh))),
         ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
-        ("try_add", F::udf(SparkTryAdd::new())),
-        ("try_divide", F::udf(SparkTryDiv::new())),
-        ("try_multiply", F::udf(SparkTryMult::new())),
-        ("try_mod", F::udf(SparkTryMod::new())),
-        ("try_subtract", F::udf(SparkTrySubtract::new())),
-        ("unhex", F::udf(SparkUnHex::new())),
-        ("uniform", F::udf(SparkUniform::new())),
+        ("try_add", F::udf(TryAdd::new())),
+        ("try_divide", F::udf(TryDiv::new())),
+        ("try_multiply", F::udf(TryMult::new())),
+        ("try_mod", F::udf(TryMod::new())),
+        ("try_subtract", F::udf(TrySubtract::new())),
+        ("unhex", F::udf(UnHex::new())),
+        ("uniform", F::udf(Uniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
 }

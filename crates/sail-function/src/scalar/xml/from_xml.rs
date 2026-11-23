@@ -18,9 +18,9 @@ use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use super::reader;
-use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
-use crate::scalar::datetime::spark_timestamp::TimestampParser;
-use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
+use crate::scalar::datetime::timestamp::TimestampParser;
+use crate::scalar::datetime::utils::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::datetime::utils::parser::parse_timestamp_string;
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -29,12 +29,12 @@ const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 /// Parses an XML string column into a struct column using a user-provided schema
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromXml {
+pub struct FromXml {
     session_timezone: Arc<str>,
     signature: Signature,
 }
 
-impl SparkFromXml {
+impl FromXml {
     pub const FROM_XML_NAME: &'static str = "from_xml";
 
     pub fn new(session_timezone: Arc<str>) -> Self {
@@ -57,7 +57,7 @@ enum ParseMode {
 }
 
 #[derive(Debug)]
-struct SparkFromXmlOptions {
+struct FromXmlOptions {
     null_value: Option<String>,
     ignore_surrounding_spaces: bool,
     ignore_namespace: bool,
@@ -70,7 +70,7 @@ struct SparkFromXmlOptions {
     mode: ParseMode,
 }
 
-impl SparkFromXmlOptions {
+impl FromXmlOptions {
     const NULL_VALUE_OPTION: &'static str = "nullValue";
     const IGNORE_SURROUNDING_SPACES_OPTION: &'static str = "ignoreSurroundingSpaces";
     const ATTRIBUTE_PREFIX_OPTION: &'static str = "attributePrefix";
@@ -176,7 +176,7 @@ impl SparkFromXmlOptions {
     }
 }
 
-impl Default for SparkFromXmlOptions {
+impl Default for FromXmlOptions {
     fn default() -> Self {
         Self {
             null_value: None,
@@ -197,7 +197,7 @@ impl Default for SparkFromXmlOptions {
     }
 }
 
-impl ScalarUDFImpl for SparkFromXml {
+impl ScalarUDFImpl for FromXml {
     fn name(&self) -> &str {
         Self::FROM_XML_NAME
     }
@@ -265,7 +265,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
             "`{}` requires 2 or 3 arguments, got {}",
-            SparkFromXml::FROM_XML_NAME,
+            FromXml::FROM_XML_NAME,
             args.len()
         );
     }
@@ -287,7 +287,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     if schema_array.is_empty() || schema_array.is_null(0) {
         return exec_err!(
             "`{}` requires a non-empty schema string",
-            SparkFromXml::FROM_XML_NAME
+            FromXml::FROM_XML_NAME
         );
     }
     let schema_str = schema_array.value(0);
@@ -296,16 +296,16 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         let map = opts.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Internal("from_xml: expected MapArray for arg 2".to_string())
         })?;
-        SparkFromXmlOptions::from_map(map)?
+        FromXmlOptions::from_map(map)?
     } else {
-        SparkFromXmlOptions::default()
+        FromXmlOptions::default()
     };
 
     let schema_dt = parse_xml_schema(schema_str, session_timezone)?;
     let DataType::Struct(fields) = &schema_dt else {
         return exec_err!(
             "`{}` schema must resolve to a STRUCT type, got {:?}",
-            SparkFromXml::FROM_XML_NAME,
+            FromXml::FROM_XML_NAME,
             schema_dt
         );
     };
@@ -559,7 +559,7 @@ fn append_null_to_field(builder: &mut XmlFieldBuilder) -> Result<()> {
 fn parse_xml_into_builder(
     xml: &str,
     builder: &mut TopLevelStructBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
     let mut arena = xot::Xot::new();
@@ -586,7 +586,7 @@ fn read_xml_fields<'a>(
     parent: xot::Node,
     fields: &Fields,
     builders: &[XmlFieldBuilder],
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
 ) -> Result<Vec<XmlFieldValue<'a>>> {
     fields
         .iter()
@@ -600,7 +600,7 @@ fn read_xml_field<'a>(
     parent: xot::Node,
     field_name: &str,
     builder: &XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
 ) -> Result<XmlFieldValue<'a>> {
     if field_name == options.value_tag {
         let text = xot
@@ -652,7 +652,7 @@ fn read_xml_element<'a>(
     xot: &'a xot::Xot,
     node: xot::Node,
     builder: &XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
 ) -> Result<XmlFieldValue<'a>> {
     match builder {
         XmlFieldBuilder::Struct {
@@ -671,7 +671,7 @@ fn read_xml_element<'a>(
 fn append_xml_value(
     value: XmlFieldValue<'_>,
     builder: &mut XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
     match (value, builder) {
@@ -714,7 +714,7 @@ fn append_xml_value(
 fn append_text(
     text: Option<&str>,
     builder: &mut XmlFieldBuilder,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
     let raw = match text {
@@ -826,7 +826,7 @@ fn child_elements_named(
     xot: &xot::Xot,
     parent: xot::Node,
     name: &str,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
 ) -> Vec<xot::Node> {
     xot.children(parent)
         .filter(|&child| {
@@ -866,7 +866,7 @@ fn find_attribute<'a>(
     xot: &'a xot::Xot,
     node: xot::Node,
     attr_name: &str,
-    options: &SparkFromXmlOptions,
+    options: &FromXmlOptions,
 ) -> Option<&'a str> {
     if options.exclude_attribute {
         return None;
@@ -878,7 +878,7 @@ fn find_attribute<'a>(
         .last()
 }
 
-fn field_name<'a>(name: &'a str, options: &SparkFromXmlOptions) -> &'a str {
+fn field_name<'a>(name: &'a str, options: &FromXmlOptions) -> &'a str {
     if options.ignore_namespace {
         reader::local_name(name)
     } else {
@@ -902,7 +902,9 @@ fn boolean_option(map: &MapArray, key: &str, default: bool) -> Result<bool> {
 // StAX returns the inner markup for STRING fields, with expanded empty tags and
 // decoded text and attributes. Keep lexical names even with ignoreNamespace.
 fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
+    use quick_xml::events::attributes::Attribute;
     use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use quick_xml::name::QName;
     use xot::NodeEdge;
 
     let mut writer = quick_xml::Writer::new(Vec::new());
@@ -912,7 +914,10 @@ fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
                 let name = xot.local_name_str(element.name());
                 let mut start = BytesStart::new(name);
                 for (key, value) in xot.attributes(child).iter() {
-                    start.push_attribute((xot.local_name_str(key).as_bytes(), value.as_bytes()));
+                    start.push_attribute(Attribute {
+                        key: QName(xot.local_name_str(key)),
+                        value: Cow::Borrowed(value),
+                    });
                 }
                 writer.write_event(Event::Start(start))?;
             }

@@ -16,6 +16,7 @@ use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
     CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    StageTableOptions,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
@@ -46,7 +47,7 @@ pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 pub const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "access-delegation";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
-const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
+// const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
 const REST_ACCESS_DELEGATION_NONE: &str = "none";
 const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
 const REST_REMOTE_SIGNING_ENABLED_KEY: &str = "s3.remote-signing-enabled";
@@ -108,7 +109,10 @@ impl CatalogConfig<'_> {
             .get(REST_CATALOG_PROP_ACCESS_DELEGATION)
             .map(|value| value.trim())
         {
-            None => Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            // FIXME: The `vended-credentials` default is commented out because Sail does not
+            // use vended credentials yet.
+            // None => Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            None => None,
             Some("") => None,
             Some(value) if value.eq_ignore_ascii_case(REST_ACCESS_DELEGATION_NONE) => None,
             Some(value) => Some(value),
@@ -343,20 +347,35 @@ impl IcebergRestCatalogProvider {
         })
         .await?
         .map(|response| response.inner)
-        .map_err(|e| match e {
-            e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                CatalogObject::Table,
-                format!(
-                    "{}.{}",
-                    quote_namespace_if_needed(database),
-                    quote_name_if_needed(table)
-                ),
-            ),
-            _ => CatalogError::External(format!(
-                "Failed to load table {}.{}: {e}",
+        .map_err(|error| {
+            if let ApiError::Response(response) = &error
+                && let crate::r#gen::LoadTableError::NotFound(body) = &response.inner
+            {
+                match body.error.r#type.as_str() {
+                    "NoSuchTableException" => {
+                        return CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!(
+                                "{}.{}",
+                                quote_namespace_if_needed(database),
+                                quote_name_if_needed(table)
+                            ),
+                        );
+                    }
+                    "NoSuchNamespaceException" => {
+                        return CatalogError::NotFound(
+                            CatalogObject::Namespace,
+                            quote_namespace_if_needed(database),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            CatalogError::External(format!(
+                "Failed to load table {}.{}: {error}",
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table)
-            )),
+            ))
         })
     }
 
@@ -370,10 +389,11 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn effective_scan_planning_mode(
+    /// Returns the scan planning mode from the table or catalog config, without validating it.
+    fn configured_scan_planning_mode(
         table_config: Option<&HashMap<String, String>>,
         catalog_config: &CatalogConfig<'_>,
-    ) -> CatalogResult<Option<String>> {
+    ) -> Option<String> {
         table_config
             .and_then(|config| config.get(REST_TABLE_SCAN_PLANNING_MODE_KEY))
             .or_else(|| {
@@ -381,7 +401,15 @@ impl IcebergRestCatalogProvider {
                     .properties
                     .get(REST_TABLE_SCAN_PLANNING_MODE_KEY)
             })
-            .map(|value| Self::normalize_scan_planning_mode(value))
+            .map(|value| value.trim().to_ascii_lowercase())
+    }
+
+    fn effective_scan_planning_mode(
+        table_config: Option<&HashMap<String, String>>,
+        catalog_config: &CatalogConfig<'_>,
+    ) -> CatalogResult<Option<String>> {
+        Self::configured_scan_planning_mode(table_config, catalog_config)
+            .map(|value| Self::normalize_scan_planning_mode(&value))
             .transpose()
     }
 
@@ -454,10 +482,12 @@ impl IcebergRestCatalogProvider {
         table: &str,
         catalog_config: &CatalogConfig<'_>,
         result: &crate::r#gen::LoadTableResult,
-    ) -> CatalogResult<IcebergRestTableSessionRef> {
+    ) -> IcebergRestTableSessionRef {
         let config = result.config.as_ref();
         let credentials = result.storage_credentials.as_deref();
-        let scan_planning_mode = Self::effective_scan_planning_mode(config, catalog_config)?;
+        // The mode is validated when table access begins, so that a table lookup
+        // does not fail on it.
+        let scan_planning_mode = Self::configured_scan_planning_mode(config, catalog_config);
         let remote_signing_enabled = Self::remote_signing_enabled(config, catalog_config);
         let fingerprint = Self::rest_table_session_fingerprint(
             catalog,
@@ -467,14 +497,14 @@ impl IcebergRestCatalogProvider {
             remote_signing_enabled,
             result,
         );
-        Ok(IcebergRestTableSessionRef {
+        IcebergRestTableSessionRef {
             fingerprint,
             scan_planning_mode,
             storage_credential_count: credentials
                 .map(|credentials| credentials.len())
                 .unwrap_or(0),
             remote_signing_enabled,
-        })
+        }
     }
 
     fn validate_create_table_access_session_requirements(
@@ -1039,17 +1069,37 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
-    async fn resolve_lakehouse_table(
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
-    ) -> CatalogResult<sail_catalog::lakehouse::LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, sail_catalog::lakehouse::LakehouseResolvedTable)> {
         let config = self.resolved_catalog_config().await?;
-        let result = self
-            .load_table_result(database, table, config.access_delegation())
-            .await?;
-        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result)?;
+        let access_delegation = config.access_delegation();
+        let (result, session) = match self
+            .load_table_result(database, table, access_delegation)
+            .await
+        {
+            Ok(result) => {
+                let session =
+                    Self::rest_table_session_ref(&self.name, database, table, config, &result);
+                (result, Some(session))
+            }
+            Err(error @ CatalogError::NotFound(_, _)) => return Err(error),
+            // A server may reject the access delegation header before it looks up the table,
+            // so the table is loaded again without the header. A view or a missing table is
+            // then reported as not found. For an existing table, the session is left out, so
+            // that table access loads the table again with the header.
+            Err(error) if access_delegation.is_some() => {
+                match self.load_table_result(database, table, None).await {
+                    Ok(result) => (result, None),
+                    Err(not_found @ CatalogError::NotFound(_, _)) => return Err(not_found),
+                    Err(_) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
         let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
             &self.name,
@@ -1058,8 +1108,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             request.operation,
             &self.lakehouse_capabilities(),
         );
-        resolved.execution.rest_session = Some(session);
-        Ok(resolved)
+        resolved.execution.rest_session = session;
+        Ok((status, resolved))
     }
 
     fn create_table_metadata_requirement(
@@ -1511,6 +1561,173 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         Self::load_table_result_to_status(&self.name, database, table, result)
     }
 
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: StageTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        use sail_common_datafusion::catalog::{
+            LakehouseOperation, ReplacementAuthority, TableReplacement,
+        };
+        let StageTableOptions::Definition(options) = options else {
+            return Err(CatalogError::UnsupportedCapability(
+                "shallow clone in the Iceberg REST catalog".into(),
+            ));
+        };
+        if !options.format.eq_ignore_ascii_case("iceberg")
+            || !options.mode.is_replace()
+            || options.bucket_by.is_some()
+            || !options.constraints.is_empty()
+        {
+            return Err(CatalogError::NotSupported(
+                "Iceberg REST replacement options".into(),
+            ));
+        }
+        let mut property_updates = options.properties;
+        if let Some(comment) = options.comment {
+            property_updates.push(("comment".to_string(), comment));
+        }
+        let config = self.resolved_catalog_config().await?;
+        let loaded = self
+            .load_table_result(database, table, config.access_delegation())
+            .await;
+        let (result, existing) = match loaded {
+            Ok(result) => (result, true),
+            Err(CatalogError::NotFound(CatalogObject::Table, _))
+                if !options.mode.replace_requires_existing() =>
+            {
+                let version = requested_iceberg_format_version(&property_updates)?;
+                let fields = columns_to_nested_fields(&options.columns, version)?;
+                let (names, _) = sail_iceberg::spec::SchemaBuilder::build_name_indexes(
+                    &StructType::new(fields.clone()),
+                );
+                let schema = sail_iceberg::spec::Schema::builder()
+                    .with_fields(fields)
+                    .build()
+                    .map_err(|error| CatalogError::External(error.to_string()))?;
+                let mut properties: HashMap<_, _> = property_updates
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with("option."))
+                    .cloned()
+                    .collect();
+                let minimum = sail_iceberg::operations::helpers::format_version_for_schema(&schema);
+                if minimum > FormatVersion::V1 {
+                    properties.insert(
+                        "format-version".into(),
+                        (minimum.max(version) as i32).to_string(),
+                    );
+                }
+                let request = crate::r#gen::CreateTableRequest {
+                    name: table.to_string(),
+                    location: options.location.clone(),
+                    schema: Box::new(crate::r#gen::Schema::try_from(schema)?),
+                    partition_spec: build_partition_spec(&options.partition_by, None, &names)?,
+                    write_order: build_sort_order(&options.sort_by, &names)?,
+                    stage_create: Some(true),
+                    properties: Some(properties),
+                };
+                let prefix = config.prefix().map(ToOwned::to_owned);
+                let namespace = config.namespace_string(database)?;
+                let response = self
+                    .with_auth_retry(|client| {
+                        let prefix = prefix.clone();
+                        let namespace = namespace.clone();
+                        let request = request.clone();
+                        async move { client.create_table(prefix, namespace, None, request).await }
+                    })
+                    .await?
+                    .map_err(|error| {
+                        CatalogError::External(format!("Failed to stage Iceberg table: {error}"))
+                    })?;
+                (response.inner, false)
+            }
+            Err(error) => return Err(error),
+        };
+        Self::validate_create_table_access_session_requirements(
+            &self.name, database, table, config, &result,
+        )?;
+        let metadata_json = serde_json::to_string(&result.metadata)
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let metadata: sail_iceberg::spec::TableMetadata = serde_json::from_str(&metadata_json)
+            .map_err(|error| {
+                CatalogError::External(format!(
+                    "Invalid authoritative replacement metadata: {error}"
+                ))
+            })?;
+        if metadata.table_uuid.is_none()
+            || metadata.current_schema().is_none()
+            || metadata.default_partition_spec().is_none()
+        {
+            return Err(CatalogError::InvalidArgument(
+                "Incomplete authoritative replacement metadata".into(),
+            ));
+        }
+        if existing
+            && options.location.as_ref().is_some_and(|location| {
+                location.trim_end_matches('/') != metadata.location.trim_end_matches('/')
+            })
+        {
+            return Err(CatalogError::NotSupported(
+                "relocating an Iceberg table during replacement".into(),
+            ));
+        }
+        let mut catalog_table = vec![self.name.clone()];
+        catalog_table.extend(Vec::<String>::from(database.clone()));
+        catalog_table.push(table.to_string());
+        let metadata_location = result.metadata_location.clone();
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let execution = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            self.name.clone(),
+            catalog_table.clone(),
+            &status,
+            LakehouseOperation::Write,
+            &self.lakehouse_capabilities(),
+        )
+        .execution;
+        let authority = if existing {
+            ReplacementAuthority::IcebergRestExisting {
+                metadata_json,
+                metadata_location: metadata_location.ok_or_else(|| {
+                    CatalogError::InvalidArgument(
+                        "Existing REST table has no metadata location".into(),
+                    )
+                })?,
+                execution,
+            }
+        } else {
+            ReplacementAuthority::IcebergRestStagedCreate {
+                metadata_json,
+                execution,
+            }
+        };
+        Ok(TableReplacement {
+            catalog_table,
+            authority,
+            require_existing: options.mode.replace_requires_existing(),
+            existing,
+            columns: options
+                .columns
+                .into_iter()
+                .map(|column| {
+                    (
+                        column.name,
+                        column.data_type,
+                        column.nullable,
+                        column.metadata,
+                    )
+                })
+                .collect(),
+            location: metadata.location,
+            format: options.format,
+            partition_by: options.partition_by,
+            sort_by: options.sort_by,
+            properties: metadata.properties.into_iter().collect(),
+            property_updates,
+            is_external: options.is_external,
+        })
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let result = self.load_table_result(database, table, None).await?;
         Self::load_table_result_to_status(&self.name, database, table, result)
@@ -1753,6 +1970,20 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let response = response
             .map(|response| response.inner)
             .map_err(|e| match e {
+                e if matches!(
+                    e.status(),
+                    Some(
+                        reqwest::StatusCode::BAD_REQUEST
+                            | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+                    )
+                ) =>
+                {
+                    CatalogError::CommitRejected(format!(
+                        "Iceberg REST catalog rejected commit for {}.{}: {e}",
+                        quote_namespace_if_needed(database),
+                        quote_name_if_needed(table)
+                    ))
+                }
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
                     CatalogObject::Table,
                     format!(
@@ -1799,7 +2030,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let payload = match payload {
             Some(payload) => Some(payload),
             None => Some(serde_json::to_value(response).map_err(|e| {
-                CatalogError::External(format!("Failed to serialize commit response: {e}"))
+                CatalogError::CommitStateUnknown(
+                    format!("Failed to serialize commit response: {e}").into(),
+                )
             })?),
         };
         Ok(LakehouseCommitOutcome::Committed { context, payload })
@@ -1815,16 +2048,25 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             mut context,
             purpose: _,
         } = request;
-        let catalog_config = self.resolved_catalog_config().await?;
-        let access_delegation = catalog_config.access_delegation().map(ToOwned::to_owned);
-        let result = self
-            .load_table_result(database, table, access_delegation.as_deref())
-            .await?;
+        // A context from `get_lakehouse_table` usually has the session from that table load.
+        let rest_session = match context.rest_session.take() {
+            Some(rest_session) => rest_session,
+            None => {
+                let catalog_config = self.resolved_catalog_config().await?;
+                let access_delegation = catalog_config.access_delegation().map(ToOwned::to_owned);
+                let result = self
+                    .load_table_result(database, table, access_delegation.as_deref())
+                    .await?;
+                Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)
+            }
+        };
         // TODO: Convert preserved REST table-session credentials into operation-scoped
         // FileIO/object-store access instead of only fingerprinting the session.
-        let rest_session =
-            Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?;
-        if rest_session.scan_planning_mode.as_deref() == Some("server") {
+        let server_side = match &rest_session.scan_planning_mode {
+            Some(mode) => Self::normalize_scan_planning_mode(mode)? == "server",
+            None => false,
+        };
+        if server_side {
             context.scan = ScanAuthority::IcebergRestServerSide;
         } else {
             context.scan = ScanAuthority::ClientLakeSource;
@@ -2886,6 +3128,77 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn replacement_stages_only_a_genuine_missing_table() {
+        for (status, error_type, stages) in [
+            (404, "NoSuchTableException", true),
+            (404, "NoSuchNamespaceException", false),
+            (404, "NotFoundException", false),
+            (403, "ForbiddenException", false),
+            (503, "ServiceUnavailableException", false),
+        ] {
+            for replace_only in [false, true] {
+                let context = TestContext::new(Some("rest")).await;
+                Mock::given(method("GET")).and(path("/v1/namespaces/db1/tables/table1"))
+                    .respond_with(ResponseTemplate::new(status).set_body_json(serde_json::json!({"error":{"code":status,"type":error_type,"message":"test failure"}})))
+                    .mount(&context.server).await;
+                let mut response = create_table_response_with_access_session_hints();
+                response
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("metadata-location");
+                response["metadata"]["last-updated-ms"] = serde_json::json!(1);
+                response["metadata"]["last-column-id"] = serde_json::json!(101);
+                response["metadata"]["schemas"][0]["fields"][0]["id"] = serde_json::json!(101);
+                response["metadata"]["partition-specs"] =
+                    serde_json::json!([{"spec-id":0,"fields":[]}]);
+                response["metadata"]["default-spec-id"] = serde_json::json!(0);
+                response["metadata"]["last-partition-id"] = serde_json::json!(999);
+                response["metadata"]["last-sequence-number"] = serde_json::json!(0);
+                response["metadata"]["sort-orders"] =
+                    serde_json::json!([{"order-id":0,"fields":[]}]);
+                response["metadata"]["default-sort-order-id"] = serde_json::json!(0);
+                Mock::given(method("POST"))
+                    .and(path("/v1/namespaces/db1/tables"))
+                    .and(wiremock::matchers::body_partial_json(
+                        serde_json::json!({"stage-create":true}),
+                    ))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .expect(u64::from(stages && !replace_only))
+                    .mount(&context.server)
+                    .await;
+                let mut options = simple_create_table_options();
+                options.mode = if replace_only {
+                    spec::CreateTableMode::Replace
+                } else {
+                    spec::CreateTableMode::CreateOrReplace
+                };
+                let result = context
+                    .catalog
+                    .stage_table_replacement(
+                        &Namespace::try_from(vec!["db1"]).unwrap(),
+                        "table1",
+                        options.into(),
+                    )
+                    .await;
+                if stages && !replace_only {
+                    let replacement = result.unwrap();
+                    assert!(!replacement.existing);
+                    assert_eq!(replacement.location, "s3://bucket/table");
+                    let serialized = serde_json::to_string(&replacement).unwrap();
+                    assert!(!serialized.contains("storage-secret"));
+                    assert!(!serialized.contains("AKIA-SECRET"));
+                    let metadata: sail_iceberg::spec::TableMetadata =
+                        serde_json::from_str(replacement.authority.rest_metadata().unwrap())
+                            .unwrap();
+                    assert_eq!(metadata.current_schema().unwrap().fields()[0].id, 101);
+                } else {
+                    assert!(result.is_err(), "{status} {error_type}");
+                }
+            }
         }
     }
 
@@ -4299,10 +4612,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path(ctx.path("/namespaces/db1/tables/table1")))
-            .and(header(
-                "X-Iceberg-Access-Delegation",
-                REST_ACCESS_DELEGATION_VENDED_CREDENTIALS,
-            ))
+            .and(|request: &Request| !request.headers.contains_key("X-Iceberg-Access-Delegation"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
                 "metadata": {
@@ -4420,12 +4730,12 @@ mod tests {
                 options: vec![],
             };
             ctx.catalog
-                .resolve_lakehouse_table(&namespace, "table1", request.clone())
+                .get_lakehouse_table(&namespace, "table1", request.clone())
                 .await
                 .unwrap();
-            let resolved = ctx
+            let (_, resolved) = ctx
                 .catalog
-                .resolve_lakehouse_table(&namespace, "table1", request)
+                .get_lakehouse_table(&namespace, "table1", request)
                 .await
                 .unwrap();
             assert_eq!(
@@ -5196,6 +5506,226 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_lakehouse_table_and_begin_table_access_load_the_table_once() {
+        let ctx = TestContext::new_with_properties(
+            Some("test"),
+            HashMap::from([(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                "vended-credentials".to_string(),
+            )]),
+        )
+        .await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints()),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let (status, resolved) = ctx
+            .catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.name, "table1");
+        let rest_session = resolved.execution.rest_session.clone().unwrap();
+        assert_eq!(rest_session.storage_credential_count, 1);
+
+        let session = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.context.rest_session, Some(rest_session.clone()));
+        assert_eq!(session.reference.fingerprint, rest_session.fingerprint);
+        assert_eq!(
+            session.credential_scope.as_deref(),
+            Some("iceberg-rest:db1.table1")
+        );
+    }
+
+    fn iceberg_error_response(code: u16, error_type: &str) -> ResponseTemplate {
+        ResponseTemplate::new(code).set_body_json(serde_json::json!({
+            "error": {
+                "message": error_type,
+                "type": error_type,
+                "code": code
+            }
+        }))
+    }
+
+    /// Creates a catalog with the access delegation header, for a server that rejects the
+    /// header with 403 Forbidden and answers a table load without the header with `headerless`.
+    async fn rejected_access_delegation_context(
+        rejected: u64,
+        headerless: ResponseTemplate,
+    ) -> TestContext {
+        let ctx = TestContext::new_with_properties(
+            Some("test"),
+            HashMap::from([(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                "vended-credentials".to_string(),
+            )]),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
+            .respond_with(iceberg_error_response(403, "ForbiddenException"))
+            .expect(rejected)
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(|request: &Request| !request.headers.contains_key("X-Iceberg-Access-Delegation"))
+            .respond_with(headerless)
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+        ctx
+    }
+
+    async fn get_read_lakehouse_table(
+        ctx: &TestContext,
+    ) -> CatalogResult<(TableStatus, sail_catalog::lakehouse::LakehouseResolvedTable)> {
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        ctx.catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn get_lakehouse_table_reports_missing_table_when_access_delegation_is_rejected() {
+        let ctx = rejected_access_delegation_context(
+            1,
+            iceberg_error_response(404, "NoSuchTableException"),
+        )
+        .await;
+        let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
+        assert!(matches!(err, CatalogError::NotFound(_, _)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_reports_rejected_access_delegation() {
+        let ctx = rejected_access_delegation_context(
+            2,
+            ResponseTemplate::new(200)
+                .set_body_json(create_table_response_with_access_session_hints()),
+        )
+        .await;
+        let (status, resolved) = get_read_lakehouse_table(&ctx).await.unwrap();
+        assert_eq!(status.name, "table1");
+        assert_eq!(resolved.execution.rest_session, None);
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let err = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::External(message) if message.contains("403 Forbidden")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_lakehouse_table_reports_rejected_access_delegation_on_other_errors() {
+        let ctx =
+            rejected_access_delegation_context(1, iceberg_error_response(500, "ServerError")).await;
+        let err = get_read_lakehouse_table(&ctx).await.unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::External(message) if message.contains("403 Forbidden")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_rejects_invalid_scan_planning_mode_from_table_lookup() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let mut response = create_table_response_with_access_session_hints();
+        response["config"]["scan-planning-mode"] = serde_json::json!("unknown");
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        // The table lookup does not validate the scan planning mode.
+        let (_, resolved) = ctx
+            .catalog
+            .get_lakehouse_table(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::ResolveLakehouseTableRequest {
+                    catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        let err = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context: resolved.execution,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CatalogError::InvalidArgument(message)
+                if message == "Invalid Iceberg REST scan-planning-mode: unknown"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn begin_table_access_omits_access_delegation_header_when_disabled() {
         let ctx = TestContext::new_with_properties(
             Some("test"),
@@ -5718,7 +6248,8 @@ mod tests {
                     | (404, CatalogError::NotFound(CatalogObject::Table, _))
                     | (409, CatalogError::Conflict(_))
                     | (429, CatalogError::RateLimited(_))
-                    | (400 | 422 | 501, CatalogError::External(_))
+                    | (400 | 422, CatalogError::CommitRejected(_))
+                    | (501, CatalogError::External(_))
             ));
         }
     }

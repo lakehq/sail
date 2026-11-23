@@ -20,7 +20,7 @@ use crate::lakehouse::{
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 
 #[derive(Clone)]
@@ -289,7 +289,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         self.inner
             .stage_table_replacement(database, table, options)
@@ -328,14 +328,14 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.lakehouse_capabilities()
     }
 
-    async fn resolve_lakehouse_table(
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         self.inner
-            .resolve_lakehouse_table(database, table, request)
+            .get_lakehouse_table(database, table, request)
             .await
     }
 
@@ -378,15 +378,22 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         table: &str,
         request: LakehouseCommitRequest,
     ) -> CatalogResult<LakehouseCommitOutcome> {
-        let outcome = self
-            .inner
-            .commit_lakehouse_table(database, table, request)
-            .await?;
-        if let Some(c) = self.table_cache.as_ref() {
-            let c: &Cache<Namespace, Vec<TableStatus>> = c;
-            c.invalidate(database).await;
-        }
-        Ok(outcome)
+        let inner = self.inner.clone();
+        let cache = self.table_cache.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        tokio::spawn(async move {
+            let outcome = inner
+                .commit_lakehouse_table(&database, &table, request)
+                .await;
+            // Unknown outcomes may also have changed the authoritative table.
+            if let Some(cache) = cache {
+                cache.invalidate(&database).await;
+            }
+            outcome
+        })
+        .await
+        .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
     }
 
     async fn get_delta_ratified_commits(
@@ -397,6 +404,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         self.inner
             .get_delta_ratified_commits(database, table, request)
+            .await
+    }
+
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<super::CatalogFilePartition>>> {
+        self.inner
+            .list_file_partitions(database, table, partition_values)
             .await
     }
 

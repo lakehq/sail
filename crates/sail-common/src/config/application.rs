@@ -598,9 +598,11 @@ pub struct ParquetConfig {
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
+    pub force_filter_selections: bool,
     pub schema_force_view_types: bool,
     pub binary_as_string: bool,
     pub max_predicate_cache_size: usize,
+    pub max_in_list_size: usize,
     pub data_page_size_limit: usize,
     pub write_batch_size: usize,
     pub writer_version: String,
@@ -610,6 +612,11 @@ pub struct ParquetConfig {
     pub dictionary_page_size_limit: usize,
     pub statistics_enabled: String,
     pub max_row_group_size: usize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub max_row_group_bytes: Option<usize>,
     #[serde(
         serialize_with = "serialize_non_zero",
         deserialize_with = "deserialize_non_zero"
@@ -629,7 +636,11 @@ pub struct ParquetConfig {
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
     pub bloom_filter_fpp: f64,
-    pub bloom_filter_ndv: u64,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub bloom_filter_ndv: Option<u64>,
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
@@ -879,7 +890,7 @@ pub enum CatalogType {
         #[serde(skip_serializing_if = "Option::is_none")]
         namespace_separator: Option<String>,
         /// The value of the `X-Iceberg-Access-Delegation` header sent when loading a table.
-        /// Set this to `none` to omit the header for servers that reject it.
+        /// The header is not sent if this is not set, is empty, or is `none`.
         #[serde(skip_serializing_if = "Option::is_none")]
         access_delegation: Option<String>,
         #[serde(

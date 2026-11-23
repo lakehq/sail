@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -12,23 +13,25 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use quick_xml::Writer;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::name::QName;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::display::{
     spark_f32_to_string as format_single, spark_f64_to_string as format_double,
 };
 
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkToXml {
+pub struct ToXml {
     session_timezone: Arc<str>,
     signature: Signature,
 }
 
 #[derive(Debug)]
-struct SparkToXmlOptions {
+struct ToXmlOptions {
     row_tag: String,
     indent: String,
     validate_name: bool,
@@ -43,7 +46,7 @@ struct SparkToXmlOptions {
     session_timezone: String,
 }
 
-impl SparkToXmlOptions {
+impl ToXmlOptions {
     pub const ROW_TAG_OPTION: &'static str = "rowTag";
     pub const ROW_TAG_DEFAULT: &'static str = "ROW";
     pub const ARRAY_ELEMENT_NAME_OPTION: &'static str = "arrayElementName";
@@ -150,7 +153,7 @@ impl SparkToXmlOptions {
     }
 }
 
-impl Default for SparkToXmlOptions {
+impl Default for ToXmlOptions {
     #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
@@ -173,7 +176,7 @@ impl Default for SparkToXmlOptions {
     }
 }
 
-impl SparkToXml {
+impl ToXml {
     pub const TO_XML_NAME: &'static str = "to_xml";
 
     pub fn new(session_timezone: Arc<str>) -> Self {
@@ -195,13 +198,13 @@ impl SparkToXml {
     }
 }
 
-impl Default for SparkToXml {
+impl Default for ToXml {
     fn default() -> Self {
         Self::new(Arc::from("UTC"))
     }
 }
 
-impl ScalarUDFImpl for SparkToXml {
+impl ScalarUDFImpl for ToXml {
     fn name(&self) -> &str {
         Self::TO_XML_NAME
     }
@@ -259,25 +262,25 @@ impl ScalarUDFImpl for SparkToXml {
 
         let options = if args.len() == 2 {
             match &args[1] {
-                ColumnarValue::Scalar(s) if s.is_null() => SparkToXmlOptions {
+                ColumnarValue::Scalar(s) if s.is_null() => ToXmlOptions {
                     session_timezone: session_timezone.to_string(),
-                    ..SparkToXmlOptions::default()
+                    ..ToXmlOptions::default()
                 },
                 ColumnarValue::Array(arr) if matches!(arr.data_type(), DataType::Null) => {
-                    SparkToXmlOptions {
+                    ToXmlOptions {
                         session_timezone: session_timezone.to_string(),
-                        ..SparkToXmlOptions::default()
+                        ..ToXmlOptions::default()
                     }
                 }
                 _ => {
                     let map_array = to_map_array(&args[1])?;
-                    SparkToXmlOptions::from_map(&map_array, session_timezone)?
+                    ToXmlOptions::from_map(&map_array, session_timezone)?
                 }
             }
         } else {
-            SparkToXmlOptions {
+            ToXmlOptions {
                 session_timezone: session_timezone.to_string(),
-                ..SparkToXmlOptions::default()
+                ..ToXmlOptions::default()
             }
         };
 
@@ -287,7 +290,7 @@ impl ScalarUDFImpl for SparkToXml {
     }
 }
 
-fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Result<ArrayRef> {
+fn spark_to_xml_inner(array: &StructArray, options: &ToXmlOptions) -> Result<ArrayRef> {
     let mut builder = StringBuilder::with_capacity(array.len(), 0);
     // One reused buffer across rows: `clear()` keeps its capacity, so the row
     // strings are not re-allocated per row and are copied into the Arrow buffer
@@ -321,7 +324,7 @@ fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Resul
     Ok(Arc::new(builder.finish()))
 }
 
-fn push_indent(buf: &mut Writer<Vec<u8>>, depth: usize, options: &SparkToXmlOptions) {
+fn push_indent(buf: &mut Writer<Vec<u8>>, depth: usize, options: &ToXmlOptions) {
     if !options.indent.is_empty() {
         buf.get_mut().push(b'\n');
         for _ in 0..depth {
@@ -330,7 +333,7 @@ fn push_indent(buf: &mut Writer<Vec<u8>>, depth: usize, options: &SparkToXmlOpti
     }
 }
 
-fn check_name(name: &str, options: &SparkToXmlOptions) -> Result<()> {
+fn check_name(name: &str, options: &ToXmlOptions) -> Result<()> {
     if options.validate_name {
         if name.contains(':') {
             return exec_err!("Illegal name character ':' in XML name '{name}'");
@@ -353,7 +356,7 @@ fn write_struct(
     fields: &Fields,
     tag: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     push_indent(buf, depth, options);
     check_name(tag, options)?;
@@ -369,13 +372,19 @@ fn write_struct(
             if let Some(ref nv) = options.null_value {
                 let attr_name = options.strip_prefix(field.name());
                 check_name(attr_name, options)?;
-                start.push_attribute((attr_name.as_bytes(), escape_attr(nv).as_bytes()));
+                start.push_attribute(Attribute {
+                    key: QName(attr_name),
+                    value: Cow::Owned(escape_attr(nv)),
+                });
             }
         } else {
             let attr_name = options.strip_prefix(field.name());
             check_name(attr_name, options)?;
             let value = format_field_to_xml(col, row, field.data_type(), options)?;
-            start.push_attribute((attr_name.as_bytes(), escape_attr(&value).as_bytes()));
+            start.push_attribute(Attribute {
+                key: QName(attr_name),
+                value: Cow::Owned(escape_attr(&value)),
+            });
         }
     }
 
@@ -430,7 +439,7 @@ fn write_field(
     row: usize,
     field: &Field,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let name = field.name().as_str();
 
@@ -477,7 +486,7 @@ fn write_array(
     field_name: &str,
     item_field: &Field,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let (offsets_start, offsets_end, values): (usize, usize, ArrayRef) =
         if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
@@ -558,7 +567,7 @@ fn write_map(
     row: usize,
     field_name: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     let map_array = col.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
         DataFusionError::Internal(format!(
@@ -629,7 +638,7 @@ fn write_map_entry(
     i: usize,
     key: &str,
     depth: usize,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     if values.is_null(i) {
         if let Some(ref nv) = options.null_value {
@@ -710,7 +719,7 @@ fn format_field_to_xml(
     array: &ArrayRef,
     row_idx: usize,
     data_type: &DataType,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<String> {
     match data_type {
         DataType::Timestamp(time_unit, tz_opt) => {
@@ -746,7 +755,9 @@ fn format_field_to_xml(
 }
 
 fn format_date_xml(date: chrono::NaiveDate, format: &DateTimeFormat) -> Result<String> {
-    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+    use crate::scalar::datetime::utils::format::{
+        DateTimeFormatInput, TimePrecision, TimestampKind,
+    };
 
     let datetime = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
         DataFusionError::Execution("Failed to create datetime from date".to_string())
@@ -828,7 +839,7 @@ fn format_timestamp_field(
     row_idx: usize,
     time_unit: &TimeUnit,
     tz_opt: &Option<Arc<str>>,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<String> {
     let micros = match time_unit {
         TimeUnit::Second => array.as_primitive::<TimestampSecondType>().value(row_idx) * 1_000_000,
@@ -865,7 +876,7 @@ fn format_timestamp_field(
 
         use chrono::Offset;
 
-        use crate::scalar::datetime::format::{
+        use crate::scalar::datetime::utils::format::{
             DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
         };
 
@@ -889,7 +900,7 @@ fn format_timestamp_field(
             // Use default format
             #[expect(clippy::expect_used)]
             let default_fmt =
-                DateTimeFormat::for_formatting(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(ToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
                     .expect("default timestamp LTZ format should be valid");
             Ok(default_fmt.format(input).map_err(|e| {
                 DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
@@ -902,7 +913,9 @@ fn format_timestamp_field(
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
 
-        use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+        use crate::scalar::datetime::utils::format::{
+            DateTimeFormatInput, TimePrecision, TimestampKind,
+        };
 
         let input = DateTimeFormatInput {
             datetime: naive,
@@ -921,16 +934,17 @@ fn format_timestamp_field(
 
 /// Match the StAX escaping rules, including XML line-ending preservation and
 /// the forbidden CDATA terminator in ordinary text.
+/// StAX uses hexadecimal whitespace references.
 fn escape_text(s: &str) -> String {
     quick_xml::escape::minimal_escape(s)
         .replace("]]>", "]]&gt;")
-        .replace('\r', "&#xd;")
+        .replace("&#13;", "&#xd;")
 }
 
 fn escape_attr(s: &str) -> String {
     quick_xml::escape::minimal_escape(s)
         .replace('"', "&quot;")
-        .replace('\r', "&#xd;")
+        .replace("&#13;", "&#xd;")
         .replace('\n', "&#xa;")
         .replace('\t', "&#x9;")
 }
@@ -939,7 +953,7 @@ fn push_element(
     buf: &mut Writer<Vec<u8>>,
     name: &str,
     content: &str,
-    options: &SparkToXmlOptions,
+    options: &ToXmlOptions,
 ) -> Result<()> {
     check_name(name, options)?;
     buf.write_event(Event::Start(BytesStart::new(name)))?;

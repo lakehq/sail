@@ -19,7 +19,7 @@ use crate::deletion_vector::resolve_dv_absolute_path;
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::snapshot::DeltaSnapshot;
-use crate::spec::utils::encode_path;
+use crate::spec::utils::{absolute_uri_parts, decode_path, encode_path};
 use crate::spec::{DeletionVectorDescriptor, DeltaError, DeltaOperation, TableFeature};
 use crate::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 
@@ -42,6 +42,12 @@ pub(super) async fn execute(
         .unwrap_or(true);
     let safety = options
         .get("spark.databricks.delta.retentionDurationCheck.enabled")
+        .map(|value| value.to_ascii_lowercase().parse::<bool>())
+        .transpose()
+        .map_err(|e| DeltaError::generic(e.to_string()))?
+        .unwrap_or(true);
+    let logging = options
+        .get("spark.databricks.delta.vacuum.logging.enabled")
         .map(|value| value.to_ascii_lowercase().parse::<bool>())
         .transpose()
         .map_err(|e| DeltaError::generic(e.to_string()))?
@@ -91,17 +97,25 @@ pub(super) async fn execute(
         })
         .collect::<Result<Vec<_>>>()?;
     let store = log_store.object_store(None);
-    let candidates = store
-        .list(None)
-        .try_filter(|meta| {
-            let candidate = meta.last_modified.timestamp_millis() < cutoff
-                && !protected.contains(&meta.location)
-                && !hidden(&meta.location, &partition_names);
-            futures::future::ready(candidate)
-        })
-        .try_collect::<Vec<_>>()
-        .await?;
     let root = snapshot.table_url();
+    let mut candidates = Vec::new();
+    let directory_count = {
+        let mut directories = HashSet::new();
+        let mut listing = store.list(None);
+        while let Some(meta) = listing.try_next().await? {
+            if hidden(&meta.location, &partition_names) {
+                continue;
+            }
+            if logging && !dry_run {
+                record_parent_directories(&mut directories, &meta.location);
+            }
+            if meta.last_modified.timestamp_millis() < cutoff && !protected.contains(&meta.location)
+            {
+                candidates.push(meta);
+            }
+        }
+        directories.len() + 1 // Include the table root.
+    };
     if dry_run {
         let mut paths = candidates
             .iter()
@@ -119,17 +133,19 @@ pub(super) async fn execute(
         ("numFilesToDelete".to_string(), json!(candidates.len())),
         ("sizeOfDataToDelete".to_string(), json!(bytes)),
     ]);
-    CommitBuilder::from(CommitProperties::default().with_operation_metrics(start_metrics))
-        .build(
-            Some(snapshot.clone()),
-            log_store.clone(),
-            DeltaOperation::VacuumStart {
-                retention_check_enabled: safety,
-                specified_retention_millis: specified,
-                default_retention_millis: default_retention,
-            },
-        )
-        .await?;
+    if logging {
+        CommitBuilder::from(CommitProperties::default().with_operation_metrics(start_metrics))
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                DeltaOperation::VacuumStart {
+                    retention_check_enabled: safety,
+                    specified_retention_millis: specified,
+                    default_retention_millis: default_retention,
+                },
+            )
+            .await?;
+    }
     // Protect references committed while discovery was running, and recheck object identity.
     let latest = Arc::new(
         DeltaSnapshot::try_new(
@@ -162,18 +178,30 @@ pub(super) async fn execute(
         session.config().target_partitions(),
     )
     .await?;
-    // TODO: Discover and remove eligible empty directories, including their result paths and metrics.
-    let end_metrics = HashMap::from([
-        ("numDeletedFiles".to_string(), json!(deleted)),
-        ("numVacuumedDirectories".to_string(), json!(0)),
-    ]);
-    CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
-        .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
-        .await?;
+    if logging {
+        let end_metrics = HashMap::from([
+            ("numDeletedFiles".to_string(), json!(deleted)),
+            ("numVacuumedDirectories".to_string(), json!(directory_count)),
+        ]);
+        CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
+            .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
+            .await?;
+    }
     result(
         invocation,
-        vec![root.as_str().trim_end_matches('/').to_string()],
+        vec![display_path(root)?.trim_end_matches('/').to_string()],
     )
+}
+
+fn record_parent_directories(directories: &mut HashSet<Path>, file: &Path) {
+    let mut parent = file.parent();
+    while let Some(path) = parent {
+        if path == Path::ROOT || directories.contains(&path) {
+            break;
+        }
+        parent = path.parent();
+        directories.insert(path);
+    }
 }
 
 async fn delete_candidates(
@@ -260,17 +288,12 @@ fn protect(
     path: &str,
     dv: Option<&DeletionVectorDescriptor>,
 ) -> Result<()> {
+    // Protection compares physical objects, not log-action identities.
+    let is_absolute_uri = absolute_uri_parts(path).is_some();
+    let decoded = decode_path(path).map_err(DeltaError::generic_err)?;
+    let path = decoded.as_str();
     // Hadoop absolute paths have an absolute path component, not merely a scheme.
-    let absolute_uri = path.split_once(':').filter(|(scheme, rest)| {
-        scheme
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphabetic)
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            && rest.starts_with('/')
-    });
+    let absolute_uri = absolute_uri_parts(path).filter(|_| is_absolute_uri);
     let encoded = encode_path(path);
     let mut url = if let Some((scheme, rest)) = absolute_uri {
         if scheme.eq_ignore_ascii_case(root.scheme())
@@ -298,7 +321,7 @@ fn protect(
     if let Some(path) = relative_path(root, &url)? {
         files.insert(path);
     }
-    // Decoding erased the distinction between `scheme:/path` and `scheme%3A/path`.
+    // Older writers may have persisted a relative file name with an unescaped colon.
     // Protect the literal relative object too; `scheme://` cannot name such an object.
     if absolute_uri.is_some_and(|(_, rest)| !rest.starts_with("//")) {
         let url = root
@@ -330,10 +353,16 @@ fn relative_path(root: &Url, url: &Url) -> Result<Option<Path>> {
 }
 
 fn absolute_path(root: &Url, path: &Path) -> Result<String> {
-    Ok(root
+    let url = root
         .join(&format!("./{}", encode_path(path.as_ref())))
-        .map_err(DeltaError::generic_err)?
-        .to_string())
+        .map_err(DeltaError::generic_err)?;
+    display_path(&url)
+}
+
+fn display_path(url: &Url) -> Result<String> {
+    // Hadoop Path strings expose the physical path, including literal percent signs.
+    let path = decode_path(url.path()).map_err(DeltaError::generic_err)?;
+    Ok(format!("{}{path}", &url[..url::Position::BeforePath]))
 }
 
 fn hidden(path: &Path, partition_names: &[String]) -> bool {
@@ -379,12 +408,12 @@ mod tests {
                 ("space #/%3A?*.parquet", "space%20%23/%253A%3F%2A.parquet"),
             ] {
                 let mut files = HashSet::new();
-                protect(&mut files, &root, path, None).unwrap();
+                protect(&mut files, &root, encoded, None).unwrap();
                 let object = Path::parse(path).unwrap();
                 assert_eq!(files, HashSet::from([object.clone()]), "{root} {path}");
                 assert_eq!(
                     absolute_path(&root, &object).unwrap(),
-                    format!("{root}{encoded}")
+                    format!("{}{path}", display_path(&root).unwrap())
                 );
             }
         }
@@ -448,7 +477,7 @@ mod tests {
             ] {
                 let path = format!("{}:{suffix}", root.scheme());
                 let mut files = HashSet::new();
-                protect(&mut files, &root, &path, None).unwrap();
+                protect(&mut files, &root, &encode_path(&path), None).unwrap();
                 let object = Path::parse(&path).unwrap();
                 let mut expected = HashSet::from([object.clone()]);
                 if let Some(relative) = relative {
@@ -457,7 +486,7 @@ mod tests {
                 assert_eq!(files, expected, "{root} {path}");
                 assert_eq!(
                     absolute_path(&root, &object).unwrap(),
-                    format!("{root}{}", encode_path(&path))
+                    format!("{}{path}", display_path(&root).unwrap())
                 );
             }
             let mut files = HashSet::new();

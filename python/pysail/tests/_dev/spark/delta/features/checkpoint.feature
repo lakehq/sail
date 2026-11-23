@@ -301,6 +301,7 @@ Feature: Delta Lake Checkpoint
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true'
         )
         """
@@ -376,6 +377,7 @@ Feature: Delta Lake Checkpoint
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true',
           'delta.enableInCommitTimestamps' = 'true'
         )

@@ -26,6 +26,72 @@ use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
 };
 
+/// A metadata delete may discard its row scan. Report the unsupported format
+/// only if the selected files are actually needed for row-level processing.
+#[derive(Debug)]
+pub struct UnsupportedIcebergRowScanExec {
+    properties: Arc<PlanProperties>,
+}
+
+impl UnsupportedIcebergRowScanExec {
+    pub fn new(schema: SchemaRef) -> Self {
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+
+        Self {
+            properties: Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )),
+        }
+    }
+}
+
+impl DisplayAs for UnsupportedIcebergRowScanExec {
+    fn fmt_as(&self, _: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl ExecutionPlan for UnsupportedIcebergRowScanExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return datafusion_common::internal_err!("UnsupportedIcebergRowScanExec is a leaf");
+        }
+        Ok(self)
+    }
+
+    fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {
+        datafusion_common::exec_err!(
+            "Row-level operations on imported Avro/ORC files are not supported"
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IcebergMergeMetadataExec {
     input: Arc<dyn ExecutionPlan>,

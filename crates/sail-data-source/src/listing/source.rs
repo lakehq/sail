@@ -20,19 +20,21 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::{
     DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
+use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use url::Url;
 
-use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
-use crate::listing::utils::{
-    infer_partitions, rewrite_unsupported_fields, sample_listing_files, validate_partitions,
+use crate::listing::partition::{
+    boolean_option, read_option, resolve_base_path, schema_names_match, split_discovered_partitions,
 };
+use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
+use crate::listing::utils::{SchemaSampling, rewrite_unsupported_fields, sample_listing_files};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
-use crate::resolve_listing_urls;
-use crate::url::{PathGlobFilter, resolve_listing_writer_url};
+use crate::url::{PathGlobFilter, resolve_listing_writer_url, resolve_read_urls};
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -52,6 +54,20 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
+    fn configure_schema_inference(
+        &mut self,
+        _ctx: &dyn Session,
+        _hadoop_paths: bool,
+        _case_sensitive: bool,
+    ) -> Result<SchemaSampling> {
+        Ok(SchemaSampling::Sample)
+    }
+
+    /// Per-file column identity used to calculate and cache statistics.
+    fn statistics_field_matching(&self) -> StructFieldMatching {
+        StructFieldMatching::Name
+    }
+
     async fn infer_compression(
         &self,
         ctx: &dyn Session,
@@ -72,11 +88,12 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         object: &ObjectMeta,
         file_schema: SchemaRef,
         compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, object, compression);
+        let _ = (ctx, store, object_store_url, object, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,
@@ -85,16 +102,6 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
-
-    /// Whether validating an explicit schema requires the physical file schema.
-    fn requires_explicit_schema_validation(&self) -> bool {
-        false
-    }
-
-    /// Validate a user-provided file schema against the physical file schema.
-    fn validate_explicit_schema(&self, _schema: &Schema, _physical: &Schema) -> Result<()> {
-        Ok(())
-    }
 
     /// File-name glob restricting which listed files compose the dataset.
     fn path_glob_filter(&self) -> Option<&str> {
@@ -107,6 +114,7 @@ pub struct ListingFileSample<'a> {
     pub url: &'a ListingTableUrl,
     pub store: Arc<dyn ObjectStore>,
     pub objects: Vec<ObjectMeta>,
+    pub(super) has_listed_file: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -175,31 +183,61 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             read_case_sensitive,
         } = info;
 
-        let read_format = T::read(ctx, options)?;
+        let recursive = boolean_option(
+            "recursiveFileLookup",
+            read_option(&options, "recursiveFileLookup"),
+            false,
+        )?;
+        if recursive && !partition_by.is_empty() {
+            return plan_err!("recursiveFileLookup is not supported for a partitioned table");
+        }
+        let path = read_option(&options, "basePath");
+        let mut read_format = T::read(ctx, options.clone())?;
+        let hadoop_paths = path.is_some() || recursive;
+        let sampling =
+            read_format.configure_schema_inference(ctx, hadoop_paths, read_case_sensitive)?;
+        let hadoop_paths = hadoop_paths
+            || matches!(
+                sampling,
+                SchemaSampling::SingleParquet | SchemaSampling::MergeParquet { .. }
+            );
+        let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
+        let base_path = (hadoop_paths && !recursive)
+            .then(|| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
+            .transpose()?;
         let path_glob_filter = read_format
             .path_glob_filter()
             .map(PathGlobFilter::parse)
             .transpose()?;
-        let urls = resolve_listing_urls(ctx, paths).await?;
-        let sampled_files = sample_listing_files(ctx, &urls, path_glob_filter.as_ref()).await?;
+        let (sampled_files, discovery) = sample_listing_files(
+            ctx,
+            &urls,
+            path_glob_filter.as_ref(),
+            base_path.as_ref(),
+            recursive,
+            sampling,
+        )
+        .await?;
+        let explicit_schema = schema.filter(|s| !s.fields().is_empty());
+        let inferred = discovery.fields(base_path.as_ref(), explicit_schema.as_ref())?;
+        let inferred_names: Vec<_> = inferred.iter().map(|f| f.name().clone()).collect();
         let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
-        let (schema, partition_fields) = match schema {
-            Some(schema) if !schema.fields().is_empty() => {
-                let physical = if read_format.requires_explicit_schema_validation() {
-                    Some(
+        let positional_partitions =
+            !inferred.is_empty() && base_path.is_some() && matches!(T::name(), "csv" | "text");
+        let has_explicit_schema = explicit_schema.is_some();
+        let (schema, physical) = match explicit_schema {
+            Some(schema) => {
+                // Parquet resolves requested fields per file, including case-insensitive matches.
+                let physical =
+                    if T::name() == "parquet" || (read_case_sensitive && !positional_partitions) {
+                        None
+                    } else {
                         read_format
                             .infer_schema(ctx, &sampled_files, compression)
-                            .await?,
-                    )
-                } else if read_case_sensitive {
-                    None
-                } else {
-                    read_format
-                        .infer_schema(ctx, &sampled_files, compression)
-                        .await
-                        .ok()
-                };
+                            .await
+                            .ok()
+                    };
                 // Spark matches a user-specified schema against the physical file
                 // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
                 // Reconcile the user column names to the physical names up front so that both
@@ -207,65 +245,130 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 let schema = if read_case_sensitive {
                     schema
                 } else if let Some(physical) = &physical {
-                    reconcile_schema_names_case_insensitive(schema, physical)?
+                    let partition_names: &[String] = if base_path.is_none() {
+                        &[]
+                    } else if partition_by.is_empty() {
+                        &inferred_names
+                    } else {
+                        &partition_by
+                    };
+                    reconcile_schema_names_case_insensitive(schema, physical, partition_names)?
                 } else {
                     // Keeps the user schema if physical schema inference is unavailable.
                     schema
                 };
-                // When the partition columns are not specified, auto-discover
-                // them from `key=value` segments in the listing paths.
-                // Without this, columns that exist only in the directory tree
-                // are treated as file columns, and the file reader fails
-                // because the file itself does not contain them.
-                let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
-                        .into_iter()
-                        .filter(|name| {
-                            schema
-                                .fields()
-                                .iter()
-                                .any(|f| f.name().eq_ignore_ascii_case(name))
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    partition_by
-                };
-                let (partition_fields, schema) =
-                    get_partition_columns_and_file_schema(&schema, partition_by)?;
-                if let Some(physical) = physical {
-                    read_format.validate_explicit_schema(&schema, &physical)?;
-                }
-                (Arc::new(schema), partition_fields)
+                (Arc::new(schema), physical)
             }
-            _ => {
+            None => {
+                let format = T::name();
+                if hadoop_paths
+                    && matches!(format, "csv" | "json" | "parquet")
+                    && !sampled_files.iter().any(|sample| {
+                        !sample.objects.is_empty()
+                            || (format != "parquet" && sample.has_listed_file)
+                    })
+                {
+                    return plan_err!(
+                        "[UNABLE_TO_INFER_SCHEMA] Unable to infer schema for {format}. It must be specified manually."
+                    );
+                }
                 let schema = read_format
                     .infer_schema(ctx, &sampled_files, compression)
                     .await?;
-                let schema = rewrite_unsupported_fields(schema);
-
-                let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
-                } else {
-                    partition_by
-                };
-
-                // TODO: infer concrete partition types from observed values to match
-                //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
-                let partition_fields = partition_by
-                    .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
-                    .collect();
-                (schema, partition_fields)
+                (rewrite_unsupported_fields(schema), None)
             }
         };
 
-        validate_partitions(&sampled_files, &partition_fields)?;
+        let (schema, partition_fields, output_columns) = if base_path.is_some()
+            && partition_by.is_empty()
+        {
+            split_discovered_partitions(
+                &schema,
+                inferred,
+                has_explicit_schema,
+                read_case_sensitive,
+                if positional_partitions && has_explicit_schema {
+                    physical.as_deref()
+                } else {
+                    positional_partitions.then_some(schema.as_ref())
+                },
+            )
+        } else if has_explicit_schema {
+            let partition_by = if partition_by.is_empty() {
+                inferred_names
+                    .iter()
+                    .filter(|name| {
+                        schema
+                            .fields()
+                            .iter()
+                            .any(|f| f.name().eq_ignore_ascii_case(name))
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                partition_by
+            };
+            let (fields, schema) = get_partition_columns_and_file_schema(&schema, partition_by)?;
+            (Arc::new(schema), fields, None)
+        } else if partition_by.is_empty() {
+            (schema, inferred, None)
+        } else {
+            (
+                schema,
+                partition_by
+                    .into_iter()
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .collect(),
+                None,
+            )
+        };
+        if !inferred_names.is_empty() && !partition_fields.is_empty() {
+            if base_path.is_none() && urls.iter().flatten().any(|url| !url.is_collection()) {
+                return plan_err!(
+                    "Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash?"
+                );
+            }
+            // Catalog tables may declare only a prefix of the discovered partitions.
+            let names: Vec<_> = partition_fields.iter().map(|f| f.name()).collect();
+            if names.len() > inferred_names.len()
+                || names.iter().zip(&inferred_names).any(|(actual, expected)| {
+                    !schema_names_match(
+                        actual,
+                        expected,
+                        base_path.is_none() || read_case_sensitive,
+                    )
+                })
+            {
+                return plan_err!(
+                    "Inferred partitions to be {inferred_names:?}, but got {names:?}"
+                );
+            }
+        }
 
+        let base_path = base_path
+            .map(|options| {
+                discovery
+                    .resolve_values(&options, &partition_fields)
+                    .map(Arc::new)
+            })
+            .transpose()?;
+        let schema = TableSchema::builder(schema)
+            .with_table_partition_cols(partition_fields)
+            .build();
+        let output_projection = output_columns
+            .map(|names| {
+                names
+                    .iter()
+                    .map(|name| schema.table_schema().index_of(name))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
-            table_paths: urls,
-            schema: TableSchema::builder(schema)
-                .with_table_partition_cols(partition_fields)
-                .build(),
+            output_projection,
+            table_paths: urls.into_iter().flatten().collect(),
+            recursive_file_lookup: recursive,
+            base_path,
+            schema,
             constraints,
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),
@@ -352,14 +455,25 @@ async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
 
 // Reconciles a user-specified schema's field names with the physical file schema
 // case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
-fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+fn reconcile_schema_names_case_insensitive(
+    schema: Schema,
+    physical: &Schema,
+    partitions: &[String],
+) -> Result<Schema> {
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let name = field.name();
+        if partitions
+            .iter()
+            .any(|p| spark_case_insensitive_name_eq(p, name))
+        {
+            fields.push(Arc::clone(field));
+            continue;
+        }
         let mut matches = physical
             .fields()
             .iter()
-            .filter(|f| f.name().eq_ignore_ascii_case(name));
+            .filter(|f| spark_case_insensitive_name_eq(f.name(), name));
         let reconciled = match matches.next() {
             None => Arc::clone(field),
             Some(first) => {

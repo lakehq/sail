@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import bz2
 import glob
 import gzip
+import lzma
 from collections.abc import Mapping
 from datetime import datetime
+from functools import partial
 
+import pyarrow as pa
 import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import Row
@@ -398,6 +402,26 @@ def test_csv_read_multiline_keeps_whitespace_only_lines(spark, tmp_path):
         Row(a="x", b="1", c="2"),
         Row(a="y", b="3", c=None),
     ]
+
+
+@pytest.mark.parametrize(
+    ("extension", "compress"),
+    [
+        ("bz2", bz2.compress),
+        pytest.param(
+            "xz",
+            lzma.compress,
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="The default Hadoop codecs do not recognize XZ files"),
+        ),
+        ("zst", partial(pa.compress, codec="zstd", asbytes=True)),
+    ],
+    ids=["bzip2", "xz", "zstd"],
+)
+def test_csv_multiline_concatenated_compression(spark, tmp_path, extension, compress):
+    path = tmp_path / f"data.csv.{extension}"
+    path.write_bytes(compress(b"id,label\n1,first\n") + compress(b'2,"two\nlines"\n'))
+    df = spark.read.schema("id INT, label STRING").options(header=True, multiLine=True).csv(str(path))
+    assert df.collect() == [Row(id=1, label="first"), Row(id=2, label="two\nlines")]
 
 
 @pytest.mark.parametrize(

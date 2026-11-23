@@ -55,6 +55,8 @@ pub(crate) fn catalog_managed_commit_file_name(file_name: &str) -> String {
 pub struct DeltaSnapshotConfig {
     /// Whether snapshots should eagerly load file level metadata.
     pub require_files: bool,
+    /// Replay transaction actions even when the checksum omits them.
+    pub require_transactions: bool,
     /// Number of log files buffered concurrently when replaying the Delta log.
     pub log_buffer_size: usize,
     /// Number of log entries pulled per batch when materializing logs.
@@ -67,6 +69,7 @@ impl Default for DeltaSnapshotConfig {
     fn default() -> Self {
         Self {
             require_files: true,
+            require_transactions: false,
             log_buffer_size: default_parallelism() * 4,
             log_batch_size: 1024,
             catalog_managed_commits: None,

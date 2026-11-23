@@ -45,6 +45,22 @@ pub struct CreateTableOptions {
     pub is_write_precondition: bool,
 }
 
+pub enum StageTableOptions {
+    Definition(CreateTableOptions),
+    ShallowClone {
+        default_location: String,
+        location: Option<String>,
+        mode: CreateTableMode,
+        is_external: bool,
+    },
+}
+
+impl From<CreateTableOptions> for StageTableOptions {
+    fn from(options: CreateTableOptions) -> Self {
+        Self::Definition(options)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,
@@ -308,4 +324,12 @@ impl From<&AlterTableOptions>
             }
         }
     }
+}
+
+/// A registered file-table partition. Values follow the table's partition-column order.
+#[derive(Debug, Clone)]
+pub struct CatalogFilePartition {
+    pub values: Vec<String>,
+    pub location: Option<String>,
+    pub format: String,
 }

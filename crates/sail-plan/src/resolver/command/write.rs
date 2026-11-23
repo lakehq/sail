@@ -313,6 +313,7 @@ impl PlanResolver<'_> {
             lakehouse_table: None,
         };
         let mut preconditions = vec![];
+        let mut skip_preconditions_on_empty_exec = false;
         let mut table_replacement = None;
         match target {
             WriteTarget::DataSource => {
@@ -577,11 +578,19 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
+                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     let columns = input
                         .schema()
                         .inner()
                         .fields()
                         .iter()
+                        .map(|f| {
+                            if is_iceberg {
+                                sail_common_datafusion::schema::nullable_query_field(f)
+                            } else {
+                                f.as_ref().clone()
+                            }
+                        })
                         .map(|f| CreateTableColumnOptions {
                             metadata: f
                                 .metadata()
@@ -597,7 +606,6 @@ impl PlanResolver<'_> {
                             identity: None,
                         })
                         .collect();
-                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
                         .options
@@ -651,16 +659,6 @@ impl PlanResolver<'_> {
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
                     };
-                    if write_format.eq_ignore_ascii_case("iceberg")
-                        && matches!(mode, WriteMode::Replace { .. })
-                    {
-                        table_replacement = Some(
-                            self.ctx
-                                .extension::<CatalogManager>()?
-                                .stage_table_replacement(&catalog_table, create_options.clone())
-                                .await?,
-                        );
-                    }
                     let create_plan = self
                         .ctx
                         .extension::<CatalogManager>()?
@@ -686,7 +684,33 @@ impl PlanResolver<'_> {
                             .execution
                             .for_operation(LakehouseOperation::Write),
                     );
+                    if write_format.eq_ignore_ascii_case("iceberg")
+                        && matches!(mode, WriteMode::Replace { .. })
+                    {
+                        if info.is_none() && !write_options_had_location
+                            && sink_info.lakehouse_table.as_ref().is_some_and(|binding| matches!(binding.commit, sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit))
+                        {
+                            create_options.location = None;
+                        }
+                        let replacement = self
+                            .ctx
+                            .extension::<CatalogManager>()?
+                            .stage_table_replacement(&catalog_table, create_options.clone())
+                            .await?;
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), replacement.location.clone())],
+                        });
+                        if let Some(execution) = replacement.authority.execution() {
+                            sink_info.lakehouse_table = Some(execution.clone());
+                        }
+                        table_replacement = Some(replacement);
+                    }
                     if table_replacement.is_none() {
+                        // A retried Delta overwrite may be a no-op. In that case
+                        // preserve the existing catalog entry as well as the data.
+                        skip_preconditions_on_empty_exec = info.is_some()
+                            && write_format.eq_ignore_ascii_case("delta")
+                            && matches!(mode, WriteMode::Replace { .. });
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),
                             options: create_options,
@@ -737,7 +761,10 @@ impl PlanResolver<'_> {
             .create_writer(&self.ctx.state(), sink_info)
             .await?;
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(
+                BarrierNode::new(preconditions, Arc::new(plan))
+                    .with_skip_preconditions_on_empty_exec(skip_preconditions_on_empty_exec),
+            ),
         }))
     }
 

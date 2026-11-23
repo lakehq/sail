@@ -28,12 +28,14 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
 };
 use url::Url;
 
+use crate::datasource::data_file_last_modified;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::predicate::Predicate;
@@ -42,7 +44,9 @@ use crate::io::StoreContext;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::{IcebergManifestScanExec, ManifestPruning};
-use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::physical_plan::merge_metadata_exec::{
+    IcebergMergeMetadataExec, UnsupportedIcebergRowScanExec,
+};
 use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
@@ -51,12 +55,12 @@ use crate::row_level_metadata::{
 use crate::spec::delete_index::{DeleteFileRef, EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
-use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
+use crate::spec::{DataFile, DataFileFormat, ManifestContentType, PartitionSpec, Schema, Snapshot};
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 mod planning;
-pub(crate) use planning::IcebergScanPlan;
+pub(crate) use planning::{IcebergScanPlan, ManifestDataFile};
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
     Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
@@ -172,12 +176,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         log::trace!(
             "Converted schema to Arrow with {} fields",
@@ -219,12 +218,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         Ok(Self {
             row_level_options: Default::default(),
@@ -322,61 +316,6 @@ impl IcebergScan {
         Ok(())
     }
 
-    fn reorder_arrow_schema_for_identity_partitions(
-        schema: &Schema,
-        partition_specs: &[PartitionSpec],
-        default_spec_id: i32,
-        arrow_schema: &ArrowSchema,
-    ) -> ArrowSchema {
-        // BDD scenarios expect "data columns" first and identity-partition columns last (in spec order),
-        // but only for identity-only partition specs. For mixed transform specs (e.g. `years(x), y`)
-        // we keep the original schema order.
-        let Some(spec) = partition_specs
-            .iter()
-            .find(|s| s.spec_id() == default_spec_id)
-        else {
-            return arrow_schema.clone();
-        };
-        if spec
-            .fields()
-            .iter()
-            .any(|pf| !matches!(pf.transform, Transform::Identity))
-        {
-            return arrow_schema.clone();
-        }
-
-        let mut identity_cols: Vec<String> = Vec::new();
-        for pf in spec.fields().iter() {
-            if matches!(pf.transform, Transform::Identity)
-                && let Some(field) = schema.field_by_id(pf.source_id)
-            {
-                identity_cols.push(field.name.clone());
-            }
-        }
-        if identity_cols.is_empty() {
-            return arrow_schema.clone();
-        }
-
-        let identity_set: std::collections::HashSet<&str> =
-            identity_cols.iter().map(|s| s.as_str()).collect();
-        let mut out_fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
-
-        // Keep non-partition columns in original order.
-        for f in arrow_schema.fields().iter() {
-            if !identity_set.contains(f.name().as_str()) {
-                out_fields.push(Arc::new((**f).clone()));
-            }
-        }
-        // Append identity partition columns in spec order.
-        for name in identity_cols {
-            if let Ok(idx) = arrow_schema.index_of(&name) {
-                out_fields.push(Arc::new(arrow_schema.field(idx).clone()));
-            }
-        }
-
-        ArrowSchema::new(out_fields)
-    }
-
     /// Get the table URI
     pub fn table_uri(&self) -> &str {
         &self.table_uri
@@ -423,7 +362,7 @@ impl IcebergScan {
             selected
                 .candidates
                 .into_iter()
-                .map(|(file, _)| file.file_path)
+                .map(|file| file.data_file.file_path)
                 .collect()
         }))
     }
@@ -488,7 +427,7 @@ impl IcebergScan {
             .load_data_files_with_seq(&[], &store_ctx, &manifest_list)
             .await?
             .into_iter()
-            .map(|(file, _)| file)
+            .map(|file| file.data_file)
             .collect::<Vec<_>>();
         // Each file is probed with a single planning-only row that carries the file's
         // identity-partition values and NULL for every other column. The probe schema
@@ -565,14 +504,15 @@ impl IcebergScan {
         }
     }
 
+    /// Each data file is paired with the ID of the snapshot that added it.
     fn create_partitioned_files(
         &self,
         store_ctx: &StoreContext,
-        data_files: Vec<DataFile>,
+        data_files: Vec<(DataFile, i64)>,
     ) -> Result<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
-        for data_file in data_files {
+        for (data_file, added_snapshot_id) in data_files {
             let raw_path = data_file.file_path();
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             log::trace!("Processing data file: {}", file_path);
@@ -581,7 +521,7 @@ impl IcebergScan {
 
             let object_meta = ObjectMeta {
                 location: file_path,
-                last_modified: chrono::Utc::now(),
+                last_modified: data_file_last_modified(Some(added_snapshot_id)),
                 size: data_file.file_size_in_bytes(),
                 e_tag: None,
                 version: None,
@@ -652,11 +592,11 @@ impl IcebergScan {
     fn create_merge_partitioned_files(
         &self,
         store_ctx: &StoreContext,
-        data_files: Vec<DataFile>,
+        data_files: Vec<(DataFile, i64)>,
     ) -> Result<Vec<PartitionedFile>> {
         let file_metadata = data_files
             .iter()
-            .map(|file| {
+            .map(|(file, _)| {
                 Ok((
                     file.file_path.clone(),
                     file.partition_spec_id,
@@ -711,12 +651,6 @@ impl IcebergScan {
                 .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
         )?;
         let schema = iceberg_schema_to_arrow(&read_scan.schema)?;
-        let schema = Self::reorder_arrow_schema_for_identity_partitions(
-            &read_scan.schema,
-            &self.partition_specs,
-            self.default_spec_id,
-            &schema,
-        );
         read_scan.arrow_schema = Arc::new(match &self.name_mapping {
             Some(mapping) => {
                 crate::datasource::type_converter::apply_name_mapping(&schema, mapping)?
@@ -1210,17 +1144,33 @@ impl IcebergScan {
             )));
         }
         let (_, parquet_pushdown_filters) = self.separate_filters(&planned.residual_filters());
-        let mut clean_files = Vec::new();
+        let mut clean_parquet = Vec::new();
+        let mut clean_avro = Vec::new();
+        let mut clean_orc = Vec::new();
         let mut dirty_units = Vec::new();
         let mut all_data_files = Vec::new();
         for task in &planned.tasks {
             let file = task.data_file.clone();
             all_data_files.push(file.clone());
             if task.deletes.is_empty() {
-                clean_files.push(file);
+                let id = task.added_snapshot_id;
+                match file.file_format {
+                    DataFileFormat::Parquet => clean_parquet.push((file, id)),
+                    DataFileFormat::Avro => clean_avro.push((file, id)),
+                    DataFileFormat::Orc => clean_orc.push((file, id)),
+                    DataFileFormat::Puffin => {
+                        return plan_err!("Unsupported Iceberg data file format: Puffin");
+                    }
+                }
             } else {
+                if file.file_format != DataFileFormat::Parquet {
+                    return plan_err!(
+                        "Row-level operations on imported Avro/ORC files are not supported"
+                    );
+                }
                 dirty_units.push((
                     file,
+                    task.added_snapshot_id,
                     task.deletes.positional.clone(),
                     task.deletes.equality.clone(),
                 ));
@@ -1245,17 +1195,21 @@ impl IcebergScan {
         }
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+                session.session_id(),
+            ),
         ));
 
-        if dirty_units.is_empty() {
+        if dirty_units.is_empty() && clean_avro.is_empty() && clean_orc.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
-            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
+            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_parquet)?;
             let file_groups = self.create_file_groups(partitioned_files);
             let parquet_source = self.build_parquet_source(session, nan_free, reader_factory);
             let expanded_projection =
@@ -1296,33 +1250,38 @@ impl IcebergScan {
             return Ok(plan);
         }
 
-        // Delete-aware path: build clean + per-dirty-file branches. We apply
-        // predicates, projection, and limit ABOVE the Union so that positional
-        // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
-        // unfiltered Parquet read of each dirty file.
-
-        let mut branches: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-
-        // Branch A: clean files scanned as one DataSourceExec. Neither projection nor
-        // predicate is pushed down at this level because the upper layers will apply
-        // them uniformly across branches.
-        if !clean_files.is_empty() {
-            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source =
-                self.build_parquet_source(session, false, Arc::clone(&reader_factory));
-            let file_scan_config =
-                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
-                    .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
-                    .build();
-            branches.push(create_data_scan(session, file_scan_config).await?);
+        // Apply filters, projection, and limit above all branches to preserve
+        // the original row positions in files with positional deletes.
+        let mut branches = Vec::new();
+        for (format, files) in [
+            (DataFileFormat::Parquet, clean_parquet),
+            (DataFileFormat::Avro, clean_avro),
+            (DataFileFormat::Orc, clean_orc),
+        ] {
+            if files.is_empty() {
+                continue;
+            }
+            let source = if format == DataFileFormat::Parquet {
+                self.build_parquet_source(session, false, Arc::clone(&reader_factory))
+            } else {
+                Arc::new(super::imported_source::IcebergImportedFileSource::new(
+                    TableSchema::from(self.arrow_schema.clone()),
+                    format,
+                ))
+            };
+            let files = self.create_partitioned_files(&store_ctx, files)?;
+            let config = FileScanConfigBuilder::new(object_store_url.clone(), source)
+                .with_file_groups(self.create_file_groups(files))
+                .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
+                .build();
+            branches.push(create_data_scan(session, config).await?);
         }
 
-        // Branch B: one branch per dirty file.
-        for (df, pos_deletes, eq_deletes) in dirty_units {
+        // One branch per file with applicable deletes.
+        for (df, added_snapshot_id, pos_deletes, eq_deletes) in dirty_units {
             let delete_scan = self.equality_scan(&eq_deletes)?;
-            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned = delete_scan
+                .create_partitioned_files(&store_ctx, vec![(df.clone(), added_snapshot_id)])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
             let parquet_source =
                 delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
@@ -1355,17 +1314,7 @@ impl IcebergScan {
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
 
-        // Union the branches.
-        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
-            // SAFETY: length was just checked above.
-            branches.into_iter().next().ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal(
-                    "unreachable: branches.len() == 1 but next() returned None".to_string(),
-                )
-            })?
-        } else {
-            UnionExec::try_new(branches)?
-        };
+        let unioned = UnionExec::try_new(branches)?;
 
         // Apply predicate above (covers both clean & dirty branches).
         let after_filter: Arc<dyn ExecutionPlan> = if !parquet_pushdown_filters.is_empty() {
@@ -1470,36 +1419,43 @@ impl IcebergScan {
         let mut dirty_units = Vec::new();
 
         for task in planned.tasks {
-            let data_file = task.data_file;
-            let sequence_number = task.data_sequence_number;
-            let matched = task.deletes;
-            if matched.is_empty() {
+            match task.data_file.file_format {
+                DataFileFormat::Avro | DataFileFormat::Orc => {
+                    return Ok(Arc::new(UnsupportedIcebergRowScanExec::new(
+                        self.projected_arrow_schema(projection)?,
+                    )));
+                }
+                DataFileFormat::Puffin => {
+                    return plan_err!("Unsupported Iceberg data file format: Puffin");
+                }
+                DataFileFormat::Parquet => {}
+            }
+            if task.deletes.is_empty() {
                 if self.has_row_lineage() {
                     file_lineage.insert(
-                        data_file.file_path.clone(),
+                        task.data_file.file_path.clone(),
                         crate::row_lineage::RowLineage {
-                            first_row_id: data_file.first_row_id,
-                            data_sequence_number: sequence_number,
+                            first_row_id: task.data_file.first_row_id,
+                            data_sequence_number: task.data_sequence_number,
                         },
                     );
                 }
-                clean_files.push(data_file);
+                clean_files.push((task.data_file, task.added_snapshot_id));
             } else {
-                dirty_units.push((
-                    data_file,
-                    sequence_number,
-                    matched.positional,
-                    matched.equality,
-                ));
+                dirty_units.push(task);
             }
         }
 
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            session
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache(),
+            scoped_file_metadata_cache(
+                session
+                    .runtime_env()
+                    .cache_manager
+                    .get_file_metadata_cache(),
+                &object_store_url,
+                session.session_id(),
+            ),
         ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =
             Vec::with_capacity(dirty_units.len() + usize::from(!clean_files.is_empty()));
@@ -1552,20 +1508,24 @@ impl IcebergScan {
             ));
         }
 
-        for (df, sequence_number, positional_deletes, equality_deletes) in dirty_units {
+        for task in dirty_units {
+            let df = task.data_file;
+            let positional_deletes = task.deletes.positional;
+            let equality_deletes = task.deletes.equality;
             let mut delete_scan = self.equality_scan(&equality_deletes)?;
             let row_lineage = self
                 .has_row_lineage()
                 .then_some(crate::row_lineage::RowLineage {
                     first_row_id: df.first_row_id,
-                    data_sequence_number: sequence_number,
+                    data_sequence_number: task.data_sequence_number,
                 });
             if row_lineage.is_some() {
                 delete_scan.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
                     &delete_scan.arrow_schema,
                 )?);
             }
-            let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned = delete_scan
+                .create_partitioned_files(&store_ctx, vec![(df.clone(), task.added_snapshot_id)])?;
             let parquet_source =
                 delete_scan.build_parquet_source(session, false, Arc::clone(&reader_factory));
             let file_scan_config =
@@ -1691,7 +1651,7 @@ impl IcebergScan {
     /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
     /// Instead of eagerly loading file metadata on the driver, an `IcebergManifestScanExec`
     /// node produces file metadata that feeds through `IcebergDiscoveryExec` (tagging) and
-    /// into `IcebergScanByDataFilesExec` which dynamically opens Parquet files via a
+    /// into `IcebergScanByDataFilesExec` which dynamically opens data files via a
     /// streaming `try_unfold` loop.
     ///
     /// Physical plan pipeline:
@@ -1700,7 +1660,7 @@ impl IcebergScan {
     ///   ↓
     /// IcebergDiscoveryExec (annotate stream with partition_scan flag)
     ///   ↓
-    /// IcebergScanByDataFilesExec (consume file paths → dynamic Parquet scan)
+    /// IcebergScanByDataFilesExec (consume file paths → format-specific scan)
     ///   ↓
     /// Data output (actual table rows)
     /// ```
@@ -2007,6 +1967,30 @@ mod tests {
             );
             assert_eq!(ordinary.schema().as_ref(), &constant_schema);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn partitioned_files_describe_a_data_file_the_same_way_in_every_scan() -> Result<()> {
+        // The Parquet metadata cache validates entries by size and last_modified, so two scans
+        // of the same data file must build identical object metadata for footers to be reused,
+        // while a new file that reuses the path in a later snapshot must not match.
+        let (read_scan, file) = statistics_fixture()?;
+        let table_url = Url::parse(read_scan.table_uri())
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let store_ctx =
+            StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)?;
+        let first = read_scan.create_partitioned_files(&store_ctx, vec![(file.clone(), 1)])?;
+        let second = read_scan.create_partitioned_files(&store_ctx, vec![(file.clone(), 1)])?;
+        let reused = read_scan.create_partitioned_files(&store_ctx, vec![(file, 2)])?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].object_meta, second[0].object_meta);
+        assert_eq!(first[0].object_meta.size, 100);
+        assert_ne!(
+            first[0].object_meta.last_modified,
+            reused[0].object_meta.last_modified
+        );
         Ok(())
     }
 
@@ -2359,17 +2343,16 @@ mod tests {
         file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
             "tag".to_string(),
         )))];
-        // Identity partition columns move to the end of the scan schema.
         let names = read_scan
             .arrow_schema
             .fields()
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["id", "payload", "meta", "tag"]);
+        assert_eq!(names, vec!["id", "tag", "payload", "meta"]);
 
         let (narrow, file_size) =
-            planned_byte_size(read_scan, file, spec, Some(&vec![0, 3])).await?;
+            planned_byte_size(read_scan, file, spec, Some(&vec![0, 1])).await?;
         let expected = 12_000 + (file_size / 100) as usize;
         assert_eq!(narrow, Precision::Inexact(expected));
         assert!(
@@ -2398,11 +2381,11 @@ mod tests {
         file.column_sizes.remove(&2);
         let statistics = read_scan.create_file_statistics(&file);
         assert_eq!(
-            statistics.column_statistics[3].byte_size,
+            statistics.column_statistics[1].byte_size,
             Precision::Inexact(4_000)
         );
         assert_eq!(
-            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 3])),
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1])),
             Some(12_000)
         );
         Ok(())

@@ -9,22 +9,9 @@ impl MemoryCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: impl Into<StageTableOptions>,
     ) -> CatalogResult<TableReplacement> {
-        let _access = self.publication_gate.read().await;
-        validate_create_table_options(&options.format, &options.partition_by)?;
-        if !options.format.eq_ignore_ascii_case("iceberg")
-            || !matches!(
-                options.mode,
-                CreateTableMode::Replace | CreateTableMode::CreateOrReplace
-            )
-            || options.bucket_by.is_some()
-            || !options.constraints.is_empty()
-        {
-            return Err(CatalogError::NotSupported(
-                "staged Iceberg table replacement options".into(),
-            ));
-        }
+        let _access = self.table_access(database, table).await;
         let db = self.databases.get(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
@@ -36,6 +23,28 @@ impl MemoryCatalogProvider {
             ));
         }
         let existing = db.tables.get(table);
+        let options = options.into().resolve(existing)?;
+        validate_create_table_options(&options.format, &options.partition_by)?;
+        let is_delta = options.format.eq_ignore_ascii_case("delta");
+        if !(is_delta || options.format.eq_ignore_ascii_case("iceberg"))
+            || (!is_delta
+                && !matches!(
+                    options.mode,
+                    CreateTableMode::Replace | CreateTableMode::CreateOrReplace
+                ))
+            || options.bucket_by.is_some()
+            || !options.constraints.is_empty()
+        {
+            return Err(CatalogError::NotSupported(
+                "staged lakehouse table publication options".into(),
+            ));
+        }
+        if existing.is_some() && !options.mode.is_replace() {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.into(),
+            ));
+        }
         if options.mode.replace_requires_existing() && existing.is_none() {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
@@ -50,32 +59,31 @@ impl MemoryCatalogProvider {
                     location: old_location,
                     properties: old_properties,
                     ..
-                } if format.eq_ignore_ascii_case("iceberg") => {
+                } if format.eq_ignore_ascii_case(&options.format) => {
                     if old_location.as_deref() != Some(location.as_str()) {
                         return Err(CatalogError::NotSupported(
-                            "relocating an Iceberg table during replacement".into(),
+                            "relocating a lakehouse table during replacement".into(),
                         ));
                     }
                     properties = old_properties.clone();
                 }
                 _ => {
                     return Err(CatalogError::NotSupported(
-                        "replacing a non-Iceberg table with Iceberg".into(),
+                        "replacement requires the same lakehouse table format".into(),
                     ));
                 }
             }
         }
         // Validate the original bookkeeping too: a request must not hide a managed marker.
-        if properties
-            .iter()
-            .chain(options.properties.iter())
-            .any(|(key, value)| {
-                sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
-                    key.trim(),
-                    value.trim(),
-                ) || key.trim().starts_with("metadata.")
-            })
-        {
+        let mut markers = properties.iter().chain(&options.properties);
+        if is_delta {
+            validate_delta_replacement_properties(markers)?;
+        } else if markers.any(|(key, value)| {
+            sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
+                key.trim(),
+                value.trim(),
+            ) || key.trim().starts_with("metadata.")
+        }) {
             return Err(CatalogError::UnsupportedCapability(
                 "replacement requires path-managed Iceberg publication authority".into(),
             ));
@@ -85,9 +93,11 @@ impl MemoryCatalogProvider {
         catalog_table.push(table.to_string());
         Ok(TableReplacement {
             catalog_table,
-            catalog_generation: self.generation,
-            database_generation: db.generation,
-            table_generation: db.table_generations.get(table).copied().unwrap_or(0),
+            authority: sail_common_datafusion::catalog::ReplacementAuthority::Path {
+                catalog_generation: self.generation,
+                database_generation: db.generation,
+                table_generation: db.table_generations.get(table).copied().unwrap_or(0),
+            },
             require_existing: options.mode.replace_requires_existing(),
             existing: existing.is_some(),
             columns: options
@@ -103,6 +113,7 @@ impl MemoryCatalogProvider {
                 })
                 .collect(),
             location,
+            format: options.format,
             partition_by: options.partition_by,
             sort_by: options.sort_by,
             properties,
@@ -120,7 +131,22 @@ impl MemoryCatalogProvider {
         replacement: TableReplacement,
         publication: TablePublication,
     ) -> CatalogResult<()> {
-        if replacement.catalog_generation != self.generation {
+        // Clone preparation fills in authoritative metadata after staging the target identity.
+        validate_create_table_options(&replacement.format, &replacement.partition_by)?;
+        if replacement.format.eq_ignore_ascii_case("delta") {
+            validate_delta_replacement_properties(&replacement.properties)?;
+        }
+        let sail_common_datafusion::catalog::ReplacementAuthority::Path {
+            catalog_generation,
+            database_generation,
+            table_generation,
+        } = replacement.authority
+        else {
+            return Err(CatalogError::UnsupportedCapability(
+                "memory replacement requires path authority".into(),
+            ));
+        };
+        if catalog_generation != self.generation {
             return Err(CatalogError::Conflict(
                 "replacement catalog identity changed".into(),
             ));
@@ -133,19 +159,20 @@ impl MemoryCatalogProvider {
         let database = Namespace::try_from(namespace)?;
         let table = table.clone();
         let databases = self.databases.clone();
-        let gate = self.publication_gate.clone();
+        let namespace_gate = self.namespace_gate(&database);
+        let table_gate = self.table_gate(&database, &table);
         // Only this short final publication is reserved, not worker execution. Dropping the
         // caller's JoinHandle detaches this task; publication and status installation continue.
         tokio::spawn(async move {
-            let _reservation = gate.write_owned().await;
+            let _namespace = namespace_gate.read_owned().await;
+            let _reservation = table_gate.write_owned().await;
             let status = {
                 let db = databases.get(&database).ok_or_else(|| {
                     CatalogError::Conflict("replacement database was dropped".into())
                 })?;
                 db.check_known(&table)?;
-                if db.generation != replacement.database_generation
-                    || db.table_generations.get(&table).copied().unwrap_or(0)
-                        != replacement.table_generation
+                if db.generation != database_generation
+                    || db.table_generations.get(&table).copied().unwrap_or(0) != table_generation
                     || db.views.contains_key(&table)
                     || (replacement.require_existing && !db.tables.contains_key(&table))
                 {
@@ -159,7 +186,7 @@ impl MemoryCatalogProvider {
             let result = tokio::spawn(publication).await.unwrap_or_else(|error| {
                 Err(CatalogError::CommitStateUnknown(error.to_string().into()))
             });
-            // The exclusive gate prevents removal/recreation of this database. No DashMap
+            // The namespace reservation prevents removal/recreation of this database. No DashMap
             // guard survives the I/O above and there is no await or fallible step after it.
             databases.entry(database).and_modify(|db| {
                 if result.is_ok() {
@@ -174,6 +201,20 @@ impl MemoryCatalogProvider {
         .await
         .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
     }
+}
+
+fn validate_delta_replacement_properties<'a>(
+    properties: impl IntoIterator<Item = &'a (String, String)>,
+) -> CatalogResult<()> {
+    if properties
+        .into_iter()
+        .any(|(key, _)| sail_common_datafusion::catalog::delta::is_delta_coordinated_property(key))
+    {
+        return Err(CatalogError::UnsupportedCapability(
+            "replacement of a catalog-coordinated Delta table".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn prepared_status(
@@ -213,7 +254,7 @@ fn prepared_status(
                 .map(|(_, value)| value.clone()),
             constraints: vec![],
             location: Some(replacement.location.clone()),
-            format: "iceberg".into(),
+            format: replacement.format.clone(),
             partition_by: replacement.partition_by.clone(),
             sort_by: replacement.sort_by.clone(),
             bucket_by: None,
@@ -278,6 +319,121 @@ mod tests {
             provider.create_table(&namespace, "t", old).await?;
         }
         Ok((provider, namespace))
+    }
+
+    #[tokio::test]
+    async fn missing_queries_bound_idle_gate_history() -> CatalogResult<()> {
+        let (provider, namespace) = fixture(false).await?;
+        for missing_namespace in [false, true] {
+            for i in 0..1024 {
+                let database = if missing_namespace {
+                    Namespace::try_from(vec![format!("missing_{i}")])?
+                } else {
+                    namespace.clone()
+                };
+                assert!(matches!(
+                    provider.get_table(&database, &format!("missing_{i}")).await,
+                    Err(CatalogError::NotFound(CatalogObject::Table, _))
+                ));
+                assert!(provider.namespace_gates.len() <= GATE_CLEANUP_INTERVAL as usize);
+                assert!(provider.table_gates.len() <= GATE_CLEANUP_INTERVAL as usize);
+            }
+        }
+        assert_eq!(provider.databases.len(), 1);
+        assert!(provider.list_tables(&namespace).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gate_cleanup_preserves_holders_waiters_and_unpolled_acquisitions() -> CatalogResult<()>
+    {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        for namespace_gate in [false, true] {
+            let (provider, namespace) = fixture(false).await?;
+            let gate = || {
+                if namespace_gate {
+                    provider.namespace_gate(&namespace)
+                } else {
+                    provider.table_gate(&namespace, "t")
+                }
+            };
+            let original = gate();
+            let identity = Arc::as_ptr(&original);
+            let held = original.write_owned().await;
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            let mut queued = Box::pin(gate().write_owned());
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(queued.as_mut().poll(&mut cx).is_pending());
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            let mut later = Box::pin(gate().read_owned());
+            assert!(later.as_mut().poll(&mut cx).is_pending());
+            drop(held);
+            drop(later);
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            // Cancellation releases the queued reservation, but the unpolled
+            // future must still keep the allocation registered on its own.
+            let unpolled = gate().read_owned();
+            drop(queued);
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            drop(unpolled);
+            // Normal acquisitions eventually reclaim it without explicit cleanup.
+            let other = Namespace::try_from(vec!["other".to_string()])?;
+            for _ in 0..GATE_CLEANUP_INTERVAL {
+                drop(provider.table_gate(&other, "churn"));
+            }
+            assert!(!provider.namespace_gates.contains_key(&namespace));
+            assert!(!provider.table_gates.contains_key(&(namespace, "t".into())));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ordered_reads_do_not_deadlock_with_queued_publications() -> CatalogResult<()> {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        let a = Arc::new(RwLock::new(()));
+        let b = Arc::new(RwLock::new(()));
+        let mut cx = Context::from_waker(Waker::noop());
+        let held_b = b.clone().write_owned().await;
+        let mut rename = Box::pin(MemoryCatalogProvider::ordered_table_access(vec![
+            ("a".into(), a.clone()),
+            ("b".into(), b.clone()),
+        ]));
+        assert!(rename.as_mut().poll(&mut cx).is_pending()); // holds a, waits for b
+        let mut publish_a = Box::pin(a.clone().write_owned());
+        assert!(publish_a.as_mut().poll(&mut cx).is_pending()); // queues behind rename
+        let mut reverse_rename = Box::pin(MemoryCatalogProvider::ordered_table_access(vec![
+            ("b".into(), b.clone()),
+            ("a".into(), a.clone()),
+            ("a".into(), a.clone()),
+        ]));
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_pending()); // must wait on a first
+        drop(held_b);
+        let Poll::Ready(rename_guards) = rename.as_mut().poll(&mut cx) else {
+            return Err(CatalogError::Internal(
+                "rename blocked by out-of-order reverse rename".into(),
+            ));
+        };
+        drop(rename_guards);
+        let Poll::Ready(held_a) = publish_a.as_mut().poll(&mut cx) else {
+            return Err(CatalogError::Internal(
+                "publication a did not acquire reservation".into(),
+            ));
+        };
+        let held_b = b.clone().try_write_owned().map_err(|_| {
+            CatalogError::Internal("reverse rename holds b while waiting for a".into())
+        })?;
+        drop(held_a);
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_pending());
+        drop(held_b);
+        assert!(reverse_rename.as_mut().poll(&mut cx).is_ready());
+        Ok(())
     }
 
     #[tokio::test]
@@ -412,10 +568,18 @@ mod tests {
             let mut staged = provider
                 .stage_replacement(&namespace, "t", options())
                 .await?;
+            let sail_common_datafusion::catalog::ReplacementAuthority::Path {
+                catalog_generation,
+                database_generation,
+                table_generation,
+            } = &mut staged.authority
+            else {
+                unreachable!()
+            };
             match mutation {
-                "catalog" => staged.catalog_generation += 1,
-                "database" => staged.database_generation += 1,
-                "generation" => staged.table_generation += 1,
+                "catalog" => *catalog_generation += 1,
+                "database" => *database_generation += 1,
+                "generation" => *table_generation += 1,
                 "rename" => {
                     provider
                         .rename_table(&namespace, "t", &namespace, "renamed")
@@ -451,6 +615,9 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
+            provider.cleanup_idle_gates();
+            assert!(provider.namespace_gates.is_empty());
+            assert!(provider.table_gates.is_empty());
             let called = Arc::new(AtomicBool::new(false));
             let flag = called.clone();
             let result = provider
@@ -502,10 +669,34 @@ mod tests {
                 };
                 entered.wait().await;
                 // The reservation hides the intermediate storage/catalog boundary.
-                assert!(provider.publication_gate.try_read().is_err());
+                assert!(provider.table_gate(&namespace, "t").try_read().is_err());
+                provider
+                    .create_table(&namespace, "unrelated", options())
+                    .await?;
+                provider.get_table(&namespace, "unrelated").await?;
+                let independent = provider
+                    .stage_replacement(&namespace, "independent", options())
+                    .await?;
+                provider
+                    .publish_replacement(independent, Box::pin(async { Ok(()) }))
+                    .await?;
                 if cancel {
                     task.abort();
                 }
+                provider.cleanup_idle_gates();
+                assert!(provider.table_gate(&namespace, "t").try_read().is_err());
+                let mut listing = Box::pin(provider.list_tables(&namespace));
+                {
+                    use std::future::Future;
+                    use std::task::{Context, Waker};
+                    let mut cx = Context::from_waker(Waker::noop());
+                    assert!(listing.as_mut().poll(&mut cx).is_pending());
+                    // A table acquired after the listing starts also waits at the namespace gate.
+                    let mut late_read = Box::pin(provider.get_table(&namespace, "late"));
+                    assert!(late_read.as_mut().poll(&mut cx).is_pending());
+                }
+                provider.cleanup_idle_gates();
+                assert!(provider.table_gate(&namespace, "t").try_read().is_err());
                 release.wait().await;
                 if cancel {
                     let error = task.await.err().ok_or_else(|| {
@@ -517,10 +708,14 @@ mod tests {
                         CatalogError::InvalidArgument(format!("publication task failed: {error}"))
                     })??;
                 }
-                // This read waits for detached finalization, rather than polling or sleeping.
+                let tables = listing.await?;
+                assert_eq!(tables.len(), 3);
+                let listed = tables.into_iter().find(|status| status.name == "t");
+                let expected = status_value(expected);
+                assert_eq!(listed.map(status_value).as_ref(), Some(&expected));
                 assert_eq!(
                     status_value(provider.get_table(&namespace, "t").await?),
-                    status_value(expected)
+                    expected
                 );
             }
             Ok::<(), CatalogError>(())

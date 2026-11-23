@@ -27,6 +27,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use partitioning::partition_ranges;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use stats::create_add;
 use uuid::Uuid;
 use variant_shredding::{
@@ -99,6 +100,7 @@ impl WriterConfig {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
+                .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
                 .build()
         });
 
@@ -1082,8 +1084,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partition_path_with_percent_encoded_value_is_not_double_encoded()
-    -> Result<(), DeltaTableError> {
+    async fn partition_path_is_uri_encoded_once_at_action_creation() -> Result<(), DeltaTableError>
+    {
         use datafusion::arrow::datatypes::TimeUnit;
 
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1125,27 +1127,19 @@ mod tests {
         assert_eq!(adds.len(), 1);
         let path = &adds[0].path;
 
-        assert!(
-            path.contains("%20"),
-            "path should contain %20 (encoded space) in partition dir, got: {path}"
-        );
-        assert!(
-            !path.contains("%2520"),
-            "path must not contain double-encoded %2520: {path}"
-        );
-        assert!(
-            !path.contains("%253A"),
-            "path must not contain double-encoded %253A: {path}"
-        );
-
-        use crate::spec::utils::{decode_path, encode_path};
-        let encoded = encode_path(path);
-        #[expect(clippy::expect_used)]
-        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
-        assert_eq!(
-            decoded, *path,
-            "path should survive one encode/decode round-trip unchanged"
-        );
+        // Hive partition escaping is part of the physical filename. URI encoding
+        // escapes its percent signs once more, but action serialization must not.
+        assert!(path.contains("%2520"), "unexpected log URI: {path}");
+        assert!(path.contains("%253A"), "unexpected log URI: {path}");
+        let json = serde_json::to_value(&adds[0]).map_err(DeltaTableError::generic_err)?;
+        assert_eq!(json["path"].as_str(), Some(path.as_str()));
+        let decoded =
+            crate::spec::utils::decode_path(path).map_err(DeltaTableError::generic_err)?;
+        assert!(decoded.contains("%20"));
+        assert!(!decoded.contains("%2520"));
+        object_store
+            .head(&Path::parse(format!("{table_path}/{decoded}"))?)
+            .await?;
 
         Ok(())
     }

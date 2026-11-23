@@ -4,10 +4,14 @@ use std::fmt;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
 
+use bytes::Bytes;
+use csv_core::{ReadRecordResult, ReaderBuilder, Terminator};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::csv;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::error::ArrowError;
+#[cfg(not(target_arch = "wasm32"))]
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::file_format::csv::CsvDecoder;
 use datafusion::physical_expr::PhysicalExpr;
@@ -24,6 +28,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
+use futures::stream::{self, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -31,6 +36,79 @@ use super::decoder::{CsvInputDecoder, CsvInputReader, decode_csv_input_stream};
 use super::projected::{DecoderBatchReader, ProjectedCsvDecoder, ProjectedCsvOptions};
 
 type CsvBatchReader = Box<dyn Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send>;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn local_csv_chunks(reader: Box<dyn Read + Send>) -> BoxStream<'static, Result<Bytes>> {
+    stream::try_unfold(reader, |mut reader| async move {
+        SpawnedTask::spawn_blocking(move || {
+            let mut bytes = Vec::new();
+            (&mut reader).take(64 * 1024).read_to_end(&mut bytes)?;
+            Ok((!bytes.is_empty()).then(|| (Bytes::from(bytes), reader)))
+        })
+        .await
+        .map_err(|error| DataFusionError::ExecutionJoin(Box::new(error)))?
+    })
+    .boxed()
+}
+
+/// Count the fields in the first logical record. Reopen files whose leading comments or
+/// first record exceed the replay buffer instead of retaining an unbounded prefix.
+async fn multiline_file_width(
+    input: BoxStream<'static, Result<Bytes>>,
+    options: &CsvOptions,
+) -> Result<(usize, Option<BoxStream<'static, Result<Bytes>>>)> {
+    const REPLAY_LIMIT: usize = 64 * 1024;
+    let mut input = input.fuse();
+    let mut parser = ReaderBuilder::new();
+    parser
+        .delimiter(options.delimiter)
+        .quote(options.quote)
+        .escape(options.escape)
+        .comment(options.comment);
+    if let Some(terminator) = options.terminator {
+        parser.terminator(Terminator::Any(terminator));
+    }
+    let mut parser = parser.build();
+    let mut prefix = Some(Vec::new());
+    let mut retained = 0;
+    let mut width = 0;
+    let mut field_bytes = [0; 4096];
+    let mut field_ends = [0; 64];
+    loop {
+        let Some(bytes) = input.try_next().await? else {
+            let (_, _, _, fields) = parser.read_record(&[], &mut field_bytes, &mut field_ends);
+            width += fields;
+            break;
+        };
+        let mut chunk = bytes.as_ref();
+        let mut complete = false;
+        while !chunk.is_empty() {
+            let (result, read, _, fields) =
+                parser.read_record(chunk, &mut field_bytes, &mut field_ends);
+            width += fields;
+            chunk = &chunk[read..];
+            if result == ReadRecordResult::Record {
+                complete = true;
+                break;
+            }
+        }
+        if let Some(chunks) = &mut prefix {
+            retained += bytes.len();
+            if complete || retained <= REPLAY_LIMIT {
+                chunks.push(bytes);
+            } else {
+                prefix = None;
+            }
+        }
+        if complete {
+            break;
+        }
+    }
+    Ok((
+        width,
+        prefix.map(|chunks| stream::iter(chunks).map(Ok).chain(input).boxed()),
+    ))
+}
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
@@ -73,6 +151,18 @@ impl CsvSource {
         self.options.truncated_rows.unwrap_or(false)
     }
 
+    fn permissive_multiline(&self) -> bool {
+        self.options.newlines_in_values == Some(true) && self.truncate_rows()
+    }
+
+    fn all_string_fields(&self) -> bool {
+        self.table_schema
+            .file_schema()
+            .fields()
+            .iter()
+            .all(|field| field.data_type() == &DataType::Utf8)
+    }
+
     fn delimiter(&self) -> u8 {
         self.options.delimiter
     }
@@ -94,12 +184,13 @@ impl CsvSource {
     }
 
     fn open<R: Read + Send + 'static>(&self, reader: R) -> Result<CsvBatchReader> {
+        let schema = self.table_schema.file_schema();
         match self.projected_decoder()? {
             Some(decoder) => Ok(Box::new(DecoderBatchReader::new(
                 BufReader::new(reader),
                 decoder,
             ))),
-            None => Ok(Box::new(self.builder()?.build(reader)?)),
+            None => Ok(Box::new(self.builder(schema)?.build(reader)?)),
         }
     }
 
@@ -112,16 +203,11 @@ impl CsvSource {
     /// The projected decoder covers all-string file schemas (the Spark default
     /// `inferSchema=false`); typed columns keep the arrow decoder.
     fn projected_decoder(&self) -> Result<Option<ProjectedCsvDecoder>> {
-        let schema = self.table_schema.file_schema();
-        let all_strings = schema
-            .fields()
-            .iter()
-            .all(|field| field.data_type() == &DataType::Utf8);
-        if !all_strings {
+        if !self.all_string_fields() {
             return Ok(None);
         }
         let decoder = ProjectedCsvDecoder::try_new(ProjectedCsvOptions {
-            schema: Arc::clone(schema),
+            schema: Arc::clone(self.table_schema.file_schema()),
             projection: self.projection.file_indices.clone(),
             delimiter: self.delimiter(),
             quote: self.quote(),
@@ -130,13 +216,14 @@ impl CsvSource {
             terminator: self.terminator(),
             has_header: self.has_header(),
             truncated_rows: self.truncate_rows(),
+            ignore_extra_fields: self.permissive_multiline(),
             batch_size: self.batch_size()?,
         })?;
         Ok(Some(decoder))
     }
 
-    fn builder(&self) -> Result<csv::ReaderBuilder> {
-        let mut builder = csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
+    fn builder(&self, schema: &SchemaRef) -> Result<csv::ReaderBuilder> {
+        let mut builder = csv::ReaderBuilder::new(Arc::clone(schema))
             .with_delimiter(self.delimiter())
             .with_batch_size(self.batch_size()?)
             .with_header(self.has_header())
@@ -294,7 +381,9 @@ impl FileOpener for CsvOpener {
                 )
                 .await?
                 .map_err(DataFusionError::from);
-                let decoder = config.builder()?.build_decoder();
+                let decoder = config
+                    .builder(config.table_schema.file_schema())?
+                    .build_decoder();
                 let input = file_compression_type.convert_stream(aligned_stream.boxed())?;
                 let input =
                     decode_csv_input_stream(input, CsvInputDecoder::new(&config.options)).fuse();
@@ -307,9 +396,15 @@ impl FileOpener for CsvOpener {
                 .get_opts(&location, GetOptions::default())
                 .await?;
 
+            let multiline_width = config.permissive_multiline() && !config.all_string_fields();
+            let reopen = GetOptions {
+                if_match: result.meta.e_tag.clone(),
+                version: result.meta.version.clone(),
+                ..Default::default()
+            };
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => {
+                GetResultPayload::File(file, _) if !multiline_width => {
                     let decompressed = file_compression_type.convert_read(file)?;
                     let decoder = CsvInputDecoder::new(&config.options);
                     let mut reader = config.open(CsvInputReader::new(decompressed, decoder))?;
@@ -320,32 +415,59 @@ impl FileOpener for CsvOpener {
                         result
                     });
 
-                    Ok(futures::stream::iter(iterator)
+                    return Ok(futures::stream::iter(iterator)
                         .map_err(DataFusionError::from)
-                        .boxed())
+                        .boxed());
                 }
-                GetResultPayload::Stream(stream) => {
-                    let input = stream.map_err(DataFusionError::from).boxed();
-                    let input = file_compression_type.convert_stream(input)?;
-                    let input =
-                        decode_csv_input_stream(input, CsvInputDecoder::new(&config.options))
-                            .fuse();
-                    let stream = match config.projected_decoder()? {
-                        Some(decoder) => {
-                            deserialize_stream(input, DecoderDeserializer::new(decoder))
-                        }
-                        None => {
-                            let decoder = config.builder()?.build_decoder();
-                            deserialize_stream(
-                                input,
-                                DecoderDeserializer::new(CsvDecoder::new(decoder)),
-                            )
-                        }
-                    };
-
-                    Ok(stream.map_err(DataFusionError::from).boxed())
-                }
+                _ => {}
             }
+            let decode = |result: object_store::GetResult| -> Result<_> {
+                let input = match result.payload {
+                    // Local decoders read concatenated bzip2, XZ, and Zstandard streams.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(file, _) if file_compression_type.is_compressed() => {
+                        local_csv_chunks(file_compression_type.convert_read(file)?)
+                    }
+                    _ => {
+                        let stream = result.into_stream().map_err(DataFusionError::from).boxed();
+                        file_compression_type.convert_stream(stream)?
+                    }
+                };
+                Ok(decode_csv_input_stream(
+                    input,
+                    CsvInputDecoder::new(&config.options),
+                ))
+            };
+            let input = decode(result)?;
+            let mut schema = Arc::clone(config.table_schema.file_schema());
+            let input = if multiline_width {
+                let (width, input) = multiline_file_width(input, &config.options).await?;
+                if width == 0 {
+                    return Ok(stream::empty().boxed());
+                }
+                if width > schema.fields.len() {
+                    // Spark takes column names from the first input and ignores trailing fields.
+                    // Arrow validates record width before applying the logical projection.
+                    let mut fields = schema.fields.to_vec();
+                    fields.resize(width, Arc::new(Field::new("", DataType::Utf8, true)));
+                    schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata.clone()));
+                }
+                match input {
+                    Some(input) => input,
+                    None => decode(object_store.get_opts(&location, reopen).await?)?,
+                }
+            } else {
+                input
+            };
+            let input = input.fuse();
+            let stream = match config.projected_decoder()? {
+                Some(decoder) => deserialize_stream(input, DecoderDeserializer::new(decoder)),
+                None => {
+                    let decoder = config.builder(&schema)?.build_decoder();
+                    deserialize_stream(input, DecoderDeserializer::new(CsvDecoder::new(decoder)))
+                }
+            };
+            Ok(stream.map_err(DataFusionError::from).boxed())
         }))
     }
 }
