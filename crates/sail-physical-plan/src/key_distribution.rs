@@ -197,6 +197,7 @@ mod tests {
     use datafusion::execution::config::SessionConfig;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+    use datafusion_common::{DataFusionError, internal_err};
     use futures::{StreamExt, TryStreamExt};
     use sail_common_datafusion::session::repartition::DEFAULT_REPARTITION_BUFFER_SIZE;
 
@@ -295,6 +296,118 @@ mod tests {
         assert_eq!(seen.len(), 50);
         assert!(full > 0);
         assert_eq!(rows, 3 * BATCHES * ROWS);
+        Ok(())
+    }
+
+    /// The error of an input partition, which is not an error of the query engine.
+    #[derive(Debug)]
+    struct InputError;
+
+    impl std::fmt::Display for InputError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "the input has failed")
+        }
+    }
+
+    impl std::error::Error for InputError {}
+
+    /// An input partition that returns rows, and then fails or panics.
+    #[derive(Debug)]
+    struct FailingInput {
+        schema: SchemaRef,
+        panic: bool,
+    }
+
+    impl PartitionStream for FailingInput {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        #[expect(clippy::panic)]
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let (schema, panic) = (Arc::clone(&self.schema), self.panic);
+            let batches = futures::stream::iter(0..2).map(move |i| {
+                if i == 1 && panic {
+                    panic!("the input has panicked");
+                } else if i == 1 {
+                    return Err(DataFusionError::External(Box::new(InputError)));
+                }
+                let k: ArrayRef = Arc::new(Int64Array::from_iter_values(0..ROWS as i64));
+                let v: ArrayRef = Arc::new(Int64Array::from_iter_values(0..ROWS as i64));
+                Ok(RecordBatch::try_new(Arc::clone(&schema), vec![k, v])?)
+            });
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                batches,
+            ))
+        }
+    }
+
+    /// Returns the error of each of the eight output partitions for an input
+    /// of three partitions of which the second one fails or panics.
+    async fn output_errors(panic: bool) -> Result<Vec<Option<DataFusionError>>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let read = Arc::new(AtomicUsize::new(0));
+        let good = || {
+            Arc::new(CountedInput {
+                schema: Arc::clone(&schema),
+                keys: 50,
+                read: Arc::clone(&read),
+            }) as Arc<dyn PartitionStream>
+        };
+        let bad = Arc::new(FailingInput {
+            schema: Arc::clone(&schema),
+            panic,
+        }) as Arc<dyn PartitionStream>;
+        let partitions = vec![good(), bad, good()];
+        let input = StreamingTableExec::try_new(schema, partitions, None, [], false, None)?;
+        let keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("k", 0))];
+        let plan = KeyDistributionExec::new(Arc::new(input), keys, 8);
+        let context = Arc::new(TaskContext::default());
+        let streams = (0..8)
+            .map(|i| plan.execute(i, Arc::clone(&context)))
+            .collect::<Result<Vec<_>>>()?;
+        let outputs = futures::future::try_join_all(
+            streams
+                .into_iter()
+                .map(|stream| tokio::spawn(stream.try_collect::<Vec<_>>())),
+        )
+        .await
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?;
+        Ok(outputs.into_iter().map(|output| output.err()).collect())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_error_of_the_input_is_the_error_of_every_partition() -> Result<()> {
+        let errors = output_errors(false).await?;
+        assert_eq!(errors.len(), 8);
+        for error in errors {
+            // The partitions fail with the error of the input and not with its text,
+            // so that the kind of the error is known to the client.
+            let Some(DataFusionError::Shared(error)) = error else {
+                return internal_err!("unexpected output: {error:?}");
+            };
+            assert!(matches!(
+                error.as_ref(),
+                DataFusionError::External(e) if e.is::<InputError>()
+            ));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_panic_of_the_input_is_an_error_of_every_partition() -> Result<()> {
+        // No partition ends as it does for an input that has ended,
+        // also when it has no rows of the input that panics.
+        let errors = output_errors(true).await?;
+        assert_eq!(errors.len(), 8);
+        for error in errors {
+            let message = error.map(|e| e.to_string()).unwrap_or_default();
+            assert!(message.contains("the input has panicked"), "{message}");
+        }
         Ok(())
     }
 

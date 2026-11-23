@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,8 +28,8 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     apply_expression_roots,
 };
-use datafusion_common::{Result, Statistics, internal_err, plan_err};
-use futures::{Stream, StreamExt};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err, plan_err};
+use futures::{FutureExt, Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
     DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
@@ -363,13 +364,30 @@ pub(crate) fn initialize_exchange(
             hash_outputs.as_ref(),
         );
         tasks.push(SpawnedTask::spawn(async move {
-            execute_round_robin_input_partition(
+            let read = execute_round_robin_input_partition(
                 input,
-                output_senders,
+                output_senders.clone(),
                 input_partition,
                 partitioner,
-            )
-            .await;
+            );
+            // A task that panics drops its senders, which ends the output
+            // partitions as the end of the input does. The output partitions
+            // receive an error instead, since they have not received all rows.
+            if let Err(panic) = AssertUnwindSafe(read).catch_unwind().await {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|x| x.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                let mut output_senders = output_senders.into_iter().map(Some).collect::<Vec<_>>();
+                broadcast_round_robin_error(
+                    &mut output_senders,
+                    DataFusionError::Execution(format!(
+                        "repartition panicked on input partition {input_partition}: {message}"
+                    )),
+                )
+                .await;
+            }
         }));
     }
 
@@ -495,7 +513,7 @@ async fn execute_round_robin_input_partition(
         Err(error) => {
             broadcast_round_robin_error(
                 &mut output_senders,
-                format!("failed to initialize repartition: {error}"),
+                error.context("failed to initialize repartition"),
             )
             .await;
             return;
@@ -509,40 +527,41 @@ async fn execute_round_robin_input_partition(
             item = input.next() => item,
         };
         let ended = item.is_none();
-        let partitions = match item.transpose() {
-            Ok(batch) => partition_round_robin_batch(&mut partitioner, batch).map_err(|error| {
-                format!("repartition failed on input partition {input_partition}: {error}")
-            }),
-            Err(error) => Err(format!(
-                "repartition failed while reading input partition {input_partition}: {error}"
-            )),
-        };
+        // The error of the input is passed on as it is, so that the output
+        // partitions fail with the error that the input has failed with.
+        let partitions = item.transpose().and_then(|batch| {
+            partition_round_robin_batch(&mut partitioner, batch).map_err(|error| {
+                error.context(format!(
+                    "repartition failed on input partition {input_partition}"
+                ))
+            })
+        });
         match partitions {
             Ok(partitions) => {
                 if !send_round_robin_partitions(&mut output_senders, partitions).await || ended {
                     return;
                 }
             }
-            Err(message) => {
-                broadcast_round_robin_error(&mut output_senders, message).await;
+            Err(error) => {
+                broadcast_round_robin_error(&mut output_senders, error).await;
                 return;
             }
         }
     }
 }
 
+/// Sends the error to every output partition that is still read.
 async fn broadcast_round_robin_error(
     output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
-    message: String,
+    error: DataFusionError,
 ) {
+    let error = Arc::new(error);
     for sender in output_senders.iter_mut() {
         let Some(current_sender) = sender.as_ref().cloned() else {
             continue;
         };
         let disconnected = current_sender
-            .send(Err(datafusion_common::DataFusionError::Execution(
-                message.clone(),
-            )))
+            .send(Err(DataFusionError::Shared(Arc::clone(&error))))
             .await
             .is_err();
         if disconnected {
