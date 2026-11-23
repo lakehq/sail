@@ -36,6 +36,24 @@ def expected_pandas_df():
     )
 
 
+@pytest.mark.parametrize(
+    ("case", "condition"),
+    [("missing", "PATH_NOT_FOUND"), ("empty", "DELTA_TABLE_NOT_FOUND"), ("empty_log", "DELTA_TABLE_NOT_FOUND")],
+)
+def test_delta_read_without_commits(spark, tmp_path, case, condition):
+    path = tmp_path / case
+    if case == "empty":
+        path.mkdir()
+    elif case == "empty_log":
+        (path / "_delta_log").mkdir(parents=True)
+
+    with pytest.raises(AnalysisException, match=rf"\[{condition}\]") as error:
+        spark.read.format("delta").load(str(path)).collect()
+    assert error.value.getCondition() == condition
+    assert error.value.getSqlState() == ("42K03" if case == "missing" else "42P01")
+    assert path.as_posix() in str(error.value)
+
+
 def test_delta_io_write_with_input_partitions(spark, tmp_path):
     delta_path = tmp_path / "delta_table"
 

@@ -329,8 +329,7 @@ impl LakeSource for DeltaLakeSource {
         .await
         {
             Ok(table) => Some(table),
-            Err(DeltaTableError::InvalidTableLocation(_))
-            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(DeltaTableError::TableNotFound(_)) | Err(DeltaTableError::FileNotFound(_)) => None,
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
 
@@ -860,9 +859,7 @@ pub(crate) async fn plan_delta_write(
     .await
     {
         Ok(table) => Some(table),
-        Err(DeltaTableError::InvalidTableLocation(_)) | Err(DeltaTableError::FileNotFound(_)) => {
-            None
-        }
+        Err(DeltaTableError::TableNotFound(_)) | Err(DeltaTableError::FileNotFound(_)) => None,
         Err(err) => return Err(DataFusionError::External(Box::new(err))),
     };
     let table_exists = table.is_some();

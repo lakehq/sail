@@ -29,7 +29,7 @@ use crate::spec::{
     TableMetadata, TableRequirement, TableUpdate, Transform,
 };
 use crate::table::find_latest_metadata_file;
-use crate::table::metadata_loader::metadata_file_version_from_path;
+use crate::table::metadata_loader::{is_missing_table_metadata, metadata_file_version_from_path};
 
 /// Coordinator-only private replacement state. Workers receive only the resulting writer schema,
 /// spec, properties and order, not the table's history or a live catalog reservation.
@@ -380,7 +380,7 @@ async fn validate_base(
 ) -> Result<()> {
     let actual = match find_latest_metadata_file(&store.base, table_url).await {
         Ok(path) => Some(path),
-        Err(error) if error.to_string().contains("No metadata files found") => None,
+        Err(error) if is_missing_table_metadata(&error) => None,
         Err(error) => return Err(error),
     };
     if actual.as_deref() != expected {
