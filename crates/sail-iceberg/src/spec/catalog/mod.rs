@@ -220,6 +220,7 @@ pub enum TableUpdate {
         snapshot_id: i64,
     },
     SetPartitionStatistics {
+        #[serde(rename = "partition-statistics", alias = "partition_statistics")]
         partition_statistics: PartitionStatisticsFile,
     },
     RemovePartitionStatistics {
