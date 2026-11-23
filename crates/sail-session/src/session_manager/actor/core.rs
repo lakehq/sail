@@ -6,15 +6,13 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use log::{info, warn};
 use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::JobService;
+use sail_common_datafusion::session::job::ServerShutdown;
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
 use sail_system_store::SystemEvent;
 
 use crate::session_manager::actor::SessionManagerActor;
-use crate::session_manager::session::ServerSessionState;
 use crate::session_manager::{
     SessionManagerComponents, SessionManagerMessage, SessionManagerOptions,
 };
@@ -40,14 +38,18 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
 
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
-    type Options = (SessionManagerOptions, SessionManagerComponents);
+    type Options = (
+        SessionManagerOptions,
+        SessionManagerComponents,
+        Arc<ServerShutdown>,
+    );
 
     fn name() -> &'static str {
         "SessionManagerActor"
     }
 
     fn new(options: Self::Options) -> Self {
-        let (options, components) = options;
+        let (options, components, shutdown) = options;
         let SessionManagerComponents {
             session_factory,
             job_runner_factory,
@@ -63,6 +65,7 @@ impl Actor for SessionManagerActor {
             drivers: Default::default(),
             driver_gateway,
             driver_id_generator: IdGenerator::new(),
+            shutdown,
             shutdown_notifier: None,
             event_reporter,
         }
@@ -125,21 +128,6 @@ impl Actor for SessionManagerActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
-        for (session_id, session) in &self.sessions {
-            if let ServerSessionState::Running {
-                context,
-                driver_id: None,
-            } = &session.state
-            {
-                match context.extension::<JobService>() {
-                    Ok(service) => service.runner().stop().await,
-                    Err(e) => {
-                        warn!("failed to stop local job runner for session {session_id}: {e}")
-                    }
-                }
-            }
-        }
-
         // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
         // active task stream connections, which are owned by the drivers.
         let drivers = self.drivers.drain().collect::<Vec<_>>();

@@ -377,7 +377,10 @@ impl Executor {
     ) -> ExecutorTaskResult {
         let out = tokio::select! {
             x = Executor::run_internal(&mut context, &tx, reattachable) => x,
-            _ = listener => return ExecutorTaskResult::Paused(context),
+            pause = listener => match pause {
+                Ok(()) => return ExecutorTaskResult::Paused(context),
+                Err(_) => Err(SparkError::internal("query cancelled because its executor was dropped")),
+            },
         };
         match out {
             Ok(()) => ExecutorTaskResult::Completed,

@@ -13,6 +13,7 @@ use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::server::ServerBuilder;
+use sail_common_datafusion::session::job::ServerShutdown;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::net::TcpListener;
@@ -31,6 +32,7 @@ pub type ServerSessionFactoryFn =
 #[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
+    shutdown: Arc<ServerShutdown>,
 }
 
 impl fmt::Debug for SessionManager {
@@ -45,8 +47,9 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
-        let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self { handle })
+        let shutdown = Arc::new(ServerShutdown::default());
+        let handle = system.spawn::<SessionManagerActor>((options, components, shutdown.clone()));
+        Ok(Self { handle, shutdown })
     }
 
     pub async fn get_or_create_session_context(
@@ -81,6 +84,18 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
 
+    /// Cancel work inside a query RPC, including execution needed to resolve its plan.
+    pub async fn run_query<T>(
+        &self,
+        query: impl Future<Output = Result<T, tonic::Status>>,
+    ) -> Result<T, tonic::Status> {
+        tokio::select! {
+            biased;
+            () = self.shutdown.cancelled() => Err(tonic::Status::cancelled("query cancelled because the server is shutting down")),
+            result = query => result,
+        }
+    }
+
     /// Shut down sessions as the server starts draining active requests.
     pub async fn serve(
         self,
@@ -111,6 +126,7 @@ impl SessionManager {
 
     /// Shut down the session manager and all resources it owns.
     pub async fn shutdown(&self) -> SessionResult<()> {
+        self.shutdown.cancel();
         let (tx, rx) = oneshot::channel();
         self.handle
             .send(SessionManagerMessage::Shutdown { result: tx })

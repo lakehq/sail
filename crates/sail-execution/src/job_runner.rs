@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use sail_common::actor::ActorSystem;
-use sail_common_datafusion::session::job::JobRunner;
+use sail_common_datafusion::session::job::{JobRunner, ServerShutdown};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
-use crate::stream::cancel_job_stream_on_stop;
 
 fn explain_job_graph(
     plan: Arc<dyn ExecutionPlan>,
@@ -31,7 +29,7 @@ fn explain_job_graph(
 pub struct LocalJobRunner {
     session_id: String,
     next_job_id: AtomicU64,
-    stopped: CancellationToken,
+    stopped: AtomicBool,
 }
 
 impl LocalJobRunner {
@@ -39,7 +37,7 @@ impl LocalJobRunner {
         Self {
             session_id,
             next_job_id: AtomicU64::new(1),
-            stopped: CancellationToken::new(),
+            stopped: AtomicBool::new(false),
         }
     }
 }
@@ -69,7 +67,7 @@ impl JobRunner for LocalJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.stopped.is_cancelled() {
+        if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
         }
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
@@ -82,12 +80,12 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        let input = execute_stream(plan, ctx.task_ctx())?;
-        Ok(cancel_job_stream_on_stop(input, self.stopped.clone()))
+        let stream = execute_stream(plan, ctx.task_ctx())?;
+        Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {
-        self.stopped.cancel();
+        self.stopped.store(true, Ordering::Relaxed);
     }
 }
 
@@ -136,9 +134,11 @@ impl JobRunner for ClusterJobRunner {
             })
             .await
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        rx.await
+        let stream = rx
+            .await
             .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
-            .map_err(|e| internal_datafusion_err!("{e}"))
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {

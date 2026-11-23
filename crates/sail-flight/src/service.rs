@@ -67,30 +67,8 @@ impl SailFlightSqlService {
             .await
             .map_err(|e| Status::internal(format!("session error: {e}")))
     }
-}
 
-#[tonic::async_trait]
-impl FlightSqlService for SailFlightSqlService {
-    type FlightService = SailFlightSqlService;
-
-    async fn do_handshake(
-        &self,
-        _request: Request<Streaming<HandshakeRequest>>,
-    ) -> Result<
-        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
-        Status,
-    > {
-        // Note: not all clients perform handshake with the server.
-        debug!("handshake received from client");
-        let response = HandshakeResponse {
-            protocol_version: 0,
-            payload: Default::default(),
-        };
-        let output = stream::iter(vec![Ok(response)]);
-        Ok(Response::new(Box::pin(output)))
-    }
-
-    async fn get_flight_info_statement(
+    async fn handle_statement_query(
         &self,
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
@@ -196,6 +174,38 @@ impl FlightSqlService for SailFlightSqlService {
             .map_err(|e| Status::internal(format!("schema error: {e}")))?;
 
         Ok(Response::new(info))
+    }
+}
+
+#[tonic::async_trait]
+impl FlightSqlService for SailFlightSqlService {
+    type FlightService = SailFlightSqlService;
+
+    async fn do_handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    > {
+        // Note: not all clients perform handshake with the server.
+        debug!("handshake received from client");
+        let response = HandshakeResponse {
+            protocol_version: 0,
+            payload: Default::default(),
+        };
+        let output = stream::iter(vec![Ok(response)]);
+        Ok(Response::new(Box::pin(output)))
+    }
+
+    async fn get_flight_info_statement(
+        &self,
+        query: CommandStatementQuery,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        self.session_manager
+            .run_query(self.handle_statement_query(query, request))
+            .await
     }
 
     async fn do_get_statement(

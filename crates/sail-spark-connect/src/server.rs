@@ -141,14 +141,11 @@ fn validated_server_session_id(
     }
 }
 
-#[tonic::async_trait]
-impl SparkConnectService for SparkConnectServer {
-    type ExecutePlanStream = ExecutePlanResponseStream;
-
-    async fn execute_plan(
+impl SparkConnectServer {
+    async fn handle_execute_plan(
         &self,
         request: Request<ExecutePlanRequest>,
-    ) -> Result<Response<Self::ExecutePlanStream>, Status> {
+    ) -> Result<Response<ExecutePlanResponseStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_id = validated_session_id(request.session_id)?;
@@ -188,7 +185,7 @@ impl SparkConnectService for SparkConnectServer {
         Ok(Response::new(stream))
     }
 
-    async fn analyze_plan(
+    async fn handle_analyze_plan(
         &self,
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
@@ -273,6 +270,29 @@ impl SparkConnectService for SparkConnectServer {
         };
         debug!("{response:?}");
         Ok(Response::new(response))
+    }
+}
+
+#[tonic::async_trait]
+impl SparkConnectService for SparkConnectServer {
+    type ExecutePlanStream = ExecutePlanResponseStream;
+
+    async fn execute_plan(
+        &self,
+        request: Request<ExecutePlanRequest>,
+    ) -> Result<Response<Self::ExecutePlanStream>, Status> {
+        self.session_manager
+            .run_query(self.handle_execute_plan(request))
+            .await
+    }
+
+    async fn analyze_plan(
+        &self,
+        request: Request<AnalyzePlanRequest>,
+    ) -> Result<Response<AnalyzePlanResponse>, Status> {
+        self.session_manager
+            .run_query(self.handle_analyze_plan(request))
+            .await
     }
 
     async fn config(

@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 
-use datafusion::common::Result;
+use datafusion::common::{Result, exec_err};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
+use futures::{TryStreamExt, stream};
+use tokio_util::sync::CancellationToken;
 
 use crate::extension::SessionExtension;
 
@@ -41,5 +44,39 @@ impl JobService {
 impl SessionExtension for JobService {
     fn name() -> &'static str {
         "JobService"
+    }
+}
+
+/// Shared by all query requests and result streams on one server.
+#[derive(Default)]
+pub struct ServerShutdown {
+    signal: CancellationToken,
+}
+
+impl ServerShutdown {
+    pub fn cancel(&self) {
+        self.signal.cancel();
+    }
+
+    pub async fn cancelled(&self) {
+        self.signal.cancelled().await;
+    }
+
+    pub fn cancel_stream_on_shutdown(
+        ctx: &SessionContext,
+        input: SendableRecordBatchStream,
+    ) -> SendableRecordBatchStream {
+        let Some(shutdown) = ctx.state_ref().read().config().get_extension::<Self>() else {
+            return input;
+        };
+        let schema = input.schema();
+        let stream = stream::try_unfold((input, shutdown), |(mut input, shutdown)| async move {
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => exec_err!("query cancelled because the server is shutting down"),
+                batch = input.try_next() => Ok(batch?.map(|batch| (batch, (input, shutdown)))),
+            }
+        });
+        Box::pin(RecordBatchStreamAdapter::new(schema, stream))
     }
 }
