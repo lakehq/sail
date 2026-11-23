@@ -12,7 +12,7 @@ use futures::stream;
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::JobService;
+use sail_common_datafusion::session::job::{JobService, ServerShutdown};
 use sail_plan::resolve_and_execute_plan;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
@@ -47,6 +47,17 @@ pub struct ExecutePlanResponseStream {
 }
 
 impl ExecutePlanResponseStream {
+    pub(crate) fn cancel_on_shutdown(mut self, ctx: &SessionContext) -> Self {
+        if let Some(shutdown) = ServerShutdown::from_context(ctx) {
+            self.inner = Box::pin(shutdown.cancel_stream(self.inner, || {
+                Err(SparkError::internal(
+                    "query cancelled because the server is shutting down",
+                ))
+            }));
+        }
+        self
+    }
+
     pub fn new(
         session_id: String,
         server_side_session_id: String,

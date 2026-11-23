@@ -182,7 +182,30 @@ impl SparkConnectServer {
                 return Err(Status::unimplemented("compressed operation plan"));
             }
         };
-        Ok(Response::new(stream))
+        Ok(Response::new(stream.cancel_on_shutdown(&ctx)))
+    }
+
+    async fn handle_reattach_execute(
+        self,
+        request: Request<ReattachExecuteRequest>,
+    ) -> Result<Response<ExecutePlanResponseStream>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let session_id = validated_session_id(request.session_id)?;
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let ctx = self
+            .session_manager
+            .get_or_create_session_context(session_id, user_id)
+            .await
+            .map_err(SparkError::from)?;
+        validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
+        let stream =
+            service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
+                .await?;
+        Ok(Response::new(stream.cancel_on_shutdown(&ctx)))
     }
 
     async fn handle_analyze_plan(
@@ -472,23 +495,9 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ReattachExecuteRequest>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        let request = request.into_inner();
-        debug!("{request:?}");
-        let session_id = validated_session_id(request.session_id)?;
-        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
-        let ctx = self
-            .session_manager
-            .get_or_create_session_context(session_id, user_id)
+        self.session_manager
+            .run_query(self.clone().handle_reattach_execute(request))
             .await
-            .map_err(SparkError::from)?;
-        validated_server_session_id(
-            &ctx,
-            request.client_observed_server_side_session_id.as_deref(),
-        )?;
-        let stream =
-            service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
-                .await?;
-        Ok(Response::new(stream))
     }
 
     async fn release_execute(

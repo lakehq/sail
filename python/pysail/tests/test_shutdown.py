@@ -97,7 +97,18 @@ def test_sigterm_force_closes_connection_after_grace_period():
         assert server.wait(timeout=5) == 0
 
 
-@pytest.mark.parametrize("kind", ["scalar", "scalar_literal", "iterator", "analyze", "source_schema"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "scalar",
+        "scalar_literal",
+        "iterator",
+        pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1", reason="Requires UDTF analysis")),
+        pytest.param(
+            "source_schema", marks=pytest.mark.spark(version=">=4.1", reason="Requires Python data source registration")
+        ),
+    ],
+)
 def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
     import grpc
     from pyspark.sql import SparkSession, functions

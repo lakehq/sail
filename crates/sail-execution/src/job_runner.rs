@@ -14,6 +14,7 @@ use sail_common::actor::ActorSystem;
 use sail_common_datafusion::session::job::{JobRunner, ServerShutdown};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
@@ -85,9 +86,14 @@ impl JobRunner for LocalJobRunner {
         let plan = trace_execution_plan(plan, options)?;
         let input = execute_stream(plan, ctx.task_ctx())?;
         let schema = input.schema();
-        // Start producing batches on the first poll. A synchronous operator can then finish
-        // its current batch independently while the result stream delivers cancellation.
-        let output = stream::once(async move { spawn_buffered(input, 1) }).flatten();
+        // Keep execution lazy and on the query runtime, even when Flight first polls
+        // the result stream on the transport runtime.
+        let runtime = Handle::try_current().ok();
+        let output = stream::once(async move {
+            let _guard = runtime.as_ref().map(Handle::enter);
+            spawn_buffered(input, 1)
+        })
+        .flatten();
         let stream = Box::pin(RecordBatchStreamAdapter::new(schema, output));
         Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
     }

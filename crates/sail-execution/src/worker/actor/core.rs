@@ -98,24 +98,26 @@ impl Actor for WorkerActor {
             }
             ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
-        let task_runner = ctx
-            .children_mut()
-            .spawn::<TaskRunnerActor>(TaskRunnerComponents {
-                session_id: self.options.session_id.clone(),
-                extensions: TaskRunnerExtensions {
-                    local_streams,
-                    storage_streams,
-                    celeborn_streams,
-                },
-                placement: TaskRunnerPlacement::Worker {
-                    worker_id: self.options.worker_id,
-                    sequence: 42,
-                    driver: self.driver_client_set.clone(),
-                    worker,
-                    peers: PeerTracker::new(PeerTrackerOptions::from(&self.options)),
-                    retry_strategy: self.options.rpc_retry_strategy.clone(),
-                },
-            });
+        let task_runner = {
+            let _guard = self.options.runtime.io().enter();
+            ctx.children_mut()
+                .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                    session_id: self.options.session_id.clone(),
+                    extensions: TaskRunnerExtensions {
+                        local_streams,
+                        storage_streams,
+                        celeborn_streams,
+                    },
+                    placement: TaskRunnerPlacement::Worker {
+                        worker_id: self.options.worker_id,
+                        sequence: 42,
+                        driver: self.driver_client_set.clone(),
+                        worker,
+                        peers: PeerTracker::new(PeerTrackerOptions::from(&self.options)),
+                        retry_strategy: self.options.rpc_retry_strategy.clone(),
+                    },
+                })
+        };
         self.task_runner = Some(task_runner.clone());
         let addr = (
             self.options.worker_listen_host.clone(),
