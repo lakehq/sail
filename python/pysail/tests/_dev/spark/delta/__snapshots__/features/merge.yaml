@@ -1915,6 +1915,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
       CoalescePartitionsExec

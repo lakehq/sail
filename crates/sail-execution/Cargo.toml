@@ -60,6 +60,7 @@ kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }

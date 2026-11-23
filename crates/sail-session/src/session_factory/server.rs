@@ -17,6 +17,7 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
+use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
@@ -138,6 +139,14 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
             )))
+            .with_extension(Arc::new(
+                ParquetWriteConfig::new(self.config.parquet.max_open_files_per_task)
+                    .with_file_limits(
+                        self.config.parquet.max_records_per_file,
+                        self.config.parquet.max_file_size,
+                    )
+                    .with_write_success_file(self.config.parquet.write_success_file),
+            ))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config)?;
@@ -152,9 +161,10 @@ impl ServerSessionFactory {
 
     fn create_session_state(&mut self, info: &mut ServerSessionInfo) -> Result<SessionState> {
         let config = self.create_session_config(info)?;
-        let runtime = self
+        let (runtime, multipart) = self
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
+        let config = config.with_extension(multipart);
         // We do not add default features to the session state,
         // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()

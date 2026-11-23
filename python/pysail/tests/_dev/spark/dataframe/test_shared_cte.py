@@ -68,7 +68,7 @@ def test_nested_cte_insert_plan_is_linear_in_depth(spark, tmp_path):
     spark.sql(f"CREATE TABLE nested_cte_insert (id BIGINT) USING parquet LOCATION '{tmp_path / 'data'}'")
     try:
         text = plan(spark, f"INSERT INTO nested_cte_insert {nested(depth, projection='id')}")
-        assert "DataSinkExec" in text, text
+        assert "FileWriteCommitExec" in text, text
         assert "SharedCteExec" in text, text
         assert len(text.splitlines()) < 10 * depth + 30
         assert "RangeExec" in text, text

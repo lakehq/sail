@@ -33,12 +33,14 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::listing::commit::FileWriteCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
@@ -62,7 +64,7 @@ impl JobGraph {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
-        let plan = ensure_worker_input_for_lake_procedure(plan)?;
+        let plan = ensure_worker_input_for_driver_commit(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -82,7 +84,7 @@ impl JobGraph {
     }
 }
 
-fn ensure_worker_input_for_lake_procedure(
+fn ensure_worker_input_for_driver_commit(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -101,7 +103,8 @@ fn ensure_worker_input_for_lake_procedure(
             {
                 procedure.input()
             } else {
-                None
+                plan.downcast_ref::<FileWriteCommitExec>()
+                    .map(|commit| commit.input())
             };
             let Some(input) = input else {
                 return Ok(Transformed::no(plan));
@@ -374,6 +377,7 @@ fn is_plain_exchange(plan: &dyn ExecutionPlan) -> bool {
             .downcast_ref::<RepartitionExec>()
             .is_some_and(|repartition| repartition_ordering_to_restore(repartition).is_none())
         || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<KeyDistributionExec>()
         || plan.is::<CoalesceExec>()
         || plan
             .downcast_ref::<SortPreservingMergeExec>()
@@ -577,6 +581,7 @@ fn plan_job_graph_stages(
         ]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<KeyDistributionExec>()
         || plan.is::<CoalescePartitionsExec>()
         || plan.is::<SortPreservingMergeExec>()
         || plan.is::<CoalesceExec>()
@@ -685,6 +690,12 @@ fn plan_job_graph_stages(
             }
         };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
+    } else if let Some(distribution) = subtree.plan.downcast_ref::<KeyDistributionExec>() {
+        let properties = distribution.properties().clone();
+        let child = subtree.only_child()?;
+        let plan = create_shuffle(child, graph, properties, consumption, scalar_context)?;
+        let has_pending_scalar_subquery_expr = reads_scalar_subquery(&plan)?;
+        PlannedSubtree::new(plan, has_pending_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
         let fetch = coalesce.fetch();
@@ -730,6 +741,7 @@ fn plan_job_graph_stages(
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
         || subtree.plan.is::<RemoteCheckpointCommitExec>()
+        || subtree.plan.is::<FileWriteCommitExec>()
     {
         if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
             subtree.into_planned_subtree()
@@ -1049,6 +1061,7 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
+        || plan.is::<FileWriteCommitExec>()
 }
 
 fn is_coordinator_lake_procedure(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -1372,6 +1385,7 @@ mod tests {
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::key_distribution::KeyDistributionExec;
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -2737,6 +2751,37 @@ mod tests {
     }
 
     #[test]
+    fn test_key_distribution_is_a_hash_shuffle() {
+        for (options, stages) in [
+            (flight_shuffle_options(), 2),
+            (blocking_shuffle_options(), 3),
+        ] {
+            let keys = vec![col("id", &schema()).unwrap()];
+            let source = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let partitioning = Partitioning::Hash(keys.clone(), 4);
+            let plan = Arc::new(KeyDistributionExec::new(source, keys, 4));
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(graph.stages().len(), stages);
+            // The stage of the input writes its rows to a channel for each partition.
+            assert!(matches!(
+                &graph.stages()[0].distribution,
+                OutputDistribution::Hash { .. }
+            ));
+            let OutputDistribution::Hash { keys, channels } = &graph.stages()[0].distribution
+            else {
+                return;
+            };
+            assert_eq!(*channels, 4);
+            assert_eq!(Partitioning::Hash(keys.clone(), *channels), partitioning);
+            assert!(graph.stages()[0].plan.is::<UnionExec>());
+            // The partitions are read from the channels, and the plan is not executed.
+            let output = &graph.stages().last().unwrap().plan;
+            assert!(output.is::<StageInputExec<usize>>());
+            assert_eq!(output.properties().output_partitioning(), &partitioning);
+        }
+    }
+
+    #[test]
     fn test_storage_shuffle_inserts_a_blocking_merge_stage() {
         let graph = JobGraph::try_new(
             Arc::new(
@@ -2983,6 +3028,108 @@ mod tests {
                 mode: InputMode::Forward,
             }]
         ));
+    }
+
+    fn parquet_write_plan(partitions: usize) -> Arc<dyn ExecutionPlan> {
+        use datafusion::common::config::TableParquetOptions;
+        use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
+        use sail_data_source::listing::commit::FileWriteCommitExec;
+
+        let write_id = uuid::Uuid::from_u128(1);
+        let input = Arc::new(EmptyExec::new(schema()).with_partitions(partitions));
+        let mut plan: Arc<dyn ExecutionPlan> = Arc::new(
+            ParquetWriteExec::try_new(
+                input,
+                ObjectStoreUrl::parse("memory://").unwrap(),
+                object_store::path::Path::from("table"),
+                write_id,
+                vec![],
+                TableParquetOptions::default(),
+                ".parquet".to_string(),
+                None,
+                false,
+                std::num::NonZeroUsize::MIN,
+            )
+            .unwrap(),
+        );
+        // The physical optimizer adds the exchange only for multiple writer partitions.
+        if partitions > 1 {
+            plan = Arc::new(CoalescePartitionsExec::new(plan));
+        }
+        Arc::new(FileWriteCommitExec::new(
+            plan,
+            ObjectStoreUrl::parse("memory://").unwrap(),
+            object_store::path::Path::from("table"),
+            write_id,
+        ))
+    }
+
+    /// Returns the index of the writer stage and the index of the commit stage.
+    fn assert_parquet_write_stages(graph: &JobGraph, partitions: usize) -> (usize, usize) {
+        use datafusion::common::tree_node::TreeNode;
+        use sail_data_source::formats::parquet::writer::exec::ParquetWriteExec;
+        use sail_data_source::listing::commit::FileWriteCommitExec;
+
+        let find = |predicate: fn(&Arc<dyn ExecutionPlan>) -> bool| {
+            let stages = graph
+                .stages()
+                .iter()
+                .enumerate()
+                .filter(|(_, stage)| stage.plan.exists(|plan| Ok(predicate(plan))).unwrap())
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            assert_eq!(stages.len(), 1);
+            stages[0]
+        };
+        let writer = find(|plan| plan.is::<ParquetWriteExec>());
+        let commit = find(|plan| plan.is::<FileWriteCommitExec>());
+        assert_ne!(writer, commit);
+
+        let stage = &graph.stages()[writer];
+        assert_eq!(stage.placement, TaskPlacement::Worker);
+        assert!(stage.plan.is::<ParquetWriteExec>());
+        assert_eq!(
+            stage.plan.output_partitioning().partition_count(),
+            partitions
+        );
+        assert!(stage.inputs.is_empty());
+        assert!(matches!(
+            stage.distribution,
+            OutputDistribution::RoundRobinBatch { channels: 1 }
+        ));
+
+        let stage = &graph.stages()[commit];
+        assert_eq!(stage.placement, TaskPlacement::Driver);
+        assert_eq!(stage.plan.output_partitioning().partition_count(), 1);
+        assert!(
+            stage
+                .inputs
+                .iter()
+                .any(|input| input.stage == writer && matches!(input.mode, InputMode::Shuffle))
+        );
+        (writer, commit)
+    }
+
+    #[test]
+    fn test_job_graph_places_file_write_commit_on_driver() {
+        use sail_data_source::listing::commit::FileWriteCommitExec;
+
+        // A single writer partition also runs on a worker.
+        for partitions in [1, 2, 8] {
+            let graph = JobGraph::try_new(parquet_write_plan(partitions), flight_shuffle_options())
+                .unwrap();
+            let (writer, commit) = assert_parquet_write_stages(&graph, partitions);
+            assert_eq!(graph.stages().len(), 3);
+            assert_eq!((writer, commit), (0, 1));
+            assert!(graph.stages()[commit].plan.is::<FileWriteCommitExec>());
+            assert!(matches!(
+                graph.stages()[2].inputs.as_slice(),
+                [StageInput {
+                    stage: 1,
+                    mode: InputMode::Forward,
+                }]
+            ));
+        }
     }
 
     #[test]

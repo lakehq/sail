@@ -604,7 +604,6 @@ pub struct ParquetConfig {
     pub max_predicate_cache_size: usize,
     pub max_in_list_size: usize,
     pub data_page_size_limit: usize,
-    pub write_batch_size: usize,
     pub writer_version: String,
     pub skip_arrow_metadata: bool,
     pub compression: String,
@@ -628,11 +627,6 @@ pub struct ParquetConfig {
     )]
     pub statistics_truncate_length: Option<usize>,
     pub data_page_row_count_limit: usize,
-    #[serde(
-        serialize_with = "serialize_non_empty_string",
-        deserialize_with = "deserialize_non_empty_string"
-    )]
-    pub encoding: Option<String>,
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
     pub bloom_filter_fpp: f64,
@@ -641,9 +635,10 @@ pub struct ParquetConfig {
         deserialize_with = "deserialize_non_zero"
     )]
     pub bloom_filter_ndv: Option<u64>,
-    pub allow_single_file_parallelism: bool,
-    pub maximum_parallel_row_group_writers: usize,
-    pub maximum_buffered_record_batches_per_stream: usize,
+    pub max_open_files_per_task: NonZeroUsize,
+    pub write_success_file: bool,
+    pub max_records_per_file: i64,
+    pub max_file_size: u64,
     pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,

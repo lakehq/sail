@@ -32,12 +32,13 @@ impl WorkerSessionFactory {
 
 impl SessionFactory<()> for WorkerSessionFactory {
     fn create(&mut self, _info: ()) -> Result<SessionContext> {
-        let runtime = self.runtime_env.create(Ok)?;
+        let (runtime, multipart) = self.runtime_env.create(Ok)?;
         // We still add default features for the worker session
         // since we need built-in functions to be available for the codec
         // when decoding the execution plan.
         let mut config = SessionConfig::default()
             .with_extension(Arc::new(DeltaTableCache::default()))
+            .with_extension(multipart)
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
             )))
@@ -61,7 +62,9 @@ impl SessionFactory<()> for WorkerSessionFactory {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
+    use sail_common_datafusion::session::multipart::MultipartStoreProvider;
 
     use super::*;
 
@@ -75,6 +78,21 @@ mod tests {
         let context = session.task_ctx();
         let shuffle = context.extension::<ShuffleWriteConfig>()?;
         assert_eq!(shuffle.buffer_size(), 1024);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn worker_has_multipart_store_provider() -> Result<(), Box<dyn std::error::Error>> {
+        let config = AppConfig::load()?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
+        let context = session.task_ctx();
+        let provider = context.extension::<MultipartStoreProvider>()?;
+        let memory = ObjectStoreUrl::parse("memory://")?;
+        assert!(provider.multipart_store(memory.as_ref())?.is_some());
+        let file = ObjectStoreUrl::local_filesystem();
+        assert!(provider.multipart_store(file.as_ref())?.is_none());
         Ok(())
     }
 

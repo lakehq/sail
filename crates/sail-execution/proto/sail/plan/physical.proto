@@ -86,6 +86,8 @@ message ExtendedPhysicalPlanNode {
     TailExecNode tail = 69;
     IcebergImportedExecNode iceberg_imported = 70;
     bytes unsupported_iceberg_row_scan_schema = 71;
+    ParquetWriteExecNode parquet_write = 72;
+    FileWriteCommitExecNode file_write_commit = 73;
   }
 }
 
@@ -1048,6 +1050,31 @@ message TextSinkExecNode {
 message FileDeleteExecNode {
   string object_store_url = 1;
   string path = 2;
+}
+
+message ParquetWriteExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string table_path = 3;
+  string write_id = 4;
+  repeated string partition_columns = 5;
+  bytes options = 6;
+  string file_suffix = 7;
+  LexOrdering ordering = 8;
+  bool write_sorting_columns = 9;
+  uint64 max_open_files_per_task = 10;
+  bytes schema = 11;
+  uint64 max_records_per_file = 12;
+  uint64 max_file_size = 13;
+}
+
+message FileWriteCommitExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string table_path = 3;
+  string write_id = 4;
+  bool overwrite = 5;
+  bool write_success_file = 6;
 }
 
 message StreamCollectorExecNode {

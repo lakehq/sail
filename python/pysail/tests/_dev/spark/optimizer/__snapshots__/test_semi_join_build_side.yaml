@@ -16,9 +16,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-False-True]"
 data:
@@ -36,9 +36,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-True-False]"
 data:
@@ -56,9 +56,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-True-True]"
 data:
@@ -76,9 +76,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-False-False]"
 data:
@@ -91,14 +91,14 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-False-True]"
 data:
@@ -111,14 +111,14 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], NullsEqual: true
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-False]"
 data:
@@ -131,14 +131,14 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], filter=#1@0 < #9@1, projection=[#0@0]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-True]"
 data:
@@ -151,14 +151,14 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], filter=#1@0 < #9@1, projection=[#0@0], NullsEqual: true
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
                   BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                     PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-False-False]"
 data:
@@ -176,9 +176,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-False-True]"
 data:
@@ -196,9 +196,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-True-False]"
 data:
@@ -216,9 +216,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-True-True]"
 data:
@@ -236,9 +236,9 @@ data:
                       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                           AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
@@ -251,14 +251,14 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#4@0 as #8]
                   AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
                     RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=2
                       AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
@@ -271,13 +271,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, __grouping_id@1 as __grouping_id], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, __grouping_id@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[(#2@0 as #2), (NULL as #2)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
@@ -290,13 +290,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, #3@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
@@ -309,13 +309,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[spark_reverse(#2@0) as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
@@ -328,14 +328,14 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#4@0 as #8]
                   AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
                     RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=2
                       AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
@@ -348,13 +348,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, __grouping_id@1 as __grouping_id], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, __grouping_id@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[(#2@0 as #2), (NULL as #2)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
@@ -367,13 +367,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, #3@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
@@ -386,13 +386,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[spark_reverse(#2@0) as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
@@ -405,14 +405,14 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #8@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#4@0 as #8]
                   AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
                     RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=2
                       AggregateExec: mode=Partial, gby=[#4@0 as #4], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #4], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
@@ -425,13 +425,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, __grouping_id@1 as __grouping_id], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, __grouping_id@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[(#2@0 as #2), (NULL as #2)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
@@ -444,13 +444,13 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[#2@0 as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0, #3@1], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2, #3@1 as #3], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
@@ -463,10 +463,10 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #4@0)], projection=[]
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=4
                   ProjectionExec: expr=[spark_reverse(#2@0) as #4]
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
                       RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
                         AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/part-00000-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00001-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00002-<uuid>-c000.zstd.parquet:<range>, <tmp>/facts/part-00003-<uuid>-c000.zstd.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible

@@ -10,6 +10,8 @@ use datafusion_common::config::{
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
@@ -98,7 +100,6 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetWritePartialOptions> {
         Ok(ParquetWritePartialOptions {
             data_page_size_limit: Some(self.global.data_pagesize_limit),
-            write_batch_size: Some(self.global.write_batch_size),
             writer_version: Some(self.global.writer_version.to_string()),
             skip_arrow_metadata: Some(self.global.skip_arrow_metadata),
             compression: Some(self.global.compression.clone()),
@@ -110,17 +111,13 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             column_index_truncate_length: Some(self.global.column_index_truncate_length),
             statistics_truncate_length: Some(self.global.statistics_truncate_length),
             data_page_row_count_limit: Some(self.global.data_page_row_count_limit),
-            encoding: Some(self.global.encoding.clone()),
             bloom_filter_on_write: Some(self.global.bloom_filter_on_write),
             bloom_filter_fpp: Some(self.global.bloom_filter_fpp),
             bloom_filter_ndv: Some(self.global.bloom_filter_ndv),
-            allow_single_file_parallelism: Some(self.global.allow_single_file_parallelism),
-            maximum_parallel_row_group_writers: Some(
-                self.global.maximum_parallel_row_group_writers,
-            ),
-            maximum_buffered_record_batches_per_stream: Some(
-                self.global.maximum_buffered_record_batches_per_stream,
-            ),
+            max_open_files_per_task: None,
+            max_records_per_file: None,
+            max_file_size: None,
+            write_success_file: None,
             content_defined_chunking_enabled: Some(self.global.content_defined_chunking.enabled),
             content_defined_chunking_min_chunk_size: Some(
                 self.global.content_defined_chunking.min_chunk_size,
@@ -139,7 +136,6 @@ impl ParquetWriteOptions {
     pub fn into_table_options(self) -> DataSourceResult<TableParquetOptions> {
         let ParquetWriteOptions {
             data_page_size_limit,
-            write_batch_size,
             writer_version,
             skip_arrow_metadata,
             compression,
@@ -151,13 +147,13 @@ impl ParquetWriteOptions {
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
-            encoding,
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            allow_single_file_parallelism,
-            maximum_parallel_row_group_writers,
-            maximum_buffered_record_batches_per_stream,
+            max_open_files_per_task: _,
+            max_records_per_file: _,
+            max_file_size: _,
+            write_success_file: _,
             content_defined_chunking_enabled,
             content_defined_chunking_min_chunk_size,
             content_defined_chunking_max_chunk_size,
@@ -246,6 +242,48 @@ impl ParquetWriteOptions {
         } else {
             None
         };
+        // The Arrow writer panics for the values that are rejected here.
+        // The other options are parsed to values that it accepts.
+        let invalid = |key: &str, value: String, cause: &str| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value,
+            cause: Some(cause.to_string()),
+        };
+        if max_row_group_size == 0 {
+            return Err(invalid(
+                "max_row_group_size",
+                max_row_group_size.to_string(),
+                "a row group has at least one row",
+            ));
+        }
+        if let Some(fpp) = bloom_filter_fpp
+            && !(fpp > 0.0 && fpp < 1.0)
+        {
+            return Err(invalid(
+                "bloom_filter_fpp",
+                fpp.to_string(),
+                "the false positive probability is greater than 0 and less than 1",
+            ));
+        }
+        if content_defined_chunking_enabled {
+            if content_defined_chunking_min_chunk_size == 0 {
+                return Err(invalid(
+                    "content_defined_chunking_min_chunk_size",
+                    content_defined_chunking_min_chunk_size.to_string(),
+                    "the minimum chunk size is greater than 0",
+                ));
+            }
+            if content_defined_chunking_max_chunk_size <= content_defined_chunking_min_chunk_size
+                || i64::try_from(content_defined_chunking_max_chunk_size).is_err()
+            {
+                return Err(invalid(
+                    "content_defined_chunking_max_chunk_size",
+                    content_defined_chunking_max_chunk_size.to_string(),
+                    "the maximum chunk size is greater than the minimum chunk size \
+                    and less than 2^63",
+                ));
+            }
+        }
         // `parse_optional_non_zero_usize` maps `0` to `None`, so the value is never zero here.
         let max_row_group_bytes = max_row_group_bytes
             .map(MaxRowGroupBytes::try_new)
@@ -266,7 +304,6 @@ impl ParquetWriteOptions {
         };
         let global = ParquetOptions {
             data_pagesize_limit: data_page_size_limit,
-            write_batch_size,
             writer_version,
             skip_arrow_metadata,
             created_by: SAIL_PARQUET_CREATED_BY.to_string(),
@@ -279,13 +316,9 @@ impl ParquetWriteOptions {
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
-            encoding,
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            allow_single_file_parallelism,
-            maximum_parallel_row_group_writers,
-            maximum_buffered_record_batches_per_stream,
             content_defined_chunking: ParquetCdcOptions {
                 enabled: content_defined_chunking_enabled,
                 min_chunk_size: content_defined_chunking_min_chunk_size,
@@ -324,6 +357,14 @@ impl ResolveOptions for ParquetWriteOptions {
                 .parquet
                 .build_partial_options()?,
         );
+        let config = ctx.extension::<ParquetWriteConfig>()?;
+        partial.merge(ParquetWritePartialOptions {
+            max_open_files_per_task: Some(config.max_open_files_per_task()),
+            max_records_per_file: Some(config.max_records_per_file()),
+            max_file_size: Some(config.max_file_size()),
+            write_success_file: Some(config.write_success_file()),
+            ..Default::default()
+        });
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -333,15 +374,102 @@ impl ResolveOptions for ParquetWriteOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
     use std::str::FromStr;
+    use std::sync::Arc;
 
-    use datafusion::prelude::SessionContext;
-    use datafusion_common::config::MaxRowGroupBytes;
+    use datafusion::parquet::file::properties::WriterPropertiesBuilder;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::config::{MaxRowGroupBytes, ParquetOptions};
     use datafusion_common::parquet_config::DFParquetWriterVersion;
     use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
+    use sail_common_datafusion::datasource::OptionLayer;
+    use sail_common_datafusion::session::parquet::ParquetWriteConfig;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
+
+    /// A session that has the values of the application configuration
+    /// for the Parquet write options.
+    fn write_session(max_open_files_per_task: usize) -> datafusion_common::Result<SessionContext> {
+        let max_open_files_per_task = NonZeroUsize::new(max_open_files_per_task)
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("invalid test value"))?;
+        let config = SessionConfig::new()
+            .with_extension(Arc::new(ParquetWriteConfig::new(max_open_files_per_task)));
+        Ok(SessionContext::new_with_config(config))
+    }
+
+    #[test]
+    fn test_resolve_parquet_file_limits() -> datafusion_common::Result<()> {
+        let config = SessionConfig::new().with_extension(Arc::new(
+            ParquetWriteConfig::new(NonZeroUsize::MIN).with_file_limits(5, 6),
+        ));
+        let state = SessionContext::new_with_config(config).state();
+        let resolve = |layers| ParquetWriteOptions::resolve(&state, layers);
+
+        // The values of the session are used when the write does not set the options.
+        let options = resolve(vec![])?;
+        assert_eq!(options.max_records_per_file, 5);
+        assert_eq!(options.max_file_size, 6);
+
+        let options = resolve(vec![option_list(&[
+            ("maxRecordsPerFile", "1000"),
+            ("maxFileSize", "4294967296"),
+        ])])?;
+        assert_eq!(options.max_records_per_file, 1000);
+        assert_eq!(options.max_file_size, 4294967296);
+
+        // A table can have the limits as properties, and an option of the write
+        // is used before the property of the table.
+        let properties = OptionLayer::TablePropertyList {
+            items: vec![
+                ("option.max_records_per_file".to_string(), "7".to_string()),
+                ("option.max_file_size".to_string(), "8".to_string()),
+            ],
+        };
+        let options = resolve(vec![properties.clone()])?;
+        assert_eq!(options.max_records_per_file, 7);
+        assert_eq!(options.max_file_size, 8);
+        let options = resolve(vec![properties, option_list(&[("max_file_size", "0")])])?;
+        assert_eq!(options.max_records_per_file, 7);
+        assert_eq!(options.max_file_size, 0);
+
+        // The `_SUCCESS` file is written unless the session or the write says otherwise.
+        assert!(options.write_success_file);
+        for key in [
+            "write_success_file",
+            "writeSuccessFile",
+            "mapreduce.fileoutputcommitter.marksuccessfuljobs",
+        ] {
+            let options = resolve(vec![option_list(&[(key, "false")])])?;
+            assert!(!options.write_success_file, "{key}");
+        }
+        let config = SessionConfig::new().with_extension(Arc::new(
+            ParquetWriteConfig::new(NonZeroUsize::MIN).with_write_success_file(false),
+        ));
+        let other = SessionContext::new_with_config(config).state();
+        assert!(!ParquetWriteOptions::resolve(&other, vec![])?.write_success_file);
+        let kv = option_list(&[("write_success_file", "true")]);
+        assert!(ParquetWriteOptions::resolve(&other, vec![kv])?.write_success_file);
+
+        // A limit on the rows that is not positive means that there is no limit.
+        let options = resolve(vec![option_list(&[("max_records_per_file", "-1")])])?;
+        assert_eq!(options.max_records_per_file, -1);
+
+        for (key, value) in [
+            ("max_records_per_file", "1.5"),
+            ("max_records_per_file", "many"),
+            ("max_file_size", "-1"),
+            ("max_file_size", "1.5"),
+        ] {
+            let result = resolve(vec![option_list(&[(key, value)])]);
+            assert!(
+                matches!(&result, Err(e) if e.to_string() == format!("invalid option: {key}: {value}")),
+                "{result:?}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -431,12 +559,11 @@ mod tests {
 
     #[test]
     fn test_resolve_parquet_write_options() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
+        let ctx = write_session(100)?;
         let state = ctx.state();
 
         let kv = option_list(&[
             ("data_page_size_limit", "1024"),
-            ("write_batch_size", "1000"),
             ("writer_version", "2.0"),
             ("skip_arrow_metadata", "true"),
             ("compression", "snappy"),
@@ -447,13 +574,10 @@ mod tests {
             ("column_index_truncate_length", "100"),
             ("statistics_truncate_length", "200"),
             ("data_page_row_count_limit", "10000"),
-            ("encoding", "delta_binary_packed"),
             ("bloom_filter_on_write", "true"),
             ("bloom_filter_fpp", "0.01"),
             ("bloom_filter_ndv", "1000"),
-            ("allow_single_file_parallelism", "false"),
-            ("maximum_parallel_row_group_writers", "4"),
-            ("maximum_buffered_record_batches_per_stream", "10"),
+            ("max_open_files_per_task", "10"),
             ("content_defined_chunking_enabled", "true"),
             ("content_defined_chunking_min_chunk_size", "4096"),
             ("content_defined_chunking_max_chunk_size", "8192"),
@@ -461,11 +585,12 @@ mod tests {
             ("max_row_group_bytes", "65536"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_open_files_per_task.get(), 10);
+        let options = options
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
-        assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(
             options.global.writer_version,
             DFParquetWriterVersion::from_str("2.0")?
@@ -479,19 +604,9 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, Some(100));
         assert_eq!(options.global.statistics_truncate_length, Some(200));
         assert_eq!(options.global.data_page_row_count_limit, 10000);
-        assert_eq!(
-            options.global.encoding,
-            Some("delta_binary_packed".to_string())
-        );
         assert!(options.global.bloom_filter_on_write);
         assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
         assert_eq!(options.global.bloom_filter_ndv, Some(1000));
-        assert!(!options.global.allow_single_file_parallelism);
-        assert_eq!(options.global.maximum_parallel_row_group_writers, 4);
-        assert_eq!(
-            options.global.maximum_buffered_record_batches_per_stream,
-            10
-        );
         assert!(options.global.content_defined_chunking.enabled);
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
@@ -505,7 +620,6 @@ mod tests {
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
-            ("encoding", ""),
             ("max_row_group_bytes", "0"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
@@ -514,7 +628,6 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
-        assert_eq!(options.global.encoding, None);
         assert_eq!(options.global.max_row_group_bytes, None);
 
         // bloom_filter_ndv = "0" leaves the NDV unset so the Parquet writer derives it
@@ -535,7 +648,7 @@ mod tests {
         use datafusion::parquet::file::properties::WriterPropertiesBuilder;
         use datafusion::parquet::schema::types::ColumnPath;
 
-        let ctx = SessionContext::default();
+        let ctx = write_session(100)?;
         let state = ctx.state();
         let writer_ndv = |kv: &[(&str, &str)]| -> datafusion_common::Result<Option<u64>> {
             // The Arrow schema is only embedded by the file sink, which this test bypasses.
@@ -574,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_resolve_parquet_write_options_with_global_default() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
+        let ctx = write_session(100)?;
         let state = ctx.state_ref();
         state
             .write()
@@ -597,13 +710,6 @@ mod tests {
             .execution
             .parquet
             .statistics_truncate_length = Some(99);
-        state
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .parquet
-            .encoding = Some("bit_packed".to_string());
         state
             .write()
             .config_mut()
@@ -653,7 +759,6 @@ mod tests {
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
-        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
         assert!(options.global.content_defined_chunking.enabled);
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
@@ -666,7 +771,6 @@ mod tests {
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
-            ("encoding", ""),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
@@ -674,7 +778,134 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options_of_writer_tasks() -> datafusion_common::Result<()> {
+        let ctx = write_session(50)?;
+        let state = ctx.state();
+
+        // The values of the session are used when the options are not set.
+        let options = ParquetWriteOptions::resolve(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_open_files_per_task.get(), 50);
+
+        let kv = option_list(&[("maxOpenFilesPerTask", "1")]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_open_files_per_task.get(), 1);
+
+        // A task must be able to keep one file open.
+        let kv = option_list(&[("max_open_files_per_task", "0")]);
+        let result = ParquetWriteOptions::resolve(&state, vec![kv]);
+        assert!(
+            matches!(&result, Err(e) if e.to_string() == "invalid option: max_open_files_per_task: 0"),
+            "{result:?}"
+        );
+
+        // The values that the Arrow writer panics for are rejected.
+        for (options, error) in [
+            (
+                vec![("max_row_group_size", "0")],
+                "invalid option: max_row_group_size: 0 (a row group has at least one row)",
+            ),
+            (
+                vec![("bloom_filter_fpp", "0")],
+                "invalid option: bloom_filter_fpp: 0 \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![("bloom_filter_on_write", "true"), ("bloom_filter_fpp", "1")],
+                "invalid option: bloom_filter_fpp: 1 \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![("bloom_filter_fpp", "NaN")],
+                "invalid option: bloom_filter_fpp: NaN \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![
+                    ("content_defined_chunking_enabled", "true"),
+                    ("content_defined_chunking_min_chunk_size", "0"),
+                ],
+                "invalid option: content_defined_chunking_min_chunk_size: 0 \
+                (the minimum chunk size is greater than 0)",
+            ),
+            (
+                vec![
+                    ("content_defined_chunking_enabled", "true"),
+                    ("content_defined_chunking_min_chunk_size", "64"),
+                    ("content_defined_chunking_max_chunk_size", "64"),
+                ],
+                "invalid option: content_defined_chunking_max_chunk_size: 64 \
+                (the maximum chunk size is greater than the minimum chunk size \
+                and less than 2^63)",
+            ),
+        ] {
+            let result = ParquetWriteOptions::resolve(&state, vec![option_list(&options)])
+                .and_then(|x| x.into_table_options());
+            assert!(
+                matches!(&result, Err(e) if e.to_string() == error),
+                "{result:?}"
+            );
+        }
+        // The sizes of the chunks are not checked when the chunking is not enabled,
+        // and the limits of zero that mean no limit are accepted.
+        let kv = option_list(&[
+            ("content_defined_chunking_min_chunk_size", "0"),
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("max_row_group_bytes", "0"),
+            ("data_page_row_count_limit", "0"),
+            ("bloom_filter_on_write", "true"),
+            ("bloom_filter_fpp", "0.5"),
+            ("bloom_filter_ndv", "0"),
+        ]);
+        let mut options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .and_then(|x| x.into_table_options())
+            .map_err(datafusion_common::DataFusionError::from)?;
+        // The writer task sets the limit on the rows of a data page, and it adds
+        // the Arrow schema that the Arrow writer is otherwise required to have.
+        options.global.data_page_row_count_limit = 1;
+        options.global.skip_arrow_metadata = true;
+        WriterPropertiesBuilder::try_from(&options)?.build();
+
+        // The option is not a table property, so that a table does not decide
+        // how the tasks that write to the table use their worker.
+        let kv = OptionLayer::TablePropertyList {
+            items: vec![(
+                "option.max_open_files_per_task".to_string(),
+                "7".to_string(),
+            )],
+        };
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_open_files_per_task.get(), 50);
+
+        // A removed option is ignored in the same way as an unknown option.
+        let kv = option_list(&[
+            ("allow_single_file_parallelism", "false"),
+            ("maximum_parallel_row_group_writers", "4"),
+            ("maximum_buffered_record_batches_per_stream", "10"),
+            ("encoding", "plain"),
+            ("write_batch_size", "16"),
+            ("encoding_parallelism", "4"),
+            ("no_such_option", "1"),
+        ]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.max_open_files_per_task.get(), 50);
+        let options = options
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.encoding, None);
+        assert_eq!(
+            options.global.write_batch_size,
+            ParquetOptions::default().write_batch_size
+        );
 
         Ok(())
     }

@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -25,6 +25,7 @@ use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema,
 };
 use url::Url;
+use uuid::Uuid;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
@@ -136,6 +137,11 @@ pub struct ListingSinkInput {
     pub input: Arc<dyn ExecutionPlan>,
     pub sink: FileSinkConfig,
     pub sort_order: Option<LexRequirement>,
+    /// The identifier of the write, shared by all files that the write produces.
+    pub write_id: Uuid,
+    /// Whether the write replaces the content of the table directory.
+    /// This is for the formats that replace the content themselves.
+    pub overwrite: bool,
 }
 
 /// A trait for format-specific logic for writing listing files.
@@ -146,6 +152,13 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
         ctx: &dyn Session,
         input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Whether the plan of the sink replaces the content of the table directory
+    /// itself when the write overwrites. The content is deleted before the plan
+    /// of the sink runs otherwise.
+    fn replaces_existing_files(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]
@@ -254,11 +267,20 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
                 let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, true)))
                     .collect();
                 (schema, partition_fields)
             }
         };
+        // A partition column is nullable whatever the schema of the user says,
+        // since the directory of the default partition is read as NULL.
+        let partition_fields: Vec<FieldRef> = partition_fields
+            .into_iter()
+            .map(|field| match field.is_nullable() {
+                true => field,
+                false => Arc::new(field.as_ref().clone().with_nullable(true)),
+            })
+            .collect();
 
         validate_partitions(&sampled_files, &partition_fields)?;
 

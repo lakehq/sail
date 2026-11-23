@@ -2,4 +2,5 @@
 
 pub mod lazy;
 pub mod logging;
+pub mod multipart;
 pub mod runtime;

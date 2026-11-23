@@ -42,6 +42,7 @@ log = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 chrono = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
@@ -50,6 +51,10 @@ dashmap = { workspace = true }
 once_cell = { workspace = true }
 thiserror = { workspace = true }
 educe = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

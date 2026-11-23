@@ -410,6 +410,9 @@ data:
     physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepExplicitPartitions:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 

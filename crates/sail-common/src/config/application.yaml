@@ -687,13 +687,6 @@
     (Writing) The best-effort maximum size of a data page in bytes.
   experimental: true
 
-- key: parquet.write_batch_size
-  type: number
-  default: "1024"
-  description: |
-    (Writing) The Parquet writer batch size in bytes.
-  experimental: true
-
 - key: parquet.writer_version
   type: string
   default: '"1.0"'
@@ -756,10 +749,15 @@
   type: number
   default: "0"
   description: |
-    (Writing) The target maximum size of each row group in bytes for the Parquet writer.
-    When set, the writer flushes a row group when either this limit or `max_row_group_size` is reached,
-    whichever comes first. This is currently only honored when `allow_single_file_parallelism` is `false`.
-    If the value is `0`, only the row count limit applies.
+    (Writing) The maximum size in bytes of the values of each row group for the Parquet writer.
+    This is the size of the values before they are encoded and compressed,
+    so a row group in a file is usually smaller than this.
+    The writer ends a row group when either this limit or `max_row_group_size` is reached,
+    whichever comes first.
+    If the value is `0`, the writer ends a row group when the values of its largest column
+    have about 134217728 bytes (128 MiB), whatever the size of the other columns.
+    With content-defined chunking, the limit applies to the size of the encoded values instead,
+    and the value `0` means that only the row count limit applies.
   experimental: true
 
 - key: parquet.column_index_truncate_length
@@ -781,20 +779,11 @@
   type: number
   default: "20000"
   description: |
-    (Writing) The best-effort maximum number of rows in data page for the Parquet writer.
-  experimental: true
-
-- key: parquet.encoding
-  type: string
-  default: ""
-  description: |
-    (Writing) The default encoding for any column.
-    Valid values are `plain`, `plain_dictionary`, `rle`,
-    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
-    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
-    These values are not case sensitive.
-    An empty value can also be used, which allows the Parquet writer to choose
-    the encoding for each column to achieve good performance.
+    (Writing) The best-effort maximum number of rows in a data page for the Parquet writer.
+    The writer checks this limit after it has written at most 1024 rows to a column,
+    and not after each row, so a page can exceed the limit by fewer than 1024 rows.
+    If the value is `0`, the number of rows in a data page is not limited,
+    and only the limit on the size of a data page applies.
   experimental: true
 
 - key: parquet.bloom_filter_on_write
@@ -820,30 +809,57 @@
     (the `parquet.max_row_group_size` option), so the bloom filter is never undersized.
   experimental: true
 
-- key: parquet.allow_single_file_parallelism
+- key: parquet.write_success_file
   type: boolean
   default: "true"
   description: |
-    (Writing) Whether to parallelize writing for each single Parquet file.
-    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    (Writing) Whether to write an empty file named `_SUCCESS` to the output directory
+    after all Parquet files of a write have been written.
+    The file is not written when the write fails.
   experimental: true
 
-- key: parquet.maximum_parallel_row_group_writers
+- key: parquet.max_records_per_file
   type: number
-  default: "2"
+  default: "0"
   description: |
-    (Writing) The maximum number of row group writers to use for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    (Writing) The maximum number of rows in each Parquet file.
+    When a file has this number of rows, the write task continues with a new file.
+    A write task writes one partition of the data.
+    If the value is `0` or negative, there is no limit,
+    and each write task writes one file for each directory.
   experimental: true
 
-- key: parquet.maximum_buffered_record_batches_per_stream
+- key: parquet.max_file_size
   type: number
-  default: "16"
+  default: "0"
   description: |
-    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    (Writing) The target maximum size in bytes of each Parquet file.
+    When the size of a file is expected to reach this value at the end of a row group,
+    the write task continues with a new file.
+    A file can be larger than this value by about the size of one row group,
+    and the row group at which a file ends can differ between runs of the same write.
+    If the value is `0`, there is no limit.
+    A file that is uploaded to an object store in parts is at most about 88 GiB in any case,
+    which is 9,000 parts of 10 MiB.
+    This limit applies together with `parquet.max_records_per_file`, whichever is reached first.
+  experimental: true
+
+- key: parquet.max_open_files_per_task
+  type: number
+  default: "100"
+  description: |
+    (Writing) The maximum number of partition directories that one write task writes to
+    at the same time when the data is written with partition columns.
+    The task keeps one Parquet file open in each of these directories.
+    The rows for other partition directories are sorted by their partition directory
+    and written after the task has read all its input.
+    So the number of files does not depend on this option: each write task writes one file
+    per partition directory, unless a limit on the rows or the size of a file is reached.
+    A larger value sorts fewer rows and uses more memory, since each open file buffers
+    the rows of one row group.
+    The sorted rows are kept in memory, or in temporary files when the memory pool has a limit.
+    No rows are sorted when the data is already sorted by the partition columns.
+    The value must be greater than `0`.
   experimental: true
 
 - key: parquet.content_defined_chunking.enabled
@@ -852,6 +868,7 @@
   description: |
     (Writing) Whether to enable content-defined chunking (CDC) when writing Parquet files.
     When enabled, data page boundaries are determined by a rolling hash of column values.
+    When enabled, each write task encodes its files on a single CPU core.
   experimental: true
 
 - key: parquet.content_defined_chunking.min_chunk_size

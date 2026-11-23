@@ -13,6 +13,7 @@ use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
 mod options;
 mod read;
 mod write;
+pub mod writer;
 
 pub use read::{ParquetReadFormat, parse_coerce_int96_string};
 pub use write::ParquetWriteFormat;

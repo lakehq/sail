@@ -9,7 +9,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
@@ -37,8 +36,10 @@ use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
+use uuid::Uuid;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::{pruned_partition_list, with_statistics};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -244,6 +245,7 @@ async fn plan_file_write(
         file_output_mode: FileOutputMode::Automatic,
     };
     let sort_order = create_sort_order(session, sort_by.clone(), logical_input.schema())?;
+    let write_id = Uuid::new_v4();
     let plan = format
         .sink(
             session,
@@ -251,10 +253,12 @@ async fn plan_file_write(
                 input: physical_input,
                 sink: conf,
                 sort_order,
+                write_id,
+                overwrite: *overwrite,
             },
         )
         .await?;
-    if *overwrite {
+    if *overwrite && !format.replaces_existing_files() {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
@@ -413,9 +417,7 @@ async fn list_files_for_scan<'a>(
                     None,
                 )
             };
-            Ok(part_file
-                .with_statistics(statistics)
-                .with_ordering(ordering))
+            Ok(with_statistics(part_file, statistics).with_ordering(ordering))
         })
         .boxed()
         .buffer_unordered(meta_fetch_concurrency);

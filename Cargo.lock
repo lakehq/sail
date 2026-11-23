@@ -7284,10 +7284,13 @@ dependencies = [
  "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -7395,6 +7398,7 @@ dependencies = [
  "tonic-types",
  "tower",
  "url",
+ "uuid",
 ]
 
 [[package]]
