@@ -276,6 +276,49 @@ def test_parquet_failed_write_has_no_success_marker(spark, tmp_path):
     assert not (path / "_SUCCESS").exists()
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark keeps the files of failed tasks in a temporary directory")
+def test_parquet_write_with_failed_input_task_publishes_nothing(spark, tmp_path):
+    # The task that fails is not a writer task in cluster mode. Its rows reach
+    # the writer tasks through an exchange, which can end for them like a complete input.
+    rows = 20000
+    df = spark.range(0, rows, 1, 4).selectExpr(
+        f"CASE WHEN id = {rows - 1} THEN raise_error('input failure') ELSE id END AS id",
+        "id % 4 AS k",
+    )
+    for i, writer in enumerate([df.write.partitionBy("k"), df.repartition(4).write]):
+        path = tmp_path / f"input-{i}"
+        with pytest.raises(Exception, match="input failure"):
+            writer.parquet(str(path))
+        assert not (path / "_SUCCESS").exists()
+        assert data_files(path) == []
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not create a table at a location that has files")
+def test_parquet_create_table_as_select_is_complete_when_it_returns(spark, tmp_path):
+    path = tmp_path / "ctas"
+    failed = tmp_path / "ctas-failed"
+    try:
+        spark.sql(f"CREATE TABLE parquet_layout_ctas USING parquet LOCATION '{path}' AS SELECT id FROM range(100)")
+        assert_success_marker(path)
+        assert spark.table("parquet_layout_ctas").count() == 100
+        spark.sql("INSERT INTO parquet_layout_ctas SELECT id FROM range(100, 150)")
+        assert spark.table("parquet_layout_ctas").count() == 150
+        assert len(write_ids(path)) == 2
+
+        # The error is not always the one of the write in cluster mode, where the tasks
+        # are attempted again and the table then exists.
+        with pytest.raises(Exception, match="write failure|already exists"):
+            spark.sql(
+                f"CREATE TABLE parquet_layout_ctas_failed USING parquet LOCATION '{failed}' AS "
+                "SELECT CASE WHEN id >= 0 THEN raise_error('write failure') ELSE id END AS id FROM range(10)"
+            )
+        assert not (failed / "_SUCCESS").exists()
+        assert data_files(failed) == []
+    finally:
+        spark.sql("DROP TABLE IF EXISTS parquet_layout_ctas")
+        spark.sql("DROP TABLE IF EXISTS parquet_layout_ctas_failed")
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail writes its own version to the file metadata")
 def test_parquet_write_file_metadata(spark, tmp_path):
     path = tmp_path / "metadata"
