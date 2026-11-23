@@ -242,6 +242,48 @@ impl ParquetWriteOptions {
         } else {
             None
         };
+        // The Arrow writer panics for the values that are rejected here.
+        // The other options are parsed to values that it accepts.
+        let invalid = |key: &str, value: String, cause: &str| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value,
+            cause: Some(cause.to_string()),
+        };
+        if max_row_group_size == 0 {
+            return Err(invalid(
+                "max_row_group_size",
+                max_row_group_size.to_string(),
+                "a row group has at least one row",
+            ));
+        }
+        if let Some(fpp) = bloom_filter_fpp
+            && !(fpp > 0.0 && fpp < 1.0)
+        {
+            return Err(invalid(
+                "bloom_filter_fpp",
+                fpp.to_string(),
+                "the false positive probability is greater than 0 and less than 1",
+            ));
+        }
+        if content_defined_chunking_enabled {
+            if content_defined_chunking_min_chunk_size == 0 {
+                return Err(invalid(
+                    "content_defined_chunking_min_chunk_size",
+                    content_defined_chunking_min_chunk_size.to_string(),
+                    "the minimum chunk size is greater than 0",
+                ));
+            }
+            if content_defined_chunking_max_chunk_size <= content_defined_chunking_min_chunk_size
+                || i64::try_from(content_defined_chunking_max_chunk_size).is_err()
+            {
+                return Err(invalid(
+                    "content_defined_chunking_max_chunk_size",
+                    content_defined_chunking_max_chunk_size.to_string(),
+                    "the maximum chunk size is greater than the minimum chunk size \
+                    and less than 2^63",
+                ));
+            }
+        }
         // `parse_optional_non_zero_usize` maps `0` to `None`, so the value is never zero here.
         let max_row_group_bytes = max_row_group_bytes
             .map(MaxRowGroupBytes::try_new)
@@ -336,6 +378,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
+    use datafusion::parquet::file::properties::WriterPropertiesBuilder;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::config::{MaxRowGroupBytes, ParquetOptions};
     use datafusion_common::parquet_config::DFParquetWriterVersion;
@@ -761,6 +804,74 @@ mod tests {
             matches!(&result, Err(e) if e.to_string() == "invalid option: max_open_files_per_task: 0"),
             "{result:?}"
         );
+
+        // The values that the Arrow writer panics for are rejected.
+        for (options, error) in [
+            (
+                vec![("max_row_group_size", "0")],
+                "invalid option: max_row_group_size: 0 (a row group has at least one row)",
+            ),
+            (
+                vec![("bloom_filter_fpp", "0")],
+                "invalid option: bloom_filter_fpp: 0 \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![("bloom_filter_on_write", "true"), ("bloom_filter_fpp", "1")],
+                "invalid option: bloom_filter_fpp: 1 \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![("bloom_filter_fpp", "NaN")],
+                "invalid option: bloom_filter_fpp: NaN \
+                (the false positive probability is greater than 0 and less than 1)",
+            ),
+            (
+                vec![
+                    ("content_defined_chunking_enabled", "true"),
+                    ("content_defined_chunking_min_chunk_size", "0"),
+                ],
+                "invalid option: content_defined_chunking_min_chunk_size: 0 \
+                (the minimum chunk size is greater than 0)",
+            ),
+            (
+                vec![
+                    ("content_defined_chunking_enabled", "true"),
+                    ("content_defined_chunking_min_chunk_size", "64"),
+                    ("content_defined_chunking_max_chunk_size", "64"),
+                ],
+                "invalid option: content_defined_chunking_max_chunk_size: 64 \
+                (the maximum chunk size is greater than the minimum chunk size \
+                and less than 2^63)",
+            ),
+        ] {
+            let result = ParquetWriteOptions::resolve(&state, vec![option_list(&options)])
+                .and_then(|x| x.into_table_options());
+            assert!(
+                matches!(&result, Err(e) if e.to_string() == error),
+                "{result:?}"
+            );
+        }
+        // The sizes of the chunks are not checked when the chunking is not enabled,
+        // and the limits of zero that mean no limit are accepted.
+        let kv = option_list(&[
+            ("content_defined_chunking_min_chunk_size", "0"),
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("max_row_group_bytes", "0"),
+            ("data_page_row_count_limit", "0"),
+            ("bloom_filter_on_write", "true"),
+            ("bloom_filter_fpp", "0.5"),
+            ("bloom_filter_ndv", "0"),
+        ]);
+        let mut options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .and_then(|x| x.into_table_options())
+            .map_err(datafusion_common::DataFusionError::from)?;
+        // The writer task sets the limit on the rows of a data page, and it adds
+        // the Arrow schema that the Arrow writer is otherwise required to have.
+        options.global.data_page_row_count_limit = 1;
+        options.global.skip_arrow_metadata = true;
+        WriterPropertiesBuilder::try_from(&options)?.build();
 
         // The option is not a table property, so that a table does not decide
         // how the tasks that write to the table use their worker.
