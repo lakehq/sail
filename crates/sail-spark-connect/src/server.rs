@@ -27,7 +27,7 @@ use crate::spark::connect::{
     ReleaseSessionRequest, ReleaseSessionResponse, config_request, plan,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SparkConnectServer {
     session_manager: SessionManager,
 }
@@ -143,7 +143,7 @@ fn validated_server_session_id(
 
 impl SparkConnectServer {
     async fn handle_execute_plan(
-        &self,
+        self,
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<ExecutePlanResponseStream>, Status> {
         let request = request.into_inner();
@@ -186,7 +186,7 @@ impl SparkConnectServer {
     }
 
     async fn handle_analyze_plan(
-        &self,
+        self,
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
         use crate::spark::connect::analyze_plan_response;
@@ -282,7 +282,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         self.session_manager
-            .run_query(self.handle_execute_plan(request))
+            .run_query(self.clone().handle_execute_plan(request))
             .await
     }
 
@@ -291,7 +291,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
         self.session_manager
-            .run_query(self.handle_analyze_plan(request))
+            .run_query(self.clone().handle_analyze_plan(request))
             .await
     }
 

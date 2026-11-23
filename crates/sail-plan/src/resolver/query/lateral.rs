@@ -87,19 +87,17 @@ impl PlanResolver<'_> {
             let output_qualifier = table_alias
                 .map(|alias| self.resolve_table_reference(&alias))
                 .transpose()?;
-            return self
-                .resolve_python_udtf_plan(
-                    udtf,
-                    &function_name,
-                    input,
-                    arguments,
-                    &kwarg_names,
-                    output_names,
-                    output_qualifier,
-                    f.deterministic(),
-                    state,
-                )
-                .await;
+            return self.resolve_python_udtf_plan(
+                udtf,
+                &function_name,
+                input,
+                arguments,
+                &kwarg_names,
+                output_names,
+                output_qualifier,
+                f.deterministic(),
+                state,
+            );
         }
 
         let function_name = if outer {

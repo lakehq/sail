@@ -33,6 +33,7 @@ use crate::metrics::{MetricsRecordingContext, MetricsRecordingStream, StatementT
 use crate::session::FlightSession;
 use crate::state::{QueryHandle, SailFlightSqlState};
 
+#[derive(Clone)]
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
     config: Arc<PlanConfig>,
@@ -69,7 +70,7 @@ impl SailFlightSqlService {
     }
 
     async fn handle_statement_query(
-        &self,
+        self,
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
@@ -204,7 +205,7 @@ impl FlightSqlService for SailFlightSqlService {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         self.session_manager
-            .run_query(self.handle_statement_query(query, request))
+            .run_query(self.clone().handle_statement_query(query, request))
             .await
     }
 

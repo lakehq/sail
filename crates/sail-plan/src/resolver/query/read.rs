@@ -636,7 +636,6 @@ impl PlanResolver<'_> {
                         f.deterministic(),
                         state,
                     )
-                    .await
                 } else {
                     Err(PlanError::invalid(format!(
                         "user-defined function is not a table function: {function_name}"

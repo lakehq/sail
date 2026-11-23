@@ -97,15 +97,16 @@ def test_sigterm_force_closes_connection_after_grace_period():
         assert server.wait(timeout=5) == 0
 
 
-@pytest.mark.parametrize(
-    "kind", ["scalar", "iterator", pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1"))]
-)
-def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
+@pytest.mark.parametrize("kind", ["scalar", "scalar_literal", "iterator", "analyze", "source_schema"])
+def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
     import grpc
     from pyspark.sql import SparkSession, functions
     from pyspark.sql.connect.proto import ExecutePlanRequest
     from pyspark.sql.connect.proto.base_pb2_grpc import SparkConnectServiceStub
     from pyspark.sql.types import LongType
+
+    if kind in {"analyze", "source_schema"}:
+        pytest.importorskip("pyspark", minversion="4.1")
 
     released = tmp_path / "client_received_error"
     timed_out = tmp_path / "udf_timed_out"
@@ -134,11 +135,12 @@ def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
         spark = SparkSession.builder.remote(f"sc://{address}").create()
         try:
             df = spark.range(0, 1, 1, 1)
-            if kind == "scalar":
-                df = df.select(functions.udf(scalar, LongType())("id"))
+            if kind in {"scalar", "scalar_literal"}:
+                arg = functions.lit(1) if kind == "scalar_literal" else functions.col("id")
+                df = df.select(functions.udf(scalar, LongType())(arg))
             elif kind == "iterator":
                 df = df.mapInPandas(iterator, "id long")
-            else:
+            elif kind == "analyze":
                 from pyspark.sql.types import StructType
                 from pyspark.sql.udtf import AnalyzeResult
 
@@ -153,6 +155,16 @@ def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
                         yield (1,)
 
                 df = BlockingAnalysis()
+            else:
+                from pyspark import cloudpickle
+                from pyspark.sql.datasource import DataSource
+
+                class BlockingSource(DataSource):
+                    def schema(self):
+                        wait_for_client()
+                        return "id long"
+
+                df = spark.read.format(BlockingSource.name()).load()
             # Use a non-reattachable RPC so client retries cannot hide a truncated result.
             request = ExecutePlanRequest(session_id=str(uuid.uuid4()))
             request.user_context.user_id = "test"
@@ -161,7 +173,14 @@ def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
             spark.stop()
 
         with grpc.insecure_channel(address) as channel:
-            responses = SparkConnectServiceStub(channel).ExecutePlan(request, timeout=20, wait_for_ready=True)
+            execute = SparkConnectServiceStub(channel).ExecutePlan
+            if kind == "source_schema":
+                register = ExecutePlanRequest(session_id=request.session_id, user_context=request.user_context)
+                source = register.plan.command.register_data_source
+                source.name = BlockingSource.name()
+                source.python_data_source.command = cloudpickle.dumps(BlockingSource)
+                list(execute(register, timeout=10, wait_for_ready=True))
+            responses = execute(request, timeout=20, wait_for_ready=True)
             try:
                 with pytest.raises(grpc.RpcError, match="query cancelled"):
                     for _ in responses:
