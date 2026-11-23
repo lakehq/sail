@@ -102,10 +102,15 @@ def test_duplicate_empty_columns_preserve_dtypes():
 
 
 def test_pandas_null_normalization_preserves_object_and_nullable_dtypes():
-    left = pd.DataFrame({"object": pd.Series([pd.NA, "value"], dtype="object"), "nullable": [pd.NA, 1]})
-    left["nullable"] = left["nullable"].astype("Int64")
-    right = left.copy(deep=True)
-    right.loc[0, "object"] = None
+    frame = pd.DataFrame(
+        {"object": pd.Series([pd.NA, "value"], dtype="object"), "nullable": pd.Series([pd.NA, 1], dtype="Int64")}
+    )
+    expected = frame.copy()
+    expected.loc[0, "object"] = None
 
-    assert_frame_equal(normalize_pandas_nulls(left), normalize_pandas_nulls(right))
-    assert left.loc[0, "object"] is pd.NA
+    result = normalize_pandas_nulls(frame)
+
+    assert result.loc[0, "object"] is None
+    assert result.loc[0, "nullable"] is pd.NA
+    assert_frame_equal(result, expected)
+    assert frame.loc[0, "object"] is pd.NA

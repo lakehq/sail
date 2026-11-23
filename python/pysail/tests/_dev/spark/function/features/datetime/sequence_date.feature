@@ -367,8 +367,8 @@ Feature: sequence() over DATE returns expected arrays
 
       Examples:
         | value                     | escaped_value |
-        | concat('a', chr(39), 'b') | a\\'b         |
-        | concat('a', chr(92), 'b') | a\\\\b        |
+        | concat('a', chr(39), 'b') | a\\\\'b         |
+        | concat('a', chr(92), 'b') | a\\\\\\\\b        |
 
     Scenario: timestamp sequence crosses daylight-saving transitions
       Given config spark.sql.session.timeZone = Europe/Prague

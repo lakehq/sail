@@ -760,9 +760,9 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Examples:
         | case                                           | json                      | result                 |
         | non-ASCII field name requires backtick quoting | '{"café": 1}'             | STRUCT<`café`: BIGINT> |
-        | unicode escape in field name is decoded        | '{"\\u00e9": 1}'          | STRUCT<`é`: BIGINT>    |
-        | unicode escape in string value stays STRING    | '{"a": "\\u00e9"}'        | STRUCT<a: STRING>      |
-        | surrogate-pair escape stays STRING             | '{"a": "\\ud83d\\ude00"}' | STRUCT<a: STRING>      |
+        | unicode escape in field name is decoded        | '{"\\\\u00e9": 1}'          | STRUCT<`é`: BIGINT>    |
+        | unicode escape in string value stays STRING    | '{"a": "\\\\u00e9"}'        | STRUCT<a: STRING>      |
+        | surrogate-pair escape stays STRING             | '{"a": "\\\\ud83d\\\\ude00"}' | STRUCT<a: STRING>      |
 
   Rule: Option value validation
 
