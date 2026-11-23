@@ -20,9 +20,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """Configure both installed sanity tests and development tests."""
     config.pluginmanager.import_plugin("pysail.testing.suites")
     if config.pluginmanager.has_plugin("doctest"):
-        for flag in ("ELLIPSIS", "NORMALIZE_WHITESPACE", "IGNORE_EXCEPTION_DETAIL"):
-            if flag not in config.getini("doctest_optionflags"):
-                config.addinivalue_line("doctest_optionflags", flag)
+        config.getini("doctest_optionflags")[:] = ["ELLIPSIS", "NORMALIZE_WHITESPACE", "IGNORE_EXCEPTION_DETAIL"]
 
     # Small test inputs intentionally exercise window plans without a partition key.
     config.addinivalue_line(
