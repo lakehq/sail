@@ -241,7 +241,7 @@ def list_topic_partitions(
             # Unanchored search matches Spark's SubscribePatternStrategy (findFirstIn).
             topics = sorted(t for t in admin.list_topics(timeout=timeout_s).topics if pattern.search(t))
         case AssignPartitions(partitions):
-            topics = sorted({tp.topic for tp in partitions})
+            topics = sorted({topic_partition.topic for topic_partition in partitions})
 
     if not topics:
         return []
@@ -300,12 +300,16 @@ def get_offsets_per_topic_partition(
         request_timeout=timeout_s,
     )
     out: dict[TopicPartitionKey, int] = {}
-    for tp, future in futures.items():
+    for topic_partition, future in futures.items():
         try:
-            result = await_future(future, timeout_s=timeout_s, what=f"list offsets for {tp.topic}[{tp.partition}]")
-            out[TopicPartitionKey(tp.topic, tp.partition)] = result.offset
+            result = await_future(
+                future,
+                timeout_s=timeout_s,
+                what=f"list offsets for {topic_partition.topic}[{topic_partition.partition}]",
+            )
+            out[TopicPartitionKey(topic_partition.topic, topic_partition.partition)] = result.offset
         except KafkaException as e:
-            msg = f"Failed to look up offsets for {tp.topic}[{tp.partition}]: {e.args[0]}"
+            msg = f"Failed to look up offsets for {topic_partition.topic}[{topic_partition.partition}]: {e.args[0]}"
             raise ValueError(msg) from e
     return out
 
@@ -324,21 +328,24 @@ def resolve_endpoint_offsets(
         case SpecialOffset():
             return dict.fromkeys(topic_partitions, limit.value)
         case PartitionOffsets(offsets):
-            return {tp: offsets[tp] for tp in topic_partitions}
+            return {topic_partition: offsets[topic_partition] for topic_partition in topic_partitions}
         case PartitionTimestamps(timestamps):
-            wanted = {tp: OffsetSpec.for_timestamp(timestamps[tp]) for tp in topic_partitions}
+            wanted = {
+                topic_partition: OffsetSpec.for_timestamp(timestamps[topic_partition])
+                for topic_partition in topic_partitions
+            }
         case GlobalTimestamp(timestamp):
-            wanted = {tp: OffsetSpec.for_timestamp(timestamp) for tp in topic_partitions}
+            wanted = {topic_partition: OffsetSpec.for_timestamp(timestamp) for topic_partition in topic_partitions}
 
     resolved = get_offsets_per_topic_partition(admin, wanted, timeout_s=timeout_s, isolation_level=isolation_level)
-    unmatched = [tp for tp in topic_partitions if resolved.get(tp, -1) < 0]
+    unmatched = [topic_partition for topic_partition in topic_partitions if resolved.get(topic_partition, -1) < 0]
     if not unmatched:
         return resolved
     match strategy:
         case TimestampStrategy.ERROR:
-            tp = unmatched[0]
+            topic_partition = unmatched[0]
             msg = (
-                f"No offset matches the requested timestamp for {tp.topic}[{tp.partition}]. "
+                f"No offset matches the requested timestamp for {topic_partition.topic}[{topic_partition.partition}]. "
                 f"Set 'startingOffsetsByTimestampStrategy' to 'latest' to read from the end of "
                 f"the log instead of failing."
             )
@@ -346,7 +353,7 @@ def resolve_endpoint_offsets(
         case TimestampStrategy.LATEST:
             fallback = get_offsets_per_topic_partition(
                 admin,
-                {tp: OffsetSpec.latest() for tp in unmatched},
+                {topic_partition: OffsetSpec.latest() for topic_partition in unmatched},
                 timeout_s=timeout_s,
                 isolation_level=isolation_level,
             )

@@ -148,13 +148,13 @@ class _FakeConsumer:
         self.closed = False
 
     # -- reading -------------------------------------------------------
-    def get_watermark_offsets(self, tp, timeout=None, *, cached=False):  # noqa: ARG002
+    def get_watermark_offsets(self, topic_partition, timeout=None, *, cached=False):  # noqa: ARG002
         source = (
             self.watermarks_after_assign
             if self.assigned is not None and self.watermarks_after_assign is not None
             else self.watermarks
         )
-        return source[(tp.topic, tp.partition)]
+        return source[(topic_partition.topic, topic_partition.partition)]
 
     def assign(self, partitions):
         self.assigned = partitions
@@ -163,12 +163,12 @@ class _FakeConsumer:
         return self.messages.pop(0) if self.messages else None
 
     def position(self, partitions):
-        tp = partitions[0]
-        offset = self.positions.pop(0) if self.positions else tp.offset
-        return [kafka_reader.TopicPartition(tp.topic, tp.partition, offset)]
+        topic_partition = partitions[0]
+        offset = self.positions.pop(0) if self.positions else topic_partition.offset
+        return [kafka_reader.TopicPartition(topic_partition.topic, topic_partition.partition, offset)]
 
-    def seek(self, tp):
-        self.seeks.append(tp)
+    def seek(self, topic_partition):
+        self.seeks.append(topic_partition)
 
     def close(self):
         self.closed = True
@@ -216,18 +216,20 @@ class _FakeAdminClient:
         self.list_offsets_calls += 1
         self.isolation_levels.append(isolation_level)
         out = {}
-        for tp, spec in specs.items():
-            low, high = self.state.watermarks[(tp.topic, tp.partition)]
+        for topic_partition, spec in specs.items():
+            low, high = self.state.watermarks[(topic_partition.topic, topic_partition.partition)]
             if isinstance(spec, TimestampSpec):
-                offset, error = self.state.times.get((tp.topic, tp.partition, spec.timestamp), (-1, None))
+                offset, error = self.state.times.get(
+                    (topic_partition.topic, topic_partition.partition, spec.timestamp), (-1, None)
+                )
                 if error is not None:
-                    out[tp] = _future(exception=KafkaException(error))
+                    out[topic_partition] = _future(exception=KafkaException(error))
                     continue
             elif isinstance(spec, EarliestSpec):
                 offset = low
             else:
                 offset = high
-            out[tp] = _future(SimpleNamespace(offset=offset))
+            out[topic_partition] = _future(SimpleNamespace(offset=offset))
         return out
 
 
@@ -413,7 +415,7 @@ class TestPlanning:
         # Nothing to resolve on the driver when both endpoints are sentinels.
         consumer = self._wide_consumer()
         reader = _reader(consumer_factory, consumer)
-        assert len(reader.partitions()) == 4  # noqa: PLR2004
+        assert len(reader.partitions()) == 4
         assert consumer.admin.list_offsets_calls == 0
 
     def test_planning_defaults_to_read_uncommitted(self, consumer_factory):
@@ -447,8 +449,8 @@ class TestPlanning:
         # what would turn planning a wide topic into a round-trip each.
         consumer = self._wide_consumer()
         reader = _reader(consumer_factory, consumer, minPartitions="8")
-        assert len(reader.partitions()) == 8  # noqa: PLR2004
-        assert consumer.admin.list_offsets_calls == 2  # noqa: PLR2004
+        assert len(reader.partitions()) == 8
+        assert consumer.admin.list_offsets_calls == 2
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +706,10 @@ class TestRead:
             watermarks_after={(_TOPIC, 0): (2, 5)},
         )
         assert [r["offset"] for r in _read_all(reader, partition)] == [2, 3, 4]
-        assert [(tp.topic, tp.partition, tp.offset) for tp in consumer.seeks] == [(_TOPIC, 0, 2)]
+        assert [
+            (topic_partition.topic, topic_partition.partition, topic_partition.offset)
+            for topic_partition in consumer.seeks
+        ] == [(_TOPIC, 0, 2)]
 
     def test_fail_on_data_loss_false_stops_when_nothing_overlaps(self, consumer_factory):
         # The planned range and what is left of the log have no overlap, so
@@ -908,7 +913,7 @@ class TestReadLifecycle:
         class MovingLog(_FakeConsumer):
             def poll(self, timeout=None):
                 record = super().poll(timeout)
-                if record.offset() == 5:  # noqa: PLR2004
+                if record.offset() == 5:
                     self.watermarks[(_TOPIC, 0)] = (5, 7)
                 return record
 
@@ -925,7 +930,7 @@ class TestReadLifecycle:
             def poll(self, timeout=None):  # noqa: ARG002
                 nonlocal polls
                 polls += 1
-                if polls > 10:  # noqa: PLR2004
+                if polls > 10:
                     pytest.fail("recovery looped without making progress")
                 return _offset_out_of_range_message()
 

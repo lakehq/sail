@@ -46,7 +46,7 @@ _READ_UNCOMMITTED = IsolationLevel.READ_UNCOMMITTED
 _POLL_TIMEOUT_MS = 250
 
 
-def _tp(partition):
+def _topic_partition(partition):
     """Key for partition ``partition`` of the test topic ``t``."""
     return TopicPartitionKey("t", partition)
 
@@ -108,7 +108,7 @@ class TestParseOffsetSpec:
             _resolved(startingOffsets="")
 
     def test_json_object(self):
-        assert _resolved(startingOffsets='{"t": {"0": 5}}').starting == PartitionOffsets({_tp(0): 5})
+        assert _resolved(startingOffsets='{"t": {"0": 5}}').starting == PartitionOffsets({_topic_partition(0): 5})
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -144,12 +144,12 @@ class TestParseOffsetSpec:
         # Spark reads these keys as `Map[Int, Long]`, so every spelling of 0 is
         # partition 0.
         spec = _resolved(startingOffsets='{"t": {"%s": 5}}' % key).starting  # noqa: UP031
-        assert spec == PartitionOffsets({_tp(0): 5})
+        assert spec == PartitionOffsets({_topic_partition(0): 5})
 
     def test_duplicate_partition_keys_collapse(self):
         # Two spellings of one id are one entry in the Scala `Map` too.
         limit = _resolved(startingOffsets='{"t": {"0": 5, "00": 9}}').starting
-        assert limit == PartitionOffsets({_tp(0): 9})
+        assert limit == PartitionOffsets({_topic_partition(0): 9})
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +182,11 @@ class TestParseTimestamps:
 
     def test_partition_key_is_canonicalized(self):
         result = _resolved(startingOffsetsByTimestamp='{"t": {"00": 1700000000000}}').starting
-        assert result == PartitionTimestamps({_tp(0): _TS_MS})
+        assert result == PartitionTimestamps({_topic_partition(0): _TS_MS})
 
-    def test_per_tp_json(self):
+    def test_per_topic_partition_json(self):
         result = _resolved(startingOffsetsByTimestamp='{"t": {"0": 1700000000000}}').starting
-        assert result == PartitionTimestamps({_tp(0): _TS_MS})
+        assert result == PartitionTimestamps({_topic_partition(0): _TS_MS})
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -244,7 +244,7 @@ class TestRangeOptionPrecedence:
             ),
             boundary="ending",
         )
-        assert spec == PartitionTimestamps({_tp(0): _TS_MS})
+        assert spec == PartitionTimestamps({_topic_partition(0): _TS_MS})
 
     def test_combination_is_not_rejected(self):
         # Spark applies precedence rather than failing, so a job that supplies
@@ -436,7 +436,7 @@ class TestSubscription:
 
     def test_assign(self):
         sub = parse_subscription(CaseInsensitiveDict({"assign": '{"t": [0, 2]}'}))
-        assert sub == AssignPartitions(frozenset({_tp(0), _tp(2)}))
+        assert sub == AssignPartitions(frozenset({_topic_partition(0), _topic_partition(2)}))
 
     def test_assign_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -454,7 +454,7 @@ class TestSubscription:
         # Spark deserializes `Seq[Int]` and filters against the broker's
         # partitions later, so an id that cannot exist is skipped, not rejected.
         assert parse_subscription(CaseInsensitiveDict({"assign": '{"t": [-1]}'})) == AssignPartitions(
-            frozenset({_tp(-1)})
+            frozenset({_topic_partition(-1)})
         )
 
     def test_assign_bool_partition_raises(self):
@@ -501,7 +501,7 @@ class TestOptionCaseInsensitivity:
     def test_lower_case_option_keys(self):
         resolved = _resolved(startingoffsets="earliest", maxbatchrows="99")
         assert resolved.starting is SpecialOffset.EARLIEST
-        assert resolved.max_batch_rows == 99  # noqa: PLR2004
+        assert resolved.max_batch_rows == 99
 
     def test_case_insensitive_dict_input_is_not_flattened(self):
         # This is what PySpark and Sail actually pass to the constructor.
@@ -517,7 +517,7 @@ class TestOptionCaseInsensitivity:
         )
         resolved = source.reader(None)
         assert resolved.starting is SpecialOffset.EARLIEST
-        assert resolved.max_batch_rows == 77  # noqa: PLR2004
+        assert resolved.max_batch_rows == 77
 
 
 # ---------------------------------------------------------------------------
@@ -558,17 +558,17 @@ class TestNumericOptions:
     def test_poll_timeout_default_matches_spark(self):
         # Spark's batch default for kafkaConsumer.pollTimeoutMs is
         # spark.network.timeout, i.e. 120s.
-        assert _resolved().poll_timeout_s == 120.0  # noqa: PLR2004
+        assert _resolved().poll_timeout_s == 120.0
 
     def test_spark_poll_timeout_option_name(self):
-        assert _resolved(**{"kafkaConsumer.pollTimeoutMs": str(_POLL_TIMEOUT_MS)}).poll_timeout_s == 0.25  # noqa: PLR2004
+        assert _resolved(**{"kafkaConsumer.pollTimeoutMs": str(_POLL_TIMEOUT_MS)}).poll_timeout_s == 0.25
 
     def test_short_poll_timeout_alias(self):
-        assert _resolved(pollTimeoutMs=str(_POLL_TIMEOUT_MS)).poll_timeout_s == 0.25  # noqa: PLR2004
+        assert _resolved(pollTimeoutMs=str(_POLL_TIMEOUT_MS)).poll_timeout_s == 0.25
 
     def test_spark_name_wins_over_alias(self):
         resolved = _resolved(**{"kafkaConsumer.pollTimeoutMs": "500", "pollTimeoutMs": "invalid"})
-        assert resolved.poll_timeout_s == 0.5  # noqa: PLR2004
+        assert resolved.poll_timeout_s == 0.5
 
     @pytest.mark.parametrize("raw", ["250.5", "2.5e2", "1e3", "Infinity", "inf", "nan"])
     def test_poll_timeout_must_be_whole_milliseconds(self, raw):
@@ -587,8 +587,8 @@ class TestNumericOptions:
         assert _resolved().max_records_per_partition is None
 
     def test_min_partitions_parsed(self):
-        assert _resolved(minPartitions="4").min_partitions == 4  # noqa: PLR2004
-        assert _resolved(maxRecordsPerPartition="100").max_records_per_partition == 100  # noqa: PLR2004
+        assert _resolved(minPartitions="4").min_partitions == 4
+        assert _resolved(maxRecordsPerPartition="100").max_records_per_partition == 100
 
     def test_min_partitions_must_be_positive(self):
         with pytest.raises(ValueError, match="must be positive"):
@@ -628,36 +628,36 @@ class TestValidateOffsets:
             validate_offsets(SpecialOffset.EARLIEST, boundary="ending")
 
     def test_allowed_json_sentinels(self):
-        validate_offsets({_tp(0): -2}, boundary="starting")
-        validate_offsets({_tp(0): -1}, boundary="ending")
+        validate_offsets({_topic_partition(0): -2}, boundary="starting")
+        validate_offsets({_topic_partition(0): -1}, boundary="ending")
 
     def test_json_latest_rejected_for_starting(self):
         with pytest.raises(ValueError, match="'startingOffsets' does not support offset -1"):
-            validate_offsets({_tp(0): -1}, boundary="starting")
+            validate_offsets({_topic_partition(0): -1}, boundary="starting")
 
     def test_json_earliest_rejected_for_ending(self):
         with pytest.raises(ValueError, match="'endingOffsets' does not support offset -2"):
-            validate_offsets({_tp(0): -2}, boundary="ending")
+            validate_offsets({_topic_partition(0): -2}, boundary="ending")
 
     def test_concrete_offsets_allowed(self):
-        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="starting")
-        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="ending")
+        validate_offsets({_topic_partition(0): 0, _topic_partition(1): 12345}, boundary="starting")
+        validate_offsets({_topic_partition(0): 0, _topic_partition(1): 12345}, boundary="ending")
 
     @pytest.mark.parametrize("boundary", ["starting", "ending"])
     def test_offset_below_negative_two_rejected(self, boundary):
         with pytest.raises(ValueError, match=rf"'{boundary}Offsets'.*must be >= 0"):
-            validate_offsets({_tp(0): -3}, boundary=boundary)
+            validate_offsets({_topic_partition(0): -3}, boundary=boundary)
 
     @pytest.mark.parametrize("offset", [-1000, -1001])
     def test_librdkafka_sentinels_rejected(self, offset):
         # -1000 is OFFSET_STORED and -1001 is OFFSET_INVALID. Passed through,
         # OFFSET_STORED would silently read from committed group offsets.
         with pytest.raises(ValueError, match=r"'startingOffsets'.*must be >= 0"):
-            validate_offsets({_tp(0): offset}, boundary="starting")
+            validate_offsets({_topic_partition(0): offset}, boundary="starting")
 
     def test_error_names_the_offending_partition(self):
         with pytest.raises(ValueError, match=r"topic 't' partition 3"):
-            validate_offsets({_tp(0): 5, _tp(3): -7}, boundary="starting")
+            validate_offsets({_topic_partition(0): 5, _topic_partition(3): -7}, boundary="starting")
 
 
 # ---------------------------------------------------------------------------
@@ -667,28 +667,34 @@ class TestValidateOffsets:
 
 class TestDivideRange:
     def test_single_part(self):
-        assert divide_range(OffsetRange(_tp(0), 0, 10), 1) == [OffsetRange(_tp(0), 0, 10)]
+        assert divide_range(OffsetRange(_topic_partition(0), 0, 10), 1) == [OffsetRange(_topic_partition(0), 0, 10)]
 
     def test_even_split(self):
-        assert divide_range(OffsetRange(_tp(0), 0, 10), 2) == [OffsetRange(_tp(0), 0, 5), OffsetRange(_tp(0), 5, 10)]
+        assert divide_range(OffsetRange(_topic_partition(0), 0, 10), 2) == [
+            OffsetRange(_topic_partition(0), 0, 5),
+            OffsetRange(_topic_partition(0), 5, 10),
+        ]
 
     def test_remainder_goes_to_latest_chunks(self):
         # Spark sizes each chunk against what is left (`remaining / (parts - i)`),
         # so ten records over three chunks are 3/3/4 rather than 4/3/3.
-        assert divide_range(OffsetRange(_tp(0), 0, 10), 3) == [
-            OffsetRange(_tp(0), 0, 3),
-            OffsetRange(_tp(0), 3, 6),
-            OffsetRange(_tp(0), 6, 10),
+        assert divide_range(OffsetRange(_topic_partition(0), 0, 10), 3) == [
+            OffsetRange(_topic_partition(0), 0, 3),
+            OffsetRange(_topic_partition(0), 3, 6),
+            OffsetRange(_topic_partition(0), 6, 10),
         ]
-        assert divide_range(OffsetRange(_tp(0), 0, 10), 4) == [
-            OffsetRange(_tp(0), 0, 2),
-            OffsetRange(_tp(0), 2, 4),
-            OffsetRange(_tp(0), 4, 7),
-            OffsetRange(_tp(0), 7, 10),
+        assert divide_range(OffsetRange(_topic_partition(0), 0, 10), 4) == [
+            OffsetRange(_topic_partition(0), 0, 2),
+            OffsetRange(_topic_partition(0), 2, 4),
+            OffsetRange(_topic_partition(0), 4, 7),
+            OffsetRange(_topic_partition(0), 7, 10),
         ]
 
     def test_more_parts_than_records(self):
-        assert divide_range(OffsetRange(_tp(0), 0, 2), 5) == [OffsetRange(_tp(0), 0, 1), OffsetRange(_tp(0), 1, 2)]
+        assert divide_range(OffsetRange(_topic_partition(0), 0, 2), 5) == [
+            OffsetRange(_topic_partition(0), 0, 1),
+            OffsetRange(_topic_partition(0), 1, 2),
+        ]
 
     def test_large_partition_hint_skips_empty_iterations(self, monkeypatch):
         def bounded_range(parts):
@@ -696,59 +702,75 @@ class TestDivideRange:
             return range(parts)
 
         monkeypatch.setattr("pysail.spark.datasource.kafka.planning.range", bounded_range, raising=False)
-        assert divide_range(OffsetRange(_tp(0), 9, 10), 2**31 - 1) == [OffsetRange(_tp(0), 9, 10)]
+        assert divide_range(OffsetRange(_topic_partition(0), 9, 10), 2**31 - 1) == [
+            OffsetRange(_topic_partition(0), 9, 10)
+        ]
 
     def test_chunks_are_contiguous_and_complete(self):
-        chunks = divide_range(OffsetRange(_tp(0), 100, 137), 4)
-        assert chunks[0].start == 100  # noqa: PLR2004
-        assert chunks[-1].end == 137  # noqa: PLR2004
+        chunks = divide_range(OffsetRange(_topic_partition(0), 100, 137), 4)
+        assert chunks[0].start == 100
+        assert chunks[-1].end == 137
         assert all(left.end == right.start for left, right in itertools.pairwise(chunks))
 
 
 class TestSplitOffsetRanges:
     def test_no_options_is_identity(self):
-        ranges = [OffsetRange(_tp(0), 0, 100)]
+        ranges = [OffsetRange(_topic_partition(0), 0, 100)]
         assert split_offset_ranges(ranges, min_partitions=None, max_records_per_partition=None) == ranges
 
     def test_max_records_caps_each_range(self):
-        out = split_offset_ranges([OffsetRange(_tp(0), 0, 10)], min_partitions=None, max_records_per_partition=4)
-        assert out == [OffsetRange(_tp(0), 0, 3), OffsetRange(_tp(0), 3, 6), OffsetRange(_tp(0), 6, 10)]
-        assert all(r.size <= 4 for r in out)  # noqa: PLR2004
+        out = split_offset_ranges(
+            [OffsetRange(_topic_partition(0), 0, 10)], min_partitions=None, max_records_per_partition=4
+        )
+        assert out == [
+            OffsetRange(_topic_partition(0), 0, 3),
+            OffsetRange(_topic_partition(0), 3, 6),
+            OffsetRange(_topic_partition(0), 6, 10),
+        ]
+        assert all(r.size <= 4 for r in out)
 
     def test_min_partitions_below_count_is_identity(self):
-        ranges = [OffsetRange(_tp(0), 0, 10), OffsetRange(_tp(1), 0, 10)]
+        ranges = [OffsetRange(_topic_partition(0), 0, 10), OffsetRange(_topic_partition(1), 0, 10)]
         assert split_offset_ranges(ranges, min_partitions=2, max_records_per_partition=None) == ranges
 
     def test_min_partitions_splits_proportionally(self):
         # One partition, 100 records, minPartitions=4 -> four equal chunks.
-        out = split_offset_ranges([OffsetRange(_tp(0), 0, 100)], min_partitions=4, max_records_per_partition=None)
+        out = split_offset_ranges(
+            [OffsetRange(_topic_partition(0), 0, 100)], min_partitions=4, max_records_per_partition=None
+        )
         assert out == [
-            OffsetRange(_tp(0), 0, 25),
-            OffsetRange(_tp(0), 25, 50),
-            OffsetRange(_tp(0), 50, 75),
-            OffsetRange(_tp(0), 75, 100),
+            OffsetRange(_topic_partition(0), 0, 25),
+            OffsetRange(_topic_partition(0), 25, 50),
+            OffsetRange(_topic_partition(0), 50, 75),
+            OffsetRange(_topic_partition(0), 75, 100),
         ]
 
     def test_min_partitions_weights_by_size(self):
         # 90 vs 10 records with minPartitions=10 -> 9 chunks and 1 chunk.
         out = split_offset_ranges(
-            [OffsetRange(_tp(0), 0, 90), OffsetRange(_tp(1), 0, 10)], min_partitions=10, max_records_per_partition=None
+            [OffsetRange(_topic_partition(0), 0, 90), OffsetRange(_topic_partition(1), 0, 10)],
+            min_partitions=10,
+            max_records_per_partition=None,
         )
-        assert len([r for r in out if r.topic_partition.partition == 0]) == 9  # noqa: PLR2004
+        assert len([r for r in out if r.topic_partition.partition == 0]) == 9
         assert len([r for r in out if r.topic_partition.partition == 1]) == 1
 
     def test_both_options_apply_in_order(self):
-        out = split_offset_ranges([OffsetRange(_tp(0), 0, 100)], min_partitions=8, max_records_per_partition=50)
+        out = split_offset_ranges(
+            [OffsetRange(_topic_partition(0), 0, 100)], min_partitions=8, max_records_per_partition=50
+        )
         # maxRecords gives 2 ranges, then minPartitions splits those up to 8.
-        assert len(out) == 8  # noqa: PLR2004
+        assert len(out) == 8
         assert out[0].start == 0
-        assert out[-1].end == 100  # noqa: PLR2004
+        assert out[-1].end == 100
 
     def test_records_are_never_lost(self):
-        out = split_offset_ranges([OffsetRange(_tp(0), 5, 47)], min_partitions=7, max_records_per_partition=9)
-        assert sum(r.size for r in out) == 42  # noqa: PLR2004
-        assert out[0].start == 5  # noqa: PLR2004
-        assert out[-1].end == 47  # noqa: PLR2004
+        out = split_offset_ranges(
+            [OffsetRange(_topic_partition(0), 5, 47)], min_partitions=7, max_records_per_partition=9
+        )
+        assert sum(r.size for r in out) == 42
+        assert out[0].start == 5
+        assert out[-1].end == 47
 
     def test_small_ranges_do_not_inflate_the_partition_count(self):
         # Spark sets aside ranges too small to split before dividing the
@@ -756,25 +778,31 @@ class TestSplitOffsetRanges:
         # small ones left behind. A single proportional pass would give the big
         # range 4 chunks and still add one per small range, overshooting to 6.
         out = split_offset_ranges(
-            [OffsetRange(_tp(0), 0, 100), OffsetRange(_tp(1), 0, 1), OffsetRange(_tp(2), 0, 1)],
+            [
+                OffsetRange(_topic_partition(0), 0, 100),
+                OffsetRange(_topic_partition(1), 0, 1),
+                OffsetRange(_topic_partition(2), 0, 1),
+            ],
             min_partitions=4,
             max_records_per_partition=None,
         )
         assert out == [
-            OffsetRange(_tp(0), 0, 50),
-            OffsetRange(_tp(0), 50, 100),
-            OffsetRange(_tp(1), 0, 1),
-            OffsetRange(_tp(2), 0, 1),
+            OffsetRange(_topic_partition(0), 0, 50),
+            OffsetRange(_topic_partition(0), 50, 100),
+            OffsetRange(_topic_partition(1), 0, 1),
+            OffsetRange(_topic_partition(2), 0, 1),
         ]
 
     def test_skewed_split_matches_spark_budget(self):
         out = split_offset_ranges(
-            [OffsetRange(_tp(0), 0, 1000), OffsetRange(_tp(1), 0, 5)], min_partitions=8, max_records_per_partition=None
+            [OffsetRange(_topic_partition(0), 0, 1000), OffsetRange(_topic_partition(1), 0, 5)],
+            min_partitions=8,
+            max_records_per_partition=None,
         )
-        assert len(out) == 8  # noqa: PLR2004
-        assert [r for r in out if r.topic_partition.partition == 1] == [OffsetRange(_tp(1), 0, 5)]
+        assert len(out) == 8
+        assert [r for r in out if r.topic_partition.partition == 1] == [OffsetRange(_topic_partition(1), 0, 5)]
         assert out[0].start == 0
-        assert out[-2].end == 1000  # noqa: PLR2004
+        assert out[-2].end == 1000
 
 
 # ---------------------------------------------------------------------------

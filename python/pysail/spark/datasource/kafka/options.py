@@ -212,8 +212,8 @@ def validate_offsets(
             raise ValueError(msg)
         return
 
-    for tp, value in offsets.items():
-        where = f"topic {tp.topic!r} partition {tp.partition}"
+    for topic_partition, value in offsets.items():
+        where = f"topic {topic_partition.topic!r} partition {topic_partition.partition}"
         if value == forbidden:
             msg = (
                 f"'{key}' does not support offset {forbidden.value} "

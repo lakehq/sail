@@ -325,7 +325,10 @@ class KafkaDataSourceReader(DataSourceReader):
             isolation_level=self.isolation_level,
         )
 
-        offset_ranges = [OffsetRange(topic_partition=tp, start=starts[tp], end=ends[tp]) for tp in topic_partitions]
+        offset_ranges = [
+            OffsetRange(topic_partition=topic_partition, start=starts[topic_partition], end=ends[topic_partition])
+            for topic_partition in topic_partitions
+        ]
 
         # Match Spark 4.1 shouldDivvyUpLargePartitions (tests unresolved sizes), then
         # resolve only to place interior split points and restore outer sentinels.
@@ -551,17 +554,23 @@ class KafkaDataSourceReader(DataSourceReader):
         return recovered
 
     def _check_offset_gap(
-        self, consumer: Consumer, tp: TopicPartition, *, next_offset: int, record_offset: int, end_offset: int
+        self,
+        consumer: Consumer,
+        topic_partition: TopicPartition,
+        *,
+        next_offset: int,
+        record_offset: int,
+        end_offset: int,
     ) -> None:
         """Distinguish unreadable in-log gaps (compaction/control markers) from retention data loss.
 
         Always queries fresh watermarks because the log start can advance between gaps.
         """
-        watermarks = self._query_watermarks(consumer, tp)
+        watermarks = self._query_watermarks(consumer, topic_partition)
         if watermarks.low <= next_offset:
             return
         msg = (
-            f"Data loss on {tp.topic}[{tp.partition}]: offsets {next_offset} to "
+            f"Data loss on {topic_partition.topic}[{topic_partition.partition}]: offsets {next_offset} to "
             f"{min(record_offset, end_offset) - 1} were requested but are no longer in the log, which now starts at "
             f"{watermarks.low}. Records were removed after planning (retention or truncation). "
             f"Set 'failOnDataLoss' to false to skip missing records."
