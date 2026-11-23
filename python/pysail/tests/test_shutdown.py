@@ -81,6 +81,22 @@ def test_sigterm_closes_stalled_flight_connection():
         assert server.wait(timeout=12) == 0
 
 
+def test_sigterm_force_closes_connection_after_grace_period():
+    import grpc
+
+    with _server("flight", "local") as (server, address), grpc.insecure_channel(address) as channel:
+        # A health watch shares the query transport and stays open independently of query cancellation.
+        watch = channel.unary_stream("/grpc.health.v1.Health/Watch")(b"", timeout=20, wait_for_ready=True)
+        assert next(watch)
+        started = time.monotonic()
+        server.send_signal(signal.SIGTERM)
+        with pytest.raises(grpc.RpcError) as err:
+            next(watch)
+        assert err.value.code() == grpc.StatusCode.UNAVAILABLE
+        assert 5 <= time.monotonic() - started < 12
+        assert server.wait(timeout=5) == 0
+
+
 @pytest.mark.parametrize(
     "kind", ["scalar", "iterator", pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1"))]
 )
