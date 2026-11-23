@@ -4,6 +4,7 @@ mod actor;
 mod session;
 
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,8 +12,10 @@ use datafusion::prelude::SessionContext;
 use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common::server::ServerBuilder;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
@@ -76,6 +79,34 @@ impl SessionManager {
         self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
+    }
+
+    /// Shut down sessions as the server starts draining active requests.
+    pub async fn serve(
+        self,
+        builder: ServerBuilder<'_>,
+        listener: TcpListener,
+        signal: impl Future<Output = ()>,
+    ) -> SessionResult<()> {
+        let (tx, rx) = oneshot::channel();
+        let serve = async move {
+            let signal = async move {
+                signal.await;
+                let _ = tx.send(());
+            };
+            builder
+                .serve(listener, signal)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        };
+        let shutdown = async {
+            // The sender also drops if the server exits before receiving the signal.
+            let _ = rx.await;
+            self.shutdown().await
+        };
+        let (result, shutdown) = tokio::join!(serve, shutdown);
+        shutdown?;
+        Ok(result?)
     }
 
     /// Shut down the session manager and all resources it owns.

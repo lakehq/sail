@@ -64,3 +64,25 @@ impl RuntimeHandle {
         &self.io
     }
 }
+
+/// Wait for Ctrl-C or, on Unix, SIGTERM in a standalone Sail process.
+pub async fn stop_signal() {
+    #[cfg(unix)]
+    let result = async {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    .await;
+
+    #[cfg(not(unix))]
+    let result = tokio::signal::ctrl_c().await;
+
+    if let Err(e) = result {
+        log::error!("failed to listen for a shutdown signal: {e}");
+    }
+}

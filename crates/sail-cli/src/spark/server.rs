@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use log::{error, info};
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_common::runtime::{RuntimeManager, stop_signal};
 use sail_spark_connect::entrypoint::serve;
 use tokio::net::TcpListener;
 
-/// Handles graceful shutdown by waiting for a `SIGINT` signal in [tokio].
+/// Handles shutdown signals in Tokio, including Ctrl-C when Python is embedded.
 ///
 /// The `SIGINT` signal is captured by Python if the `_signal` module is imported [1].
 /// To prevent this, we would need to run Python code like the following [2].
@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 ///   - [1] https://github.com/PyO3/pyo3/issues/2576
 ///   - [2] https://github.com/PyO3/pyo3/issues/3218
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    stop_signal().await;
     info!("Shutting down the Spark Connect server...");
 }
 

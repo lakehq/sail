@@ -17,6 +17,7 @@ pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_telemetry::events::SystemEventReporter;
 pub use state::{JobState, TaskState};
+use tokio_util::sync::CancellationToken;
 
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
@@ -26,6 +27,7 @@ use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
+    stopped: CancellationToken,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
     codec: Box<dyn PhysicalExtensionCodec>,
@@ -36,6 +38,7 @@ impl JobScheduler {
     pub fn new(options: JobSchedulerOptions, event_reporter: SystemEventReporter) -> Self {
         Self {
             options,
+            stopped: CancellationToken::new(),
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec: Box::new(RemoteExecutionCodec),

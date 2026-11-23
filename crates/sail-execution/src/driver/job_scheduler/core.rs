@@ -33,6 +33,7 @@ use crate::proto::{
     encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
 };
 use crate::shuffle::ShuffleBackendKind;
+use crate::stream::cancel_job_stream_on_stop;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -103,7 +104,10 @@ impl JobScheduler {
             }
         }
 
-        Ok((job_id, stream))
+        Ok((
+            job_id,
+            cancel_job_stream_on_stop(stream, self.stopped.clone()),
+        ))
     }
 
     pub fn update_task(
@@ -726,6 +730,8 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
+        // Signal consumers before dropping job outputs so a partial result cannot look complete.
+        self.stopped.cancel();
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         for (job_id, job) in self.jobs.iter_mut() {

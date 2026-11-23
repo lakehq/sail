@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use log::info;
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_common::runtime::{RuntimeManager, stop_signal};
 use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
 use sail_telemetry::{ResourceKind, ResourceOptions};
 use tokio::net::TcpListener;
 
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    stop_signal().await;
     info!("Shutting down the Flight SQL server...");
 }
 
