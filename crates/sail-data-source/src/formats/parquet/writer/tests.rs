@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray,
-    FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array, Int64Builder, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray, ListArray,
-    ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
-    RunArray, StringArray, StringBuilder, StringViewArray, StructArray, UInt32Array, UnionArray,
-    make_array, new_null_array,
+    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int32Array, Int64Array, Int64Builder,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray,
+    ListArray, ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch,
+    RecordBatchOptions, RunArray, StringArray, StringBuilder, StringViewArray, StructArray,
+    UInt32Array, UnionArray, make_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{
@@ -5481,6 +5481,36 @@ fn test_logical_size_of_arrays() -> Result<()> {
     }
     let maps = maps.finish();
     assert_eq!(logical_size(&maps.slice(10, 20)), 21 * 4 + 100 * 16);
+
+    // The values of a dictionary are counted in proportion to the rows.
+    let values = Int64Array::from_iter_values(0..100);
+    let keys = Int32Array::from_iter_values((0..1000).map(|i| i % 100));
+    let dictionary = DictionaryArray::new(keys, Arc::new(values));
+    assert_eq!(logical_size(&dictionary), 1000 * 4 + 100 * 8);
+    assert_eq!(logical_size(&dictionary.slice(10, 20)), 20 * 4 + 20 * 8);
+
+    // The values of a list of a fixed size are counted for the rows of the array.
+    let field = Arc::new(Field::new_list_field(DataType::Int64, false));
+    let values = Int64Array::from_iter_values(0..300);
+    let fixed = FixedSizeListArray::try_new(field, 3, Arc::new(values), None)?;
+    assert_eq!(logical_size(&fixed), 300 * 8);
+    assert_eq!(logical_size(&fixed.slice(10, 20)), 60 * 8);
+    Ok(())
+}
+
+#[test]
+fn test_logical_size_of_a_slice_follows_its_rows() -> Result<()> {
+    // The row groups of a file end by the size of their values, so a slice
+    // of a few rows must not have the size of the array that it is a slice of.
+    let batch = all_types_batch(100)?;
+    for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
+        let whole = logical_size(column.as_ref());
+        let slice = logical_size(column.slice(200, 4).as_ref());
+        assert!(
+            slice * 20 <= whole.max(1) * 3,
+            "{field}: {slice} of {whole}"
+        );
+    }
     Ok(())
 }
 

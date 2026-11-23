@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use datafusion::arrow::array::{
-    Array, ArrayData, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait, RecordBatch,
+    Array, ArrayData, ArrayRef, AsArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
+    RecordBatch, make_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::concat_batches;
@@ -1051,17 +1052,48 @@ async fn upload_buffer(
 ///
 /// This is not the size of the buffers of the array, since an array can be
 /// a slice of buffers that are much larger and that are shared with other arrays.
-/// The values of a list or a map are counted for the rows of the array only.
+/// The values of a list or a map are counted for the rows of the array only,
+/// and the values of a dictionary and the runs of equal values in proportion
+/// to the rows of the array.
 pub(super) fn logical_size(array: &dyn Array) -> usize {
     let nulls = array.nulls().map_or(0, |_| array.len().div_ceil(8));
     match array.data_type() {
         DataType::List(_) => list_size(array.as_list::<i32>()) + nulls,
         DataType::LargeList(_) => list_size(array.as_list::<i64>()) + nulls,
+        DataType::ListView(_) => list_view_size(array.as_list_view::<i32>()) + nulls,
+        DataType::LargeListView(_) => list_view_size(array.as_list_view::<i64>()) + nulls,
         DataType::Map(_, _) => {
             let map = array.as_map();
             let (start, end) = offset_range(map.offsets());
             let entries = map.entries().slice(start, end - start);
             size_of_val(map.offsets().inner().as_ref()) + logical_size(&entries) + nulls
+        }
+        DataType::FixedSizeList(_, _) => {
+            logical_size(array.as_fixed_size_list().values().as_ref()) + nulls
+        }
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let values = dictionary.values();
+            // The rows refer to no more values of the dictionary than there
+            // are rows, and the dictionary is shared with the other rows of
+            // the array that this array is a slice of.
+            let referred = array.len().min(values.len()) as u128;
+            let size =
+                logical_size(values.as_ref()) as u128 * referred / values.len().max(1) as u128;
+            logical_size(dictionary.keys()) + size as usize
+        }
+        DataType::RunEndEncoded(_, _) => {
+            // The rows are in no more runs than there are rows, and the runs
+            // are shared with the other rows of the array that this array
+            // is a slice of.
+            let data = array.to_data();
+            let runs = data.child_data().first().map_or(0, |x| x.len());
+            let size: usize = data
+                .child_data()
+                .iter()
+                .map(|x| logical_size(make_array(x.clone()).as_ref()))
+                .sum();
+            (size as u128 * array.len().min(runs) as u128 / runs.max(1) as u128) as usize
         }
         DataType::Struct(_) => {
             let columns = array.as_struct().columns();
@@ -1085,6 +1117,16 @@ fn list_size<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> usize {
     let (start, end) = offset_range(list.offsets());
     let values = list.values().slice(start, end - start);
     size_of_val(list.offsets().inner().as_ref()) + logical_size(values.as_ref())
+}
+
+/// The values of a list view array can be anywhere in the array of its values,
+/// so they are counted in proportion to the number of values of the rows.
+fn list_view_size<O: OffsetSizeTrait>(list: &GenericListViewArray<O>) -> usize {
+    let values = list.values();
+    let referred: usize = list.sizes().iter().map(|x| x.as_usize()).sum();
+    let size = logical_size(values.as_ref()) as u128 * referred.min(values.len()) as u128
+        / values.len().max(1) as u128;
+    size_of_val(list.offsets().as_ref()) + size_of_val(list.sizes().as_ref()) + size as usize
 }
 
 /// The range of the values of a list array in the array of its values.
