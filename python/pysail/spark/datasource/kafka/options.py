@@ -238,7 +238,7 @@ def parse_range_limit(options: Mapping[str, str], *, boundary: RangeBoundary) ->
     key = f"{boundary}Timestamp"
     if key in options:
         label = f"'{key}'"
-        timestamp = parse_strict_int(options[key], label=label)
+        timestamp = parse_strict_int(options[key].strip(), label=label)
         return GlobalTimestamp(check_integer_width(timestamp, bits=64, label=label))
 
     key = f"{boundary}OffsetsByTimestamp"
@@ -263,7 +263,7 @@ def parse_range_limit(options: Mapping[str, str], *, boundary: RangeBoundary) ->
 def parse_timestamp_strategy(option_value: str) -> TimestampStrategy:
     """Parse ``startingOffsetsByTimestampStrategy`` (case-insensitive ``error``/``latest``)."""
     try:
-        return TimestampStrategy(option_value.strip().lower())
+        return TimestampStrategy(option_value.lower())
     except ValueError as e:
         msg = f"'startingOffsetsByTimestampStrategy' must be 'error' or 'latest', got {option_value!r}"
         raise ValueError(msg) from e
@@ -271,7 +271,7 @@ def parse_timestamp_strategy(option_value: str) -> TimestampStrategy:
 
 def parse_bool(option_value: str, name: str) -> bool:
     """Parse a boolean strictly (case-insensitive ``true``/``false``, matching Scala ``toBoolean``)."""
-    normalized = option_value.strip().lower()
+    normalized = option_value.lower()
     if normalized in ("true", "false"):
         return normalized == "true"
     msg = f"'{name}' must be 'true' or 'false', got {option_value!r}"
@@ -307,7 +307,7 @@ def build_admin_config(client_config: dict[str, str]) -> dict[str, str]:
 def parse_isolation_level(option_value: str) -> IsolationLevel:
     """Parse ``kafka.isolation.level`` case-insensitively (``read_uncommitted`` or ``read_committed``)."""
     try:
-        return IsolationLevel[option_value.strip().upper()]
+        return IsolationLevel[option_value.upper()]
     except KeyError:
         msg = f"'kafka.isolation.level' must be 'read_uncommitted' or 'read_committed', got {option_value!r}"
         raise ValueError(msg) from None

@@ -158,8 +158,10 @@ class TestParseOffsetSpec:
 
 
 class TestParseTimestamps:
-    def test_global_int(self):
-        assert _resolved(startingTimestamp="1700000000000").starting == GlobalTimestamp(_TS_MS)
+    @pytest.mark.parametrize("boundary", ["starting", "ending"])
+    @pytest.mark.parametrize("raw", ["1700000000000", "  1700000000000  ", "\t1700000000000\n"])
+    def test_global_int(self, boundary, raw):
+        assert getattr(_resolved(**{f"{boundary}Timestamp": raw}), boundary) == GlobalTimestamp(_TS_MS)
 
     @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
     def test_global_timestamp_width(self, value):
@@ -170,10 +172,9 @@ class TestParseTimestamps:
     def test_global_timestamp_width_boundaries(self, value):
         assert _resolved(startingTimestamp=str(value)).starting == GlobalTimestamp(value)
 
-    @pytest.mark.parametrize("raw", ["  1700000000000  ", "1_700_000_000_000"])
-    def test_global_timestamp_rejects_whitespace_and_underscores(self, raw):
+    def test_global_timestamp_rejects_underscores(self):
         with pytest.raises(ValueError, match="must be an integer"):
-            _resolved(endingTimestamp=raw)
+            _resolved(endingTimestamp="1_700_000_000_000")
 
     def test_invalid_global_raises(self):
         with pytest.raises(ValueError, match="must be an integer"):
@@ -269,13 +270,14 @@ class TestTimestampStrategy:
     def test_default_is_error(self):
         assert _resolved().starting_ts_strategy is TimestampStrategy.ERROR
 
-    @pytest.mark.parametrize("raw", ["latest", "LATEST", " Latest "])
+    @pytest.mark.parametrize("raw", ["latest", "LATEST", "Latest"])
     def test_latest_accepted(self, raw):
         assert _resolved(startingOffsetsByTimestampStrategy=raw).starting_ts_strategy is TimestampStrategy.LATEST
 
-    def test_invalid_raises(self):
+    @pytest.mark.parametrize("raw", ["earliest", " latest", "latest ", " error ", "\tLATEST\n"])
+    def test_invalid_raises(self, raw):
         with pytest.raises(ValueError, match="startingOffsetsByTimestampStrategy"):
-            _resolved(startingOffsetsByTimestampStrategy="earliest")
+            _resolved(startingOffsetsByTimestampStrategy=raw)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +351,7 @@ class TestIsolationLevel:
         # Spark derives `ListOffsetsOptions` from the driver Kafka params, so a
         # user asking for `read_committed` gets last-stable-offset semantics
         # when a "latest" boundary or a timestamp is resolved.
-        assert _resolved(**{"kafka.isolation.level": " READ_COMMITTED "}).isolation_level == (
+        assert _resolved(**{"kafka.isolation.level": "READ_COMMITTED"}).isolation_level == (
             IsolationLevel.READ_COMMITTED
         )
 
@@ -358,9 +360,10 @@ class TestIsolationLevel:
         # a raw spelling cannot reach librdkafka.
         assert "isolation.level" not in _resolved(**{"kafka.isolation.level": "read_committed"}).client_config
 
-    def test_invalid_value_fails_option_validation(self):
+    @pytest.mark.parametrize("raw", ["read_everything", " READ_COMMITTED ", "read_uncommitted ", "\tread_committed\n"])
+    def test_invalid_value_fails_option_validation(self, raw):
         with pytest.raises(ValueError, match="must be 'read_uncommitted' or 'read_committed'"):
-            _resolved(**{"kafka.isolation.level": "read_everything"})
+            _resolved(**{"kafka.isolation.level": raw})
 
 
 class TestBuildAdminConfig:
@@ -420,8 +423,9 @@ class TestSubscription:
         with pytest.raises(ValueError, match="at least one topic"):
             parse_subscription(CaseInsensitiveDict({"subscribe": " , "}))
 
-    def test_subscribe_pattern(self):
-        sub = parse_subscription(CaseInsensitiveDict({"subscribePattern": "orders-.*"}))
+    @pytest.mark.parametrize("raw", ["orders-.*", "  orders-.*  "])
+    def test_subscribe_pattern(self, raw):
+        sub = parse_subscription(CaseInsensitiveDict({"subscribePattern": raw}))
         assert isinstance(sub, SubscribePattern)
         assert sub.pattern.fullmatch("orders-eu")
         assert not sub.pattern.fullmatch("shipments")
@@ -527,13 +531,13 @@ class TestBooleanOptions:
         assert resolved.include_headers is False
         assert resolved.fail_on_data_loss is True
 
-    @pytest.mark.parametrize(("raw", "expected"), [("true", True), ("TRUE", True), (" False ", False)])
+    @pytest.mark.parametrize(("raw", "expected"), [("true", True), ("TRUE", True), ("False", False)])
     def test_case_insensitive_values(self, raw, expected):
         assert _resolved(includeHeaders=raw).include_headers is expected
         assert _resolved(failOnDataLoss=raw).fail_on_data_loss is expected
 
     @pytest.mark.parametrize("option", ["includeHeaders", "failOnDataLoss"])
-    @pytest.mark.parametrize("raw", ["", "yes", "0", "1", "maybe"])
+    @pytest.mark.parametrize("raw", ["", "yes", "0", "1", "maybe", " true", "false ", "\tTRUE\n"])
     def test_invalid_values_rejected(self, option, raw):
         with pytest.raises(ValueError, match=rf"{option}.*must be 'true' or 'false'"):
             _resolved(**{option: raw})
