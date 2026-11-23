@@ -103,6 +103,8 @@ impl SessionManager {
         listener: TcpListener,
         signal: impl Future<Output = ()>,
     ) -> SessionResult<()> {
+        const CONNECTION_GRACE_PERIOD: Duration = Duration::from_secs(5);
+
         let (tx, rx) = oneshot::channel();
         let serve = async move {
             let signal = async move {
@@ -110,6 +112,7 @@ impl SessionManager {
                 let _ = tx.send(());
             };
             builder
+                .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
                 .serve(listener, signal)
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))

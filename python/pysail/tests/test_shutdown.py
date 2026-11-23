@@ -66,3 +66,15 @@ def test_spark_sigterm_cancels_running_query(mode):
             for _ in responses:
                 pass
         assert server.wait(timeout=10) == 0
+
+
+def test_sigterm_closes_stalled_flight_connection():
+    from adbc_driver_flightsql import dbapi
+
+    with _server("flight", "local") as (server, addr), dbapi.connect(f"grpc://{addr}") as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM range(0, 1000000000, 1, 1)")
+        reader = cur.fetch_record_batch()
+        assert reader.read_next_batch().num_rows > 0
+        server.send_signal(signal.SIGTERM)
+        # Keep the RPC open without consuming further batches until the server exits.
+        assert server.wait(timeout=12) == 0
