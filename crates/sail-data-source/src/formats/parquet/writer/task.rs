@@ -679,7 +679,6 @@ async fn write_files(
     let pool = Arc::clone(task.context.memory_pool());
     let resources = Arc::new(EncodeResources::new(
         Arc::clone(&task.budget),
-        &pool,
         reservation.new_empty(),
         metrics.elapsed_compute.clone(),
     ));

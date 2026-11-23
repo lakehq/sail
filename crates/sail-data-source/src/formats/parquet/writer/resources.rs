@@ -3,12 +3,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservation};
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::parquet::errors::{ParquetError, Result};
 use datafusion::physical_plan::metrics::Time;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
-/// The size of the input that the jobs of a row group receive at a time.
+/// The largest size of the input that the jobs of a row group receive at a time.
 ///
 /// A job encodes the values of one column for a whole slab before its thread
 /// encodes another column, which is faster than encoding the columns batch
@@ -19,6 +19,20 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 /// 7.05 s with 64 MiB and 6.85 s with 128 MiB. This is the smallest of these
 /// sizes that is within 3% of the best time for both tables.
 const SLAB_BYTES: usize = 64 * 1024 * 1024;
+
+/// The size of the input that the job of a column receives at a time, which
+/// gives the size of a slab for a file with fewer than 64 columns.
+///
+/// A file keeps the rows of a slab before it starts their jobs, so a large
+/// slab is memory for every file that receives rows, and the 121 columns
+/// above have half a megabyte each in a slab. Measured with 600 million rows
+/// of 4 columns that were written to 4 and to 100 partition directories:
+/// 4.91 s with 10.7 GiB and 5.91 s with 11.6 GiB with slabs of 64 MiB, and
+/// 4.77 s with 3.5 GiB and 5.82 s with 12.3 GiB with this size for each column,
+/// which became 5.97 s with 7.1 GiB with the limit on the jobs that wait.
+/// 60 million rows of 16 columns took 1.31 s and 1.30 s in one file,
+/// and 1.98 s and 2.01 s in 48 files.
+const COLUMN_SLAB_BYTES: usize = 1024 * 1024;
 
 /// The number of slabs in the encode budget for each thread of the runtime:
 /// one slab that the thread is encoding and one slab that is waiting for it.
@@ -40,6 +54,21 @@ const SLABS_PER_THREAD: usize = 2;
 /// 7.74 s with one job and 7.79 s with two jobs for each thread.
 const JOBS_PER_THREAD: usize = 1;
 
+/// The number of jobs that may wait for their turn to encode for each job
+/// that may encode at the same time. The files start no more jobs while
+/// this number of jobs is waiting, so that a job that ends is followed by
+/// a job that waits, and the rows and the column writers of more jobs than
+/// that are not kept in memory.
+///
+/// Measured as the time of a write and the peak memory of the process with
+/// 1, 4 and 16 waiting jobs and without a limit: 60 million rows of 16
+/// columns in one file 1.27 s with 7.4 GiB, 1.28 s with 8.9 GiB, 1.30 s with
+/// 11.7 GiB, and 1.32 s with 11.9 GiB, the same rows in 48 files 2.14 s,
+/// 2.13 s, 2.00 s and 2.01 s with 8.6 to 8.7 GiB, and 600 million rows of
+/// 4 columns in 100 partition directories 5.97 s with 7.1 GiB, 5.96 s with
+/// 7.2 GiB, 5.82 s with 12.1 GiB, and 5.85 s with 12.1 GiB.
+const QUEUE_PER_JOB: usize = 1;
+
 /// The memory that the Parquet files of this process may use for their input
 /// and for their row groups that are encoded and not in a file.
 ///
@@ -51,11 +80,36 @@ const JOBS_PER_THREAD: usize = 1;
 #[derive(Debug)]
 pub struct EncodeBudget {
     capacity: usize,
-    /// The size of the input that the jobs of a row group receive at a time.
+    /// The largest size of the input that the jobs of a row group receive at a time.
     slab_bytes: usize,
+    /// The size of the input that the job of a column receives at a time.
+    column_slab_bytes: usize,
     used: AtomicUsize,
     /// The jobs of all files that may encode at the same time.
     jobs: Arc<Semaphore>,
+    /// The number of the jobs of all files that wait for their turn to encode.
+    waiting: AtomicUsize,
+    /// The number of waiting jobs at which the files start no more jobs.
+    queue: usize,
+    /// Wakes a file that waits to start jobs when a job has had its turn.
+    turn: Notify,
+}
+
+/// Counts a job as waiting for its turn to encode until this is dropped.
+struct Waiting<'a>(&'a EncodeBudget);
+
+impl<'a> Waiting<'a> {
+    fn new(budget: &'a EncodeBudget) -> Self {
+        budget.waiting.fetch_add(1, Ordering::AcqRel);
+        Self(budget)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.fetch_sub(1, Ordering::AcqRel);
+        self.0.turn.notify_one();
+    }
 }
 
 static PROCESS_BUDGET: OnceLock<Arc<EncodeBudget>> = OnceLock::new();
@@ -73,19 +127,29 @@ impl EncodeBudget {
     /// Creates a budget of the given size for files whose jobs run
     /// on the runtime of the caller.
     pub fn new(capacity: usize) -> Arc<Self> {
-        Self::with_slab_bytes(capacity, SLAB_BYTES)
+        Self::with_slabs(capacity, SLAB_BYTES, COLUMN_SLAB_BYTES)
     }
 
-    /// Creates a budget for files whose jobs receive input of the given size at a time.
+    /// Creates a budget for files whose jobs receive input of the given size
+    /// at a time, whatever the number of the columns of a file.
+    #[cfg(test)]
     pub(super) fn with_slab_bytes(capacity: usize, slab_bytes: usize) -> Arc<Self> {
+        Self::with_slabs(capacity, slab_bytes, slab_bytes)
+    }
+
+    fn with_slabs(capacity: usize, slab_bytes: usize, column_slab_bytes: usize) -> Arc<Self> {
         let jobs = runtime_threads()
             .saturating_mul(JOBS_PER_THREAD)
             .min(Semaphore::MAX_PERMITS);
         Arc::new(Self {
             capacity,
             slab_bytes,
+            column_slab_bytes,
             used: AtomicUsize::new(0),
             jobs: Arc::new(Semaphore::new(jobs)),
+            waiting: AtomicUsize::new(0),
+            queue: jobs.saturating_mul(QUEUE_PER_JOB),
+            turn: Notify::new(),
         })
     }
 
@@ -106,9 +170,11 @@ impl EncodeBudget {
         self.capacity
     }
 
-    /// The size of the input that the jobs of a row group receive at a time.
-    pub(super) fn slab_bytes(&self) -> usize {
+    /// The size of the input that the jobs of a row group of a file
+    /// with the given number of columns receive at a time.
+    fn slab_bytes(&self, columns: usize) -> usize {
         self.slab_bytes
+            .min(columns.max(1).saturating_mul(self.column_slab_bytes))
     }
 
     /// The part of the budget that is in use. This can be more than the size
@@ -138,8 +204,6 @@ impl EncodeBudget {
 /// What the files of a writer task share for encoding.
 pub struct EncodeResources {
     budget: Arc<EncodeBudget>,
-    /// The memory pool of the reservation.
-    pool: Arc<dyn MemoryPool>,
     /// The memory that the files of the task have taken from the budget.
     reservation: Arc<MemoryReservation>,
     elapsed_compute: Time,
@@ -150,13 +214,11 @@ impl EncodeResources {
     /// the memory pool what the files of the task have taken from the budget.
     pub fn new(
         budget: Arc<EncodeBudget>,
-        pool: &Arc<dyn MemoryPool>,
         reservation: MemoryReservation,
         elapsed_compute: Time,
     ) -> Self {
         Self {
             budget,
-            pool: Arc::clone(pool),
             reservation: Arc::new(reservation),
             elapsed_compute,
         }
@@ -164,19 +226,7 @@ impl EncodeResources {
 
     /// Takes the bytes from the budget and from the memory pool,
     /// or returns nothing if either does not have them.
-    ///
-    /// A memory pool with a limit has the bytes only while it is less than
-    /// half full. A write can do without the rows that it keeps for the jobs,
-    /// since the writer task then encodes them itself, and it cannot do
-    /// without the memory of its column writers. So the rows that are kept
-    /// leave half of the pool to the memory that fails a query when the pool
-    /// does not have it.
     pub(super) fn try_charge(&self, bytes: usize) -> Option<Charge> {
-        if let MemoryLimit::Finite(limit) = self.pool.memory_limit()
-            && self.pool.reserved().saturating_add(bytes) > limit / 2
-        {
-            return None;
-        }
         if !self.budget.try_take(bytes) {
             return None;
         }
@@ -213,15 +263,33 @@ impl EncodeResources {
         }
     }
 
-    /// The size of the input that the jobs of a row group receive at a time.
-    pub(super) fn slab_bytes(&self) -> usize {
-        self.budget.slab_bytes()
+    /// The size of the input that the jobs of a row group of a file
+    /// with the given number of columns receive at a time.
+    pub(super) fn slab_bytes(&self, columns: usize) -> usize {
+        self.budget.slab_bytes(columns)
+    }
+
+    /// Waits while the jobs of the process that wait for their turn to encode
+    /// are as many as the queue allows. A file calls this before it starts
+    /// jobs: more jobs would not be encoded sooner, and they would keep their
+    /// rows and the column writers of their row group in memory while they
+    /// wait. The jobs that are waited for need nothing but a thread, so they
+    /// have their turn whatever the file that waits does.
+    pub(super) async fn admit(&self) {
+        loop {
+            let turn = self.budget.turn.notified();
+            if self.budget.waiting.load(Ordering::Acquire) < self.budget.queue {
+                return;
+            }
+            turn.await;
+        }
     }
 
     /// Waits until a job may encode. The job may encode until the returned
     /// value is dropped. A job must not wait for anything but its turn
     /// on a thread while it has the value.
     pub(super) async fn job(&self) -> Result<OwnedSemaphorePermit> {
+        let _waiting = Waiting::new(&self.budget);
         Arc::clone(&self.budget.jobs)
             .acquire_owned()
             .await

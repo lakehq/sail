@@ -128,6 +128,8 @@ pub(super) struct ColumnEncoder {
     started: usize,
     row_group_writer_factory: ArrowRowGroupWriterFactory,
     max_row_group_row_count: usize,
+    /// The size of the rows that the jobs of a row group receive at a time.
+    slab_bytes: usize,
     /// The largest size of the values of a row group before they are encoded.
     max_row_group_bytes: usize,
     /// The size of the values of the row group that receives rows,
@@ -320,6 +322,7 @@ impl ColumnEncoder {
                 *count += 1;
             }
         }
+        let slab_bytes = resources.slab_bytes(schema.fields().len());
         Ok(Self {
             writer,
             buffer,
@@ -335,6 +338,7 @@ impl ColumnEncoder {
             started: 0,
             row_group_writer_factory,
             max_row_group_row_count: max_row_group_row_count.max(1),
+            slab_bytes,
             max_row_group_bytes: max_row_group_bytes.max(1),
             row_group_bytes: 0,
             leaf_counts,
@@ -426,7 +430,7 @@ impl ColumnEncoder {
                 if fit < rows {
                     if fit == 0 && self.row_group_rows() > 0 {
                         self.flush_small().await?;
-                        self.seal()?;
+                        self.seal().await?;
                         continue;
                     }
                     rows = fit.max(1);
@@ -443,11 +447,11 @@ impl ColumnEncoder {
             // does not encode more than a slab at a time, and so is a batch
             // with which the row group would exceed the size of a row group.
             let bytes: usize = column_bytes.iter().sum();
-            let room = self.resources.slab_bytes().min(self.row_group_byte_room());
+            let room = self.slab_bytes.min(self.row_group_byte_room());
             let (piece, column_bytes) = if bytes > room {
                 rows = (rows as u128 * room as u128 / bytes as u128) as usize;
                 if rows == 0 && self.row_group_rows() > 0 {
-                    self.seal()?;
+                    self.seal().await?;
                     continue;
                 }
                 rows = rows.max(1);
@@ -559,9 +563,9 @@ impl ColumnEncoder {
             }
         }
         if self.is_full() {
-            self.seal()?;
-        } else if self.pending.bytes() >= self.resources.slab_bytes() {
-            self.submit(false)?;
+            self.seal().await?;
+        } else if self.pending.bytes() >= self.slab_bytes {
+            self.submit(false).await?;
         }
         Ok(())
     }
@@ -575,7 +579,7 @@ impl ColumnEncoder {
     /// and waits for that. Returns whether the file had anything in the budget.
     async fn release(&mut self) -> Result<bool> {
         if self.pending.rows > 0 {
-            self.submit(false)?;
+            self.submit(false).await?;
             return Ok(true);
         }
         if !self.sealed.is_empty() {
@@ -674,10 +678,15 @@ impl ColumnEncoder {
 
     /// Starts the jobs for the rows of the row group that no job has received.
     /// The jobs complete the columns of the row group if these are its last rows.
-    fn submit(&mut self, last: bool) -> Result<()> {
+    ///
+    /// This waits while too many jobs of the process wait for their turn
+    /// to encode, so that the rows and the column writers of jobs that
+    /// cannot run are not kept in memory.
+    async fn submit(&mut self, last: bool) -> Result<()> {
         if self.pending.rows == 0 && !last {
             return Ok(());
         }
+        self.resources.admit().await;
         let slab = std::mem::take(&mut self.pending);
         let resources = Arc::clone(&self.resources);
         let stop = Arc::clone(&self.stop);
@@ -718,12 +727,12 @@ impl ColumnEncoder {
 
     /// Ends the row group that receives rows. The row group is added to the file
     /// when its columns are completed and all row groups before it are in the file.
-    fn seal(&mut self) -> Result<()> {
+    async fn seal(&mut self) -> Result<()> {
         if self.open.is_none() && self.pending.rows == 0 {
             return Ok(());
         }
         self.row_group_bytes = 0;
-        self.submit(true)?;
+        self.submit(true).await?;
         if let Some(open) = self.open.take() {
             self.sealed.push_back(open);
         }
@@ -763,7 +772,7 @@ impl ColumnEncoder {
     pub async fn flush(&mut self) -> Result<()> {
         self.slice = TimeSlice::start();
         self.flush_small().await?;
-        self.seal()?;
+        self.seal().await?;
         self.append_all().await
     }
 

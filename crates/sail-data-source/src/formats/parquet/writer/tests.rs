@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray,
-    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int32Array, Int64Array, Int64Builder,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListViewArray,
-    ListArray, ListViewArray, MapBuilder, NullArray, PrimitiveArray, RecordBatch,
-    RecordBatchOptions, RunArray, StringArray, StringBuilder, StringViewArray, StructArray,
-    UInt32Array, UnionArray, make_array, new_null_array,
+    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int32Array, Int64Array,
+    Int64Builder, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeListViewArray, ListArray, ListViewArray, MapBuilder, NullArray, PrimitiveArray,
+    RecordBatch, RecordBatchOptions, RunArray, StringArray, StringBuilder, StringViewArray,
+    StructArray, UInt32Array, UnionArray, make_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{
@@ -119,7 +119,6 @@ const TEST_BUDGET: usize = 64 * 1024 * 1024;
 fn test_resources(budget: Arc<EncodeBudget>, pool: &Arc<dyn MemoryPool>) -> Arc<EncodeResources> {
     Arc::new(EncodeResources::new(
         budget,
-        pool,
         MemoryConsumer::new("test").register(pool),
         Time::new(),
     ))
@@ -5740,6 +5739,7 @@ async fn test_dropped_file_writer_stops_a_job_that_is_encoding() -> Result<()> {
         Arc::clone(&schema),
         WriterProperties::builder()
             .set_max_row_group_row_count(Some(100_000_000))
+            .set_max_row_group_bytes(Some(usize::MAX))
             .set_compression(Compression::ZSTD(Default::default()))
             .build(),
         false,
@@ -6048,49 +6048,6 @@ async fn test_memory_pool_without_room_slows_the_files_instead_of_failing() -> R
     let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(3000));
     check_many_files_share_a_budget(20, Arc::clone(&budget), Arc::clone(&pool)).await?;
     assert_eq!(pool.reserved(), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_rows_are_kept_in_half_of_a_memory_pool_with_a_limit() -> Result<()> {
-    // The runtime of the test has one thread, so the jobs run only when
-    // the writer waits for them. A batch has 26,400 bytes of values, and
-    // the batches have the same values, so the encoded rows are small.
-    let schema = three_int_schema();
-    // The rows have 10.5 MB, and the pool has 8 MB.
-    let batches = vec![three_int_batch(0..1100)?; 400];
-    let mut options = TableParquetOptions::default();
-    options.global.max_row_group_size = 11_000;
-    let expected = reference_file_of_batches(&options, &batches)?;
-    options.arrow_schema(&schema);
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8_000_000));
-    let budget = EncodeBudget::with_slab_bytes(TEST_BUDGET, 600_000);
-    let mut writer = file_writer(
-        Arc::clone(&store),
-        Path::from("file.parquet"),
-        Arc::clone(&schema),
-        WriterPropertiesBuilder::try_from(&options)?.build(),
-        false,
-        10 * 1024 * 1024,
-        test_resources(Arc::clone(&budget), &pool),
-    )?;
-    // The memory of the column writers, which a task reserves for its files.
-    let columns = MemoryConsumer::new("columns").register(&pool);
-    let mut most = 0;
-    for batch in &batches {
-        writer.write(batch).await?;
-        most = most.max(budget.used());
-        // The pool has room for the column writers, whatever the budget has.
-        columns.try_resize(writer.memory_size())?;
-    }
-    assert!(most >= 3_000_000, "{most}");
-    assert!(most <= 4_000_000 + expected.len(), "{most}");
-    writer.close().await?;
-    columns.free();
-    assert_eq!(pool.reserved(), 0);
-    let data = read_bytes(store.as_ref(), "file.parquet").await?;
-    assert!(data == expected);
     Ok(())
 }
 
