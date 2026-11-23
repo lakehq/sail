@@ -2,8 +2,9 @@
 
 """Comparators for upstream Spark parity tests."""
 
+from pandas import NA
 from pandas._testing.asserters import assert_frame_equal
-from pandas.api.types import is_float_dtype, is_hashable
+from pandas.api.types import is_float_dtype, is_hashable, is_object_dtype
 from pandas.testing import assert_index_equal
 
 
@@ -35,6 +36,16 @@ def normalize_datetime_dtypes(df):
     for position, dtype in enumerate(result.dtypes):
         if str(dtype) == "datetime64[ns]":
             result.isetitem(position, result.iloc[:, position].astype("datetime64[us]"))
+    return result
+
+
+def normalize_pandas_nulls(df):
+    """Use None for pd.NA in object columns when comparing Spark results."""
+    result = df.copy()
+    for position, dtype in enumerate(result.dtypes):
+        if is_object_dtype(dtype):
+            column = result.iloc[:, position]
+            result.isetitem(position, column.mask(column.map(lambda value: value is NA), None))
     return result
 
 
