@@ -4655,14 +4655,12 @@ fn combined_batches(batches: &[RecordBatch], row_group_rows: usize) -> Result<Ve
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
-    // The size of the encoded data follows the number of rows
-    // without dictionaries and with small pages.
     let mut options = TableParquetOptions::default();
     options.global.dictionary_enabled = Some(false);
     options.global.data_pagesize_limit = 512;
     options.global.data_page_row_count_limit = 16;
     options.global.max_row_group_bytes = Some("9000".parse()?);
-    // The first batch alone is larger than the limit.
+    // The values of the first batch alone are larger than the limit.
     let batches = vec![all_types_batch(78)?, all_types_batch(25)?];
     let schema = batches[0].schema();
     let rows: usize = batches.iter().map(|x| x.num_rows()).sum();
@@ -4684,8 +4682,7 @@ async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
         .map(|x| x.num_rows() as usize)
         .collect();
     assert_eq!(row_groups.iter().sum::<usize>(), rows);
-    // A row group receives one row before the size of its rows is known,
-    // and it then ends where the limit is expected to be reached,
+    // A row group ends where its values reach the limit,
     // so the first row group ends inside the first batch.
     assert!(row_groups.len() > 2, "{row_groups:?}");
     assert!(row_groups[0] > 1, "{row_groups:?}");
@@ -4698,9 +4695,10 @@ async fn test_row_group_byte_limit_applies_to_first_batch() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_row_group_byte_limit_is_the_size_of_the_encoded_rows() -> Result<()> {
-    // The rows have the same size, and the encoded data is not compressed,
-    // so the size of a row group in the file is the size that the limit is for.
+async fn test_row_group_byte_limit_is_the_size_of_the_values() -> Result<()> {
+    // The rows have the same size, and the values are neither encoded in
+    // fewer bytes nor compressed, so the size of a row group in the file
+    // is about the size of its values, which the limit is for.
     let schema = three_int_schema();
     let source = three_int_batch(0..100_000)?;
     let batches: Vec<_> = (0..100).map(|i| source.slice(i * 1000, 1000)).collect();
@@ -4721,9 +4719,7 @@ async fn test_row_group_byte_limit_is_the_size_of_the_encoded_rows() -> Result<(
             .iter()
             .map(|x| x.compressed_size() as usize)
             .collect();
-        // Each row group but the last has the size of the limit. A row group
-        // ends at the row with which it is expected to reach the limit,
-        // and the pages that are not full are counted without their headers.
+        // Each row group but the last has about the size of the limit.
         if let Some((_, full)) = row_groups.split_last() {
             for size in full {
                 assert!(*size >= limit * 9 / 10, "{limit} {row_groups:?}");
@@ -4890,8 +4886,7 @@ async fn test_encoding_reports_error_of_job() -> Result<()> {
             options.global.max_row_group_bytes = Some("65536".parse()?);
         }
         // The error is found when the row group is added to the file,
-        // when the size of the encoded rows is needed, when the writer
-        // encodes the rows itself, or when the file is completed.
+        // when the writer encodes the rows itself, or when the file is completed.
         for batches in [1, 20] {
             let batches = vec![batch.clone(); batches];
             let Err(expected) = reference_file_of_batches(&options, &batches) else {
@@ -4958,7 +4953,7 @@ async fn test_row_groups_end_where_the_options_say() -> Result<()> {
         options.global.max_row_group_size = limit;
         cases.push((options, Some(rows.div_ceil(limit))));
     }
-    // The first two limits are below the size of the encoded rows of the batches,
+    // The first two limits are below the size of the values of the batches,
     // so row groups end inside batches.
     for limit in ["9000", "24000", "1073741824"] {
         let mut options = TableParquetOptions::default();

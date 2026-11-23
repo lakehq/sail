@@ -46,6 +46,12 @@ const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 /// 1.8 times the memory.
 const TIME_SLICE: Duration = Duration::from_millis(10);
 
+/// The size of the values of a row group at which the row group ends when
+/// the options of the write do not limit the size of a row group.
+///
+/// PROVISIONAL: see the measurements in the log of this change.
+const ROW_GROUP_BYTES: usize = 128 * 1024 * 1024;
+
 /// The number of rows below which a batch is combined with the batches after it
 /// before its rows are encoded or kept for the jobs.
 ///
@@ -84,15 +90,17 @@ const SMALL_BATCH_COUNT: usize = 32;
 /// It never waits for another file, so the files of a process cannot block
 /// each other, whatever the files that do not receive rows have taken.
 ///
-/// The writer task waits for the jobs of each slab when the size of a row
-/// group is limited in bytes, since the size of the encoded rows is known
-/// only then.
+/// A row group ends when it has the largest number of rows of a row group,
+/// or when its values have the largest size of a row group. This is the size
+/// of the values before they are encoded, which is known without waiting for
+/// the jobs, so the limit does not change how many columns are encoded at
+/// the same time.
 ///
 /// Batches of few rows are combined before they are encoded, whatever the budget
 /// has. Each column writer then receives the same arrays in the same order as
 /// it does in [`ArrowWriter`] for the combined batches, so the file has the same
-/// content as the file that [`ArrowWriter`] writes for them, unless the size of
-/// a row group is limited in bytes or a batch is larger than a slab.
+/// content as the file that [`ArrowWriter`] writes for them, unless a row group
+/// ends at the limit on the size of its values or a batch is larger than a slab.
 pub(super) struct ColumnEncoder {
     writer: SerializedFileWriter<SharedBuffer>,
     /// The encoded data that has not been handed to the upload.
@@ -120,11 +128,11 @@ pub(super) struct ColumnEncoder {
     started: usize,
     row_group_writer_factory: ArrowRowGroupWriterFactory,
     max_row_group_row_count: usize,
-    max_row_group_bytes: Option<usize>,
-    /// The rows that the row group that receives rows takes before the size
-    /// of its encoded rows is needed again, when the size of a row group
-    /// is limited in bytes.
-    measured: Option<MeasuredRows>,
+    /// The largest size of the values of a row group before they are encoded.
+    max_row_group_bytes: usize,
+    /// The size of the values of the row group that receives rows,
+    /// without the batches of few rows that are not combined.
+    row_group_bytes: usize,
     /// The number of leaf columns of each top-level column.
     leaf_counts: Vec<usize>,
     /// The size and the number of the rows that the file has received,
@@ -155,13 +163,6 @@ impl TimeSlice {
             self.0 = Instant::now();
         }
     }
-}
-
-/// The rows that a row group takes without waiting for the size of its encoded rows.
-struct MeasuredRows {
-    rows: usize,
-    /// Whether the row group is expected to reach the limit on its size with the rows.
-    last: bool,
 }
 
 /// Batches of few rows that are combined before they are encoded.
@@ -304,7 +305,7 @@ impl ColumnEncoder {
         resources: Arc<EncodeResources>,
     ) -> Result<Self> {
         let max_row_group_row_count = props.max_row_group_row_count().unwrap_or(usize::MAX);
-        let max_row_group_bytes = props.max_row_group_bytes();
+        let max_row_group_bytes = props.max_row_group_bytes().unwrap_or(ROW_GROUP_BYTES);
         let buffer = SharedBuffer::new(UPLOAD_THRESHOLD);
         let options = ArrowWriterOptions::new()
             .with_properties(props)
@@ -334,8 +335,8 @@ impl ColumnEncoder {
             started: 0,
             row_group_writer_factory,
             max_row_group_row_count: max_row_group_row_count.max(1),
-            max_row_group_bytes,
-            measured: None,
+            max_row_group_bytes: max_row_group_bytes.max(1),
+            row_group_bytes: 0,
             leaf_counts,
             input_bytes: 0,
             input_rows: 0,
@@ -413,46 +414,43 @@ impl ColumnEncoder {
         let mut rest = batch.clone();
         while rest.num_rows() > 0 {
             let mut rows = rest.num_rows().min(self.row_group_room());
-            if let Some(max_bytes) = self.max_row_group_bytes {
-                let (measured, last) = self
-                    .measured
-                    .as_ref()
-                    .map_or((0, false), |x| (x.rows, x.last));
-                let measured = if measured > 0 {
-                    measured
-                } else if last {
-                    self.flush_small().await?;
-                    self.seal()?;
-                    continue;
-                } else {
-                    match self.measure(max_bytes).await? {
-                        Some(measured) => self.measured.insert(measured).rows,
-                        None => {
-                            self.seal()?;
-                            continue;
-                        }
-                    }
-                };
-                rows = rows.min(measured);
-            }
             if rows < SMALL_BATCH_ROWS {
+                // The size of the values of each batch is not computed, since that
+                // takes longer than the batch does once the batches are combined.
+                let row_bytes = match self.input_rows {
+                    0 => column_sizes(&rest.slice(0, rows)).iter().sum::<usize>() / rows.max(1),
+                    input_rows => (self.input_bytes / input_rows) as usize,
+                }
+                .max(1);
+                let fit = self.row_group_byte_room() / row_bytes;
+                if fit < rows {
+                    if fit == 0 && self.row_group_rows() > 0 {
+                        self.flush_small().await?;
+                        self.seal()?;
+                        continue;
+                    }
+                    rows = fit.max(1);
+                }
                 let piece = rest.slice(0, rows);
                 rest = rest.slice(rows, rest.num_rows() - rows);
-                if let Some(measured) = &mut self.measured {
-                    measured.rows = measured.rows.saturating_sub(rows);
-                }
-                self.add_small(piece).await?;
+                self.add_small(piece, rows * row_bytes).await?;
                 continue;
             }
             self.flush_small().await?;
             let piece = rest.slice(0, rows);
             let column_bytes = column_sizes(&piece);
             // A batch that is larger than a slab is divided, so that a job
-            // does not encode more than a slab at a time.
+            // does not encode more than a slab at a time, and so is a batch
+            // with which the row group would exceed the size of a row group.
             let bytes: usize = column_bytes.iter().sum();
-            let slab_bytes = self.resources.slab_bytes();
-            let (piece, column_bytes) = if bytes > slab_bytes {
-                rows = (rows as u128 * slab_bytes as u128 / bytes as u128).max(1) as usize;
+            let room = self.resources.slab_bytes().min(self.row_group_byte_room());
+            let (piece, column_bytes) = if bytes > room {
+                rows = (rows as u128 * room as u128 / bytes as u128) as usize;
+                if rows == 0 && self.row_group_rows() > 0 {
+                    self.seal()?;
+                    continue;
+                }
+                rows = rows.max(1);
                 let piece = rest.slice(0, rows);
                 let column_bytes = column_sizes(&piece);
                 (piece, column_bytes)
@@ -460,9 +458,6 @@ impl ColumnEncoder {
                 (piece, column_bytes)
             };
             rest = rest.slice(rows, rest.num_rows() - rows);
-            if let Some(measured) = &mut self.measured {
-                measured.rows = measured.rows.saturating_sub(rows);
-            }
             self.add(piece, column_bytes).await?;
         }
         Ok(())
@@ -470,13 +465,9 @@ impl ColumnEncoder {
 
     /// Adds a batch of few rows to the row group that receives rows. The batch
     /// is combined with the batches of few rows before and after it.
-    async fn add_small(&mut self, piece: RecordBatch) -> Result<()> {
-        // The size of the values of each batch is not computed, since that
-        // takes longer than the batch does once the batches are combined.
-        self.small.bytes += match self.input_rows {
-            0 => column_sizes(&piece).iter().sum(),
-            rows => piece.num_rows() * (self.input_bytes / rows).max(1) as usize,
-        };
+    /// The batch is expected to have values of the given size.
+    async fn add_small(&mut self, piece: RecordBatch, bytes: usize) -> Result<()> {
+        self.small.bytes += bytes;
         self.small.rows += piece.num_rows();
         self.small.batches.push(piece);
         self.small.received += 1;
@@ -520,54 +511,15 @@ impl ColumnEncoder {
             .max(1)
     }
 
+    /// The size of the values that the row group that receives rows can still take.
+    fn row_group_byte_room(&self) -> usize {
+        self.max_row_group_bytes
+            .saturating_sub(self.row_group_bytes + self.small.bytes)
+    }
+
     /// The number of rows that the row group that receives rows has.
     fn row_group_rows(&self) -> usize {
         self.open.as_ref().map_or(0, |x| x.rows) + self.pending.rows + self.small.rows
-    }
-
-    /// Returns the rows that the row group that receives rows takes next when
-    /// the size of a row group is limited in bytes, or nothing when the row
-    /// group has reached the limit.
-    ///
-    /// The size of the encoded rows is known only after they are encoded,
-    /// so this waits for the jobs of the row group. The row group takes one
-    /// row first. After that it takes as many rows as are expected to fit
-    /// from the average size of its rows so far, and at most as many rows
-    /// as it has, so that the average is never used for more rows than it
-    /// was measured with. The row group ends without another measurement
-    /// when it has taken the rows that are expected to fit.
-    async fn measure(&mut self, max_bytes: usize) -> Result<Option<MeasuredRows>> {
-        self.flush_small().await?;
-        self.submit(false)?;
-        self.join_open().await?;
-        let Some(open) = &self.open else {
-            return Ok(Some(MeasuredRows {
-                rows: 1,
-                last: false,
-            }));
-        };
-        let estimated: usize = open
-            .columns
-            .iter()
-            .map(|column| match column {
-                ColumnState::Idle(writers) => writers
-                    .iter()
-                    .map(|x| x.get_estimated_total_bytes())
-                    .sum::<usize>(),
-                ColumnState::Running(_) => 0,
-            })
-            .sum();
-        if estimated >= max_bytes {
-            return Ok(None);
-        }
-        let fit = match estimated / open.rows.max(1) {
-            0 => usize::MAX,
-            row_bytes => (max_bytes - estimated) / row_bytes,
-        };
-        Ok((fit > 0).then_some(MeasuredRows {
-            rows: fit.min(open.rows),
-            last: fit <= open.rows,
-        }))
     }
 
     /// Adds rows to the row group that receives rows.
@@ -575,6 +527,7 @@ impl ColumnEncoder {
         let bytes: usize = column_bytes.iter().sum();
         self.input_bytes += bytes as u64;
         self.input_rows += piece.num_rows() as u64;
+        self.row_group_bytes += bytes;
         loop {
             if let Some(charge) = self.resources.try_charge(bytes) {
                 self.pending.rows += piece.num_rows();
@@ -615,7 +568,7 @@ impl ColumnEncoder {
 
     /// Whether the row group that receives rows has all its rows.
     fn is_full(&self) -> bool {
-        self.row_group_rows() >= self.max_row_group_row_count
+        self.row_group_rows() >= self.max_row_group_row_count || self.row_group_byte_room() == 0
     }
 
     /// Makes the file return a part of what it has taken from the budget,
@@ -698,7 +651,7 @@ impl ColumnEncoder {
     /// the row group to the file. The columns of the row group must have no jobs,
     /// and the row groups before it must be in the file.
     async fn complete(&mut self) -> Result<()> {
-        self.measured = None;
+        self.row_group_bytes = 0;
         let Some(open) = self.open.take() else {
             return Ok(());
         };
@@ -766,10 +719,10 @@ impl ColumnEncoder {
     /// Ends the row group that receives rows. The row group is added to the file
     /// when its columns are completed and all row groups before it are in the file.
     fn seal(&mut self) -> Result<()> {
-        self.measured = None;
         if self.open.is_none() && self.pending.rows == 0 {
             return Ok(());
         }
+        self.row_group_bytes = 0;
         self.submit(true)?;
         if let Some(open) = self.open.take() {
             self.sealed.push_back(open);
