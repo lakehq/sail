@@ -10,6 +10,7 @@ use datafusion_common::config::{
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
@@ -32,6 +33,7 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
+            merge_schema: Some(None),
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -54,6 +56,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 impl ParquetReadOptions {
     pub fn into_table_options(self) -> TableParquetOptions {
         let ParquetReadOptions {
+            merge_schema: _,
             enable_page_index,
             pruning,
             skip_metadata,
@@ -309,6 +312,13 @@ impl ResolveOptions for ParquetReadOptions {
                 .parquet
                 .build_partial_options()?,
         );
+        // Preserve the ordinary listing sample when neither the session nor the reader sets mergeSchema.
+        let key = "spark.sql.parquet.mergeSchema";
+        if let Some(service) = ctx.config().get_extension::<SessionConfigService>()
+            && let Some(value) = service.get_options_with_prefix(key)?.get(key)
+        {
+            partial.merge_schema = Some(Some(crate::options::parsers::parse_bool(key, value)?));
+        }
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }

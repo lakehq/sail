@@ -324,8 +324,8 @@ mod serde_day_time_interval {
         let start = start.as_ref().map(|field| field.to_string());
         let end = end.as_ref().map(|field| field.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {start} to {end}"),
-            (Some(start), None) => format!("interval {start}"),
+            (Some(start), Some(end)) if start != end => format!("interval {start} to {end}"),
+            (Some(start), _) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid day time interval")),
         };
         interval.serialize(serializer)
@@ -365,8 +365,8 @@ mod serde_year_month_interval {
         let start = start.as_ref().map(|field| field.to_string());
         let end = end.as_ref().map(|field| field.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {start} to {end}"),
-            (Some(start), None) => format!("interval {start}"),
+            (Some(start), Some(end)) if start != end => format!("interval {start} to {end}"),
+            (Some(start), _) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid year month interval")),
         };
         interval.serialize(serializer)
