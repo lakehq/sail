@@ -37,7 +37,7 @@ fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TimestampParser {
+pub enum TimestampParser {
     Ltz { default_timezone: String },
     Ntz,
 }
@@ -149,7 +149,7 @@ impl TimestampParser {
         }
     }
 
-    pub(crate) fn parse_unformatted(&self, value: &str) -> Result<i64> {
+    pub fn parse_unformatted(&self, value: &str) -> Result<i64> {
         let ParsedTimestamp {
             segments,
             timezone,

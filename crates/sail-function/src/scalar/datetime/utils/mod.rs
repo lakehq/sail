@@ -3,3 +3,5 @@
 pub(crate) mod common;
 pub mod format;
 pub(crate) mod parser;
+
+pub use parser::parse_time_nanoseconds;
