@@ -235,8 +235,7 @@ Feature: window() time-based windowing function
 
   Rule: Argument validation
 
-    # Spark reports these through WRONG_NUM_ARGS and DATATYPE_MISMATCH error classes; Sail uses
-    # its own wording for every one of them.
+    # Sail and Spark report different error messages for these cases.
     @sail-bug
     Scenario Outline: Argument validation: <case>
       When query
@@ -256,8 +255,6 @@ Feature: window() time-based windowing function
         | window rejects a non-timestamp time column                       | true                                         | b    | b, '5 minutes'               | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.*The first parameter requires the              |
         | window rejects a month-based duration (non-constant length)      | TIMESTAMP '2021-01-01 00:00:00'              | b    | b, '1 month'                 | Intervals greater than a month is not supported                                             |
 
-    # The expected error regex contains `\(` escape sequences, and pytest-bdd doubles a
-    # backslash inside an Examples cell, so this scenario cannot be parameterised.
     Scenario: window rejects a start time whose absolute value is not less than the slide duration
       When query
         """

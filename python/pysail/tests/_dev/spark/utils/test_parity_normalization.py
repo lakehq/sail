@@ -4,7 +4,11 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.testing._dev.spark.utils.parity import normalize_datetime_dtypes, normalize_pandas_data_frame
+from pysail.testing._dev.spark.utils.parity import (
+    normalize_datetime_dtypes,
+    normalize_pandas_data_frame,
+    normalize_pandas_nulls,
+)
 
 
 # Sail comparator regression for Spark 3 (3.5.9):
@@ -95,3 +99,18 @@ def test_duplicate_empty_columns_preserve_dtypes():
     frame = pd.concat([pd.Series([], dtype="int32"), pd.Series([], dtype="object")], axis=1)
     frame.columns = ["same", "same"]
     assert_frame_equal(normalize_datetime_dtypes(normalize_pandas_data_frame(frame)), frame)
+
+
+def test_pandas_null_normalization_preserves_object_and_nullable_dtypes():
+    frame = pd.DataFrame(
+        {"object": pd.Series([pd.NA, "value"], dtype="object"), "nullable": pd.Series([pd.NA, 1], dtype="Int64")}
+    )
+    expected = frame.copy()
+    expected.loc[0, "object"] = None
+
+    result = normalize_pandas_nulls(frame)
+
+    assert result.loc[0, "object"] is None
+    assert result.loc[0, "nullable"] is pd.NA
+    assert_frame_equal(result, expected)
+    assert frame.loc[0, "object"] is pd.NA
