@@ -10650,6 +10650,20 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_json_udfs_preserve_timezone() -> Result<()> {
+        let timezone = "Asia/Shanghai";
+        let decoded = round_trip_udf(ScalarUDF::from(VariantToJsonUdf::new(timezone.into())))?;
+        let decoded = downcast_udf::<VariantToJsonUdf>(&decoded, "VariantToJsonUdf")?;
+        assert_eq!(decoded.timezone(), timezone);
+
+        let decoded = round_trip_udf(ScalarUDF::from(ToJson::new(timezone.into())))?;
+        let decoded = downcast_udf::<ToJson>(&decoded, "ToJson")?;
+        assert_eq!(decoded.session_timezone(), timezone);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_qualified_interval_parsing() -> Result<()> {
         use datafusion::arrow::array::StringArray;
         use datafusion::common::DFSchema;

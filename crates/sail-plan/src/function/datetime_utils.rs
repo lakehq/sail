@@ -224,7 +224,7 @@ where
         Ok(f(coerce_timestamp_ntz_values(
             arguments,
             function_context.schema,
-            &function_context.plan_config.session_timezone_label(),
+            &function_context.plan_config.session_timezone,
         )?))
     }
 }
