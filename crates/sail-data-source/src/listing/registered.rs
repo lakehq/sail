@@ -143,14 +143,15 @@ pub(super) async fn prepare_registered_scan(
         return ListingTableSource::try_new(config);
     }
 
+    // These partition locations share a reader and object store, so use one sampling budget.
     let urls = config
         .table_paths
         .iter()
-        .map(|(url, _)| vec![url.clone()])
+        .map(|(url, _)| url.clone())
         .collect::<Vec<_>>();
     let (samples, _) = sample_listing_files(
         session,
-        &urls,
+        std::slice::from_ref(&urls),
         config.path_glob_filter.as_ref(),
         None,
         false,

@@ -257,3 +257,34 @@ def test_partitioned_python_table_keeps_its_reader(spark, moto_endpoint):
         assert spark.table(f"test_db.{name}").collect() == [(42,)]
     finally:
         glue.delete_table(DatabaseName="test_db", Name=name)
+
+
+def test_registered_json_provider_alias(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_json_provider_alias"
+    (tmp_path / "data.json").write_text('{"id": 42}')
+    glue.create_table(
+        DatabaseName="test_db",
+        TableInput={
+            "Name": name,
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {"spark.sql.sources.provider": "org.apache.spark.sql.json"},
+            "StorageDescriptor": {"Columns": [{"Name": "id", "Type": "int"}]},
+            "PartitionKeys": [{"Name": "p", "Type": "int"}],
+        },
+    )
+    try:
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={
+                "Values": ["3"],
+                "StorageDescriptor": {
+                    "Location": str(tmp_path),
+                    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                },
+            },
+        )
+        assert spark.table(f"test_db.{name}").collect() == [(42, 3)]
+    finally:
+        glue.delete_table(DatabaseName="test_db", Name=name)

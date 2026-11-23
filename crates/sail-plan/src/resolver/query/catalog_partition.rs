@@ -32,8 +32,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<Arc<dyn TableSource>>> {
         // A registered non-file provider owns its reads. An unsupported Hive file format
         // can still have readable partitions with explicit storage descriptors.
+        let provider = registry.get_data_source_if_registered(format)?;
+        let format = provider.as_ref().map_or(format, |source| source.name());
         let partitions = if !info.partition_by.is_empty()
-            && registry.get_data_source_if_registered(format)?.map_or_else(
+            && provider.as_ref().map_or_else(
                 || HiveStorageFormat::from_format(format).is_ok(),
                 |s| s.supports_registered_partitions(),
             ) {
