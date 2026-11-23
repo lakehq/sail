@@ -4284,6 +4284,10 @@ fn fault_partition_task(
     let mut task = partition_task(Arc::clone(store) as Arc<dyn ObjectStore>, 0, &["p"]);
     task.publisher = store.publisher(mode);
     task.max_open_files = max_open_files;
+    // The task writes each batch when it receives it. With a larger batch size,
+    // it combines batches of few rows before it writes them.
+    let config = SessionConfig::new().with_batch_size(1);
+    task.context = Arc::new(TaskContext::default().with_session_config(config));
     if clustered {
         task.ordering = LexOrdering::new([PhysicalSortExpr::new(
             Arc::new(Column::new("p", 0)),
@@ -4455,6 +4459,19 @@ async fn test_partitioned_task_counts_the_memory_of_files_that_are_being_complet
         (task, input)
     })
     .await?;
+
+    // With the batch size of a session, the task keeps the row until it has
+    // more rows to write with it, and it has no file.
+    let batch = keyed_batch(&[Some(1)], 0)?;
+    let no_file = reserved(|store| {
+        let mut task = fault_partition_task(store, Mode::Multipart, 2, true);
+        task.context = Arc::new(TaskContext::default());
+        let input = test_stream_with_end(&schema, vec![batch], futures::stream::pending());
+        (task, input)
+    })
+    .await?;
+    assert!(one_row > 0);
+    assert_eq!(no_file, 0);
 
     // The file of the first key is being completed in addition to that.
     let batch = keyed_batch(&[vec![Some(0); 2000], vec![Some(1)]].concat(), 0)?;

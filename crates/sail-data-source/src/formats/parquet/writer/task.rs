@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::BatchCoalescer;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -14,6 +15,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Result, exec_err};
 use futures::{Stream, StreamExt};
 use object_store::path::Path;
+use sail_common_datafusion::data_type::contains_dictionary;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -666,6 +668,24 @@ pub fn write_partition(
     })
 }
 
+/// Writes rows to the files of a task, and keeps the memory of the files
+/// in the memory pool up to date.
+async fn write_rows(
+    output: &mut TaskOutput,
+    factory: &FileFactory,
+    batch: &RecordBatch,
+    written: &mut Vec<StagedFile>,
+    reservation: &MemoryReservation,
+    pool: &Arc<dyn MemoryPool>,
+) -> Result<()> {
+    output.write(factory, batch, written).await?;
+    let size = output.memory_size();
+    if reserve_or_flush(reservation, pool, size, output.flush(written)).await? {
+        reservation.try_resize(output.memory_size())?;
+    }
+    Ok(())
+}
+
 /// Writes the files of one input partition and returns the manifest of the task.
 async fn write_files(
     task: ParquetWriteTask,
@@ -714,8 +734,16 @@ async fn write_files(
     } else {
         Some("Parquet write does not support data whose columns are all partition columns")
     };
+    let batch_size = task.context.session_config().batch_size();
+    let partitioned = !task.partition_columns.is_empty();
     let factory = FileFactory::try_new(task, files, &input_schema, schema, resources)?;
     let mut written = vec![];
+    // The batches of a partitioned write are divided by their partition keys,
+    // which has a cost for each batch and each key that does not depend on
+    // the rows. So batches with fewer rows than half a batch of the session,
+    // as a repartition of the query produces them, are combined before they
+    // are divided. Batches with dictionaries of their own are not combined.
+    let mut combined: Option<BatchCoalescer> = None;
     while let Some(batch) = input.next().await.transpose()? {
         if batch.num_rows() == 0 {
             continue;
@@ -723,10 +751,53 @@ async fn write_files(
         if let Some(message) = rows_not_supported {
             return exec_err!("{message}");
         }
-        output.write(&factory, &batch, &mut written).await?;
-        let size = output.memory_size();
-        if reserve_or_flush(&reservation, &pool, size, output.flush(&mut written)).await? {
-            reservation.try_resize(output.memory_size())?;
+        let schema = batch.schema();
+        if !partitioned
+            || schema
+                .fields()
+                .iter()
+                .any(|field| contains_dictionary(field.data_type()))
+        {
+            write_rows(
+                &mut output,
+                &factory,
+                &batch,
+                &mut written,
+                &reservation,
+                &pool,
+            )
+            .await?;
+            continue;
+        }
+        let combined = combined.get_or_insert_with(|| {
+            BatchCoalescer::new(schema, batch_size.max(1))
+                .with_biggest_coalesce_batch_size(Some(batch_size / 2))
+        });
+        combined.push_batch(batch)?;
+        while let Some(batch) = combined.next_completed_batch() {
+            write_rows(
+                &mut output,
+                &factory,
+                &batch,
+                &mut written,
+                &reservation,
+                &pool,
+            )
+            .await?;
+        }
+    }
+    if let Some(mut combined) = combined {
+        combined.finish_buffered_batch()?;
+        while let Some(batch) = combined.next_completed_batch() {
+            write_rows(
+                &mut output,
+                &factory,
+                &batch,
+                &mut written,
+                &reservation,
+                &pool,
+            )
+            .await?;
         }
     }
     if let TaskOutput::Directory(output) = &mut output
