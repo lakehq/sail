@@ -85,7 +85,7 @@ impl PlanResolver<'_> {
             ));
         }
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let target = if let Some(path) = manager.clone_path(table.parts()).await? {
+        let target = if let Some(path) = manager.delta_table_path(table.parts()).await? {
             CloneTarget::Path(path.into())
         } else {
             let default_location = self.resolve_default_table_location(&table).await?;
