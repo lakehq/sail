@@ -15,6 +15,7 @@ use futures::{Stream, StreamExt};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::driver::{DriverActor, DriverMessage};
@@ -100,12 +101,17 @@ pub fn build_job_output(
     ctx: &mut ActorContext<DriverActor>,
     job_id: JobId,
     schema: SchemaRef,
+    shutdown: CancellationToken,
 ) -> (JobOutputManager, SendableRecordBatchStream) {
     let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
     let handle = ctx.handle().clone();
     ctx.spawn(async move {
-        let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+        let outcome = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            outcome = forward_job_output(JobOutputStream::new(receiver), &tx) => outcome,
+        };
         // Output errors and consumer cancellation can precede terminal task updates.
         // Tell the scheduler why output ended so cleanup records the correct job status.
         // Keep `tx` alive until cleanup has been sent, before signaling EOF to the client.

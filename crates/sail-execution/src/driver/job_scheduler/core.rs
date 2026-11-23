@@ -66,7 +66,8 @@ impl JobScheduler {
         )?;
         debug!("job {job_id} job graph \n{graph}");
 
-        let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
+        let (output, stream) =
+            build_job_output(ctx, job_id, graph.schema().clone(), self.shutdown.clone());
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
@@ -726,19 +727,13 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
+        // Release remote task streams even when their consumer has stopped reading.
+        self.shutdown.cancel();
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         for (job_id, job) in self.jobs.iter_mut() {
             let job_id = u64::from(*job_id);
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
-                // For running jobs, the job output is dropped here.
-                // Internally, the job output manages the receiving end of the output stream.
-                // So once the stream receiver is no longer available, all the running tasks
-                // will ultimately find that the sink (owned by the shuffle write node) is closed.
-                // The task will stop running even if the task produces an infinite stream.
-                // Once the tasks are stopped, the inputs (gRPC streaming responses owned by
-                // shuffle read nodes) are dropped. So the worker gRPC server will have no active
-                // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
                 event_reporter.report(SystemEvent::JobUpdated {
                     session_id: session_id.to_string(),
