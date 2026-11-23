@@ -76,7 +76,7 @@ use uuid::Uuid;
 
 use crate::formats::parquet::writer::encoder::logical_size;
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
-use crate::formats::parquet::writer::file::ParquetFileWriter;
+use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
 use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
@@ -3946,14 +3946,18 @@ async fn test_failed_task_removes_staged_files() -> Result<()> {
         let result = stream.next().await;
         assert!(matches!(result, Some(Err(e)) if e.to_string().contains("input failure")));
         assert!(stream.next().await.is_none());
-        // The first file is staged by a task that is not canceled,
-        // and it is removed when it is staged.
+        // The first file is completed by a task of its own. The task drops
+        // the file if it has not started to upload the last data of the file,
+        // and it removes the file when the file is staged otherwise.
+        store.wait_for(&[]).await?;
+        if store.requests().is_empty() {
+            continue;
+        }
         let removal = match mode {
             Mode::Rename => "DELETE",
             Mode::Multipart => "ABORT",
         };
         store.wait_for_requests(removal, 1).await?;
-        store.wait_for(&[]).await?;
         let name = file_name(0, 0, ".parquet");
         let expected = match mode {
             Mode::Rename => vec![
@@ -5728,6 +5732,41 @@ async fn test_canceled_task_with_jobs_removes_file_that_is_staged_later() -> Res
     }
     assert_eq!(store.count("DELETE"), 1);
     store.wait_for(&[]).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_canceled_task_stops_the_file_that_is_being_completed() -> Result<()> {
+    let tasks = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let schema = int_schema();
+    let store = FaultStore::new();
+    // The object store does not answer the requests for the parts of a file.
+    let gate = store.hold("PART");
+    let mut task = large_file_task(&store, Mode::Multipart);
+    let budget = EncodeBudget::new(TEST_BUDGET);
+    task.budget = Arc::clone(&budget);
+    // The first file has 12 row groups of about 160 KiB when it has all its
+    // rows, and it is completed while the second file receives rows: its row
+    // groups are added to it until it has as many parts without an answer
+    // as a file uploads at the same time.
+    task.max_records_per_file = 240_000;
+    let input = task_input(&schema, large_batches(&schema, 14)?, false);
+    let mut stream = Box::pin(write_stream(task, input));
+    tokio::select! {
+        _ = stream.next() => return Err(internal_datafusion_err!("the write must wait")),
+        _ = gate.wait_for(MAX_UPLOAD_CONCURRENCY) => {}
+    }
+    assert_eq!(store.count("CREATE"), 1);
+    drop(stream);
+    // The file that was being completed does not wait for the object store:
+    // its jobs end, what they have encoded is released, and its upload is aborted.
+    wait_for_tasks(tasks).await?;
+    assert_eq!(budget.used(), 0);
+    store.wait_for(&[]).await?;
+    assert_eq!(store.count("ABORT"), 1);
+    assert_eq!(store.count("COMPLETE"), 0);
     Ok(())
 }
 

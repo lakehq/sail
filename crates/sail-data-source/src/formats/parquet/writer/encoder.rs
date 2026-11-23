@@ -803,13 +803,20 @@ impl ColumnEncoder {
         Ok(())
     }
 
-    /// Writes the remaining data and the footer, and uploads what remains.
-    /// Returns the size of the file and how the file is published.
-    pub async fn finish(&mut self) -> Result<(usize, Publish)> {
+    /// Ends the row group that receives rows, and adds all row groups to the file
+    /// after waiting for their columns to be completed. The rows that the file
+    /// receives after that are in another row group.
+    pub async fn flush(&mut self) -> Result<()> {
         self.slice = TimeSlice::start();
         self.flush_small().await?;
         self.seal()?;
-        self.append_all().await?;
+        self.append_all().await
+    }
+
+    /// Writes the remaining data and the footer, and uploads what remains.
+    /// Returns the size of the file and how the file is published.
+    pub async fn finish(&mut self) -> Result<(usize, Publish)> {
+        self.flush().await?;
         self.writer.finish()?;
         upload_buffer(&self.buffer, &mut self.upload, self.upload_chunk_size, 0).await?;
         self.count_unstored();

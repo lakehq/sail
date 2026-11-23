@@ -168,6 +168,19 @@ impl ParquetFileWriter {
         }
     }
 
+    /// Encodes the rows that the file has received and adds them to the file
+    /// as row groups, so that the file keeps no rows and no row group in memory.
+    /// The rows that the file receives after that are in another row group.
+    pub async fn flush(&mut self) -> Result<()> {
+        match &mut self.inner {
+            FileEncoder::Arrow(writer) => {
+                let _timer = self.resources.elapsed_compute().timer();
+                Ok(writer.flush().await?)
+            }
+            FileEncoder::Columns(writer) => Ok(writer.flush().await?),
+        }
+    }
+
     /// Writes the remaining data and the footer, and uploads what remains.
     pub async fn close(self) -> Result<StagedFile> {
         let (size, publish) = match self.inner {

@@ -15,6 +15,7 @@ use datafusion_common::{DataFusionError, Result, exec_err};
 use futures::{Stream, StreamExt};
 use object_store::path::Path;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
@@ -118,6 +119,8 @@ struct TaskFiles {
     table_path: Path,
     write_id: Uuid,
     state: Mutex<TaskFilesState>,
+    /// Canceled when the task has ended without returning its manifest.
+    abandoned: CancellationToken,
 }
 
 #[derive(Default)]
@@ -134,6 +137,7 @@ impl TaskFiles {
             table_path,
             write_id,
             state: Mutex::new(TaskFilesState::default()),
+            abandoned: CancellationToken::new(),
         }
     }
 
@@ -141,12 +145,14 @@ impl TaskFiles {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Uploads the remaining data of a file.
+    /// Encodes the remaining rows of a file and uploads its remaining data.
     ///
     /// This is done in a separate task, since some of the requests of an upload
-    /// are not canceled when the caller is. The task keeps running when
-    /// the caller is canceled, and it removes the staged file if the writer
-    /// task has been abandoned by the time the file is staged.
+    /// are not canceled when the caller is. When the writer task is abandoned
+    /// while the rows are encoded, the task drops the file, which ends the jobs
+    /// of the file and abandons its upload. Once the last data of the file
+    /// is being uploaded, the task keeps running, and it removes the staged
+    /// file if the writer task has been abandoned by the time the file is staged.
     async fn close(self: &Arc<Self>, writer: ParquetFileWriter) -> Result<StagedFile> {
         self.start_close(writer)
             .await
@@ -158,6 +164,12 @@ impl TaskFiles {
     fn start_close(self: &Arc<Self>, writer: ParquetFileWriter) -> JoinHandle<Result<StagedFile>> {
         let files = Arc::clone(self);
         tokio::spawn(async move {
+            let mut writer = writer;
+            tokio::select! {
+                biased;
+                () = files.abandoned.cancelled() => return exec_err!("the write is canceled"),
+                flushed = writer.flush() => flushed?,
+            }
             let file = writer.close().await?;
             let abandoned = {
                 let mut state = files.state();
@@ -191,6 +203,8 @@ impl Drop for AbandonGuard {
             state.abandoned = true;
             std::mem::take(&mut state.staged)
         };
+        // The files that are being completed stop encoding.
+        self.0.abandoned.cancel();
         if staged.is_empty() {
             return;
         }
