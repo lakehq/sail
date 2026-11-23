@@ -5,8 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::common::spawn_buffered;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
+use futures::{StreamExt, stream};
 use sail_common::actor::ActorSystem;
 use sail_common_datafusion::session::job::{JobRunner, ServerShutdown};
 use sail_telemetry::telemetry::global_metrics;
@@ -80,7 +83,12 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        let stream = execute_stream(plan, ctx.task_ctx())?;
+        let input = execute_stream(plan, ctx.task_ctx())?;
+        let schema = input.schema();
+        // Start producing batches on the first poll. A synchronous operator can then finish
+        // its current batch independently while the result stream delivers cancellation.
+        let output = stream::once(async move { spawn_buffered(input, 1) }).flatten();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, output));
         Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
     }
 

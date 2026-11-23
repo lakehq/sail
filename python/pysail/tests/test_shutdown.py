@@ -5,6 +5,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 
@@ -17,9 +18,9 @@ pytestmark = [
 
 
 @contextmanager
-def _server(protocol, mode):
+def _server(protocol, mode, **env_vars):
     command = [sys.executable, "-m", "pysail", protocol, "server", "--port", "0"]
-    env = {**os.environ, "SAIL_MODE": mode, "RUST_LOG": "sail_cli=info"}
+    env = {**os.environ, "SAIL_MODE": mode, "RUST_LOG": "sail_cli=info", **env_vars}
     with subprocess.Popen(command, env=env, stderr=subprocess.PIPE, text=True) as server:
         try:
             for line in server.stderr:
@@ -78,3 +79,61 @@ def test_sigterm_closes_stalled_flight_connection():
         server.send_signal(signal.SIGTERM)
         # Keep the RPC open without consuming further batches until the server exits.
         assert server.wait(timeout=12) == 0
+
+
+@pytest.mark.parametrize("kind", ["scalar", "iterator"])
+def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
+    import grpc
+    from pyspark.sql import SparkSession, functions
+    from pyspark.sql.connect.proto import ExecutePlanRequest
+    from pyspark.sql.connect.proto.base_pb2_grpc import SparkConnectServiceStub
+    from pyspark.sql.types import LongType
+
+    released = tmp_path / "client_received_error"
+    timed_out = tmp_path / "udf_timed_out"
+    with _server("spark", "local", TOKIO_WORKER_THREADS="1") as (server, address):
+        server_pid = server.pid
+
+        def wait_for_client():
+            assert os.getpid() == server_pid
+            os.kill(server_pid, signal.SIGTERM)
+            deadline = time.monotonic() + 10
+            while not released.exists():
+                if time.monotonic() > deadline:
+                    timed_out.touch()
+                    break
+                time.sleep(0.025)
+
+        def scalar(value):
+            wait_for_client()
+            return value
+
+        def iterator(batches):
+            for batch in batches:
+                wait_for_client()
+                yield batch
+
+        spark = SparkSession.builder.remote(f"sc://{address}").create()
+        try:
+            df = spark.range(0, 1, 1, 1)
+            if kind == "scalar":
+                df = df.select(functions.udf(scalar, LongType())("id"))
+            else:
+                df = df.mapInPandas(iterator, "id long")
+            # Use a non-reattachable RPC so client retries cannot hide a truncated result.
+            request = ExecutePlanRequest(session_id=str(uuid.uuid4()))
+            request.user_context.user_id = "test"
+            request.plan.CopyFrom(df._plan.to_proto(spark.client))  # noqa: SLF001
+        finally:
+            spark.stop()
+
+        with grpc.insecure_channel(address) as channel:
+            responses = SparkConnectServiceStub(channel).ExecutePlan(request, timeout=20, wait_for_ready=True)
+            try:
+                with pytest.raises(grpc.RpcError, match="query cancelled"):
+                    for _ in responses:
+                        pass
+            finally:
+                released.touch()
+        assert server.wait(timeout=10) == 0
+        assert not timed_out.exists()
