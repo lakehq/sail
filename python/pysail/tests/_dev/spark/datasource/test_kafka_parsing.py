@@ -22,25 +22,43 @@ from confluent_kafka import Consumer, IsolationLevel, KafkaException
 from confluent_kafka.admin import AdminClient
 from pyspark.sql.datasource import CaseInsensitiveDict, DataSourceReader
 
-from pysail.spark.datasource.kafka import (
-    KafkaDataSource,
-    _build_admin_config,
-    _build_consumer_config,
-    _divide_range,
-    _parse_subscription,
-    _planning_isolation_level,
-    _resolve_range_option,
-    _split_offset_ranges,
-    _validate_offset_spec,
+from pysail.spark.datasource.kafka import KafkaDataSource
+from pysail.spark.datasource.kafka.options import (
+    AssignPartitions,
+    GlobalTimestamp,
+    PartitionOffsets,
+    PartitionTimestamps,
+    SpecialOffset,
+    SubscribePattern,
+    SubscribeTopics,
+    TimestampStrategy,
+    TopicPartitionKey,
+    build_admin_config,
+    build_consumer_config,
+    parse_range_limit,
+    parse_subscription,
+    validate_offsets,
 )
+from pysail.spark.datasource.kafka.planning import OffsetRange, divide_range, split_offset_ranges
 
 _TS_MS = 1700000000000
+_READ_UNCOMMITTED = IsolationLevel.READ_UNCOMMITTED
 _POLL_TIMEOUT_MS = 250
+
+
+def _tp(partition):
+    """Key for partition ``partition`` of the test topic ``t``."""
+    return TopicPartitionKey("t", partition)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def spark_doctest():
+    """Override the parent fixture: these unit tests need no Spark server."""
 
 
 def _resolved(**extra):
     opts = {"kafka.bootstrap.servers": "localhost:9092", "subscribe": "t", **extra}
-    return KafkaDataSource(options=opts)._resolved  # noqa: SLF001
+    return KafkaDataSource(options=opts).reader(None)
 
 
 @pytest.mark.parametrize("option", ["startingOffsets", "startingOffsetsByTimestamp"])
@@ -60,7 +78,7 @@ def test_partition_limit_id_width(option, partition):
 @pytest.mark.parametrize("partition", [-(2**31) - 1, 2**31])
 def test_assignment_partition_id_width(partition):
     with pytest.raises(ValueError, match="signed 32-bit"):
-        _parse_subscription(CaseInsensitiveDict({"assign": json.dumps({"t": [partition]})}))
+        parse_subscription(CaseInsensitiveDict({"assign": json.dumps({"t": [partition]})}))
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +88,18 @@ def test_assignment_partition_id_width(partition):
 
 class TestParseOffsetSpec:
     def test_earliest_sentinel(self):
-        assert _resolved(startingOffsets="earliest")["starting_offsets"] == "earliest"
+        assert _resolved(startingOffsets="earliest").starting is SpecialOffset.EARLIEST
 
     def test_latest_sentinel(self):
-        assert _resolved(endingOffsets="latest")["ending_offsets"] == "latest"
+        assert _resolved(endingOffsets="latest").ending is SpecialOffset.LATEST
 
     def test_stripped_sentinel(self):
-        assert _resolved(startingOffsets="  earliest  ")["starting_offsets"] == "earliest"
+        assert _resolved(startingOffsets="  earliest  ").starting is SpecialOffset.EARLIEST
 
     @pytest.mark.parametrize("raw", ["EARLIEST", "Earliest", "eArLiEsT"])
     def test_sentinel_is_case_insensitive(self, raw):
         # Spark lowercases before matching, so `EARLIEST` is a valid value.
-        assert _resolved(startingOffsets=raw)["starting_offsets"] == "earliest"
+        assert _resolved(startingOffsets=raw).starting is SpecialOffset.EARLIEST
 
     def test_blank_is_a_parse_error(self):
         # Spark distinguishes absent from present-but-blank: a present blank
@@ -90,7 +108,7 @@ class TestParseOffsetSpec:
             _resolved(startingOffsets="")
 
     def test_json_object(self):
-        assert _resolved(startingOffsets='{"t": {"0": 5}}')["starting_offsets"] == {"t": {"0": 5}}
+        assert _resolved(startingOffsets='{"t": {"0": 5}}').starting == PartitionOffsets({_tp(0): 5}, "startingOffsets")
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -113,19 +131,25 @@ class TestParseOffsetSpec:
             _resolved(startingOffsets='{"t": {"0": true}}')
 
     def test_non_numeric_partition_key_raises(self):
-        with pytest.raises(ValueError, match="invalid literal for int"):
+        with pytest.raises(ValueError, match="must be an integer"):
             _resolved(startingOffsets='{"t": {"zero": 1}}')
 
-    @pytest.mark.parametrize("key", ["00", " 0", "+0"])
+    @pytest.mark.parametrize("key", ["1_0", " 0", "0 "])
+    def test_python_only_int_partition_keys_rejected(self, key):
+        with pytest.raises(ValueError, match="must be an integer"):
+            _resolved(startingOffsets='{"t": {"%s": 5}}' % key)  # noqa: UP031
+
+    @pytest.mark.parametrize("key", ["00", "+0"])
     def test_partition_key_is_canonicalized(self, key):
         # Spark reads these keys as `Map[Int, Long]`, so every spelling of 0 is
         # partition 0.
-        spec = _resolved(startingOffsets='{"t": {"%s": 5}}' % key)["starting_offsets"]  # noqa: UP031
-        assert spec == {"t": {"0": 5}}
+        spec = _resolved(startingOffsets='{"t": {"%s": 5}}' % key).starting  # noqa: UP031
+        assert spec == PartitionOffsets({_tp(0): 5}, "startingOffsets")
 
     def test_duplicate_partition_keys_collapse(self):
         # Two spellings of one id are one entry in the Scala `Map` too.
-        assert _resolved(startingOffsets='{"t": {"0": 5, "00": 9}}')["starting_offsets"] == {"t": {"0": 9}}
+        limit = _resolved(startingOffsets='{"t": {"0": 5, "00": 9}}').starting
+        assert limit == PartitionOffsets({_tp(0): 9}, "startingOffsets")
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +159,7 @@ class TestParseOffsetSpec:
 
 class TestParseTimestamps:
     def test_global_int(self):
-        assert _resolved(startingTimestamp="1700000000000")["starting_timestamps"] == _TS_MS
+        assert _resolved(startingTimestamp="1700000000000").starting == GlobalTimestamp(_TS_MS)
 
     @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
     def test_global_timestamp_width(self, value):
@@ -144,22 +168,24 @@ class TestParseTimestamps:
 
     @pytest.mark.parametrize("value", [-(2**63), 2**63 - 1])
     def test_global_timestamp_width_boundaries(self, value):
-        assert _resolved(startingTimestamp=str(value))["starting_timestamps"] == value
+        assert _resolved(startingTimestamp=str(value)).starting == GlobalTimestamp(value)
 
-    def test_global_int_stripped(self):
-        assert _resolved(endingTimestamp="  1700000000000  ")["ending_timestamps"] == _TS_MS
+    @pytest.mark.parametrize("raw", ["  1700000000000  ", "1_700_000_000_000"])
+    def test_global_timestamp_rejects_whitespace_and_underscores(self, raw):
+        with pytest.raises(ValueError, match="must be an integer"):
+            _resolved(endingTimestamp=raw)
 
     def test_invalid_global_raises(self):
-        with pytest.raises(ValueError, match="invalid literal for int"):
+        with pytest.raises(ValueError, match="must be an integer"):
             _resolved(startingTimestamp="not-a-number")
 
     def test_partition_key_is_canonicalized(self):
-        result = _resolved(startingOffsetsByTimestamp='{"t": {"00": 1700000000000}}')["starting_timestamps"]
-        assert result == {"t": {"0": _TS_MS}}
+        result = _resolved(startingOffsetsByTimestamp='{"t": {"00": 1700000000000}}').starting
+        assert result == PartitionTimestamps({_tp(0): _TS_MS}, "startingOffsetsByTimestamp")
 
     def test_per_tp_json(self):
-        result = _resolved(startingOffsetsByTimestamp='{"t": {"0": 1700000000000}}')["starting_timestamps"]
-        assert result == {"t": {"0": _TS_MS}}
+        result = _resolved(startingOffsetsByTimestamp='{"t": {"0": 1700000000000}}').starting
+        assert result == PartitionTimestamps({_tp(0): _TS_MS}, "startingOffsetsByTimestamp")
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -179,25 +205,23 @@ class TestParseTimestamps:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_range_option — Spark's precedence between the range options
+# parse_range_limit — Spark's precedence between the range options
 # ---------------------------------------------------------------------------
 
 
 class TestRangeOptionPrecedence:
-    def test_absent_returns_none(self):
-        assert _resolve_range_option(CaseInsensitiveDict({}), endpoint="starting") == (None, None)
+    def test_absent_returns_default_sentinel(self):
+        assert parse_range_limit(CaseInsensitiveDict({}), boundary="starting") is SpecialOffset.EARLIEST
+        assert parse_range_limit(CaseInsensitiveDict({}), boundary="ending") is SpecialOffset.LATEST
 
     def test_offsets_only(self):
-        offsets, timestamps = _resolve_range_option(
-            CaseInsensitiveDict({"startingOffsets": "earliest"}), endpoint="starting"
-        )
-        assert offsets == "earliest"
-        assert timestamps is None
+        spec = parse_range_limit(CaseInsensitiveDict({"startingOffsets": "earliest"}), boundary="starting")
+        assert spec is SpecialOffset.EARLIEST
 
     def test_global_timestamp_beats_everything(self):
         # Spark checks the global timestamp first and never looks at the rest,
         # so the lower-priority values are not even parsed.
-        offsets, timestamps = _resolve_range_option(
+        spec = parse_range_limit(
             CaseInsensitiveDict(
                 {
                     "startingTimestamp": "1700000000000",
@@ -205,35 +229,31 @@ class TestRangeOptionPrecedence:
                     "startingOffsets": "not-even-json",
                 }
             ),
-            endpoint="starting",
+            boundary="starting",
         )
-        assert offsets is None
-        assert timestamps == _TS_MS
+        assert spec == GlobalTimestamp(_TS_MS)
 
     def test_per_partition_timestamp_beats_offsets(self):
-        offsets, timestamps = _resolve_range_option(
+        spec = parse_range_limit(
             CaseInsensitiveDict(
                 {
                     "endingOffsetsByTimestamp": '{"t": {"0": 1700000000000}}',
                     "endingOffsets": "not-even-json",
                 }
             ),
-            endpoint="ending",
+            boundary="ending",
         )
-        assert offsets is None
-        assert timestamps == {"t": {"0": _TS_MS}}
+        assert spec == PartitionTimestamps({_tp(0): _TS_MS}, "endingOffsetsByTimestamp")
 
     def test_combination_is_not_rejected(self):
         # Spark applies precedence rather than failing, so a job that supplies
         # a fallback keeps working.
         resolved = _resolved(startingOffsets="earliest", startingTimestamp="1700000000000")
-        assert resolved["starting_offsets"] is None
-        assert resolved["starting_timestamps"] == _TS_MS
+        assert resolved.starting == GlobalTimestamp(_TS_MS)
 
     def test_blank_lower_priority_option_is_ignored(self):
         resolved = _resolved(endingOffsets="", endingTimestamp="1700000000000")
-        assert resolved["ending_offsets"] is None
-        assert resolved["ending_timestamps"] == _TS_MS
+        assert resolved.ending == GlobalTimestamp(_TS_MS)
 
     def test_blank_winning_option_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -247,11 +267,11 @@ class TestRangeOptionPrecedence:
 
 class TestTimestampStrategy:
     def test_default_is_error(self):
-        assert _resolved()["starting_ts_strategy"] == "error"
+        assert _resolved().starting_ts_strategy is TimestampStrategy.ERROR
 
     @pytest.mark.parametrize("raw", ["latest", "LATEST", " Latest "])
     def test_latest_accepted(self, raw):
-        assert _resolved(startingOffsetsByTimestampStrategy=raw)["starting_ts_strategy"] == "latest"
+        assert _resolved(startingOffsetsByTimestampStrategy=raw).starting_ts_strategy is TimestampStrategy.LATEST
 
     def test_invalid_raises(self):
         with pytest.raises(ValueError, match="startingOffsetsByTimestampStrategy"):
@@ -274,7 +294,7 @@ class TestProtectedKafkaConfigs:
             _resolved(**{"kafka.auto.offset.reset": "earliest"})
 
     def test_group_id_still_allowed(self):
-        assert _resolved(**{"kafka.group.id": "mine"})["client_config"]["group.id"] == "mine"
+        assert _resolved(**{"kafka.group.id": "mine"}).client_config["group.id"] == "mine"
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +304,7 @@ class TestProtectedKafkaConfigs:
 
 class TestBuildConsumerConfig:
     def test_defaults_applied(self):
-        config = _build_consumer_config({"bootstrap.servers": "localhost:9092"})
+        config = build_consumer_config({"bootstrap.servers": "localhost:9092"}, _READ_UNCOMMITTED)
         assert config["bootstrap.servers"] == "localhost:9092"
         assert config["group.id"] == "sail-kafka-reader"
         assert config["enable.auto.commit"] is False
@@ -292,56 +312,51 @@ class TestBuildConsumerConfig:
         assert config["enable.partition.eof"] is True
 
     def test_user_group_id_overrides_default(self):
-        config = _build_consumer_config({"bootstrap.servers": "localhost:9092", "group.id": "my-group"})
+        settings = {"bootstrap.servers": "localhost:9092", "group.id": "my-group"}
+        config = build_consumer_config(settings, _READ_UNCOMMITTED)
         assert config["group.id"] == "my-group"
 
     def test_source_owned_settings_win(self):
-        # `_validate_kafka_config` rejects these before we get here; the merge
-        # order is the second line of defence, and Spark likewise keeps its own
-        # consumer settings authoritative.
-        config = _build_consumer_config(
-            {"enable.auto.commit": "true", "auto.offset.reset": "earliest", "enable.partition.eof": "false"}
+        # Option validation rejects these before we get here; the merge order is
+        # the second line of defence, and Spark likewise keeps its own consumer
+        # settings authoritative.
+        config = build_consumer_config(
+            {"enable.auto.commit": "true", "auto.offset.reset": "earliest", "enable.partition.eof": "false"},
+            _READ_UNCOMMITTED,
         )
         assert config["enable.auto.commit"] is False
         assert config["auto.offset.reset"] == "error"
         assert config["enable.partition.eof"] is True
 
-    def test_isolation_level_matches_the_java_client_default(self):
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [(IsolationLevel.READ_UNCOMMITTED, "read_uncommitted"), (IsolationLevel.READ_COMMITTED, "read_committed")],
+    )
+    def test_isolation_level_uses_the_librdkafka_spelling(self, level, expected):
+        # librdkafka only accepts the lowercase values.
+        assert build_consumer_config({}, level)["isolation.level"] == expected
+
+
+class TestIsolationLevel:
+    def test_defaults_to_read_uncommitted(self):
         # librdkafka defaults to `read_committed`; Spark never sets the property
         # and so inherits the Java client's `read_uncommitted`. Left to the
         # librdkafka default, a transactional topic would silently return a
         # different row set here than under Spark.
-        config = _build_consumer_config({})
-        assert config["isolation.level"] == "read_uncommitted"
+        assert _resolved().isolation_level == IsolationLevel.READ_UNCOMMITTED
 
-    def test_user_isolation_level_overrides_default(self):
-        config = _build_consumer_config({"isolation.level": "read_committed"})
-        assert config["isolation.level"] == "read_committed"
-
-
-class TestPlanningIsolationLevel:
-    def test_defaults_to_read_uncommitted(self):
-        # `KafkaOffsetReaderAdmin` falls back to the Java client's default.
-        assert _planning_isolation_level({}) == IsolationLevel.READ_UNCOMMITTED
-
-    def test_follows_the_user_setting(self):
+    def test_follows_the_user_setting_in_any_case(self):
         # Spark derives `ListOffsetsOptions` from the driver Kafka params, so a
         # user asking for `read_committed` gets last-stable-offset semantics
-        # when a "latest" endpoint or a timestamp is resolved.
-        assert _planning_isolation_level({"isolation.level": "READ_COMMITTED"}) == IsolationLevel.READ_COMMITTED
+        # when a "latest" boundary or a timestamp is resolved.
+        assert _resolved(**{"kafka.isolation.level": " READ_COMMITTED "}).isolation_level == (
+            IsolationLevel.READ_COMMITTED
+        )
 
-    def test_invalid_value_raises(self):
-        with pytest.raises(ValueError, match="must be 'read_uncommitted' or 'read_committed'"):
-            _planning_isolation_level({"isolation.level": "read_everything"})
-
-    def test_resolved_config_carries_the_librdkafka_spelling(self):
-        # Planning accepts any case, but librdkafka only accepts the lowercase
-        # values. The executors' consumers must see the same setting planning
-        # used, not the raw spelling that would fail when each task starts.
-        client_config = _resolved(**{"kafka.isolation.level": " READ_COMMITTED "})["client_config"]
-        assert client_config["isolation.level"] == "read_committed"
-        assert _build_consumer_config(client_config)["isolation.level"] == "read_committed"
-        assert _planning_isolation_level(client_config) == IsolationLevel.READ_COMMITTED
+    def test_is_not_left_in_the_client_config(self):
+        # Planning and the consumers both take it from `isolation_level`, so
+        # a raw spelling cannot reach librdkafka.
+        assert "isolation.level" not in _resolved(**{"kafka.isolation.level": "read_committed"}).client_config
 
     def test_invalid_value_fails_option_validation(self):
         with pytest.raises(ValueError, match="must be 'read_uncommitted' or 'read_committed'"):
@@ -359,15 +374,19 @@ class TestBuildAdminConfig:
             "ssl.ca.location": "/test/ca.pem",
             "enable.ssl.certificate.verification": "true",
         }
-        config = _resolved(**{f"KAFKA.{key.upper()}": value for key, value in settings.items()})["client_config"]
-        assert _build_admin_config(config) == settings
-        assert all(_build_consumer_config(config)[key] == value for key, value in settings.items())
+        config = _resolved(**{f"KAFKA.{key.upper()}": value for key, value in settings.items()}).client_config
+        assert build_admin_config(config) == settings
+        assert all(build_consumer_config(config, _READ_UNCOMMITTED)[key] == value for key, value in settings.items())
 
     @pytest.mark.parametrize(
-        ("client", "build_config"), [(AdminClient, _build_admin_config), (Consumer, _build_consumer_config)]
+        ("client", "build_config"),
+        [
+            (AdminClient, build_admin_config),
+            (Consumer, lambda config: build_consumer_config(config, _READ_UNCOMMITTED)),
+        ],
     )
     def test_invalid_security_protocol_fails_without_plaintext_fallback(self, client, build_config):
-        config = _resolved(**{"kafka.security.protocol": "not-a-protocol"})["client_config"]
+        config = _resolved(**{"kafka.security.protocol": "not-a-protocol"}).client_config
         # Real librdkafka validation fails before it can open a connection.
         with pytest.raises(KafkaException, match=r"security\.protocol"):
             client(build_config(config))
@@ -376,12 +395,7 @@ class TestBuildAdminConfig:
         # librdkafka builds the admin handle on a producer and logs a CONFWARN
         # for every consumer property it finds there, so a user-supplied
         # `kafka.group.id` would warn on every planning call.
-        config = _build_admin_config({"bootstrap.servers": "localhost:9092", "group.id": "my-group"})
-        assert config == {"bootstrap.servers": "localhost:9092"}
-
-    def test_isolation_level_is_stripped(self):
-        # A consumer property too; planning passes it to `list_offsets` instead.
-        config = _build_admin_config({"bootstrap.servers": "localhost:9092", "isolation.level": "read_committed"})
+        config = build_admin_config({"bootstrap.servers": "localhost:9092", "group.id": "my-group"})
         assert config == {"bootstrap.servers": "localhost:9092"}
 
 
@@ -392,63 +406,64 @@ class TestBuildAdminConfig:
 
 class TestSubscription:
     def test_subscribe_topic_list(self):
-        assert _parse_subscription(CaseInsensitiveDict({"subscribe": "a, b ,c"})) == ("subscribe", ["a", "b", "c"])
+        assert parse_subscription(CaseInsensitiveDict({"subscribe": "a, b ,c"})) == SubscribeTopics(["a", "b", "c"])
 
     def test_subscribe_dedupes(self):
         # A repeated topic would otherwise be enumerated once per occurrence,
         # producing duplicate input partitions and emitting every row twice.
-        assert _parse_subscription(CaseInsensitiveDict({"subscribe": "t,t, t"})) == ("subscribe", ["t"])
+        assert parse_subscription(CaseInsensitiveDict({"subscribe": "t,t, t"})) == SubscribeTopics(["t"])
 
-    def test_subscribe_preserves_first_seen_order(self):
-        assert _parse_subscription(CaseInsensitiveDict({"subscribe": "b,a,b,c"})) == ("subscribe", ["b", "a", "c"])
+    def test_subscribe_topics_are_sorted(self):
+        assert parse_subscription(CaseInsensitiveDict({"subscribe": "b,a,b,c"})) == SubscribeTopics(["a", "b", "c"])
 
     def test_subscribe_empty_raises(self):
         with pytest.raises(ValueError, match="at least one topic"):
-            _parse_subscription(CaseInsensitiveDict({"subscribe": " , "}))
+            parse_subscription(CaseInsensitiveDict({"subscribe": " , "}))
 
     def test_subscribe_pattern(self):
-        strategy, pattern = _parse_subscription(CaseInsensitiveDict({"subscribePattern": "orders-.*"}))
-        assert strategy == "subscribePattern"
-        assert pattern.fullmatch("orders-eu")
-        assert not pattern.fullmatch("shipments")
+        sub = parse_subscription(CaseInsensitiveDict({"subscribePattern": "orders-.*"}))
+        assert isinstance(sub, SubscribePattern)
+        assert sub.pattern.fullmatch("orders-eu")
+        assert not sub.pattern.fullmatch("shipments")
 
     def test_subscribe_pattern_invalid_regex_raises(self):
         with pytest.raises(ValueError, match="not a valid regular expression"):
-            _parse_subscription(CaseInsensitiveDict({"subscribePattern": "orders-["}))
+            parse_subscription(CaseInsensitiveDict({"subscribePattern": "orders-["}))
 
     def test_assign(self):
-        strategy, value = _parse_subscription(CaseInsensitiveDict({"assign": '{"t": [0, 2]}'}))
-        assert strategy == "assign"
-        assert value == {"t": [0, 2]}
+        sub = parse_subscription(CaseInsensitiveDict({"assign": '{"t": [0, 2]}'}))
+        assert sub == AssignPartitions(frozenset({_tp(0), _tp(2)}))
 
     def test_assign_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
-            _parse_subscription(CaseInsensitiveDict({"assign": "not-json"}))
+            parse_subscription(CaseInsensitiveDict({"assign": "not-json"}))
 
     def test_assign_empty_object(self):
         # `JsonUtils.partitions` accepts an empty map; the assignment simply
         # selects nothing.
-        assert _parse_subscription(CaseInsensitiveDict({"assign": "{}"})) == ("assign", {})
+        assert parse_subscription(CaseInsensitiveDict({"assign": "{}"})) == AssignPartitions(frozenset())
 
     def test_assign_empty_partition_list(self):
-        assert _parse_subscription(CaseInsensitiveDict({"assign": '{"t": []}'})) == ("assign", {"t": []})
+        assert parse_subscription(CaseInsensitiveDict({"assign": '{"t": []}'})) == AssignPartitions(frozenset())
 
     def test_assign_negative_partition(self):
         # Spark deserializes `Seq[Int]` and filters against the broker's
         # partitions later, so an id that cannot exist is skipped, not rejected.
-        assert _parse_subscription(CaseInsensitiveDict({"assign": '{"t": [-1]}'})) == ("assign", {"t": [-1]})
+        assert parse_subscription(CaseInsensitiveDict({"assign": '{"t": [-1]}'})) == AssignPartitions(
+            frozenset({_tp(-1)})
+        )
 
     def test_assign_bool_partition_raises(self):
         with pytest.raises(ValueError, match="must be an integer"):
-            _parse_subscription(CaseInsensitiveDict({"assign": '{"t": [true]}'}))
+            parse_subscription(CaseInsensitiveDict({"assign": '{"t": [true]}'}))
 
     def test_none_specified_raises(self):
         with pytest.raises(ValueError, match="must be specified"):
-            _parse_subscription(CaseInsensitiveDict({"kafka.bootstrap.servers": "localhost:9092"}))
+            parse_subscription(CaseInsensitiveDict({"kafka.bootstrap.servers": "localhost:9092"}))
 
     def test_more_than_one_raises(self):
         with pytest.raises(ValueError, match="Only one of the following options"):
-            _parse_subscription(CaseInsensitiveDict({"subscribe": "t", "assign": '{"t": [0]}'}))
+            parse_subscription(CaseInsensitiveDict({"subscribe": "t", "assign": '{"t": [0]}'}))
 
 
 # ---------------------------------------------------------------------------
@@ -473,16 +488,16 @@ class TestOptionCaseInsensitivity:
                 "INCLUDEHEADERS": "true",
             }
         )
-        resolved = source._resolved  # noqa: SLF001
-        assert resolved["client_config"]["bootstrap.servers"] == "localhost:9092"
-        assert resolved["subscription"] == ("subscribe", ["t"])
-        assert resolved["starting_offsets"] == "earliest"
-        assert resolved["include_headers"] is True
+        resolved = source.reader(None)
+        assert resolved.client_config["bootstrap.servers"] == "localhost:9092"
+        assert resolved.subscription == SubscribeTopics(["t"])
+        assert resolved.starting is SpecialOffset.EARLIEST
+        assert resolved.include_headers is True
 
     def test_lower_case_option_keys(self):
         resolved = _resolved(startingoffsets="earliest", maxbatchrows="99")
-        assert resolved["starting_offsets"] == "earliest"
-        assert resolved["max_batch_rows"] == 99  # noqa: PLR2004
+        assert resolved.starting is SpecialOffset.EARLIEST
+        assert resolved.max_batch_rows == 99  # noqa: PLR2004
 
     def test_case_insensitive_dict_input_is_not_flattened(self):
         # This is what PySpark and Sail actually pass to the constructor.
@@ -496,9 +511,9 @@ class TestOptionCaseInsensitivity:
                 }
             )
         )
-        resolved = source._resolved  # noqa: SLF001
-        assert resolved["starting_offsets"] == "earliest"
-        assert resolved["max_batch_rows"] == 77  # noqa: PLR2004
+        resolved = source.reader(None)
+        assert resolved.starting is SpecialOffset.EARLIEST
+        assert resolved.max_batch_rows == 77  # noqa: PLR2004
 
 
 # ---------------------------------------------------------------------------
@@ -509,13 +524,13 @@ class TestOptionCaseInsensitivity:
 class TestBooleanOptions:
     def test_defaults(self):
         resolved = _resolved()
-        assert resolved["include_headers"] is False
-        assert resolved["fail_on_data_loss"] is True
+        assert resolved.include_headers is False
+        assert resolved.fail_on_data_loss is True
 
     @pytest.mark.parametrize(("raw", "expected"), [("true", True), ("TRUE", True), (" False ", False)])
     def test_case_insensitive_values(self, raw, expected):
-        assert _resolved(includeHeaders=raw)["include_headers"] is expected
-        assert _resolved(failOnDataLoss=raw)["fail_on_data_loss"] is expected
+        assert _resolved(includeHeaders=raw).include_headers is expected
+        assert _resolved(failOnDataLoss=raw).fail_on_data_loss is expected
 
     @pytest.mark.parametrize("option", ["includeHeaders", "failOnDataLoss"])
     @pytest.mark.parametrize("raw", ["", "yes", "0", "1", "maybe"])
@@ -525,35 +540,36 @@ class TestBooleanOptions:
 
 
 class TestNumericOptions:
-    def test_idle_deadline_defaults_to_the_effective_poll_budget(self):
-        assert _resolved(pollTimeoutMs="80")["stall_timeout_s"] == pytest.approx(0.08)
-        assert _resolved(pollTimeoutMs="80", stallTimeoutMs="20")["stall_timeout_s"] == pytest.approx(0.02)
-
-    @pytest.mark.parametrize("option", ["maxBatchBytes", "maxBatchWaitMs"])
-    @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf"])
+    @pytest.mark.parametrize("option", ["maxBatchRows", "maxBatchBytes"])
+    @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf", "1_000", " 7 "])
     def test_batch_resource_limits_reject_invalid_values(self, option, value):
-        with pytest.raises(ValueError, match=rf"invalid literal|could not convert|{option}"):
+        with pytest.raises(ValueError, match=rf"{option}"):
             _resolved(**{option: value})
+
+    @pytest.mark.parametrize("raw", ["1_000", " 100 "])
+    def test_poll_timeout_rejects_underscores_and_whitespace(self, raw):
+        with pytest.raises(ValueError, match=r"pollTimeoutMs"):
+            _resolved(pollTimeoutMs=raw)
 
     def test_poll_timeout_default_matches_spark(self):
         # Spark's batch default for kafkaConsumer.pollTimeoutMs is
         # spark.network.timeout, i.e. 120s.
-        assert _resolved()["poll_timeout_s"] == 120.0  # noqa: PLR2004
+        assert _resolved().poll_timeout_s == 120.0  # noqa: PLR2004
 
     def test_spark_poll_timeout_option_name(self):
-        assert _resolved(**{"kafkaConsumer.pollTimeoutMs": str(_POLL_TIMEOUT_MS)})["poll_timeout_s"] == 0.25  # noqa: PLR2004
+        assert _resolved(**{"kafkaConsumer.pollTimeoutMs": str(_POLL_TIMEOUT_MS)}).poll_timeout_s == 0.25  # noqa: PLR2004
 
     def test_short_poll_timeout_alias(self):
-        assert _resolved(pollTimeoutMs=str(_POLL_TIMEOUT_MS))["poll_timeout_s"] == 0.25  # noqa: PLR2004
+        assert _resolved(pollTimeoutMs=str(_POLL_TIMEOUT_MS)).poll_timeout_s == 0.25  # noqa: PLR2004
 
     def test_spark_name_wins_over_alias(self):
         resolved = _resolved(**{"kafkaConsumer.pollTimeoutMs": "500", "pollTimeoutMs": "invalid"})
-        assert resolved["poll_timeout_s"] == 0.5  # noqa: PLR2004
+        assert resolved.poll_timeout_s == 0.5  # noqa: PLR2004
 
     @pytest.mark.parametrize("raw", ["Infinity", "inf", "-inf", "nan", "NaN"])
     def test_non_finite_poll_timeout_rejected(self, raw):
-        # `float()` accepts these and a `<= 0` check does not catch them:
-        # `poll(inf)` blocks forever, defeating the stallTimeoutMs guard.
+        # `float()` accepts these and a `<= 0` check does not catch them;
+        # none is a valid bounded poll timeout.
         with pytest.raises(ValueError, match=r"pollTimeoutMs.*finite"):
             _resolved(pollTimeoutMs=raw)
 
@@ -563,12 +579,12 @@ class TestNumericOptions:
             _resolved(pollTimeoutMs=raw)
 
     def test_min_partitions_absent(self):
-        assert _resolved()["min_partitions"] is None
-        assert _resolved()["max_records_per_partition"] is None
+        assert _resolved().min_partitions is None
+        assert _resolved().max_records_per_partition is None
 
     def test_min_partitions_parsed(self):
-        assert _resolved(minPartitions="4")["min_partitions"] == 4  # noqa: PLR2004
-        assert _resolved(maxRecordsPerPartition="100")["max_records_per_partition"] == 100  # noqa: PLR2004
+        assert _resolved(minPartitions="4").min_partitions == 4  # noqa: PLR2004
+        assert _resolved(maxRecordsPerPartition="100").max_records_per_partition == 100  # noqa: PLR2004
 
     def test_min_partitions_must_be_positive(self):
         with pytest.raises(ValueError, match="must be positive"):
@@ -578,70 +594,66 @@ class TestNumericOptions:
         # Spark parses this with `String.toInt`, which rejects anything wider.
         # Python integers are unbounded, so without the bound the value goes
         # straight into the splitter as a chunk count.
-        assert _resolved(minPartitions=str(2**31 - 1))["min_partitions"] == 2**31 - 1
+        assert _resolved(minPartitions=str(2**31 - 1)).min_partitions == 2**31 - 1
         with pytest.raises(ValueError, match="must be at most 2147483647"):
             _resolved(minPartitions=str(2**31))
 
     def test_max_records_per_partition_is_bounded_by_int64(self):
         # Spark parses this one with `String.toLong`.
-        assert _resolved(maxRecordsPerPartition=str(2**63 - 1))["max_records_per_partition"] == 2**63 - 1
+        assert _resolved(maxRecordsPerPartition=str(2**63 - 1)).max_records_per_partition == 2**63 - 1
         with pytest.raises(ValueError, match="must be at most 9223372036854775807"):
             _resolved(maxRecordsPerPartition=str(2**63))
 
 
 # ---------------------------------------------------------------------------
-# _validate_offset_spec — Spark batch-mode sentinel rules
+# validate_offsets — Spark batch-mode sentinel rules
 # ---------------------------------------------------------------------------
 
 
-class TestValidateOffsetSpec:
-    def test_none_is_noop(self):
-        _validate_offset_spec(None, endpoint="starting", option_name="startingOffsets")
-        _validate_offset_spec(None, endpoint="ending", option_name="endingOffsets")
-
-    def test_allowed_string_sentinels(self):
-        _validate_offset_spec("earliest", endpoint="starting", option_name="startingOffsets")
-        _validate_offset_spec("latest", endpoint="ending", option_name="endingOffsets")
+class TestValidateOffsets:
+    def test_allowed_special_offsets(self):
+        validate_offsets(SpecialOffset.EARLIEST, boundary="starting", option_name="startingOffsets")
+        validate_offsets(SpecialOffset.LATEST, boundary="ending", option_name="endingOffsets")
 
     def test_latest_rejected_for_starting(self):
         with pytest.raises(ValueError, match="does not support 'latest'"):
-            _validate_offset_spec("latest", endpoint="starting", option_name="startingOffsets")
+            validate_offsets(SpecialOffset.LATEST, boundary="starting", option_name="startingOffsets")
 
     def test_earliest_rejected_for_ending(self):
         with pytest.raises(ValueError, match="does not support 'earliest'"):
-            _validate_offset_spec("earliest", endpoint="ending", option_name="endingOffsets")
+            validate_offsets(SpecialOffset.EARLIEST, boundary="ending", option_name="endingOffsets")
 
     def test_allowed_json_sentinels(self):
-        _validate_offset_spec({"t": {"0": -2}}, endpoint="starting", option_name="startingOffsets")
-        _validate_offset_spec({"t": {"0": -1}}, endpoint="ending", option_name="endingOffsets")
+        validate_offsets({_tp(0): -2}, boundary="starting", option_name="startingOffsets")
+        validate_offsets({_tp(0): -1}, boundary="ending", option_name="endingOffsets")
 
     def test_json_latest_rejected_for_starting(self):
         with pytest.raises(ValueError, match="does not support offset -1"):
-            _validate_offset_spec({"t": {"0": -1}}, endpoint="starting", option_name="startingOffsets")
+            validate_offsets({_tp(0): -1}, boundary="starting", option_name="startingOffsets")
 
     def test_json_earliest_rejected_for_ending(self):
         with pytest.raises(ValueError, match="does not support offset -2"):
-            _validate_offset_spec({"t": {"0": -2}}, endpoint="ending", option_name="endingOffsets")
+            validate_offsets({_tp(0): -2}, boundary="ending", option_name="endingOffsets")
 
     def test_concrete_offsets_allowed(self):
-        _validate_offset_spec({"t": {"0": 0, "1": 12345}}, endpoint="starting", option_name="startingOffsets")
-        _validate_offset_spec({"t": {"0": 0, "1": 12345}}, endpoint="ending", option_name="endingOffsets")
+        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="starting", option_name="startingOffsets")
+        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="ending", option_name="endingOffsets")
 
-    @pytest.mark.parametrize("endpoint", ["starting", "ending"])
-    def test_offset_below_negative_two_rejected(self, endpoint):
+    @pytest.mark.parametrize("boundary", ["starting", "ending"])
+    def test_offset_below_negative_two_rejected(self, boundary):
         with pytest.raises(ValueError, match="must be >= 0"):
-            _validate_offset_spec({"t": {"0": -3}}, endpoint=endpoint, option_name="opt")
+            validate_offsets({_tp(0): -3}, boundary=boundary, option_name="opt")
 
     @pytest.mark.parametrize("offset", [-1000, -1001])
     def test_librdkafka_sentinels_rejected(self, offset):
         # -1000 is OFFSET_STORED and -1001 is OFFSET_INVALID. Passed through,
         # OFFSET_STORED would silently read from committed group offsets.
         with pytest.raises(ValueError, match="must be >= 0"):
-            _validate_offset_spec({"t": {"0": offset}}, endpoint="starting", option_name="startingOffsets")
+            validate_offsets({_tp(0): offset}, boundary="starting", option_name="startingOffsets")
 
     def test_error_names_the_offending_partition(self):
-        with pytest.raises(ValueError, match=r"topic 't' partition '3'"):
-            _validate_offset_spec({"t": {"0": 5, "3": -7}}, endpoint="starting", option_name="startingOffsets")
+        with pytest.raises(ValueError, match=r"topic 't' partition 3"):
+            validate_offsets({_tp(0): 5, _tp(3): -7}, boundary="starting", option_name="startingOffsets")
 
 
 # ---------------------------------------------------------------------------
@@ -651,95 +663,114 @@ class TestValidateOffsetSpec:
 
 class TestDivideRange:
     def test_single_part(self):
-        assert _divide_range(0, 10, 1) == [(0, 10)]
+        assert divide_range(OffsetRange(_tp(0), 0, 10), 1) == [OffsetRange(_tp(0), 0, 10)]
 
     def test_even_split(self):
-        assert _divide_range(0, 10, 2) == [(0, 5), (5, 10)]
+        assert divide_range(OffsetRange(_tp(0), 0, 10), 2) == [OffsetRange(_tp(0), 0, 5), OffsetRange(_tp(0), 5, 10)]
 
     def test_remainder_goes_to_latest_chunks(self):
         # Spark sizes each chunk against what is left (`remaining / (parts - i)`),
         # so ten records over three chunks are 3/3/4 rather than 4/3/3.
-        assert _divide_range(0, 10, 3) == [(0, 3), (3, 6), (6, 10)]
-        assert _divide_range(0, 10, 4) == [(0, 2), (2, 4), (4, 7), (7, 10)]
+        assert divide_range(OffsetRange(_tp(0), 0, 10), 3) == [
+            OffsetRange(_tp(0), 0, 3),
+            OffsetRange(_tp(0), 3, 6),
+            OffsetRange(_tp(0), 6, 10),
+        ]
+        assert divide_range(OffsetRange(_tp(0), 0, 10), 4) == [
+            OffsetRange(_tp(0), 0, 2),
+            OffsetRange(_tp(0), 2, 4),
+            OffsetRange(_tp(0), 4, 7),
+            OffsetRange(_tp(0), 7, 10),
+        ]
 
     def test_more_parts_than_records(self):
-        assert _divide_range(0, 2, 5) == [(0, 1), (1, 2)]
+        assert divide_range(OffsetRange(_tp(0), 0, 2), 5) == [OffsetRange(_tp(0), 0, 1), OffsetRange(_tp(0), 1, 2)]
 
     def test_large_partition_hint_skips_empty_iterations(self, monkeypatch):
         def bounded_range(parts):
             assert parts == 1, "the splitter must not iterate billions of empty chunks"
             return range(parts)
 
-        monkeypatch.setattr("pysail.spark.datasource.kafka.range", bounded_range, raising=False)
-        assert _divide_range(9, 10, 2**31 - 1) == [(9, 10)]
+        monkeypatch.setattr("pysail.spark.datasource.kafka.planning.range", bounded_range, raising=False)
+        assert divide_range(OffsetRange(_tp(0), 9, 10), 2**31 - 1) == [OffsetRange(_tp(0), 9, 10)]
 
     def test_chunks_are_contiguous_and_complete(self):
-        chunks = _divide_range(100, 137, 4)
-        assert chunks[0][0] == 100  # noqa: PLR2004
-        assert chunks[-1][1] == 137  # noqa: PLR2004
-        assert all(a[1] == b[0] for a, b in itertools.pairwise(chunks))
+        chunks = divide_range(OffsetRange(_tp(0), 100, 137), 4)
+        assert chunks[0].start == 100  # noqa: PLR2004
+        assert chunks[-1].end == 137  # noqa: PLR2004
+        assert all(left.end == right.start for left, right in itertools.pairwise(chunks))
 
 
 class TestSplitOffsetRanges:
     def test_no_options_is_identity(self):
-        ranges = [("t", 0, 0, 100)]
-        assert _split_offset_ranges(ranges, min_partitions=None, max_records_per_partition=None) == ranges
+        ranges = [OffsetRange(_tp(0), 0, 100)]
+        assert split_offset_ranges(ranges, min_partitions=None, max_records_per_partition=None) == ranges
 
     def test_max_records_caps_each_range(self):
-        out = _split_offset_ranges([("t", 0, 0, 10)], min_partitions=None, max_records_per_partition=4)
-        assert out == [("t", 0, 0, 3), ("t", 0, 3, 6), ("t", 0, 6, 10)]
-        assert all(end - start <= 4 for _, _, start, end in out)  # noqa: PLR2004
+        out = split_offset_ranges([OffsetRange(_tp(0), 0, 10)], min_partitions=None, max_records_per_partition=4)
+        assert out == [OffsetRange(_tp(0), 0, 3), OffsetRange(_tp(0), 3, 6), OffsetRange(_tp(0), 6, 10)]
+        assert all(r.size <= 4 for r in out)  # noqa: PLR2004
 
     def test_min_partitions_below_count_is_identity(self):
-        ranges = [("t", 0, 0, 10), ("t", 1, 0, 10)]
-        assert _split_offset_ranges(ranges, min_partitions=2, max_records_per_partition=None) == ranges
+        ranges = [OffsetRange(_tp(0), 0, 10), OffsetRange(_tp(1), 0, 10)]
+        assert split_offset_ranges(ranges, min_partitions=2, max_records_per_partition=None) == ranges
 
     def test_min_partitions_splits_proportionally(self):
         # One partition, 100 records, minPartitions=4 -> four equal chunks.
-        out = _split_offset_ranges([("t", 0, 0, 100)], min_partitions=4, max_records_per_partition=None)
-        assert out == [("t", 0, 0, 25), ("t", 0, 25, 50), ("t", 0, 50, 75), ("t", 0, 75, 100)]
+        out = split_offset_ranges([OffsetRange(_tp(0), 0, 100)], min_partitions=4, max_records_per_partition=None)
+        assert out == [
+            OffsetRange(_tp(0), 0, 25),
+            OffsetRange(_tp(0), 25, 50),
+            OffsetRange(_tp(0), 50, 75),
+            OffsetRange(_tp(0), 75, 100),
+        ]
 
     def test_min_partitions_weights_by_size(self):
         # 90 vs 10 records with minPartitions=10 -> 9 chunks and 1 chunk.
-        out = _split_offset_ranges(
-            [("t", 0, 0, 90), ("t", 1, 0, 10)], min_partitions=10, max_records_per_partition=None
+        out = split_offset_ranges(
+            [OffsetRange(_tp(0), 0, 90), OffsetRange(_tp(1), 0, 10)], min_partitions=10, max_records_per_partition=None
         )
-        assert len([r for r in out if r[1] == 0]) == 9  # noqa: PLR2004
-        assert len([r for r in out if r[1] == 1]) == 1
+        assert len([r for r in out if r.topic_partition.partition == 0]) == 9  # noqa: PLR2004
+        assert len([r for r in out if r.topic_partition.partition == 1]) == 1
 
     def test_both_options_apply_in_order(self):
-        out = _split_offset_ranges([("t", 0, 0, 100)], min_partitions=8, max_records_per_partition=50)
+        out = split_offset_ranges([OffsetRange(_tp(0), 0, 100)], min_partitions=8, max_records_per_partition=50)
         # maxRecords gives 2 ranges, then minPartitions splits those up to 8.
         assert len(out) == 8  # noqa: PLR2004
-        assert out[0][2] == 0
-        assert out[-1][3] == 100  # noqa: PLR2004
+        assert out[0].start == 0
+        assert out[-1].end == 100  # noqa: PLR2004
 
     def test_records_are_never_lost(self):
-        out = _split_offset_ranges([("t", 0, 5, 47)], min_partitions=7, max_records_per_partition=9)
-        assert sum(end - start for _, _, start, end in out) == 42  # noqa: PLR2004
-        assert out[0][2] == 5  # noqa: PLR2004
-        assert out[-1][3] == 47  # noqa: PLR2004
+        out = split_offset_ranges([OffsetRange(_tp(0), 5, 47)], min_partitions=7, max_records_per_partition=9)
+        assert sum(r.size for r in out) == 42  # noqa: PLR2004
+        assert out[0].start == 5  # noqa: PLR2004
+        assert out[-1].end == 47  # noqa: PLR2004
 
     def test_small_ranges_do_not_inflate_the_partition_count(self):
         # Spark sets aside ranges too small to split before dividing the
         # `minPartitions` budget, so the big range takes only the budget the
         # small ones left behind. A single proportional pass would give the big
         # range 4 chunks and still add one per small range, overshooting to 6.
-        out = _split_offset_ranges(
-            [("t", 0, 0, 100), ("t", 1, 0, 1), ("t", 2, 0, 1)],
+        out = split_offset_ranges(
+            [OffsetRange(_tp(0), 0, 100), OffsetRange(_tp(1), 0, 1), OffsetRange(_tp(2), 0, 1)],
             min_partitions=4,
             max_records_per_partition=None,
         )
-        assert out == [("t", 0, 0, 50), ("t", 0, 50, 100), ("t", 1, 0, 1), ("t", 2, 0, 1)]
+        assert out == [
+            OffsetRange(_tp(0), 0, 50),
+            OffsetRange(_tp(0), 50, 100),
+            OffsetRange(_tp(1), 0, 1),
+            OffsetRange(_tp(2), 0, 1),
+        ]
 
     def test_skewed_split_matches_spark_budget(self):
-        out = _split_offset_ranges(
-            [("t", 0, 0, 1000), ("t", 1, 0, 5)], min_partitions=8, max_records_per_partition=None
+        out = split_offset_ranges(
+            [OffsetRange(_tp(0), 0, 1000), OffsetRange(_tp(1), 0, 5)], min_partitions=8, max_records_per_partition=None
         )
         assert len(out) == 8  # noqa: PLR2004
-        assert [r for r in out if r[1] == 1] == [("t", 1, 0, 5)]
-        assert out[0][2] == 0
-        assert out[-2][3] == 1000  # noqa: PLR2004
+        assert [r for r in out if r.topic_partition.partition == 1] == [OffsetRange(_tp(1), 0, 5)]
+        assert out[0].start == 0
+        assert out[-2].end == 1000  # noqa: PLR2004
 
 
 # ---------------------------------------------------------------------------
@@ -788,9 +819,9 @@ class TestSchema:
         assert source.reader(with_metadata) is not None
 
 
-@pytest.fixture(scope="module", autouse=True)
-def spark_doctest():
-    """Override the parent fixture: these unit tests need no Spark server."""
+def test_missing_bootstrap_servers_fail_before_client_creation():
+    with pytest.raises(ValueError, match=r"bootstrap\.servers"):
+        KafkaDataSource(options={"subscribe": "t"}).reader(None)
 
 
 @pytest.mark.parametrize("servers", ["", " ", "\t\n"])
@@ -805,9 +836,9 @@ def test_admin_timeout_respects_client_limits(timeout):
         _resolved(adminTimeoutMs=timeout)
 
 
-def test_admin_timeout_limit_does_not_restrict_python_deadlines():
-    assert _resolved(adminTimeoutMs="3600000")["admin_timeout_s"] == pytest.approx(3600)
-    assert _resolved(stallTimeoutMs="1e20")["stall_timeout_s"] == pytest.approx(1e17)
+def test_admin_timeout_limit_does_not_restrict_poll_timeout():
+    assert _resolved(adminTimeoutMs="3600000").admin_timeout_s == pytest.approx(3600)
+    assert _resolved(pollTimeoutMs="1e20").poll_timeout_s == pytest.approx(1e17)
 
 
 def test_consumer_tuning_does_not_warn_on_admin_handle(caplog):
@@ -832,8 +863,8 @@ def test_consumer_tuning_does_not_warn_on_admin_handle(caplog):
         "enable.auto.offset.store": "false",
     }
     with caplog.at_level(logging.WARNING):
-        admin = AdminClient(_build_admin_config(settings), logger=logging.getLogger(__name__))
+        admin = AdminClient(build_admin_config(settings), logger=logging.getLogger(__name__))
         admin.poll(0)
     assert not any("consumer property" in record.message for record in caplog.records)
-    config = _build_consumer_config(settings)
+    config = build_consumer_config(settings, _READ_UNCOMMITTED)
     assert all(config[key] == value for key, value in settings.items())

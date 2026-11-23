@@ -48,13 +48,7 @@ def bootstrap_servers(kafka_container):
 
 
 def _flush(producer) -> None:
-    """Flush and assert the queue drained.
-
-    ``flush()`` returns the number of messages still queued when it gives up.
-    Ignoring that lets the suite seed fewer messages than expected and fail
-    later in an unrelated assertion, which is a confusing way to learn the
-    broker was slow.
-    """
+    """Flush and fail fast if the producer queue did not drain."""
     remaining = producer.flush(timeout=15)
     assert remaining == 0, f"producer failed to drain within 15s; {remaining} message(s) still queued"
 
@@ -209,9 +203,7 @@ def test_empty_range(spark, kafka_opts):
 
 
 def test_inverted_range_raises(spark, kafka_opts):
-    """An explicit start-past-end range must fail rather than silently
-    returning a partial (here empty) result, matching Spark's treatment of an
-    inverted range as data loss."""
+    """Explicit start-past-end fails instead of returning an empty result."""
     starting = json.dumps({_TOPIC: {"0": 7}})
     ending = json.dumps({_TOPIC: {"0": 3}})
     with pytest.raises(Exception, match=r"Inverted offset range"):
@@ -240,11 +232,7 @@ def test_offsets_for_unsubscribed_topic_raises(spark, kafka_opts):
 
 
 def test_offsets_missing_a_partition_raises(spark, kafka_opts):
-    """Spark asserts the specific-offsets map covers every assigned partition.
-
-    An omitted partition would otherwise fall back to a watermark, so the read
-    silently starts somewhere the user did not ask for.
-    """
+    """Specific-offsets JSON must cover every assigned partition."""
     with pytest.raises(Exception, match=r"must specify all assigned TopicPartitions"):
         (
             spark.read.format("kafka")
@@ -269,11 +257,7 @@ def test_multi_topic(spark, kafka_opts):
 
 
 def test_duplicate_topic_not_double_counted(spark, kafka_opts):
-    """A repeated topic in `subscribe` must be deduped.
-
-    Without dedup each occurrence is enumerated separately, producing duplicate
-    input partitions over the same offset range and emitting every row twice.
-    """
+    """Repeated topics in `subscribe` are deduped rather than scanned twice."""
     df = spark.read.format("kafka").option("subscribe", f"{_TOPIC},{_TOPIC}").options(**kafka_opts).load()
     assert df.count() == _TOPIC_MSG_COUNT
     offsets = sorted(r.offset for r in df.collect())
@@ -285,59 +269,9 @@ def test_duplicate_topic_not_double_counted(spark, kafka_opts):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_bootstrap_raises(spark):
-    with pytest.raises(Exception, match=r"bootstrap\.servers"):
-        spark.read.format("kafka").option("subscribe", _TOPIC).load().collect()
-
-
-def test_missing_subscribe_raises(spark, kafka_opts):
-    with pytest.raises(Exception, match=r"subscribe"):
-        spark.read.format("kafka").options(**kafka_opts).load().collect()
-
-
 def test_unknown_topic_raises(spark, kafka_opts):
     with pytest.raises(Exception, match=r"not found"):
         spark.read.format("kafka").option("subscribe", "does-not-exist").options(**kafka_opts).load().collect()
-
-
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("startingOffsets", "latest"),
-        ("endingOffsets", "earliest"),
-        ("startingOffsets", json.dumps({_TOPIC: {"0": -1}})),
-        ("endingOffsets", json.dumps({_TOPIC: {"0": -2}})),
-    ],
-)
-def test_wrong_endpoint_sentinel_raises(spark, kafka_opts, option, value):
-    """Spark's batch source rejects latest-at-start and earliest-at-end.
-
-    Both always resolve to an empty range, so they must fail loudly rather than
-    silently returning no rows.
-    """
-    with pytest.raises(Exception, match=r"does not support"):
-        (
-            spark.read.format("kafka")
-            .option("subscribe", _TOPIC)
-            .option(option, value)
-            .options(**kafka_opts)
-            .load()
-            .collect()
-        )
-
-
-def test_out_of_range_offset_sentinel_raises(spark, kafka_opts):
-    """-1000 is librdkafka's OFFSET_STORED; passed through it would silently
-    read from committed consumer-group offsets."""
-    with pytest.raises(Exception, match=r"must be >= 0"):
-        (
-            spark.read.format("kafka")
-            .option("subscribe", _TOPIC)
-            .option("startingOffsets", json.dumps({_TOPIC: {"0": -1000}}))
-            .options(**kafka_opts)
-            .load()
-            .collect()
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -381,11 +315,7 @@ def test_offsets_by_timestamp_json(spark, kafka_opts):
 
 
 def test_starting_timestamp_future_raises_by_default(spark, kafka_opts):
-    """Spark defaults startingOffsetsByTimestampStrategy to `error`.
-
-    A future or mistaken starting timestamp must fail rather than silently
-    return an empty result.
-    """
+    """Unmatched starting timestamps fail by default (strategy='error')."""
     far_future_ms = 4102444800000  # year 2100
     with pytest.raises(Exception, match=r"No offset matches the requested timestamp"):
         (
@@ -413,11 +343,7 @@ def test_starting_timestamp_future_with_latest_strategy_reads_nothing(spark, kaf
 
 
 def test_starting_timestamp_takes_precedence_over_offsets(spark, kafka_opts):
-    """Spark applies precedence rather than rejecting the combination.
-
-    The global timestamp wins and the offsets value is never parsed, so a job
-    supplying a fallback keeps working.
-    """
+    """Global timestamp wins over startingOffsets without raising."""
     df = (
         spark.read.format("kafka")
         .option("subscribe", _TOPIC)
@@ -492,12 +418,7 @@ def test_assign(spark, kafka_opts):
 
 @pytest.mark.parametrize("assignment", [{}, {_TOPIC: []}, {_TOPIC: [7]}])
 def test_assign_skips_partitions_that_do_not_exist(spark, kafka_opts, assignment):
-    """Spark intersects the requested partitions with the broker's.
-
-    `AssignStrategy.assignedTopicPartitions` filters rather than validates, so
-    an assignment naming a partition that is empty or gone reads nothing from it
-    instead of failing the query.
-    """
+    """Empty or nonexistent partitions in `assign` are skipped rather than rejected."""
     df = spark.read.format("kafka").option("assign", json.dumps(assignment)).options(**kafka_opts).load()
     assert df.count() == 0
 
@@ -515,11 +436,7 @@ def test_subscribe_pattern(spark, kafka_opts):
 
 
 def test_subscribe_pattern_is_not_anchored(spark, kafka_opts):
-    """A prefix selects every topic containing it, as it does under Spark.
-
-    `SubscribePatternStrategy` matches with `topicRegex.findFirstIn(name)`.
-    Anchoring the pattern to the whole name would silently drop `-alt` here.
-    """
+    """Unanchored prefix matches all topics containing it, matching Spark."""
     df = spark.read.format("kafka").option("subscribePattern", "sail-test-topic").options(**kafka_opts).load()
     assert {r.topic for r in df.collect()} == {_TOPIC, _TOPIC_ALT}
 
@@ -529,24 +446,8 @@ def test_subscribe_pattern_narrow(spark, kafka_opts):
     assert {r.topic for r in df.collect()} == {_TOPIC_ALT}
 
 
-def test_multiple_subscription_strategies_raise(spark, kafka_opts):
-    with pytest.raises(Exception, match=r"Only one of the following options"):
-        (
-            spark.read.format("kafka")
-            .option("subscribe", _TOPIC)
-            .option("assign", json.dumps({_TOPIC: [0]}))
-            .options(**kafka_opts)
-            .load()
-            .collect()
-        )
-
-
 # ---------------------------------------------------------------------------
 # minPartitions / maxRecordsPerPartition
-#
-# Spark splits Kafka offset ranges into additional input partitions for these.
-# The observable guarantee through the DataFrame API is that splitting changes
-# neither the rows nor their offsets.
 # ---------------------------------------------------------------------------
 
 
@@ -576,12 +477,7 @@ def test_max_records_per_partition_preserves_rows(spark, kafka_opts):
 
 
 def test_ending_offset_past_end_of_log_raises(spark, kafka_opts):
-    """An end offset the log cannot reach is data loss under the default.
-
-    The read stops at end-of-log below the planned end, and with
-    failOnDataLoss=true (Spark's default) that must fail rather than return a
-    partial result that looks like a successful read.
-    """
+    """An end offset beyond the log is data loss under default failOnDataLoss=true."""
     ending = json.dumps({_TOPIC: {"0": _TOPIC_MSG_COUNT + 1000}})
     with pytest.raises(Exception, match=r"Data loss"):
         (
@@ -607,40 +503,13 @@ def test_fail_on_data_loss_false_returns_partial(spark, kafka_opts):
     assert df.count() == _TOPIC_MSG_COUNT
 
 
-def test_invalid_fail_on_data_loss_raises(spark, kafka_opts):
-    with pytest.raises(Exception, match=r"must be 'true' or 'false'"):
-        (
-            spark.read.format("kafka")
-            .option("subscribe", _TOPIC)
-            .option("failOnDataLoss", "maybe")
-            .options(**kafka_opts)
-            .load()
-            .collect()
-        )
-
-
 # ---------------------------------------------------------------------------
-# Option validation that mirrors Spark's
+# End-to-end validation through Spark Connect
 # ---------------------------------------------------------------------------
-
-
-def test_invalid_include_headers_raises(spark, kafka_opts):
-    """Spark rejects a non-boolean; silently treating it as false would drop
-    the headers column the user asked for."""
-    with pytest.raises(Exception, match=r"must be 'true' or 'false'"):
-        (
-            spark.read.format("kafka")
-            .option("subscribe", _TOPIC)
-            .option("includeHeaders", "yes")
-            .options(**kafka_opts)
-            .load()
-            .collect()
-        )
 
 
 def test_protected_consumer_option_raises(spark, kafka_opts):
-    """`auto.offset.reset` is owned by the source: the planner already resolved
-    a concrete start, so a reset policy could only move it silently."""
+    """Verify option-validation errors surface through Spark Connect."""
     with pytest.raises(Exception, match=r"is not supported"):
         (
             spark.read.format("kafka")
@@ -653,7 +522,7 @@ def test_protected_consumer_option_raises(spark, kafka_opts):
 
 
 def test_user_specified_schema_rejected(spark, kafka_opts):
-    """Spark's Kafka source has a fixed schema and rejects a custom one."""
+    """Verify custom .schema(...) reaches KafkaDataSource.reader and is rejected."""
     with pytest.raises(Exception, match=r"fixed schema"):
         (
             spark.read.format("kafka")
@@ -667,23 +536,11 @@ def test_user_specified_schema_rejected(spark, kafka_opts):
 
 # ---------------------------------------------------------------------------
 # Late binding of earliest/latest
-#
-# These drive the data source API directly rather than going through a
-# DataFrame. Spark Connect plans lazily at `collect()`, so the DataFrame API
-# gives no seam between planning and reading — and the seam is exactly what
-# these assert. Everything below still runs against the real broker: real
-# AdminClient, real consumer, real watermarks. A dedicated topic per test keeps
-# them from perturbing the row counts the rest of the module asserts.
 # ---------------------------------------------------------------------------
 
 
 def _plan_and_read(bootstrap_servers, topic, before_read, **options):
-    """Plan a read, run ``before_read`` against the broker, then read.
-
-    Returns the offsets the read produced. The callback runs after
-    ``partitions()`` and before ``read()``, which is the window in which a
-    late-bound endpoint is supposed to notice the broker has moved on.
-    """
+    """Plan, run ``before_read`` against the broker between planning and reading, then read."""
     from pysail.spark.datasource.kafka import KafkaDataSource
 
     reader = KafkaDataSource(
@@ -699,12 +556,7 @@ def _plan_and_read(bootstrap_servers, topic, before_read, **options):
 
 
 def test_late_binding_picks_up_records_produced_after_planning(bootstrap_servers):
-    """`latest` means the end of the log when the task runs, as in Spark.
-
-    Spark carries the -1 sentinel to the executor and binds it in
-    `KafkaSourceRDD.resolveRange`. Resolving on the driver instead would stop at
-    the watermark captured during planning and silently drop this tail.
-    """
+    """`latest` binds at task start, picking up records produced after planning."""
     topic = "sail-test-late-bind-tail"
     producer = Producer({"bootstrap.servers": bootstrap_servers})
     for i in range(4):
@@ -742,12 +594,7 @@ def _truncate_before(bootstrap_servers, topic, offset):
 
 
 def test_late_binding_survives_retention_after_planning(bootstrap_servers):
-    """An `earliest` start stays valid when the log ages on mid-query.
-
-    A start frozen at planning would now sit below the low watermark, and with
-    the default `failOnDataLoss=true` that fails a query Spark completes by
-    simply re-resolving `earliest` at task start.
-    """
+    """`earliest` binds at task start, surviving retention between planning and reading."""
     topic = "sail-test-late-bind-retention"
     _seed(bootstrap_servers, topic, 10)
 
@@ -758,14 +605,7 @@ def test_late_binding_survives_retention_after_planning(bootstrap_servers):
 
 
 def test_explicit_start_below_the_log_start_is_data_loss(bootstrap_servers):
-    """A start the log has moved past must fail rather than quietly move.
-
-    The consumer runs with `auto.offset.reset=error`, librdkafka's equivalent of
-    the `none` Spark forces on executors, so the broker's refusal reaches the
-    read loop and `failOnDataLoss` decides what happens. This is the case a
-    reset policy cannot express: `earliest` would have librdkafka pick a new
-    position on its own.
-    """
+    """Explicit start offset removed by retention fails under default failOnDataLoss=true."""
     topic = "sail-test-truncated-start-fails"
     _seed(bootstrap_servers, topic, 10)
     truncate = _truncate_before(bootstrap_servers, topic, 6)
@@ -781,13 +621,7 @@ def test_explicit_start_below_the_log_start_is_data_loss(bootstrap_servers):
 
 
 def test_explicit_start_below_the_log_start_recovers_when_allowed(bootstrap_servers):
-    """`failOnDataLoss=false` resumes inside the planned range, not below it.
-
-    Spark's `getEarliestAvailableOffsetBetween` clamps recovery to the overlap
-    of the planned and available ranges. Letting librdkafka reset to `earliest`
-    instead would replay the partition from its start, so the result here is the
-    remaining tail — never the records the planner did not ask for.
-    """
+    """With failOnDataLoss=false, out-of-range recovery resumes within the planned range."""
     topic = "sail-test-truncated-start-recovers"
     _seed(bootstrap_servers, topic, 10)
     truncate = _truncate_before(bootstrap_servers, topic, 6)
@@ -803,12 +637,7 @@ def test_explicit_start_below_the_log_start_recovers_when_allowed(bootstrap_serv
 
 
 def test_partition_eof_reports_the_log_end_offset(bootstrap_servers):
-    """The EOF event carries the position librdkafka had reached.
-
-    `_eof_is_terminal` uses that offset to tell a queued, stale EOF from a real
-    end of log. If librdkafka stopped reporting it the check would fall back to
-    the reader's own position, so this pins the assumption to the real client.
-    """
+    """Pin librdkafka's contract that _PARTITION_EOF carries the reached log-end offset."""
     from confluent_kafka import Consumer, KafkaError, TopicPartition
 
     topic = "sail-test-eof-offset"
@@ -845,8 +674,7 @@ def test_partition_eof_reports_the_log_end_offset(bootstrap_servers):
 
 
 def test_schema_fields_are_nullable(spark, kafka_opts):
-    """Spark declares every Kafka column nullable; nullability is user-visible
-    in printSchema and in write-compatibility checks."""
+    """Every column in the Kafka schema is nullable, matching Spark."""
     df = (
         spark.read.format("kafka")
         .option("subscribe", _TOPIC)

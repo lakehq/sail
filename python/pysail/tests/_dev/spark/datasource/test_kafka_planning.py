@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from pyspark import cloudpickle
@@ -30,10 +31,19 @@ from types import SimpleNamespace
 from confluent_kafka import IsolationLevel, KafkaError, KafkaException
 from confluent_kafka.admin._listoffsets import EarliestSpec, TimestampSpec
 
-from pysail.spark.datasource import kafka as kafka_module
 from pysail.spark.datasource.kafka import KafkaDataSource
+from pysail.spark.datasource.kafka import options as kafka_options
+from pysail.spark.datasource.kafka import planning as kafka_planning
+from pysail.spark.datasource.kafka import reader as kafka_reader
+from pysail.spark.datasource.kafka.options import TopicPartitionKey
+from pysail.spark.datasource.kafka.planning import OffsetRange
 
 _TOPIC = "orders"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def spark_doctest():
+    """Override the parent fixture: these unit tests need no Spark server."""
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +132,7 @@ class _FakeConsumer:
         times=None,
         messages=None,
         watermarks_after_assign=None,
+        positions=None,
     ):
         # `is None` rather than a falsy check: an empty topic map is a valid
         # broker state (it is how the unknown-topic case is set up).
@@ -131,6 +142,7 @@ class _FakeConsumer:
         self.messages = list(messages or [])
         # Watermarks observed once reading has started, for truncation cases.
         self.watermarks_after_assign = watermarks_after_assign
+        self.positions = list(positions or [])
         self.assigned = None
         self.seeks = []
         self.closed = False
@@ -149,6 +161,11 @@ class _FakeConsumer:
 
     def poll(self, timeout=None):  # noqa: ARG002
         return self.messages.pop(0) if self.messages else None
+
+    def position(self, partitions):
+        tp = partitions[0]
+        offset = self.positions.pop(0) if self.positions else tp.offset
+        return [kafka_reader.TopicPartition(tp.topic, tp.partition, offset)]
 
     def seek(self, tp):
         self.seeks.append(tp)
@@ -222,8 +239,8 @@ def consumer_factory(monkeypatch):
     def _install(consumer):
         holder["consumer"] = consumer
         holder["admin"] = _FakeAdminClient(consumer)
-        monkeypatch.setattr(kafka_module, "Consumer", lambda _config: holder["consumer"])
-        monkeypatch.setattr(kafka_module, "AdminClient", lambda _config: holder["admin"])
+        monkeypatch.setattr(kafka_reader, "Consumer", lambda _config: holder["consumer"])
+        monkeypatch.setattr(kafka_reader, "AdminClient", lambda _config: holder["admin"])
         consumer.admin = holder["admin"]
         return consumer
 
@@ -238,18 +255,18 @@ def _reader(consumer_factory, consumer, **options):
 
 def _ranges(partitions):
     """Ranges as planned, which may still carry the -2/-1 late-binding sentinels."""
-    return [(p.topic, p.kafka_partition, p.start_offset, p.end_offset) for p in partitions]
+    return [(p.topic, p.partition, p.start, p.end) for p in partitions]
 
 
-def _bound_ranges(consumer, partitions):
+def _bound_ranges(reader, consumer, partitions):
     """Ranges as each task will see them, after binding sentinels at task start."""
-    bind = kafka_module._bind_partition_range  # noqa: SLF001
-    return [(p.topic, p.kafka_partition, *bind(consumer, p)) for p in partitions]
+    bind = reader._bind_partition_range  # noqa: SLF001
+    return [bind(consumer, p) for p in partitions]
 
 
 # Spark's late-binding sentinels, carried from planning into the task.
-_EARLIEST = kafka_module._SPARK_OFFSET_EARLIEST  # noqa: SLF001
-_LATEST = kafka_module._SPARK_OFFSET_LATEST  # noqa: SLF001
+_EARLIEST = kafka_options.SpecialOffset.EARLIEST
+_LATEST = kafka_options.SpecialOffset.LATEST
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +295,7 @@ class TestPlanning:
         reader = _reader(consumer_factory, consumer)
         partitions = reader.partitions()
         assert _ranges(partitions) == [(_TOPIC, 0, _EARLIEST, _LATEST)]
-        assert _bound_ranges(consumer, partitions) == [(_TOPIC, 0, 0, 10)]
+        assert _bound_ranges(reader, consumer, partitions) == [OffsetRange(TopicPartitionKey(_TOPIC, 0), 0, 10)]
 
     def test_concrete_inverted_range_raises_during_planning(self, consumer_factory):
         # Spark asserts `fromOffset <= untilOffset` in `KafkaSourceRDD.compute`,
@@ -319,14 +336,15 @@ class TestPlanning:
         assert _ranges(partitions) == [(_TOPIC, 0, 3, 3)]
         assert _read_all(reader, partitions[0]) == []
 
-    def test_inverted_range_raises_during_planning_when_splitting(self, consumer_factory):
+    @pytest.mark.parametrize("ending_offsets", ['{"orders": {"0": 3}}', "latest"])
+    def test_inverted_range_raises_during_planning_when_splitting(self, consumer_factory, ending_offsets):
         # `minPartitions` forces an early resolve, so the same range is caught
         # on the driver instead.
         reader = _reader(
             consumer_factory,
-            _FakeConsumer(),
+            _FakeConsumer(watermarks={(_TOPIC, 0): (0, 3)}),
             startingOffsets='{"orders": {"0": 8}}',
-            endingOffsets='{"orders": {"0": 3}}',
+            endingOffsets=ending_offsets,
             minPartitions="4",
         )
         with pytest.raises(ValueError, match="Inverted offset range"):
@@ -350,7 +368,7 @@ class TestPlanning:
         )
         partitions = reader.partitions()
         assert _ranges(partitions) == [(_TOPIC, 0, _EARLIEST, _LATEST)]
-        assert _bound_ranges(consumer, partitions) == [(_TOPIC, 0, 2, 9)]
+        assert _bound_ranges(reader, consumer, partitions) == [OffsetRange(TopicPartitionKey(_TOPIC, 0), 2, 9)]
 
     def test_explicit_offsets_are_not_late_bound(self, consumer_factory):
         # Concrete offsets are used as given and need no broker round-trip,
@@ -367,7 +385,7 @@ class TestPlanning:
         assert consumer.admin.list_offsets_calls == 0
 
     def test_unresolved_admin_future_does_not_hang_planning(self, consumer_factory, monkeypatch):
-        monkeypatch.setattr(kafka_module, "_FUTURE_TIMEOUT_MARGIN_S", 0)
+        monkeypatch.setattr(kafka_planning, "FUTURE_TIMEOUT_MARGIN_S", 0)
         # `Future.result()` with no timeout blocks forever. librdkafka normally
         # completes the future itself via `request_timeout`, but if it does not,
         # planning must still give up rather than wedge the query.
@@ -546,7 +564,7 @@ class TestTimestampResolution:
         # so the range only turns out to be empty once the task binds it.
         partitions = reader.partitions()
         assert _ranges(partitions) == [(_TOPIC, 0, 10, _LATEST)]
-        assert _bound_ranges(consumer, partitions) == [(_TOPIC, 0, 10, 10)]
+        assert _bound_ranges(reader, consumer, partitions) == [OffsetRange(TopicPartitionKey(_TOPIC, 0), 10, 10)]
         assert _read_all(reader, partitions[0]) == []
 
     def test_no_match_on_end_falls_back_to_latest(self, consumer_factory):
@@ -783,12 +801,19 @@ class TestRead:
         partition = self._partition(reader, consumer, [_FakeMessage(i) for i in range(5)])
         assert [batch.num_rows for batch in reader.read(partition)] == [2, 2, 1]
 
-    def test_stall_guard_fires(self, consumer_factory):
-        consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 3)})
-        reader = _reader(consumer_factory, consumer, stallTimeoutMs="1", pollTimeoutMs="1")
-        partition = self._partition(reader, consumer, [])  # poll() always returns None
-        with pytest.raises(TimeoutError, match="Kafka read stalled"):
+    def test_poll_timeout_fails_without_retrying(self, consumer_factory):
+        consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 1)})
+        reader = _reader(consumer_factory, consumer, pollTimeoutMs="1")
+        partition = self._partition(reader, consumer, [None, _FakeMessage(0)])
+        with pytest.raises(TimeoutError, match="Cannot fetch record for offset 0"):
             _read_all(reader, partition)
+        assert len(consumer.messages) == 1
+
+    def test_empty_poll_can_advance_past_invisible_records(self, consumer_factory):
+        consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 3)}, positions=[2])
+        reader = _reader(consumer_factory, consumer, pollTimeoutMs="1")
+        partition = self._partition(reader, consumer, [None, _FakeMessage(2)])
+        assert [r["offset"] for r in _read_all(reader, partition)] == [2]
 
     def test_timestamp_type_is_translated_to_spark_values(self, consumer_factory):
         consumer = _FakeConsumer(watermarks={(_TOPIC, 0): (0, 2)})
@@ -835,6 +860,7 @@ class TestReadLifecycle:
         )
         partitions = reader.partitions()
         payload = cloudpickle.dumps((reader, partitions))
+        pysail_root = str(Path(pysail.__file__).resolve().parent.parent)
         result = subprocess.run(
             [
                 sys.executable,
@@ -842,17 +868,21 @@ class TestReadLifecycle:
                 (
                     # Reuse the package search path, including editable/native
                     # build locations, without carrying any live reader state.
-                    "import json, sys, pysail; from pyspark import cloudpickle; "
-                    "pysail.__path__[:] = json.loads(sys.argv[1]); "
+                    "import json, sys; sys.path.insert(0, sys.argv[1]); "
+                    "import pysail; from pyspark import cloudpickle; "
+                    "pysail.__path__[:] = json.loads(sys.argv[2]); "
+                    "from pysail.spark.datasource.kafka.options import TimestampStrategy; "
                     "reader, parts = cloudpickle.loads(sys.stdin.buffer.read()); "
+                    "assert reader.starting_ts_strategy is TimestampStrategy.ERROR; "
                     "assert reader.include_headers; "
                     "assert reader.max_batch_bytes == 1024; "
                     "assert reader.client_config['sasl.password'] == 'test-only-secret'; "
                     "assert not hasattr(parts[0], 'client_config'); "
                     "assert 'test-only-secret' not in repr(parts[0]) + repr(reader); "
-                    "assert (parts[0].topic, parts[0].start_offset, parts[0].end_offset) == ('orders', -2, -1); "
+                    "assert (parts[0].topic, parts[0].start, parts[0].end) == ('orders', -2, -1); "
                     "print('deserialized')"
                 ),
+                pysail_root,
                 json.dumps(list(pysail.__path__)),
             ],
             input=payload,
@@ -888,36 +918,20 @@ class TestReadLifecycle:
             _read_all(reader, reader.partitions()[0])
         assert consumer.closed
 
-    def test_poll_uses_only_the_remaining_idle_budget(self, consumer_factory, monkeypatch):
-        clock = [0.0]
-        timeouts = []
-
-        class IdleConsumer(_FakeConsumer):
-            def poll(self, timeout=None):
-                timeouts.append(timeout)
-                clock[0] += timeout
-
-        monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
-        consumer = IdleConsumer()
-        reader = _reader(consumer_factory, consumer, stallTimeoutMs="1000", pollTimeoutMs="2000")
-        with pytest.raises(TimeoutError, match="Kafka read stalled"):
-            _read_all(reader, reader.partitions()[0])
-        assert timeouts == [1.0]
-
-    def test_out_of_range_recovery_without_progress_is_bounded(self, consumer_factory, monkeypatch):
-        clock = [0.0]
+    def test_out_of_range_recovery_without_progress_is_bounded(self, consumer_factory):
+        polls = 0
 
         class StuckConsumer(_FakeConsumer):
             def poll(self, timeout=None):  # noqa: ARG002
-                clock[0] += 0.01
-                if clock[0] > 0.1:  # noqa: PLR2004
-                    pytest.fail("recovery ignored the idle deadline")
+                nonlocal polls
+                polls += 1
+                if polls > 10:  # noqa: PLR2004
+                    pytest.fail("recovery looped without making progress")
                 return _offset_out_of_range_message()
 
-        monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
         consumer = StuckConsumer()
-        reader = _reader(consumer_factory, consumer, failOnDataLoss="false", stallTimeoutMs="20")
-        with pytest.raises(TimeoutError, match="Kafka read stalled"):
+        reader = _reader(consumer_factory, consumer, failOnDataLoss="false")
+        with pytest.raises(TimeoutError, match="out-of-range recovery made no progress"):
             _read_all(reader, reader.partitions()[0])
         assert consumer.closed
 
@@ -938,7 +952,7 @@ class TestReadLifecycle:
         generator = reader.read(reader.partitions()[0])
         try:
             assert next(generator).num_rows == 1
-            assert len(generator.gi_frame.f_locals["buf"]) == 0
+            assert len(generator.gi_frame.f_locals["row_buffer"]) == 0
         finally:
             generator.close()
         assert consumer.closed
@@ -964,51 +978,6 @@ class TestReadLifecycle:
         reader = _reader(consumer_factory, consumer, failOnDataLoss="false")
         assert [r["offset"] for r in _read_all(reader, reader.partitions()[0])] == [8, 9]
         assert "partial read on orders[0]" in caplog.text
-
-    def test_partial_batch_is_flushed_before_the_idle_deadline(self, consumer_factory, monkeypatch):
-        clock = [0.0]
-
-        class SlowConsumer(_FakeConsumer):
-            def poll(self, timeout=None):
-                if self.messages:
-                    return self.messages.pop(0)
-                clock[0] += timeout
-                return None
-
-        monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
-        consumer = SlowConsumer(messages=[_FakeMessage(0)])
-        reader = _reader(consumer_factory, consumer, maxBatchWaitMs="10", stallTimeoutMs="100")
-        generator = reader.read(reader.partitions()[0])
-        try:
-            assert next(generator).column("offset").to_pylist() == [0]
-            assert clock[0] == pytest.approx(0.01)
-        finally:
-            generator.close()
-
-    def test_backpressure_does_not_use_the_broker_idle_budget(self, consumer_factory, monkeypatch):
-        clock = [0.0]
-
-        class PausedConsumer(_FakeConsumer):
-            def poll(self, timeout=None):
-                clock[0] += 0.001
-                return super().poll(timeout)
-
-        monkeypatch.setattr(kafka_module.time, "monotonic", lambda: clock[0])
-        consumer = PausedConsumer(
-            watermarks={(_TOPIC, 0): (0, 2)},
-            messages=[_FakeMessage(0), None, _FakeMessage(1)],
-        )
-        reader = _reader(consumer_factory, consumer, maxBatchRows="1", stallTimeoutMs="20")
-        generator = reader.read(reader.partitions()[0])
-        assert next(generator).column("offset").to_pylist() == [0]
-        clock[0] += 60
-        assert next(generator).column("offset").to_pylist() == [1]
-        generator.close()
-
-
-@pytest.fixture(scope="module", autouse=True)
-def spark_doctest():
-    """Override the parent fixture: these unit tests need no Spark server."""
 
 
 @pytest.mark.parametrize("path", ["bind", "gap", "eof", "recover"])
