@@ -611,23 +611,31 @@ pub fn cast_catalog_partition_value(
         ty if ty.is_signed_integer() && !ansi => {
             ScalarValue::Int64(parse_spark_legacy_string_to_i64(&value)).cast_to(ty)
         }
-        DataType::Boolean => match value.trim().to_ascii_lowercase().as_str() {
+        ty if ty.is_signed_integer() => {
+            let integer = value
+                .trim_matches(|c: char| c == ' ' || c.is_ascii_control())
+                .parse::<i64>()
+                .map_err(|_| plan_datafusion_err!("invalid integer partition value: {value}"))?;
+            ScalarValue::Int64(Some(integer)).cast_to(ty)
+        }
+        DataType::Boolean => match value
+            .trim_matches(|c: char| c == ' ' || c.is_ascii_control())
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "t" | "true" | "y" | "yes" | "1" => Ok(ScalarValue::Boolean(Some(true))),
             "f" | "false" | "n" | "no" | "0" => Ok(ScalarValue::Boolean(Some(false))),
             _ => Err(plan_datafusion_err!(
                 "invalid boolean partition value: {value}"
             )),
         },
-        DataType::Decimal128(precision, scale) => catalog_decimal(value.trim(), *precision, *scale),
-        DataType::Float32 => match java_float::<f32>(&value) {
-            Some(v) => Ok(ScalarValue::Float32(Some(v))),
-            None => ScalarValue::try_from_string(value.trim().to_owned(), ty),
-        },
-        DataType::Float64 => match java_float::<f64>(&value) {
-            Some(v) => Ok(ScalarValue::Float64(Some(v))),
-            None => ScalarValue::try_from_string(value.trim().to_owned(), ty),
-        },
-        ty if ty.is_numeric() => ScalarValue::try_from_string(value.trim().to_owned(), ty),
+        DataType::Decimal128(precision, scale) => catalog_decimal(&value, *precision, *scale),
+        DataType::Float32 => java_float::<f32>(catalog_float_literal(&value))
+            .map(|v| ScalarValue::Float32(Some(v)))
+            .ok_or_else(|| plan_datafusion_err!("invalid float partition value: {value}")),
+        DataType::Float64 => java_float::<f64>(catalog_float_literal(&value))
+            .map(|v| ScalarValue::Float64(Some(v)))
+            .ok_or_else(|| plan_datafusion_err!("invalid double partition value: {value}")),
         _ => ScalarValue::try_from_string(value, ty),
     };
     match scalar {
@@ -636,15 +644,34 @@ pub fn cast_catalog_partition_value(
     }
 }
 
+// Spark also accepts case-insensitive special values in casts from strings.
+fn catalog_float_literal(value: &str) -> &str {
+    let value = value.trim_matches(|c| c <= ' ');
+    match value.to_ascii_lowercase().as_str() {
+        "inf" | "+inf" | "infinity" | "+infinity" => "Infinity",
+        "-inf" | "-infinity" => "-Infinity",
+        "nan" => "NaN",
+        _ => value,
+    }
+}
+
+#[expect(clippy::expect_used)]
+static CATALOG_DECIMAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE]([+-]?[0-9]+))?$")
+        .expect("valid decimal pattern")
+});
+
 fn catalog_decimal(value: &str, precision: u8, scale: i8) -> Result<ScalarValue> {
     let invalid =
         || plan_datafusion_err!("invalid DECIMAL({precision},{scale}) partition value: {value}");
-    // BigDecimal also accepts underscores, which are invalid in Spark decimal strings.
-    let decimal = normalize_decimal_digits(value)
-        .parse::<BigDecimal>()
-        .ok()
-        .filter(|_| !value.contains('_'))
-        .ok_or_else(invalid)?;
+    // Java BigDecimal bounds the exponent and the resulting scale to signed 32-bit integers.
+    let literal = normalize_decimal_digits(value.trim_matches(|c| c <= ' '));
+    let captures = CATALOG_DECIMAL.captures(&literal).ok_or_else(invalid)?;
+    if let Some(exponent) = captures.get(1) {
+        exponent.as_str().parse::<i32>().map_err(|_| invalid())?;
+    }
+    let decimal = literal.parse::<BigDecimal>().map_err(|_| invalid())?;
+    i32::try_from(decimal.fractional_digit_count()).map_err(|_| invalid())?;
     let digits_before_point =
         i128::from(decimal.digits()) - i128::from(decimal.fractional_digit_count());
     // Bound exponent expansion before rounding a scientific-notation value to the target scale.

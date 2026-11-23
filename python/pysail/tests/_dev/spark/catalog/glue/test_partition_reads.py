@@ -160,6 +160,20 @@ def test_registered_decimal_with_nested_directory(spark, moto_endpoint, tmp_path
             assert parent.inputFiles() == [(root / "data.json").as_uri()]
         finally:
             nested.chmod(mode)
+        ansi = "spark.sql.ansi.enabled"
+        previous = spark.conf.get(ansi)
+        try:
+            spark.conf.set(ansi, "false")
+            for value in ["\u00a01.00", ".-1", "1E-2147483649", "\x1f3.25"]:
+                glue.create_partition(
+                    DatabaseName="test_db",
+                    TableName="registered_decimal_partition",
+                    PartitionInput={"Values": [value], "StorageDescriptor": {"Location": str(root)}},
+                )
+            assert spark.table(table).where("p IS NULL").count() == 3
+            assert spark.table(table).where("p = 3.25").count() == 1
+        finally:
+            spark.conf.set(ansi, previous)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
