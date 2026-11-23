@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 
@@ -25,13 +27,19 @@ def test_sort(spark):
     # +-----+----+----+
 
     df = spark.sql(query)
-    rows = [Row(a=False, b=1, c=None), Row(a=False, b=None, c=2.0), Row(a=None, b=3, c=3.0)]
-    assert df.sort("a").select("a").collect() == [Row(a=None), Row(a=False), Row(a=False)]
-    assert df.sort("c").collect() == rows
-    assert df.sort("b").collect() == [rows[1], rows[0], rows[2]]
-    assert df.sort(df.c, "b").collect() == rows
-    assert df.sort(df.c.desc(), "b").collect() == rows[::-1]
-    assert df.sort(df.c.desc(), df.a.asc()).collect() == rows[::-1]
+    expected = pd.DataFrame(
+        {"a": [False, False, None], "b": [1, None, 3], "c": pd.Series([None, 2.0, 3.0], dtype=object)}
+    )
+    expected_descending = expected.iloc[::-1].reset_index(drop=True)
+
+    sorted_by_a = df.sort("a").toPandas()
+    assert_frame_equal(sorted_by_a[["a"]], pd.DataFrame({"a": [None, False, False]}))
+    assert_frame_equal(sorted_by_a.sort_values(by=["a", "b"], ignore_index=True), expected)
+    assert_frame_equal(df.sort("c").toPandas(), expected)
+    assert_frame_equal(df.sort("b").toPandas(), expected.iloc[[1, 0, 2]].reset_index(drop=True))
+    assert_frame_equal(df.sort(df.c, "b").toPandas(), expected)
+    assert_frame_equal(df.sort(df.c.desc(), "b").toPandas(), expected_descending)
+    assert_frame_equal(df.sort(df.c.desc(), df.a.asc()).toPandas(), expected_descending)
 
 
 @pytest.fixture
