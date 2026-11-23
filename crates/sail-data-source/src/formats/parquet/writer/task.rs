@@ -260,8 +260,10 @@ impl FileFactory {
         // A limit of zero means that the rows of a data page are not limited,
         // and the Arrow writer does not accept zero for either of the two values.
         // The limits of a data page are checked each time a number of rows has been
-        // written to a column. That number is at most the limit on the rows
-        // of a page, so that a page does not get more rows than a small limit allows.
+        // written to a column, which is the number below for a column that has
+        // values missing or repeated, and the limit on the rows of a page otherwise.
+        // The number is at most the limit on the rows of a page, so that a page
+        // does not get more rows than a small limit allows.
         let page_rows = match options.global.data_page_row_count_limit {
             0 => UNLIMITED_PAGE_ROWS,
             rows => rows,

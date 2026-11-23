@@ -777,8 +777,8 @@
   default: "20000"
   description: |
     (Writing) The best-effort maximum number of rows in a data page for the Parquet writer.
-    The writer checks this limit every 1024 rows, or more often when the limit is smaller than 1024.
-    A page can exceed the limit by fewer rows than that interval.
+    The writer checks this limit after it has written at most 1024 rows to a column,
+    and not after each row, so a page can exceed the limit by fewer than 1024 rows.
     If the value is `0`, the number of rows in a data page is not limited,
     and only the limit on the size of a data page applies.
   experimental: true
