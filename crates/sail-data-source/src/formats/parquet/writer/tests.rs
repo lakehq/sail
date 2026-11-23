@@ -173,11 +173,16 @@ async fn run_task(
 }
 
 async fn run_task_with_pool(
-    task: ParquetWriteTask,
+    mut task: ParquetWriteTask,
     schema: &SchemaRef,
     batches: Vec<RecordBatch>,
     pool: &Arc<dyn MemoryPool>,
 ) -> Result<RecordBatch> {
+    // The memory pool of a task is the memory pool of its context.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(pool))
+        .build_arc()?;
+    task.context = Arc::new(TaskContext::default().with_runtime(runtime));
     let reservation = MemoryConsumer::new("test").register(pool);
     let metrics = ExecutionPlanMetricsSet::new();
     let partition = task.partition;
@@ -642,6 +647,65 @@ async fn test_memory_limit() -> Result<()> {
     )
     .await?;
     assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_memory_limit_ends_row_groups_early() -> Result<()> {
+    let schema = int_schema();
+    let batches = large_batches(&schema, 30)?;
+    let expected = concat_batches(&schema, &batches)?;
+    // The row groups of the file with a memory pool of the given size.
+    let row_groups = |limit: Option<usize>| {
+        let batches = batches.clone();
+        let (schema, expected) = (Arc::clone(&schema), expected.clone());
+        async move {
+            let store = FaultStore::new();
+            let pool: Arc<dyn MemoryPool> = match limit {
+                Some(limit) => Arc::new(GreedyMemoryPool::new(limit)),
+                None => Arc::new(UnboundedMemoryPool::default()),
+            };
+            let mut task = large_file_task(&store, Mode::Multipart);
+            task.options.global.max_row_group_size = 1024 * 1024;
+            run_task_with_pool(task, &schema, batches, &pool).await?;
+            assert_eq!(pool.reserved(), 0);
+            let name = file_name(0, 0, ".parquet");
+            let data = read_bytes(store.inner().as_ref(), &name).await?;
+            let (metadata, written) = read_parquet(data)?;
+            assert_eq!(written, expected);
+            Ok::<_, DataFusionError>(metadata.num_row_groups())
+        }
+    };
+    // The rows are 4.8 MiB when they are encoded, and they are in one row group.
+    assert_eq!(row_groups(None).await?, 1);
+    // The memory pool does not have the memory of the row group. The write does
+    // not fail: the row group ends when the memory pool refuses its memory.
+    let limited = row_groups(Some(2 * 1024 * 1024)).await?;
+    assert!(limited > 1 && limited < 30, "{limited}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_memory_limit_ends_row_groups_of_all_directories_early() -> Result<()> {
+    let batches = keyed_batches(400_000, 20_000, |i| Some(i % 3))?;
+    let schema = batches[0].schema();
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    // The values of the three files are not compressed, so the memory pool
+    // does not have the memory of their row groups.
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+    task.budget = EncodeBudget::new(0);
+    task.options.global.compression = Some("uncompressed".to_string());
+    task.options.global.dictionary_enabled = Some(false);
+    run_task_with_pool(task, &schema, batches.clone(), &pool).await?;
+    assert_eq!(pool.reserved(), 0);
+    check_one_file_per_key(store.as_ref(), &batches).await?;
+    let mut row_groups = 0;
+    for (file, _) in list_files(store.as_ref()).await? {
+        let (metadata, _) = read_parquet(read_bytes(store.as_ref(), &file).await?)?;
+        row_groups += metadata.num_row_groups();
+    }
+    assert!(row_groups > 3, "{row_groups}");
     Ok(())
 }
 

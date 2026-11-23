@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::parquet::file::metadata::SortingColumn;
 use datafusion::parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -459,6 +459,17 @@ impl DirectoryWriter {
             + self.closing.as_ref().map_or(0, |x| x.memory_size)
     }
 
+    /// Adds the rows of the open file to the file as row groups, and waits for
+    /// the file that is being completed, so that no file of the directory
+    /// keeps rows or row groups in memory.
+    pub async fn flush(&mut self, written: &mut Vec<StagedFile>) -> Result<()> {
+        self.wait_for_closing(written).await?;
+        if let Some(writer) = &mut self.writer {
+            writer.flush().await?;
+        }
+        Ok(())
+    }
+
     /// Waits for the file that is being completed.
     async fn wait_for_closing(&mut self, written: &mut Vec<StagedFile>) -> Result<()> {
         if let Some(closing) = self.closing.take() {
@@ -515,18 +526,56 @@ impl TaskOutput {
         }
     }
 
+    /// Adds the rows of all files to the files as row groups, so that the files
+    /// keep no rows and no row groups in memory.
+    async fn flush(&mut self, written: &mut Vec<StagedFile>) -> Result<()> {
+        match self {
+            Self::Directory(x) => x.flush(written).await,
+            Self::Partitioned(x) => x.flush(written).await,
+        }
+    }
+
     /// Completes the files. The reservation is kept up to date while rows are still written.
     async fn close(
         &mut self,
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
         reservation: &MemoryReservation,
+        pool: &Arc<dyn MemoryPool>,
     ) -> Result<()> {
         match self {
             Self::Directory(x) => x.close(factory, written).await,
-            Self::Partitioned(x) => x.close(factory, written, reservation).await,
+            Self::Partitioned(x) => x.close(factory, written, reservation, pool).await,
         }
     }
+}
+
+/// Reserves the memory of files in the memory pool.
+///
+/// When the memory pool does not have the memory, the rows of the files are
+/// added to the files as row groups, which have fewer rows than they would
+/// have otherwise, and the files then use no memory that is reserved here.
+/// The write fails only when the memory that the files have needed since
+/// the last call is more than the memory pool has in total.
+pub(super) async fn reserve_or_flush<F>(
+    reservation: &MemoryReservation,
+    pool: &Arc<dyn MemoryPool>,
+    size: usize,
+    flush: F,
+) -> Result<bool>
+where
+    F: Future<Output = Result<()>>,
+{
+    let Err(error) = reservation.try_resize(size) else {
+        return Ok(false);
+    };
+    if let MemoryLimit::Finite(limit) = pool.memory_limit()
+        && size.saturating_sub(reservation.size()) > limit
+    {
+        return Err(error);
+    }
+    flush.await?;
+    Ok(true)
 }
 
 /// Writes one input partition.
@@ -627,9 +676,10 @@ async fn write_files(
     // The memory that the files take from the encode budget, and the encoded data
     // that the object store has not stored, are counted separately from
     // the memory of the encoders.
+    let pool = Arc::clone(task.context.memory_pool());
     let resources = Arc::new(EncodeResources::new(
         Arc::clone(&task.budget),
-        task.context.memory_pool(),
+        &pool,
         reservation.new_empty(),
         metrics.elapsed_compute.clone(),
     ));
@@ -652,7 +702,10 @@ async fn write_files(
             return exec_err!("{message}");
         }
         output.write(&factory, &batch, &mut written).await?;
-        reservation.try_resize(output.memory_size())?;
+        let size = output.memory_size();
+        if reserve_or_flush(&reservation, &pool, size, output.flush(&mut written)).await? {
+            reservation.try_resize(output.memory_size())?;
+        }
     }
     if let TaskOutput::Directory(output) = &mut output
         && partition == 0
@@ -665,7 +718,9 @@ async fn write_files(
         // so that an empty result can still be written.
         output.open(&factory)?;
     }
-    output.close(&factory, &mut written, &reservation).await?;
+    output
+        .close(&factory, &mut written, &reservation, &pool)
+        .await?;
     reservation.free();
     for file in &written {
         metrics.record(file);

@@ -18,7 +18,7 @@ use datafusion::arrow::compute::{cast, is_not_null, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::runtime::SpawnedTask;
-use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::execution::memory_pool::{MemoryPool, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
@@ -42,7 +42,9 @@ use futures::StreamExt;
 use object_store::path::Path;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
-use crate::formats::parquet::writer::task::{ClosingFile, DirectoryWriter, FileFactory};
+use crate::formats::parquet::writer::task::{
+    ClosingFile, DirectoryWriter, FileFactory, reserve_or_flush,
+};
 use crate::listing::partition::DEFAULT_PARTITION_NAME;
 use crate::listing::staging::StagedFile;
 
@@ -817,6 +819,16 @@ impl PartitionedWriter {
         Ok(())
     }
 
+    /// Adds the rows of the files of the open directories to the files as row
+    /// groups, and waits for the files that are being completed, so that
+    /// no file keeps rows or row groups in memory.
+    pub async fn flush(&mut self, written: &mut Vec<StagedFile>) -> Result<()> {
+        for writer in self.open.values_mut() {
+            writer.flush(written).await?;
+        }
+        self.wait_for_closing(0, written).await
+    }
+
     /// The memory of the files in the open directories and of the files
     /// that are being completed.
     pub fn memory_size(&self) -> usize {
@@ -832,6 +844,7 @@ impl PartitionedWriter {
         factory: &FileFactory,
         written: &mut Vec<StagedFile>,
         reservation: &MemoryReservation,
+        pool: &Arc<dyn MemoryPool>,
     ) -> Result<()> {
         // The sorted rows are written to one directory at a time.
         let others = usize::from(self.overflow.is_some());
@@ -872,10 +885,19 @@ impl PartitionedWriter {
                     .await?;
                 start += length;
             }
-            let current = current
-                .as_ref()
-                .map_or(0, |(_, writer)| writer.memory_size());
-            reservation.try_resize(self.memory_size() + current)?;
+            let size = |writer: &Option<(u32, DirectoryWriter)>, files: &Self| {
+                files.memory_size() + writer.as_ref().map_or(0, |(_, x)| x.memory_size())
+            };
+            let total = size(&current, self);
+            let flush = async {
+                if let Some((_, writer)) = &mut current {
+                    writer.flush(written).await?;
+                }
+                self.wait_for_closing(0, written).await
+            };
+            if reserve_or_flush(reservation, pool, total, flush).await? {
+                reservation.try_resize(size(&current, self))?;
+            }
         }
         if let Some((_, mut writer)) = current {
             self.start_close(&mut writer, factory, written, 0).await?;
