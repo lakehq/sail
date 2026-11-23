@@ -10,11 +10,6 @@ use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
 use sail_telemetry::{ResourceKind, ResourceOptions};
 use tokio::net::TcpListener;
 
-async fn shutdown() {
-    stop_signal().await;
-    info!("Shutting down the Flight SQL server...");
-}
-
 pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
 
@@ -30,6 +25,11 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
         .block_on(async { init_telemetry(&config.telemetry, &config.catalog.system, resource) })?;
 
     runtime_manager.handle().primary().block_on(async {
+        let signal = stop_signal()?;
+        let shutdown = async move {
+            signal.await;
+            info!("Shutting down the Flight SQL server...");
+        };
         let address = SocketAddr::new(ip, port);
         let listener = TcpListener::bind(address).await?;
         let local_addr = listener.local_addr()?;
@@ -38,7 +38,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
 
         sail_flight::entrypoint::serve(
             listener,
-            shutdown(),
+            shutdown,
             config,
             runtime_manager.handle().clone(),
         )

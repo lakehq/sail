@@ -65,24 +65,27 @@ impl RuntimeHandle {
     }
 }
 
-/// Wait for Ctrl-C or, on Unix, SIGTERM in a standalone Sail process.
-pub async fn stop_signal() {
+/// Register shutdown signals before a standalone Sail process starts serving.
+pub fn stop_signal() -> std::io::Result<impl Future<Output = ()>> {
     #[cfg(unix)]
-    let result = async {
+    {
         use tokio::signal::unix::{SignalKind, signal};
 
+        let mut interrupt = signal(SignalKind::interrupt())?;
         let mut terminate = signal(SignalKind::terminate())?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result,
-            _ = terminate.recv() => Ok(()),
-        }
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        })
     }
-    .await;
 
-    #[cfg(not(unix))]
-    let result = tokio::signal::ctrl_c().await;
-
-    if let Err(e) = result {
-        log::error!("failed to listen for a shutdown signal: {e}");
+    #[cfg(windows)]
+    {
+        let mut interrupt = tokio::signal::windows::ctrl_c()?;
+        Ok(async move {
+            interrupt.recv().await;
+        })
     }
 }

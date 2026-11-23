@@ -81,7 +81,9 @@ def test_sigterm_closes_stalled_flight_connection():
         assert server.wait(timeout=12) == 0
 
 
-@pytest.mark.parametrize("kind", ["scalar", "iterator"])
+@pytest.mark.parametrize(
+    "kind", ["scalar", "iterator", pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1"))]
+)
 def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
     import grpc
     from pyspark.sql import SparkSession, functions
@@ -118,8 +120,23 @@ def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
             df = spark.range(0, 1, 1, 1)
             if kind == "scalar":
                 df = df.select(functions.udf(scalar, LongType())("id"))
-            else:
+            elif kind == "iterator":
                 df = df.mapInPandas(iterator, "id long")
+            else:
+                from pyspark.sql.types import StructType
+                from pyspark.sql.udtf import AnalyzeResult
+
+                @functions.udtf
+                class BlockingAnalysis:
+                    @staticmethod
+                    def analyze():
+                        wait_for_client()
+                        return AnalyzeResult(StructType().add("id", LongType()))
+
+                    def eval(self):
+                        yield (1,)
+
+                df = BlockingAnalysis()
             # Use a non-reattachable RPC so client retries cannot hide a truncated result.
             request = ExecutePlanRequest(session_id=str(uuid.uuid4()))
             request.user_context.user_id = "test"
@@ -137,3 +154,23 @@ def test_spark_cancels_query_while_python_udf_is_blocked(kind, tmp_path):
                 released.touch()
         assert server.wait(timeout=10) == 0
         assert not timed_out.exists()
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_worker_handles_signals_at_readiness(signum):
+    env = {**os.environ, "RUST_LOG": "sail_execution::worker::actor=info"}
+    command = [sys.executable, "-m", "pysail", "worker"]
+    with subprocess.Popen(command, env=env, stderr=subprocess.PIPE, text=True) as worker:
+        try:
+            for line in worker.stderr:
+                if "server is ready on port" in line:
+                    break
+            else:
+                pytest.fail("worker exited during startup")
+            worker.send_signal(signum)
+            status = worker.wait(timeout=10)
+            assert status == 0 or (signum == signal.SIGINT and status == -signal.SIGINT)
+            assert "server has stopped" in worker.stderr.read()
+        finally:
+            if worker.poll() is None:
+                worker.kill()

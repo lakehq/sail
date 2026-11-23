@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use datafusion::common::runtime::SpawnedTask;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
@@ -56,10 +57,11 @@ impl PlanResolver<'_> {
             deterministic,
             state,
         )
+        .await
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub(super) fn resolve_python_udtf_plan(
+    pub(super) async fn resolve_python_udtf_plan(
         &self,
         function: PythonUdtf,
         name: &str,
@@ -147,7 +149,7 @@ impl PlanResolver<'_> {
             Some(rt) => rt,
             None => {
                 // Get the argument types (excluding passthrough columns).
-                let arg_types = &input_types[passthrough_columns..];
+                let arg_types = input_types[passthrough_columns..].to_vec();
                 // Extract literal values from argument expressions.
                 // Each projection is wrapped in an Alias after `rewrite_named_expressions`,
                 // so we need to unwrap the alias to get the inner expression.
@@ -165,16 +167,26 @@ impl PlanResolver<'_> {
                         literal_evaluator.evaluate(inner).ok()
                     })
                     .collect();
-                PySparkUdtfPayload::analyze(
-                    &function.python_version,
-                    &function.command,
-                    function.eval_type,
-                    arg_types,
-                    &arg_literals,
-                    kwargs,
-                    &argument_is_tables,
-                    self.config.pyspark_udf_config.arrow_use_large_var_types,
-                )?
+                let python_version = function.python_version.clone();
+                let command = function.command.clone();
+                let kwargs = kwargs.to_vec();
+                let large_var_types = self.config.pyspark_udf_config.arrow_use_large_var_types;
+                // A user-defined analyze callback can block while the RPC is being cancelled.
+                SpawnedTask::spawn_blocking(move || {
+                    PySparkUdtfPayload::analyze(
+                        &python_version,
+                        &command,
+                        function.eval_type,
+                        &arg_types,
+                        &arg_literals,
+                        &kwargs,
+                        &argument_is_tables,
+                        large_var_types,
+                    )
+                })
+                .join()
+                .await
+                .map_err(|e| PlanError::internal(e.to_string()))??
             }
         };
 

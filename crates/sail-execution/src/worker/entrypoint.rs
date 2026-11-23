@@ -39,13 +39,14 @@ pub async fn run_worker(
             return Err(Box::new(e));
         }
     };
+    let signal = stop_signal()?;
     let handle = {
         let _guard = span.set_local_parent();
         system.spawn::<WorkerActor>(options)
     };
     tokio::select! {
         () = system.join() => {}
-        () = stop_signal() => {
+        () = signal => {
             let _ = handle.send(WorkerMessage::Shutdown).await;
             system.join().await;
         }

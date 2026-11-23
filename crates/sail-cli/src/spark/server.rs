@@ -23,9 +23,12 @@ use tokio::net::TcpListener;
 /// References:
 ///   - [1] https://github.com/PyO3/pyo3/issues/2576
 ///   - [2] https://github.com/PyO3/pyo3/issues/3218
-async fn shutdown() {
-    stop_signal().await;
-    info!("Shutting down the Spark Connect server...");
+fn shutdown() -> std::io::Result<impl Future<Output = ()>> {
+    let signal = stop_signal()?;
+    Ok(async move {
+        signal.await;
+        info!("Shutting down the Spark Connect server...");
+    })
 }
 
 pub(super) mod telemetry {
@@ -74,7 +77,7 @@ impl std::error::Error for ServerError {}
 /// the telemetry and shuts down the telemetry when the server stops.
 pub(super) fn with_spark_connect_server<S, W, F>(
     address: (IpAddr, u16),
-    signal: S,
+    signal: impl FnOnce() -> std::io::Result<S>,
     workload: W,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -92,6 +95,7 @@ where
 
     let handle = runtime.handle();
     let (server_address, server_task) = runtime.handle().primary().block_on(async {
+        let signal = signal()?;
         // A secure connection can be handled by a gateway in production.
         let listener = TcpListener::bind(address).await?;
         let server_address = listener.local_addr()?;
@@ -126,5 +130,5 @@ where
 }
 
 pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    with_spark_connect_server((ip, port), shutdown(), |_| async { Ok(()) })
+    with_spark_connect_server((ip, port), shutdown, |_| async { Ok(()) })
 }
