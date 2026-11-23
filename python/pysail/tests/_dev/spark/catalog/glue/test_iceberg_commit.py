@@ -482,17 +482,22 @@ def test_add_files_uses_registered_glue_partitions(spark, moto_endpoint, tmp_pat
         for value, row_id in [("a", 1), ("b", 2)]:
             location = tmp_path / f"part%20{value}"
             location.mkdir()
-            orc.write_table(pa.table({"id": [row_id]}), location / "part.orc")
+            descriptor = {"Location": location.as_uri().replace("%2520", "%20")}
+            data = pa.table({"id": [row_id]})
+            if value == "a":
+                pq.write_table(data, location / "part.parquet")
+            else:
+                orc.write_table(data, location / "part.orc")
+                descriptor.update(
+                    InputFormat="org.apache.hadoop.hive.ql.io.orc.OrcInputFormat",
+                    SerdeInfo={"SerializationLibrary": "org.apache.hadoop.hive.ql.io.orc.OrcSerde"},
+                )
             client.create_partition(
                 DatabaseName=database,
                 TableName=source,
                 PartitionInput={
                     "Values": ["zone", value],
-                    "StorageDescriptor": {
-                        "Location": location.as_uri().replace("%2520", "%20"),
-                        "InputFormat": "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat",
-                        "SerdeInfo": {"SerializationLibrary": "org.apache.hadoop.hive.ql.io.orc.OrcSerde"},
-                    },
+                    "StorageDescriptor": descriptor,
                 },
             )
         assert tuple(spark.sql(f"{call}, partition_filter => map('p', 'b'))").first()) == (1, None)

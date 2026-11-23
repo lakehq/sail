@@ -208,6 +208,31 @@ def test_registered_csv_partition_options(spark, moto_endpoint, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+def test_registered_text_partitions(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_text_partitions"
+    table = f"test_db.{name}"
+    spark.sql(
+        f"CREATE TABLE {table} (value STRING, p INT) USING parquet PARTITIONED BY (p) LOCATION '{tmp_path.as_uri()}'"
+    )
+    try:
+        for p in (1, 2):
+            path = tmp_path / str(p)
+            path.mkdir()
+            (path / "data.txt").write_text(f"line {p}\n")
+            descriptor = {"Location": str(path), "InputFormat": "org.apache.hadoop.mapred.TextInputFormat"}
+            if p == 2:
+                descriptor["SerdeInfo"] = {"SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"}
+            glue.create_partition(
+                DatabaseName="test_db",
+                TableName=name,
+                PartitionInput={"Values": [str(p)], "StorageDescriptor": descriptor},
+            )
+        assert spark.table(table).orderBy("p").collect() == [("line 1", 1), ("line 2", 2)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_registered_csv_inherits_table_serde(spark, moto_endpoint, tmp_path):
     glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
     name = "registered_csv_inherits_table_serde"

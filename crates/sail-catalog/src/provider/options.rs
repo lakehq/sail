@@ -335,13 +335,15 @@ pub enum PartitionFileFormat {
 }
 
 impl PartitionFileFormat {
-    pub fn resolve(self, table_format: &str) -> String {
-        match self {
-            Self::Explicit(format) => format,
-            Self::HiveText if !matches!(table_format, "csv" | "json" | "text" | "textfile") => {
-                "textfile".to_string()
-            }
-            Self::Inherit | Self::HiveText => table_format.to_string(),
+    pub fn resolve(&self, table_format: &str) -> String {
+        let format = match self {
+            Self::Explicit(format) => format.as_str(),
+            Self::HiveText if !matches!(table_format, "csv" | "json") => "text",
+            Self::HiveText | Self::Inherit => table_format,
+        };
+        match format {
+            "textfile" => "text".to_string(),
+            format => format.to_string(),
         }
     }
 }
