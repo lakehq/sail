@@ -108,7 +108,7 @@ class TestParseOffsetSpec:
             _resolved(startingOffsets="")
 
     def test_json_object(self):
-        assert _resolved(startingOffsets='{"t": {"0": 5}}').starting == PartitionOffsets({_tp(0): 5}, "startingOffsets")
+        assert _resolved(startingOffsets='{"t": {"0": 5}}').starting == PartitionOffsets({_tp(0): 5})
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -144,12 +144,12 @@ class TestParseOffsetSpec:
         # Spark reads these keys as `Map[Int, Long]`, so every spelling of 0 is
         # partition 0.
         spec = _resolved(startingOffsets='{"t": {"%s": 5}}' % key).starting  # noqa: UP031
-        assert spec == PartitionOffsets({_tp(0): 5}, "startingOffsets")
+        assert spec == PartitionOffsets({_tp(0): 5})
 
     def test_duplicate_partition_keys_collapse(self):
         # Two spellings of one id are one entry in the Scala `Map` too.
         limit = _resolved(startingOffsets='{"t": {"0": 5, "00": 9}}').starting
-        assert limit == PartitionOffsets({_tp(0): 9}, "startingOffsets")
+        assert limit == PartitionOffsets({_tp(0): 9})
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +181,11 @@ class TestParseTimestamps:
 
     def test_partition_key_is_canonicalized(self):
         result = _resolved(startingOffsetsByTimestamp='{"t": {"00": 1700000000000}}').starting
-        assert result == PartitionTimestamps({_tp(0): _TS_MS}, "startingOffsetsByTimestamp")
+        assert result == PartitionTimestamps({_tp(0): _TS_MS})
 
     def test_per_tp_json(self):
         result = _resolved(startingOffsetsByTimestamp='{"t": {"0": 1700000000000}}').starting
-        assert result == PartitionTimestamps({_tp(0): _TS_MS}, "startingOffsetsByTimestamp")
+        assert result == PartitionTimestamps({_tp(0): _TS_MS})
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
@@ -243,7 +243,7 @@ class TestRangeOptionPrecedence:
             ),
             boundary="ending",
         )
-        assert spec == PartitionTimestamps({_tp(0): _TS_MS}, "endingOffsetsByTimestamp")
+        assert spec == PartitionTimestamps({_tp(0): _TS_MS})
 
     def test_combination_is_not_rejected(self):
         # Spark applies precedence rather than failing, so a job that supplies
@@ -566,11 +566,11 @@ class TestNumericOptions:
         resolved = _resolved(**{"kafkaConsumer.pollTimeoutMs": "500", "pollTimeoutMs": "invalid"})
         assert resolved.poll_timeout_s == 0.5  # noqa: PLR2004
 
-    @pytest.mark.parametrize("raw", ["Infinity", "inf", "-inf", "nan", "NaN"])
-    def test_non_finite_poll_timeout_rejected(self, raw):
-        # `float()` accepts these and a `<= 0` check does not catch them;
-        # none is a valid bounded poll timeout.
-        with pytest.raises(ValueError, match=r"pollTimeoutMs.*finite"):
+    @pytest.mark.parametrize("raw", ["250.5", "2.5e2", "1e3", "Infinity", "inf", "nan"])
+    def test_poll_timeout_must_be_whole_milliseconds(self, raw):
+        # Spark reads kafkaConsumer.pollTimeoutMs with `toLong`, which rejects
+        # fractions, exponents, and non-finite values.
+        with pytest.raises(ValueError, match=r"pollTimeoutMs.*must be an integer"):
             _resolved(pollTimeoutMs=raw)
 
     @pytest.mark.parametrize("raw", ["0", "-1"])
@@ -612,48 +612,48 @@ class TestNumericOptions:
 
 class TestValidateOffsets:
     def test_allowed_special_offsets(self):
-        validate_offsets(SpecialOffset.EARLIEST, boundary="starting", option_name="startingOffsets")
-        validate_offsets(SpecialOffset.LATEST, boundary="ending", option_name="endingOffsets")
+        validate_offsets(SpecialOffset.EARLIEST, boundary="starting")
+        validate_offsets(SpecialOffset.LATEST, boundary="ending")
 
     def test_latest_rejected_for_starting(self):
-        with pytest.raises(ValueError, match="does not support 'latest'"):
-            validate_offsets(SpecialOffset.LATEST, boundary="starting", option_name="startingOffsets")
+        with pytest.raises(ValueError, match="'startingOffsets' does not support 'latest'"):
+            validate_offsets(SpecialOffset.LATEST, boundary="starting")
 
     def test_earliest_rejected_for_ending(self):
-        with pytest.raises(ValueError, match="does not support 'earliest'"):
-            validate_offsets(SpecialOffset.EARLIEST, boundary="ending", option_name="endingOffsets")
+        with pytest.raises(ValueError, match="'endingOffsets' does not support 'earliest'"):
+            validate_offsets(SpecialOffset.EARLIEST, boundary="ending")
 
     def test_allowed_json_sentinels(self):
-        validate_offsets({_tp(0): -2}, boundary="starting", option_name="startingOffsets")
-        validate_offsets({_tp(0): -1}, boundary="ending", option_name="endingOffsets")
+        validate_offsets({_tp(0): -2}, boundary="starting")
+        validate_offsets({_tp(0): -1}, boundary="ending")
 
     def test_json_latest_rejected_for_starting(self):
-        with pytest.raises(ValueError, match="does not support offset -1"):
-            validate_offsets({_tp(0): -1}, boundary="starting", option_name="startingOffsets")
+        with pytest.raises(ValueError, match="'startingOffsets' does not support offset -1"):
+            validate_offsets({_tp(0): -1}, boundary="starting")
 
     def test_json_earliest_rejected_for_ending(self):
-        with pytest.raises(ValueError, match="does not support offset -2"):
-            validate_offsets({_tp(0): -2}, boundary="ending", option_name="endingOffsets")
+        with pytest.raises(ValueError, match="'endingOffsets' does not support offset -2"):
+            validate_offsets({_tp(0): -2}, boundary="ending")
 
     def test_concrete_offsets_allowed(self):
-        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="starting", option_name="startingOffsets")
-        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="ending", option_name="endingOffsets")
+        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="starting")
+        validate_offsets({_tp(0): 0, _tp(1): 12345}, boundary="ending")
 
     @pytest.mark.parametrize("boundary", ["starting", "ending"])
     def test_offset_below_negative_two_rejected(self, boundary):
-        with pytest.raises(ValueError, match="must be >= 0"):
-            validate_offsets({_tp(0): -3}, boundary=boundary, option_name="opt")
+        with pytest.raises(ValueError, match=rf"'{boundary}Offsets'.*must be >= 0"):
+            validate_offsets({_tp(0): -3}, boundary=boundary)
 
     @pytest.mark.parametrize("offset", [-1000, -1001])
     def test_librdkafka_sentinels_rejected(self, offset):
         # -1000 is OFFSET_STORED and -1001 is OFFSET_INVALID. Passed through,
         # OFFSET_STORED would silently read from committed group offsets.
-        with pytest.raises(ValueError, match="must be >= 0"):
-            validate_offsets({_tp(0): offset}, boundary="starting", option_name="startingOffsets")
+        with pytest.raises(ValueError, match=r"'startingOffsets'.*must be >= 0"):
+            validate_offsets({_tp(0): offset}, boundary="starting")
 
     def test_error_names_the_offending_partition(self):
         with pytest.raises(ValueError, match=r"topic 't' partition 3"):
-            validate_offsets({_tp(0): 5, _tp(3): -7}, boundary="starting", option_name="startingOffsets")
+            validate_offsets({_tp(0): 5, _tp(3): -7}, boundary="starting")
 
 
 # ---------------------------------------------------------------------------
@@ -830,15 +830,21 @@ def test_blank_bootstrap_servers_fail_before_client_creation(servers):
         _resolved(**{"kafka.bootstrap.servers": servers})
 
 
-@pytest.mark.parametrize("timeout", ["0.5", "3600001", "1e20"])
-def test_admin_timeout_respects_client_limits(timeout):
-    with pytest.raises(ValueError, match=r"adminTimeoutMs.*between 1 and 3600000"):
+def test_admin_timeout_respects_client_limits():
+    # librdkafka admin request timeouts accept 1 ms to 1 hour.
+    with pytest.raises(ValueError, match=r"adminTimeoutMs.*must be at most 3600000"):
+        _resolved(adminTimeoutMs="3600001")
+
+
+@pytest.mark.parametrize("timeout", ["0.5", "1e3"])
+def test_admin_timeout_must_be_whole_milliseconds(timeout):
+    with pytest.raises(ValueError, match=r"adminTimeoutMs.*must be an integer"):
         _resolved(adminTimeoutMs=timeout)
 
 
 def test_admin_timeout_limit_does_not_restrict_poll_timeout():
     assert _resolved(adminTimeoutMs="3600000").admin_timeout_s == pytest.approx(3600)
-    assert _resolved(pollTimeoutMs="1e20").poll_timeout_s == pytest.approx(1e17)
+    assert _resolved(pollTimeoutMs="3600001").poll_timeout_s == pytest.approx(3600.001)
 
 
 def test_consumer_tuning_does_not_warn_on_admin_handle(caplog):

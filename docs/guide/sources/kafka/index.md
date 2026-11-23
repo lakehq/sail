@@ -103,8 +103,8 @@ Exactly one of `assign`, `subscribe`, and `subscribePattern` is required.
 When multiple range options are set for the same endpoint, Spark's precedence applies: global timestamp
 beats per-partition timestamps, which beat offsets, and lower-priority values are not parsed. Partition
 IDs must fit signed 32-bit integers; offsets and timestamps must fit signed 64-bit integers. Present blank
-values are rejected; booleans accept only case-insensitive `true`/`false`; timeouts must be positive and
-finite.
+values are rejected; booleans accept only case-insensitive `true`/`false`; timeouts must be positive whole
+numbers of milliseconds, as in Spark.
 :::
 
 ::: warning

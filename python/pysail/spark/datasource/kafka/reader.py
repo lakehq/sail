@@ -305,8 +305,8 @@ class KafkaDataSourceReader(DataSourceReader):
         admin = AdminClient(build_admin_config(self.client_config))
 
         topic_partitions = list_topic_partitions(admin, self.subscription, timeout_s=self.admin_timeout_s)
-        validate_limit_partitions(self.starting, topic_partitions)
-        validate_limit_partitions(self.ending, topic_partitions)
+        validate_limit_partitions(self.starting, topic_partitions, boundary="starting")
+        validate_limit_partitions(self.ending, topic_partitions, boundary="ending")
 
         starts = resolve_endpoint_offsets(
             admin,
@@ -374,8 +374,8 @@ class KafkaDataSourceReader(DataSourceReader):
             if bound.size == 0:
                 return
 
-            tp = TopicPartition(bound.topic_partition.topic, bound.topic_partition.partition, bound.start)
-            consumer.assign([tp])
+            topic_partition = TopicPartition(bound.topic_partition.topic, bound.topic_partition.partition, bound.start)
+            consumer.assign([topic_partition])
 
             row_buffer = _RowBuffer(include_headers=self.include_headers)
             next_offset = bound.start
@@ -385,7 +385,7 @@ class KafkaDataSourceReader(DataSourceReader):
                 while next_offset < bound.end:
                     record = consumer.poll(self.poll_timeout_s)
                     if record is None:
-                        position = consumer.position([tp])[0].offset
+                        position = consumer.position([topic_partition])[0].offset
                         if position > next_offset:
                             # Kafka may advance past invisible/control records without returning a visible message.
                             next_offset = position
@@ -393,7 +393,7 @@ class KafkaDataSourceReader(DataSourceReader):
                             continue
                         msg = (
                             f"Cannot fetch record for offset {next_offset} on "
-                            f"{tp.topic}[{tp.partition}] in "
+                            f"{topic_partition.topic}[{topic_partition.partition}] in "
                             f"{self.poll_timeout_s * 1000:g} milliseconds"
                         )
                         raise TimeoutError(msg)
@@ -401,7 +401,7 @@ class KafkaDataSourceReader(DataSourceReader):
                     if record.error() is not None:
                         result = self._handle_record_error(
                             consumer,
-                            tp,
+                            topic_partition,
                             record,
                             next_offset=next_offset,
                             end=bound.end,
@@ -418,13 +418,17 @@ class KafkaDataSourceReader(DataSourceReader):
                     record_offset = record.offset()
                     if record_offset < next_offset:
                         msg = (
-                            f"Kafka returned offset {record_offset} for {tp.topic}"
-                            f"[{tp.partition}] while offset {next_offset} was requested"
+                            f"Kafka returned offset {record_offset} for {topic_partition.topic}"
+                            f"[{topic_partition.partition}] while offset {next_offset} was requested"
                         )
                         raise ValueError(msg)
                     if record_offset > next_offset and self.fail_on_data_loss:
                         self._check_offset_gap(
-                            consumer, tp, next_offset=next_offset, record_offset=record_offset, end_offset=bound.end
+                            consumer,
+                            topic_partition,
+                            next_offset=next_offset,
+                            record_offset=record_offset,
+                            end_offset=bound.end,
                         )
                     if record_offset >= bound.end:
                         break
@@ -444,14 +448,14 @@ class KafkaDataSourceReader(DataSourceReader):
                 if partial_read:
                     LOGGER.warning(
                         "Kafka partial read on %s[%s]: skipped unavailable offsets; failOnDataLoss=false",
-                        tp.topic,
-                        tp.partition,
+                        topic_partition.topic,
+                        topic_partition.partition,
                     )
 
     def _handle_record_error(
         self,
         consumer: Consumer,
-        tp: TopicPartition,
+        topic_partition: TopicPartition,
         record: Message,
         *,
         next_offset: int,
@@ -466,7 +470,7 @@ class KafkaDataSourceReader(DataSourceReader):
         code = error.code()
         if code == KafkaError._PARTITION_EOF:  # noqa: SLF001
             outcome = self._classify_eof(
-                consumer, tp, message_offset=record.offset(), next_offset=next_offset, end_offset=end
+                consumer, topic_partition, message_offset=record.offset(), next_offset=next_offset, end_offset=end
             )
             if outcome != "stale":
                 return RecordErrorResult(
@@ -484,7 +488,7 @@ class KafkaDataSourceReader(DataSourceReader):
                 stop=False, partial_read=False, next_offset=next_offset, stalled_recoveries=stalled_recoveries
             )
         if code in OUT_OF_RANGE_CODES:
-            recovered = self._recover_out_of_range(consumer, tp, next_offset=next_offset, end_offset=end)
+            recovered = self._recover_out_of_range(consumer, topic_partition, next_offset=next_offset, end_offset=end)
             if recovered is None:
                 return RecordErrorResult(
                     stop=True, partial_read=True, next_offset=next_offset, stalled_recoveries=stalled_recoveries
@@ -493,22 +497,24 @@ class KafkaDataSourceReader(DataSourceReader):
                 return RecordErrorResult(stop=False, partial_read=True, next_offset=recovered, stalled_recoveries=0)
             stalled_recoveries += 1
             if stalled_recoveries >= MAX_STALLED_RECOVERIES:
-                msg = f"Kafka out-of-range recovery made no progress on {tp.topic}[{tp.partition}] at offset {next_offset}"
+                msg = f"Kafka out-of-range recovery made no progress on {topic_partition.topic}[{topic_partition.partition}] at offset {next_offset}"
                 raise TimeoutError(msg)
             return RecordErrorResult(
                 stop=False, partial_read=False, next_offset=next_offset, stalled_recoveries=stalled_recoveries
             )
         raise KafkaException(error)
 
-    def _query_watermarks(self, consumer: Consumer, tp: TopicPartition) -> Watermarks:
+    def _query_watermarks(self, consumer: Consumer, topic_partition: TopicPartition) -> Watermarks:
         """Query fresh watermarks, adding task context to client timeouts."""
         try:
-            return Watermarks(*consumer.get_watermark_offsets(tp, timeout=self.admin_timeout_s, cached=False))
+            return Watermarks(
+                *consumer.get_watermark_offsets(topic_partition, timeout=self.admin_timeout_s, cached=False)
+            )
         except KafkaException as e:
             if e.args[0].code() != KafkaError._TIMED_OUT:  # noqa: SLF001
                 raise
             msg = (
-                f"Timed out querying offsets for {tp.topic}[{tp.partition}] after "
+                f"Timed out querying offsets for {topic_partition.topic}[{topic_partition.partition}] after "
                 f"{self.admin_timeout_s:g}s; check broker connectivity or raise 'adminTimeoutMs'."
             )
             raise TimeoutError(msg) from e
@@ -526,22 +532,22 @@ class KafkaDataSourceReader(DataSourceReader):
         return OffsetRange(TopicPartitionKey(partition.topic, partition.partition), start, end)
 
     def _recover_out_of_range(
-        self, consumer: Consumer, tp: TopicPartition, *, next_offset: int, end_offset: int
+        self, consumer: Consumer, topic_partition: TopicPartition, *, next_offset: int, end_offset: int
     ) -> int | None:
         """Handle an out-of-range fetch: fail under ``failOnDataLoss``, else clamp to the available overlap."""
         if self.fail_on_data_loss:
             msg = (
-                f"Data loss on {tp.topic}[{tp.partition}]: offset {next_offset} is no "
+                f"Data loss on {topic_partition.topic}[{topic_partition.partition}]: offset {next_offset} is no "
                 f"longer available on the broker. Records were removed after planning (retention or "
                 f"truncation), or the offset is past the end of the log. "
                 f"Set 'failOnDataLoss' to false to skip missing records."
             )
             raise ValueError(msg)
-        watermarks = self._query_watermarks(consumer, tp)
+        watermarks = self._query_watermarks(consumer, topic_partition)
         if next_offset >= watermarks.high or watermarks.low >= end_offset:
             return None
         recovered = max(next_offset, watermarks.low)
-        consumer.seek(TopicPartition(tp.topic, tp.partition, recovered))
+        consumer.seek(TopicPartition(topic_partition.topic, topic_partition.partition, recovered))
         return recovered
 
     def _check_offset_gap(
@@ -565,7 +571,7 @@ class KafkaDataSourceReader(DataSourceReader):
     def _classify_eof(
         self,
         consumer: Consumer,
-        tp: TopicPartition,
+        topic_partition: TopicPartition,
         *,
         message_offset: int | None,
         next_offset: int,
@@ -576,7 +582,7 @@ class KafkaDataSourceReader(DataSourceReader):
         position = next_offset if eof_offset is None else eof_offset
         if position >= end_offset:
             return "complete"
-        watermarks = self._query_watermarks(consumer, tp)
+        watermarks = self._query_watermarks(consumer, topic_partition)
         if eof_offset is not None and watermarks.high > eof_offset:
             return "stale"
         if watermarks.high >= end_offset:
@@ -584,7 +590,7 @@ class KafkaDataSourceReader(DataSourceReader):
         if not self.fail_on_data_loss:
             return "partial"
         msg = (
-            f"Data loss on {tp.topic}[{tp.partition}]: reached end of log at offset "
+            f"Data loss on {topic_partition.topic}[{topic_partition.partition}]: reached end of log at offset "
             f"{next_offset}, but the read was planned up to {end_offset} and the high watermark "
             f"is now {watermarks.high}. Records were removed after planning (retention or truncation), or "
             f"'endingOffsets' points past the end of the log. "

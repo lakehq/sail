@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from confluent_kafka import IsolationLevel
     from confluent_kafka.admin import AdminClient
 
-    from pysail.spark.datasource.kafka.options import RangeLimit, Subscription
+    from pysail.spark.datasource.kafka.options import RangeBoundary, RangeLimit, Subscription
 
 
 # ============================================================================
@@ -253,13 +253,17 @@ def list_topic_partitions(
     return keys
 
 
-def validate_limit_partitions(limit: RangeLimit, topic_partitions: list[TopicPartitionKey]) -> None:
+def validate_limit_partitions(
+    limit: RangeLimit, topic_partitions: list[TopicPartitionKey], *, boundary: RangeBoundary
+) -> None:
     """Require a per-partition offset/timestamp map to match the assigned partitions exactly."""
     match limit:
-        case PartitionOffsets(offsets, option_name):
+        case PartitionOffsets(offsets):
             specified = set(offsets)
-        case PartitionTimestamps(timestamps, option_name):
+            key = f"{boundary}Offsets"
+        case PartitionTimestamps(timestamps):
             specified = set(timestamps)
+            key = f"{boundary}OffsetsByTimestamp"
         case _:
             return
     assigned = set(topic_partitions)
@@ -273,7 +277,7 @@ def validate_limit_partitions(limit: RangeLimit, topic_partitions: list[TopicPar
     if extra:
         details.append(f"not assigned: {extra}")
     msg = (
-        f"'{option_name}' must specify all assigned TopicPartitions ({', '.join(details)}). "
+        f"'{key}' must specify all assigned TopicPartitions ({', '.join(details)}). "
         f"Use -1 for latest and -2 for earliest. "
         f"Specified: {sorted(specified)} Assigned: {sorted(assigned)}"
     )

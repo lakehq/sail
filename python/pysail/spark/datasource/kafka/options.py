@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from dataclasses import dataclass
 from enum import Enum, IntEnum
@@ -38,52 +37,6 @@ class SubscriptionStrategy(str, Enum):
     ASSIGN = "assign"
     SUBSCRIBE = "subscribe"
     SUBSCRIBE_PATTERN = "subscribePattern"
-
-
-# Scala String.toInt / String.toLong bounds used by Spark's split options.
-INT32_MAX = 2**31 - 1
-INT64_MAX = 2**63 - 1
-
-# Source-owned consumer properties rejected to match Spark's validateGeneralOptions:
-# overriding them silently moves planned offsets, commits group offsets, or disables EOF stop.
-PROTECTED_KAFKA_CONFIGS = {
-    "auto.offset.reset": "startingOffsets/endingOffsets",
-    "enable.auto.commit": None,
-    "enable.partition.eof": None,
-}
-
-STRICT_INT_RE = re.compile(r"[+-]?\d+")
-STRICT_FLOAT_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
-
-# Stable group id: reads use explicit assign() without group membership or commits,
-# so concurrent queries do not coordinate or mutate group state. Overridable via kafka.group.id.
-DEFAULT_GROUP_ID = "sail-kafka-reader"
-
-# Consumer-only properties stripped from AdminClient (producer-backed in librdkafka)
-# to avoid CONFWARN logs. isolation.level is never in client_config: it is parsed
-# into an IsolationLevel and passed to list_offsets and the consumer explicitly.
-CONSUMER_ONLY_CONFIGS = (
-    "group.id",
-    "enable.auto.commit",
-    "auto.offset.reset",
-    "enable.partition.eof",
-    "queued.max.messages.kbytes",
-    "queued.min.messages",
-    "fetch.max.bytes",
-    "max.partition.fetch.bytes",
-    "fetch.message.max.bytes",
-    "fetch.min.bytes",
-    "fetch.wait.max.ms",
-    "fetch.error.backoff.ms",
-    "check.crcs",
-    "session.timeout.ms",
-    "heartbeat.interval.ms",
-    "max.poll.interval.ms",
-    "group.instance.id",
-    "auto.commit.interval.ms",
-    "partition.assignment.strategy",
-    "enable.auto.offset.store",
-)
 
 
 class TopicPartitionKey(NamedTuple):
@@ -125,7 +78,6 @@ class PartitionOffsets:
     """Per-partition offsets from ``startingOffsets``/``endingOffsets`` JSON (``-2``/``-1`` are sentinels)."""
 
     offsets: dict[TopicPartitionKey, int]
-    option_name: str
 
 
 @dataclass(frozen=True)
@@ -133,7 +85,6 @@ class PartitionTimestamps:
     """Per-partition epoch-ms timestamps from ``startingOffsetsByTimestamp``/``endingOffsetsByTimestamp``."""
 
     timestamps: dict[TopicPartitionKey, int]
-    option_name: str
 
 
 @dataclass(frozen=True)
@@ -146,12 +97,57 @@ class GlobalTimestamp:
 RangeLimit: TypeAlias = SpecialOffset | PartitionOffsets | PartitionTimestamps | GlobalTimestamp
 
 
-def parse_strict_int(raw: str, *, label: str) -> int:
+# Scala String.toInt / String.toLong bounds used by Spark's split options.
+INT32_MAX = 2**31 - 1
+INT64_MAX = 2**63 - 1
+
+# Source-owned consumer properties rejected to match Spark's validateGeneralOptions:
+# overriding them silently moves planned offsets, commits group offsets, or disables EOF stop.
+PROTECTED_KAFKA_CONFIGS = {
+    "auto.offset.reset": "startingOffsets/endingOffsets",
+    "enable.auto.commit": None,
+    "enable.partition.eof": None,
+}
+
+STRICT_INT_RE = re.compile(r"[+-]?\d+")
+
+# Stable group id: reads use explicit assign() without group membership or commits,
+# so concurrent queries do not coordinate or mutate group state. Overridable via kafka.group.id.
+DEFAULT_GROUP_ID = "sail-kafka-reader"
+
+# Consumer-only properties stripped from AdminClient (producer-backed in librdkafka)
+# to avoid CONFWARN logs. isolation.level is never in client_config: it is parsed
+# into an IsolationLevel and passed to list_offsets and the consumer explicitly.
+CONSUMER_ONLY_CONFIGS = (
+    "group.id",
+    "enable.auto.commit",
+    "auto.offset.reset",
+    "enable.partition.eof",
+    "queued.max.messages.kbytes",
+    "queued.min.messages",
+    "fetch.max.bytes",
+    "max.partition.fetch.bytes",
+    "fetch.message.max.bytes",
+    "fetch.min.bytes",
+    "fetch.wait.max.ms",
+    "fetch.error.backoff.ms",
+    "check.crcs",
+    "session.timeout.ms",
+    "heartbeat.interval.ms",
+    "max.poll.interval.ms",
+    "group.instance.id",
+    "auto.commit.interval.ms",
+    "partition.assignment.strategy",
+    "enable.auto.offset.store",
+)
+
+
+def parse_strict_int(option_value: str, *, label: str) -> int:
     """Parse an integer matching Java/Scala rules (no underscores or surrounding whitespace)."""
-    if not STRICT_INT_RE.fullmatch(raw):
-        msg = f"{label} must be an integer, got {raw!r}"
+    if not STRICT_INT_RE.fullmatch(option_value):
+        msg = f"{label} must be an integer, got {option_value!r}"
         raise ValueError(msg)
-    return int(raw)
+    return int(option_value)
 
 
 def check_integer_width(value: int, *, bits: int, label: str) -> int:
@@ -163,7 +159,7 @@ def check_integer_width(value: int, *, bits: int, label: str) -> int:
     return value
 
 
-def parse_topic_partition_mapping(raw: str, *, option_name: str) -> dict[TopicPartitionKey, int]:
+def parse_topic_partition_mapping(option_value: str, name: str) -> dict[TopicPartitionKey, int]:
     """Parse a ``{topic: {partition: int}}`` JSON mapping into a flat per-partition map.
 
     Partition keys are parsed strictly as signed 32-bit ints (e.g. ``"00"`` -> ``0``)
@@ -171,25 +167,23 @@ def parse_topic_partition_mapping(raw: str, *, option_name: str) -> dict[TopicPa
     """
     # Shape errors raise ValueError like json.loads does: the option string is
     # well typed, its content is malformed (hence the TRY004 suppressions).
-    parsed = json.loads(raw)
+    parsed = json.loads(option_value)
     if not isinstance(parsed, dict):
-        msg = f"'{option_name}' JSON must be an object, got: {type(parsed).__name__}"
+        msg = f"'{name}' JSON must be an object, got: {type(parsed).__name__}"
         raise ValueError(msg)  # noqa: TRY004
     normalized: dict[TopicPartitionKey, int] = {}
     for topic, partitions in parsed.items():
         if not isinstance(partitions, dict):
-            msg = f"'{option_name}' entry for topic {topic!r} must be an object of {{partition: value}}, got: {type(partitions).__name__}"
+            msg = f"'{name}' entry for topic {topic!r} must be an object of {{partition: value}}, got: {type(partitions).__name__}"
             raise ValueError(msg)  # noqa: TRY004
         for partition, value in partitions.items():
-            label = f"'{option_name}' partition id for topic {topic!r}"
+            label = f"'{name}' partition id for topic {topic!r}"
             partition_id = check_integer_width(parse_strict_int(partition, label=label), bits=32, label=label)
             # bool is an int subclass; reject JSON true/false.
             if not isinstance(value, int) or isinstance(value, bool):
-                msg = f"'{option_name}' value for topic {topic!r} partition {partition!r} must be an integer, got: {type(value).__name__}"
+                msg = f"'{name}' value for topic {topic!r} partition {partition!r} must be an integer, got: {type(value).__name__}"
                 raise ValueError(msg)  # noqa: TRY004
-            check_integer_width(
-                value, bits=64, label=f"'{option_name}' value for topic {topic!r} partition {partition!r}"
-            )
+            check_integer_width(value, bits=64, label=f"'{name}' value for topic {topic!r} partition {partition!r}")
             normalized[TopicPartitionKey(topic, partition_id)] = value
     return normalized
 
@@ -198,7 +192,6 @@ def validate_offsets(
     offsets: SpecialOffset | dict[TopicPartitionKey, int],
     *,
     boundary: RangeBoundary,
-    option_name: str,
 ) -> None:
     """Enforce Spark's batch-mode rules on a ``startingOffsets``/``endingOffsets`` value.
 
@@ -206,29 +199,30 @@ def validate_offsets(
     ``endingOffsets``, and any offset below ``-2`` (which librdkafka treats as
     special sentinels such as ``-1000`` ``OFFSET_STORED``).
     """
+    key = f"{boundary}Offsets"
     forbidden = SpecialOffset.LATEST if boundary == "starting" else SpecialOffset.EARLIEST
     allowed = SpecialOffset.EARLIEST if boundary == "starting" else SpecialOffset.LATEST
 
     if isinstance(offsets, SpecialOffset):
         if offsets is forbidden:
             msg = (
-                f"'{option_name}' does not support {forbidden.name.lower()!r} for batch reads; "
+                f"'{key}' does not support {forbidden.name.lower()!r} for batch reads; "
                 f"use {allowed.name.lower()!r} or per-partition JSON"
             )
             raise ValueError(msg)
         return
 
-    for key, value in offsets.items():
-        where = f"topic {key.topic!r} partition {key.partition}"
+    for tp, value in offsets.items():
+        where = f"topic {tp.topic!r} partition {tp.partition}"
         if value == forbidden:
             msg = (
-                f"'{option_name}' does not support offset {forbidden.value} "
+                f"'{key}' does not support offset {forbidden.value} "
                 f"({forbidden.name.lower()}) for batch reads, at {where}"
             )
             raise ValueError(msg)
         if value < SpecialOffset.EARLIEST:
             msg = (
-                f"'{option_name}' offset for {where} must be >= 0, "
+                f"'{key}' offset for {where} must be >= 0, "
                 f"{SpecialOffset.LATEST.value} (latest), or {SpecialOffset.EARLIEST.value} (earliest), got: {value}"
             )
             raise ValueError(msg)
@@ -241,54 +235,52 @@ def parse_range_limit(options: Mapping[str, str], *, boundary: RangeBoundary) ->
     Skipped lower-priority options are not parsed, matching Spark's
     ``KafkaSourceProvider.getKafkaOffsetRangeLimit``.
     """
-    option_name = f"{boundary}Timestamp"
-    if option_name in options:
-        label = f"'{option_name}'"
-        timestamp = parse_strict_int(options[option_name], label=label)
+    key = f"{boundary}Timestamp"
+    if key in options:
+        label = f"'{key}'"
+        timestamp = parse_strict_int(options[key], label=label)
         return GlobalTimestamp(check_integer_width(timestamp, bits=64, label=label))
 
-    option_name = f"{boundary}OffsetsByTimestamp"
-    if option_name in options:
-        return PartitionTimestamps(
-            parse_topic_partition_mapping(options[option_name], option_name=option_name), option_name
-        )
+    key = f"{boundary}OffsetsByTimestamp"
+    if key in options:
+        return PartitionTimestamps(parse_topic_partition_mapping(options[key], key))
 
-    option_name = f"{boundary}Offsets"
-    if option_name not in options:
+    key = f"{boundary}Offsets"
+    if key not in options:
         return SpecialOffset.EARLIEST if boundary == "starting" else SpecialOffset.LATEST
 
-    raw = options[option_name].strip()
+    option_value = options[key].strip()
     try:
-        sentinel = SpecialOffset[raw.upper()]
+        sentinel = SpecialOffset[option_value.upper()]
     except KeyError:
-        offsets = parse_topic_partition_mapping(raw, option_name=option_name)
-        validate_offsets(offsets, boundary=boundary, option_name=option_name)
-        return PartitionOffsets(offsets, option_name)
-    validate_offsets(sentinel, boundary=boundary, option_name=option_name)
+        offsets = parse_topic_partition_mapping(option_value, key)
+        validate_offsets(offsets, boundary=boundary)
+        return PartitionOffsets(offsets)
+    validate_offsets(sentinel, boundary=boundary)
     return sentinel
 
 
-def parse_timestamp_strategy(raw: str) -> TimestampStrategy:
+def parse_timestamp_strategy(option_value: str) -> TimestampStrategy:
     """Parse ``startingOffsetsByTimestampStrategy`` (case-insensitive ``error``/``latest``)."""
     try:
-        return TimestampStrategy(raw.strip().lower())
+        return TimestampStrategy(option_value.strip().lower())
     except ValueError as e:
-        msg = f"'startingOffsetsByTimestampStrategy' must be 'error' or 'latest', got {raw!r}"
+        msg = f"'startingOffsetsByTimestampStrategy' must be 'error' or 'latest', got {option_value!r}"
         raise ValueError(msg) from e
 
 
-def parse_bool(raw: str, name: str) -> bool:
+def parse_bool(option_value: str, name: str) -> bool:
     """Parse a boolean strictly (case-insensitive ``true``/``false``, matching Scala ``toBoolean``)."""
-    value = raw.strip().lower()
-    if value in ("true", "false"):
-        return value == "true"
-    msg = f"'{name}' must be 'true' or 'false', got {raw!r}"
+    normalized = option_value.strip().lower()
+    if normalized in ("true", "false"):
+        return normalized == "true"
+    msg = f"'{name}' must be 'true' or 'false', got {option_value!r}"
     raise ValueError(msg)
 
 
-def parse_positive_int(raw: str, name: str, *, max_value: int | None = None) -> int:
+def parse_positive_int(option_value: str, name: str, *, max_value: int | None = None) -> int:
     """Parse a positive integer option, optionally capped to a Scala/Kafka width."""
-    value = parse_strict_int(raw, label=f"'{name}'")
+    value = parse_strict_int(option_value, label=f"'{name}'")
     if value <= 0:
         msg = f"'{name}' must be positive, got {value}"
         raise ValueError(msg)
@@ -298,19 +290,13 @@ def parse_positive_int(raw: str, name: str, *, max_value: int | None = None) -> 
     return value
 
 
-def parse_positive_ms(raw: str, name: str, *, max_value: int | None = None) -> float:
-    """Parse a positive, finite millisecond option and return seconds."""
-    if not STRICT_FLOAT_RE.fullmatch(raw):
-        msg = f"'{name}' must be a positive, finite number of milliseconds, got {raw!r}"
-        raise ValueError(msg)
-    value_ms = float(raw)
-    if not math.isfinite(value_ms) or value_ms <= 0:
-        msg = f"'{name}' must be a positive, finite number of milliseconds, got {raw!r}"
-        raise ValueError(msg)
-    if max_value is not None and not 1 <= value_ms <= max_value:
-        msg = f"'{name}' must be between 1 and {max_value} milliseconds, got {raw!r}"
-        raise ValueError(msg)
-    return value_ms / 1000.0
+def parse_positive_ms(option_value: str, name: str, *, max_value: int = INT64_MAX) -> float:
+    """Parse a positive whole number of milliseconds and return seconds.
+
+    Whole milliseconds only, as Spark reads ``kafkaConsumer.pollTimeoutMs`` with ``toLong``;
+    the result is in seconds because Python's client timeouts take float seconds.
+    """
+    return parse_positive_int(option_value, name, max_value=max_value) / 1000
 
 
 def build_admin_config(client_config: dict[str, str]) -> dict[str, str]:
@@ -318,12 +304,12 @@ def build_admin_config(client_config: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in client_config.items() if k not in CONSUMER_ONLY_CONFIGS}
 
 
-def parse_isolation_level(raw: str) -> IsolationLevel:
+def parse_isolation_level(option_value: str) -> IsolationLevel:
     """Parse ``kafka.isolation.level`` case-insensitively (``read_uncommitted`` or ``read_committed``)."""
     try:
-        return IsolationLevel[raw.strip().upper()]
+        return IsolationLevel[option_value.strip().upper()]
     except KeyError:
-        msg = f"'kafka.isolation.level' must be 'read_uncommitted' or 'read_committed', got {raw!r}"
+        msg = f"'kafka.isolation.level' must be 'read_uncommitted' or 'read_committed', got {option_value!r}"
         raise ValueError(msg) from None
 
 
@@ -377,18 +363,18 @@ def parse_subscription(options: Mapping[str, str]) -> Subscription:
         raise ValueError(msg)
 
     strategy = present[0]
-    raw = options[strategy.value]
+    option_value = options[strategy.value]
 
     match strategy:
         case SubscriptionStrategy.SUBSCRIBE:
-            topics = sorted({t.strip() for t in raw.split(",")} - {""})
+            topics = sorted({t.strip() for t in option_value.split(",")} - {""})
             if not topics:
                 msg = "Option 'subscribe' must list at least one topic"
                 raise ValueError(msg)
             return SubscribeTopics(topics)
 
         case SubscriptionStrategy.SUBSCRIBE_PATTERN:
-            pattern = raw.strip()
+            pattern = option_value.strip()
             if not pattern:
                 msg = "Option 'subscribePattern' must be a non-empty regular expression"
                 raise ValueError(msg)
@@ -402,9 +388,9 @@ def parse_subscription(options: Mapping[str, str]) -> Subscription:
             # Like Spark's JsonUtils.partitions, accept empty maps/lists and nonexistent
             # int32 ids; list_topic_partitions intersects them with broker metadata.
             # Shape errors raise ValueError, as in parse_topic_partition_mapping.
-            parsed = json.loads(raw)
+            parsed = json.loads(option_value)
             if not isinstance(parsed, dict):
-                msg = f"'assign' JSON must be an object of {{topic: [partition, ...]}}, got: {raw!r}"
+                msg = f"'assign' JSON must be an object of {{topic: [partition, ...]}}, got: {option_value!r}"
                 raise ValueError(msg)  # noqa: TRY004
             assigned: set[TopicPartitionKey] = set()
             for topic, partitions in parsed.items():
