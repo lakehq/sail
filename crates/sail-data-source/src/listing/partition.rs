@@ -640,7 +640,7 @@ fn catalog_decimal(value: &str, precision: u8, scale: i8) -> Result<ScalarValue>
     let invalid =
         || plan_datafusion_err!("invalid DECIMAL({precision},{scale}) partition value: {value}");
     // BigDecimal also accepts underscores, which are invalid in Spark decimal strings.
-    let decimal = value
+    let decimal = normalize_decimal_digits(value)
         .parse::<BigDecimal>()
         .ok()
         .filter(|_| !value.contains('_'))

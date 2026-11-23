@@ -144,7 +144,8 @@ def test_registered_decimal_with_nested_directory(spark, moto_endpoint, tmp_path
         f"CREATE TABLE {table} (id INT, p DECIMAL(6,2)) USING json PARTITIONED BY (p) LOCATION '{tmp_path.as_uri()}'"
     )
     try:
-        for value, path in [("1E+2", root), ("9.995E-1", nested)]:
+        fullwidth_decimal = "９.９９５E-１"  # noqa: RUF001
+        for value, path in [("1E+2", root), (fullwidth_decimal, nested)]:
             glue.create_partition(
                 DatabaseName="test_db",
                 TableName="registered_decimal_partition",
