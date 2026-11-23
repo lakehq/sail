@@ -36,15 +36,35 @@ def _server(protocol, mode, **env_vars):
 @pytest.mark.parametrize("mode", ["local", "local-cluster"])
 def test_flight_sigterm_cancels_running_query(mode):
     from adbc_driver_flightsql import dbapi
+    from pyarrow import flight
 
     with _server("flight", mode) as (server, address), dbapi.connect(f"grpc://{address}") as conn, conn.cursor() as cur:
-        cur.execute("SELECT id FROM range(0, 1000000000, 1, 1)")
-        reader = cur.fetch_record_batch()
-        assert reader.read_next_batch().num_rows > 0
+        partitions, _ = cur.adbc_execute_partitions("SELECT id FROM range(0, 1000000000, 1, 1)")
+        ticket = flight.FlightInfo.deserialize(partitions[0]).endpoints[0].ticket
+        with flight.FlightClient(f"grpc://{address}") as client:
+            reader = client.do_get(ticket)
+            assert reader.read_chunk().data.num_rows > 0
+            server.send_signal(signal.SIGTERM)
+            with pytest.raises(flight.FlightCancelledError, match="query cancelled"):
+                for _ in reader:
+                    pass
+        assert server.wait(timeout=10) == 0
+
+
+def test_cluster_driver_stop_reports_partial_flight_result():
+    from adbc_driver_flightsql import dbapi
+
+    env = {"SAIL_FLIGHT__SESSION_TIMEOUT_SECS": "1", "RUST_LOG": "sail_cli=info,sail_session=info"}
+    with _server("flight", "local-cluster", **env) as (server, address):
+        with dbapi.connect(f"grpc://{address}") as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM range(0, 1000000000, 1, 1)")
+            reader = cur.fetch_record_batch()
+            assert reader.read_next_batch().num_rows > 0
+            assert any("removing idle session" in line for line in server.stderr)
+            with pytest.raises(OSError, match="query cancelled because the driver is shutting down"):
+                for _ in reader:
+                    pass
         server.send_signal(signal.SIGTERM)
-        with pytest.raises(OSError, match="query cancelled"):
-            for _ in reader:
-                pass
         assert server.wait(timeout=10) == 0
 
 
@@ -63,9 +83,10 @@ def test_spark_sigterm_cancels_running_query(mode):
         responses = SparkConnectServiceStub(channel).ExecutePlan(request, timeout=20, wait_for_ready=True)
         assert any(response.arrow_batch.row_count > 0 for response in responses)
         server.send_signal(signal.SIGTERM)
-        with pytest.raises(grpc.RpcError, match="query cancelled"):
+        with pytest.raises(grpc.RpcError, match="query cancelled") as err:
             for _ in responses:
                 pass
+        assert err.value.code() == grpc.StatusCode.CANCELLED
         assert server.wait(timeout=10) == 0
 
 
@@ -193,9 +214,10 @@ def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
                 list(execute(register, timeout=10, wait_for_ready=True))
             responses = execute(request, timeout=20, wait_for_ready=True)
             try:
-                with pytest.raises(grpc.RpcError, match="query cancelled"):
+                with pytest.raises(grpc.RpcError, match="query cancelled") as err:
                     for _ in responses:
                         pass
+                assert err.value.code() == grpc.StatusCode.CANCELLED
             finally:
                 released.touch()
         assert server.wait(timeout=10) == 0

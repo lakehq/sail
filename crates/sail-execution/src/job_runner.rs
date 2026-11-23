@@ -11,7 +11,7 @@ use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use futures::{StreamExt, stream};
 use sail_common::actor::ActorSystem;
-use sail_common_datafusion::session::job::{JobRunner, ServerShutdown};
+use sail_common_datafusion::session::job::{JobRunner, QueryCancellation};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::runtime::Handle;
@@ -95,7 +95,7 @@ impl JobRunner for LocalJobRunner {
         })
         .flatten();
         let stream = Box::pin(RecordBatchStreamAdapter::new(schema, output));
-        Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
+        Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {
@@ -152,7 +152,7 @@ impl JobRunner for ClusterJobRunner {
             .await
             .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(ServerShutdown::cancel_stream_on_shutdown(ctx, stream))
+        Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {

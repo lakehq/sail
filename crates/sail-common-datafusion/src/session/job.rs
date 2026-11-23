@@ -49,13 +49,13 @@ impl SessionExtension for JobService {
     }
 }
 
-/// Shared by all query requests and result streams on one server.
+/// Cancels query consumers when their server or driver shuts down.
 #[derive(Default)]
-pub struct ServerShutdown {
+pub struct QueryCancellation {
     signal: CancellationToken,
 }
 
-impl ServerShutdown {
+impl QueryCancellation {
     pub fn cancel(&self) {
         self.signal.cancel();
     }
@@ -64,7 +64,7 @@ impl ServerShutdown {
         self.signal.cancelled().await;
     }
 
-    pub fn from_context(ctx: &SessionContext) -> Option<Arc<Self>> {
+    fn from_context(ctx: &SessionContext) -> Option<Arc<Self>> {
         ctx.state_ref().read().config().get_extension::<Self>()
     }
 
@@ -88,22 +88,25 @@ impl ServerShutdown {
         mut input: impl Stream<Item = T> + Unpin,
         cancelled_item: impl Fn() -> T,
     ) -> impl Stream<Item = T> {
-        let mut cancelled = Box::pin(async move { self.cancelled().await });
+        let mut cancelled = Box::pin(self.signal.clone().cancelled_owned());
         let mut done = false;
         stream::poll_fn(move |cx| {
             if done {
                 return Poll::Ready(None);
             }
 
-            if cancelled.as_mut().poll(cx).is_ready() {
-                // Deliver the error before dropping the input. Its cleanup may wait for a Python UDF.
-                done = true;
-                return Poll::Ready(Some(cancelled_item()));
+            if cancelled.as_mut().poll(cx).is_pending() {
+                let next = Pin::new(&mut input).poll_next(cx);
+                // Shutdown can also wake the inner stream and make it report EOF.
+                if !self.signal.is_cancelled() {
+                    done = matches!(next, Poll::Ready(None));
+                    return next;
+                }
             }
 
-            let next = Pin::new(&mut input).poll_next(cx);
-            done = matches!(next, Poll::Ready(None));
-            next
+            // Deliver the error before dropping the input. Its cleanup may wait for a Python UDF.
+            done = true;
+            Poll::Ready(Some(cancelled_item()))
         })
     }
 }

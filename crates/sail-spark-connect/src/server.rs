@@ -182,7 +182,9 @@ impl SparkConnectServer {
                 return Err(Status::unimplemented("compressed operation plan"));
             }
         };
-        Ok(Response::new(stream.cancel_on_shutdown(&ctx)))
+        Ok(Response::new(
+            stream.cancel_on_shutdown(&self.session_manager),
+        ))
     }
 
     async fn handle_reattach_execute(
@@ -205,7 +207,9 @@ impl SparkConnectServer {
         let stream =
             service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
                 .await?;
-        Ok(Response::new(stream.cancel_on_shutdown(&ctx)))
+        Ok(Response::new(
+            stream.cancel_on_shutdown(&self.session_manager),
+        ))
     }
 
     async fn handle_analyze_plan(

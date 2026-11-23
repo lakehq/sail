@@ -8,12 +8,13 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
-use futures::stream;
+use futures::{StreamExt, stream};
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::{JobService, ServerShutdown};
+use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
+use sail_session::session_manager::SessionManager;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
@@ -43,18 +44,12 @@ pub struct ExecutePlanResponseStream {
     session_id: String,
     server_side_session_id: String,
     operation_id: String,
-    inner: ExecutorOutputStream,
+    inner: Pin<Box<dyn Stream<Item = Result<ExecutorOutput, Status>> + Send>>,
 }
 
 impl ExecutePlanResponseStream {
-    pub(crate) fn cancel_on_shutdown(mut self, ctx: &SessionContext) -> Self {
-        if let Some(shutdown) = ServerShutdown::from_context(ctx) {
-            self.inner = Box::pin(shutdown.cancel_stream(self.inner, || {
-                Err(SparkError::internal(
-                    "query cancelled because the server is shutting down",
-                ))
-            }));
-        }
+    pub(crate) fn cancel_on_shutdown(mut self, sessions: &SessionManager) -> Self {
+        self.inner = Box::pin(sessions.cancel_query_stream(self.inner));
         self
     }
 
@@ -68,7 +63,7 @@ impl ExecutePlanResponseStream {
             session_id,
             server_side_session_id,
             operation_id,
-            inner,
+            inner: Box::pin(inner.map(|item| item.map_err(Status::from))),
         }
     }
 }
@@ -82,7 +77,7 @@ impl Stream for ExecutePlanResponseStream {
     ) -> Poll<Option<Result<ExecutePlanResponse, Status>>> {
         self.inner.as_mut().poll_next(cx).map(|poll| {
             poll.map(|item| {
-                let item = item.map_err(Status::from)?;
+                let item = item?;
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
                 response

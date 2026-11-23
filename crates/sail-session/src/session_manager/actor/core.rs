@@ -6,7 +6,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use log::{info, warn};
 use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
-use sail_common_datafusion::session::job::ServerShutdown;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
@@ -41,7 +41,7 @@ impl Actor for SessionManagerActor {
     type Options = (
         SessionManagerOptions,
         SessionManagerComponents,
-        Arc<ServerShutdown>,
+        Arc<QueryCancellation>,
     );
 
     fn name() -> &'static str {

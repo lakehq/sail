@@ -10,11 +10,12 @@ use std::time::Duration;
 
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::prelude::SessionContext;
+use futures::Stream;
 use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::server::ServerBuilder;
-use sail_common_datafusion::session::job::ServerShutdown;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::net::TcpListener;
@@ -34,7 +35,7 @@ pub type ServerSessionFactoryFn =
 #[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
-    shutdown: Arc<ServerShutdown>,
+    shutdown: Arc<QueryCancellation>,
     query_runtime: Handle,
 }
 
@@ -50,7 +51,7 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
-        let shutdown = Arc::new(ServerShutdown::default());
+        let shutdown = Arc::new(QueryCancellation::default());
         let query_runtime = options.runtime.io().clone();
         let handle = system.spawn::<SessionManagerActor>((options, components, shutdown.clone()));
         Ok(Self {
@@ -92,6 +93,22 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
 
+    fn query_cancelled() -> tonic::Status {
+        tonic::Status::cancelled("query cancelled because the server is shutting down")
+    }
+
+    pub fn cancel_query_stream<T, S>(
+        &self,
+        stream: S,
+    ) -> impl Stream<Item = Result<T, tonic::Status>> + use<T, S>
+    where
+        S: Stream<Item = Result<T, tonic::Status>> + Unpin,
+    {
+        self.shutdown
+            .clone()
+            .cancel_stream(stream, || Err(Self::query_cancelled()))
+    }
+
     /// Cancel work inside a query RPC, including execution needed to resolve its plan.
     pub async fn run_query<T: Send + 'static>(
         &self,
@@ -109,7 +126,7 @@ impl SessionManager {
         };
         tokio::select! {
             biased;
-            () = self.shutdown.cancelled() => Err(tonic::Status::cancelled("query cancelled because the server is shutting down")),
+            () = self.shutdown.cancelled() => Err(Self::query_cancelled()),
             result = run => result,
         }
     }

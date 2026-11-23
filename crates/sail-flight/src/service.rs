@@ -238,7 +238,9 @@ impl FlightSqlService for SailFlightSqlService {
             .build(output)
             .map(|result| result.map_err(|e| Status::internal(format!("encoding error: {e}"))));
 
-        Ok(Response::new(Box::pin(output)))
+        Ok(Response::new(Box::pin(
+            self.session_manager.cancel_query_stream(output),
+        )))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
