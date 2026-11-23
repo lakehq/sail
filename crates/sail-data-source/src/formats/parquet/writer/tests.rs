@@ -62,7 +62,9 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_datafusion_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
+};
 use datafusion_datasource::ListingTableUrl;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -70,7 +72,7 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::data_type::contains_dictionary;
+use sail_common_datafusion::data_type::{contains_dictionary, without_dictionaries};
 use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
@@ -78,6 +80,7 @@ use uuid::Uuid;
 use crate::formats::parquet::writer::encoder::{logical_size, row_group_byte_limit};
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
+use crate::formats::parquet::writer::partition::with_dictionaries;
 use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
 use crate::formats::parquet::writer::task::{
     ParquetWriteMetrics, ParquetWriteTask, write_partition,
@@ -6586,5 +6589,220 @@ fn test_write_plan_rejects_unsupported_column_types() -> Result<()> {
             format!("This feature is not implemented: {message}")
         );
     }
+    Ok(())
+}
+
+#[test]
+fn test_rows_are_returned_to_dictionaries_at_the_limit_of_the_keys() -> Result<()> {
+    // Keys of 8 bits refer to 128 values when they are signed and to 256 values
+    // when they are not. One more value does not fit in one dictionary.
+    let cases = [
+        (DataType::Int8, 128, 1),
+        (DataType::Int8, 129, 2),
+        (DataType::Int8, 1000, 8),
+        (DataType::UInt8, 256, 1),
+        (DataType::UInt8, 257, 2),
+        (DataType::Int16, 1000, 1),
+    ];
+    for (keys, values, expected) in cases {
+        let dictionary = DataType::Dictionary(Box::new(keys), Box::new(DataType::Utf8));
+        let item = Arc::new(Field::new_list_field(dictionary.clone(), true));
+        let fields = vec![Field::new("x", dictionary.clone(), true)];
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", dictionary, true),
+            Field::new("l", DataType::List(Arc::clone(&item)), true),
+            Field::new("s", DataType::Struct(fields.into()), true),
+            Field::new("w", DataType::ListView(Arc::clone(&item)), true),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let strings: StringArray = (0..values).map(|x| Some(format!("value {x}"))).collect();
+        let strings: ArrayRef = Arc::new(strings);
+        let plain = Schema::new(
+            schema
+                .fields()
+                .iter()
+                .map(|x| {
+                    let data_type = without_dictionaries(x.data_type());
+                    x.as_ref().clone().with_data_type(data_type)
+                })
+                .collect::<Vec<_>>(),
+        );
+        let DataType::List(list_field) = plain.field(1).data_type().clone() else {
+            return internal_err!("the list column is not a list");
+        };
+        let DataType::Struct(struct_fields) = plain.field(2).data_type().clone() else {
+            return internal_err!("the struct column is not a struct");
+        };
+        assert_eq!(list_field.data_type(), &DataType::Utf8);
+        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(1, values));
+        let rows = RecordBatch::try_new(
+            Arc::new(plain),
+            vec![
+                Arc::clone(&strings),
+                Arc::new(ListArray::try_new(
+                    Arc::clone(&list_field),
+                    offsets,
+                    Arc::clone(&strings),
+                    None,
+                )?),
+                Arc::new(StructArray::try_new(
+                    struct_fields,
+                    vec![Arc::clone(&strings)],
+                    None,
+                )?),
+                // The lists of the rows are in the reverse order in the array of their values.
+                Arc::new(ListViewArray::try_new(
+                    Arc::clone(&list_field),
+                    (0..values as i32).rev().collect(),
+                    std::iter::repeat_n(1, values).collect(),
+                    Arc::clone(&strings),
+                    None,
+                )?),
+                Arc::new(Int64Array::from_iter_values(0..values as i64)),
+            ],
+        )?;
+        let batches = with_dictionaries(rows.clone(), &schema)?;
+        assert_eq!(batches.len(), expected, "{schema}");
+        let mut start = 0;
+        for batch in &batches {
+            assert_eq!(batch.schema(), schema);
+            let columns = batch
+                .columns()
+                .iter()
+                .zip(rows.schema().fields())
+                .map(|(column, field)| Ok(cast(column, field.data_type())?))
+                .collect::<Result<Vec<_>>>()?;
+            let batch = RecordBatch::try_new(rows.schema(), columns)?;
+            assert_eq!(batch, rows.slice(start, batch.num_rows()));
+            start += batch.num_rows();
+        }
+        assert_eq!(start, values);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_partition_sorted_keys_with_dictionaries_of_their_own_are_written() -> Result<()> {
+    // Each batch has dictionaries of its own, with as many values as the keys
+    // of 8 bits can refer to. The rows of the last two partition keys are sorted,
+    // and each of these keys has rows of all batches, which refer to more values
+    // than one dictionary can have.
+    let int8 = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+    let uint8 = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8));
+    let item = Arc::new(Field::new_list_field(int8.clone(), true));
+    let fields: datafusion::arrow::datatypes::Fields =
+        vec![Field::new("x", uint8.clone(), true)].into();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p", int8.clone(), false),
+        Field::new("v", DataType::Int64, false),
+        Field::new("d", int8, true),
+        Field::new("u", uint8, true),
+        Field::new("l", DataType::List(Arc::clone(&item)), true),
+        Field::new("s", DataType::Struct(fields.clone()), true),
+    ]));
+    let rows = 256;
+    let keys = 12;
+    let batches = (0..20)
+        .map(|batch| {
+            let p: StringArray = (0..keys).map(|x| Some(format!("key {x:02}"))).collect();
+            let p = DictionaryArray::new(
+                Int8Array::from_iter_values((0..rows).map(|x| (x % keys) as i8)),
+                Arc::new(p),
+            );
+            let v = Int64Array::from_iter_values((0..rows as i64).map(|x| batch * 1000 + x));
+            let values = |count: usize| -> ArrayRef {
+                let values: StringArray =
+                    (0..count).map(|x| Some(format!("{batch}-{x}"))).collect();
+                Arc::new(values)
+            };
+            let d = DictionaryArray::new(
+                Int8Array::from_iter((0..rows).map(|x| (x % 7 != 0).then_some((x % 128) as i8))),
+                values(128),
+            );
+            let u = || {
+                DictionaryArray::new(
+                    datafusion::arrow::array::UInt8Array::from_iter_values(
+                        (0..rows).map(|x| x as u8),
+                    ),
+                    values(256),
+                )
+            };
+            let l = ListArray::try_new(
+                Arc::clone(&item),
+                OffsetBuffer::from_lengths(std::iter::repeat_n(1, rows)),
+                Arc::new(d.clone()),
+                None,
+            )?;
+            let s = StructArray::try_new(fields.clone(), vec![Arc::new(u())], None)?;
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(p),
+                    Arc::new(v),
+                    Arc::new(d),
+                    Arc::new(u()),
+                    Arc::new(l),
+                    Arc::new(s),
+                ],
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // The rows of each directory as text, without dictionaries.
+    let lines = |batch: &RecordBatch| -> Result<Vec<String>> {
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|x| Ok(cast(x, &without_dictionaries(x.data_type()))?))
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_from_iter(
+            columns
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| (format!("c{i}"), x)),
+        )?;
+        let text = pretty_format_batches(&[batch])?.to_string();
+        Ok(text
+            .lines()
+            .skip(3)
+            .filter(|x| !x.starts_with('+'))
+            // The width of a column depends on the values of the batch.
+            .map(|x| x.split('|').map(str::trim).collect::<Vec<_>>().join("|"))
+            .collect())
+    };
+    let mut expected = DirectoryRows::new();
+    for batch in &batches {
+        let data = batch.project(&[1, 2, 3, 4, 5])?;
+        for (row, line) in lines(&data)?.into_iter().enumerate() {
+            let directory = format!("table/p=key {:02}", row % keys);
+            expected.entry(directory).or_default().push(line);
+        }
+    }
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut task = partition_task(Arc::clone(&store), 0, &["p"]);
+    task.max_open_files = 10;
+    let sorted = run_task_for_metric(task, &schema, batches, "rows_sorted").await?;
+    assert_eq!(sorted, 20 * 2 * (rows / keys));
+    let mut actual = DirectoryRows::new();
+    let files = list_files(store.as_ref()).await?;
+    assert_eq!(files.len(), keys);
+    for (file, _) in files {
+        let (directory, _) = file
+            .rsplit_once('/')
+            .ok_or_else(|| internal_datafusion_err!("invalid file path: {file}"))?;
+        let data = read_bytes(store.as_ref(), &file).await?;
+        // The dictionary of a row group can have more values than the keys of
+        // the column can refer to, so the values are read without dictionaries.
+        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+        let reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)?.build()?;
+        for batch in reader {
+            let rows = actual.entry(directory.to_string()).or_default();
+            rows.extend(lines(&batch?)?);
+        }
+    }
+    for rows in actual.values_mut().chain(expected.values_mut()) {
+        rows.sort();
+    }
+    assert!(actual == expected);
     Ok(())
 }

@@ -44,6 +44,30 @@ pub fn contains_dictionary(data_type: &adt::DataType) -> bool {
     }
 }
 
+/// Returns the data type with the type of the values in place of each
+/// dictionary, at any depth. The fields of a union are returned as they are.
+pub fn without_dictionaries(data_type: &adt::DataType) -> adt::DataType {
+    use adt::DataType;
+    let plain = |field: &adt::FieldRef| -> adt::FieldRef {
+        let data_type = without_dictionaries(field.data_type());
+        Arc::new(field.as_ref().clone().with_data_type(data_type))
+    };
+    match data_type {
+        DataType::Dictionary(_, values) => without_dictionaries(values),
+        DataType::List(field) => DataType::List(plain(field)),
+        DataType::LargeList(field) => DataType::LargeList(plain(field)),
+        DataType::ListView(field) => DataType::ListView(plain(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(plain(field)),
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(plain(field), *size),
+        DataType::Map(field, sorted) => DataType::Map(plain(field), *sorted),
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(plain).collect()),
+        DataType::RunEndEncoded(run_ends, values) => {
+            DataType::RunEndEncoded(Arc::clone(run_ends), plain(values))
+        }
+        other => other.clone(),
+    }
+}
+
 /// Converts spec data types, fields, and schemas to Arrow without query state.
 pub struct DataTypeResolver {
     pub session_timezone: Arc<str>,
