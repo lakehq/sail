@@ -16,6 +16,7 @@ use crate::resolver::state::PlanResolverState;
 
 mod aggregate;
 mod alias;
+mod catalog_partition;
 mod column_op;
 mod cte;
 mod dedup;

@@ -277,7 +277,6 @@ impl PlanResolver<'_> {
                 // Repeated references to the same table within a query share its source,
                 // so that they can share scalar subqueries. Delta Lake and Iceberg sources
                 // also pin one table snapshot, while file tables still list files for each scan.
-                let data_source = data_source_registry.get_data_source(&format)?;
                 let source_key = lake_relation.is_none().then(|| TableSourceKey {
                     catalog: status.catalog,
                     database: status.database,
@@ -294,11 +293,11 @@ impl PlanResolver<'_> {
                     options: options.clone(),
                     temporal_options: temporal_options.clone(),
                 });
-                let table_source = match source_key
+                let sources = match source_key
                     .as_ref()
-                    .and_then(|key| state.get_table_source(key))
+                    .and_then(|key| state.get_table_sources(key))
                 {
-                    Some(table_source) => table_source,
+                    Some(sources) => sources,
                     None => {
                         let access_purpose = match lake_relation.as_ref() {
                             Some((_, relation)) => lake_relation_access_purpose(relation.access()),
@@ -335,30 +334,32 @@ impl PlanResolver<'_> {
                             ],
                             read_case_sensitive: self.config.case_sensitive,
                         };
-                        let table_source = match lake_relation {
-                            Some((relation_provider, relation)) => {
+                        let sources = match lake_relation {
+                            Some((relation_provider, relation)) => vec![
                                 relation_provider
                                     .create_relation(&self.ctx.state(), info, relation)
-                                    .await?
+                                    .await?,
+                            ],
+                            None => {
+                                self.create_catalog_table_sources(
+                                    &manager,
+                                    &data_source_registry,
+                                    &catalog_reference,
+                                    &format,
+                                    info,
+                                )
+                                .await?
                             }
-                            None => data_source.create_source(&self.ctx.state(), info).await?,
                         };
                         if let Some(key) = source_key
-                            && is_reusable_source(&table_source)
+                            && sources.iter().all(is_reusable_source)
                         {
-                            state.insert_table_source(key, Arc::clone(&table_source));
+                            state.insert_table_sources(key, sources.clone());
                         }
-                        table_source
+                        sources
                     }
                 };
-                self.resolve_table_source_with_rename(
-                    table_source,
-                    table_reference,
-                    None,
-                    vec![],
-                    None,
-                    state,
-                )?
+                self.resolve_catalog_table_scans(sources, table_reference, state)?
             }
             TableKind::View {
                 definition,

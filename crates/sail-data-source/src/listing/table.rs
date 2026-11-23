@@ -22,7 +22,7 @@ pub struct ListingTableSourceConfig {
     /// File scan indices in public column order when physical columns overlap partitions.
     pub output_projection: Option<Vec<usize>>,
     pub base_path: Option<Arc<BasePathPartitions>>,
-    pub table_paths: Vec<ListingTableUrl>,
+    pub table_paths: Vec<(ListingTableUrl, Option<Vec<datafusion_common::ScalarValue>>)>,
     pub recursive_file_lookup: bool,
     pub schema: TableSchema,
     pub constraints: Constraints,

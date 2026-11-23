@@ -331,5 +331,6 @@ impl From<&AlterTableOptions>
 pub struct CatalogFilePartition {
     pub values: Vec<String>,
     pub location: Option<String>,
-    pub format: String,
+    /// Absent when the partition inherits the table format.
+    pub format: Option<String>,
 }

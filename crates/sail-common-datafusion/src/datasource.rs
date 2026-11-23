@@ -219,6 +219,13 @@ pub struct BucketBy {
     pub num_buckets: usize,
 }
 
+/// A literal catalog location and its values in declared partition column order.
+#[derive(Debug)]
+pub struct RegisteredPartition {
+    pub location: url::Url,
+    pub values: Vec<datafusion_common::ScalarValue>,
+}
+
 /// Information required to create a data source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -490,6 +497,19 @@ pub trait DataSource: Send + Sync {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
+
+    /// Creates a file source for registered partitions in one object store.
+    async fn create_partitioned_source(
+        &self,
+        _ctx: &dyn Session,
+        _info: SourceInfo,
+        _partitions: Vec<RegisteredPartition>,
+    ) -> Result<Arc<dyn TableSource>> {
+        Err(not_impl_datafusion_err!(
+            "registered partition reads for {}",
+            self.name()
+        ))
+    }
 
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {

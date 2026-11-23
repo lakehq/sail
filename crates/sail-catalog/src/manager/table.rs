@@ -105,6 +105,20 @@ impl CatalogManager {
         provider.create_table_metadata_requirement(options)
     }
 
+    pub async fn file_partitions_for_scan<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        partition_columns: usize,
+    ) -> CatalogResult<Option<Vec<crate::provider::CatalogFilePartition>>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        if partition_columns == 0 || !provider.uses_registered_file_partitions() {
+            return Ok(None);
+        }
+        provider
+            .list_file_partitions(&database, &table, &vec![None; partition_columns])
+            .await
+    }
+
     pub async fn list_file_partitions<T: AsRef<str>>(
         &self,
         table: &[T],

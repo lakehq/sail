@@ -414,7 +414,17 @@ fn hive_storage_format(storage: Option<&StorageDescriptor>) -> String {
 
 fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
     CatalogFilePartition {
-        format: hive_storage_format(partition.storage_descriptor()),
+        format: partition
+            .storage_descriptor()
+            .filter(|sd| {
+                sd.input_format().is_some()
+                    || sd.output_format().is_some()
+                    || sd
+                        .serde_info()
+                        .and_then(|serde| serde.serialization_library())
+                        .is_some()
+            })
+            .map(|sd| hive_storage_format(Some(sd))),
         location: partition
             .storage_descriptor
             .and_then(|sd| sd.location)
@@ -650,6 +660,10 @@ impl CatalogProvider for GlueCatalogProvider {
         } else {
             Ok(CreateTableMetadataRequirement::None)
         }
+    }
+
+    fn uses_registered_file_partitions(&self) -> bool {
+        true
     }
 
     async fn list_file_partitions(

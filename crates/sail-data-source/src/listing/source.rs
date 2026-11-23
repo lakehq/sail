@@ -22,8 +22,8 @@ use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::{
-    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
-    get_partition_columns_and_file_schema,
+    DataSource, OptionLayer, RegisteredPartition, SinkInfo, SinkMode, SourceInfo,
+    find_path_in_options, get_partition_columns_and_file_schema,
 };
 use sail_common_datafusion::schema_evolution::StructFieldMatching;
 use url::Url;
@@ -171,6 +171,84 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
+        self.create_listing_source(ctx, info, None).await
+    }
+
+    async fn create_partitioned_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        partitions: Vec<RegisteredPartition>,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.create_listing_source(ctx, info, Some(partitions))
+            .await
+    }
+
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in listing table options");
+        };
+        let SinkInfo {
+            input,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+            lakehouse_table,
+            sql_insert: _,
+            identity_columns_to_track: _,
+        } = info;
+        let catalog_managed = lakehouse_table.is_some();
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for writing listing data source");
+        }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for writing listing data source");
+        }
+        let url = resolve_listing_writer_url(path.clone())?;
+        let overwrite = match mode {
+            SinkMode::ErrorIfExists => {
+                if (!catalog_managed && listing_target_exists(ctx, &url).await?)
+                    || (catalog_managed && listing_target_nonempty(ctx, &url).await?)
+                {
+                    return plan_err!("listing table path already exists: {path}");
+                }
+                false
+            }
+            SinkMode::IgnoreIfExists => {
+                if listing_target_exists(ctx, &url).await? {
+                    return LogicalPlanBuilder::empty(false).build();
+                }
+                false
+            }
+            SinkMode::Append => false,
+            SinkMode::Overwrite => true,
+            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
+        };
+        let write_format = T::write(ctx, options)?;
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(FileWriteNode::new(
+                Arc::new(input),
+                FileWriteOptions {
+                    format: Arc::new(write_format),
+                    url,
+                    overwrite,
+                    partition_by,
+                    sort_by: sort_order,
+                },
+            )),
+        }))
+    }
+}
+
+impl<T: FormatFactory> ListingDataSource<T> {
+    async fn create_listing_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        partitions: Option<Vec<RegisteredPartition>>,
+    ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
             lakehouse_table: _,
@@ -201,8 +279,24 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 sampling,
                 SchemaSampling::SingleParquet | SchemaSampling::MergeParquet { .. }
             );
-        let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
-        let base_path = (hadoop_paths && !recursive)
+        let registered = partitions.is_some();
+        let (urls, values) = match partitions {
+            Some(partitions) => partitions
+                .into_iter()
+                .map(|p| {
+                    let url = ListingTableUrl::try_new(p.location, None)?;
+                    Ok((vec![url], Some(p.values)))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip(),
+            None => {
+                let urls = resolve_read_urls(ctx, paths, hadoop_paths).await?;
+                let values = vec![None; urls.iter().flatten().count()];
+                (urls, values)
+            }
+        };
+        let base_path = (!registered && hadoop_paths && !recursive)
             .then(|| resolve_base_path(ctx, read_case_sensitive, &options, &urls, path))
             .transpose()?;
         let path_glob_filter = read_format
@@ -214,7 +308,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             &urls,
             path_glob_filter.as_ref(),
             base_path.as_ref(),
-            recursive,
+            recursive || registered,
             sampling,
         )
         .await?;
@@ -245,7 +339,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 let schema = if read_case_sensitive {
                     schema
                 } else if let Some(physical) = &physical {
-                    let partition_names: &[String] = if base_path.is_none() {
+                    let partition_names: &[String] = if !registered && base_path.is_none() {
                         &[]
                     } else if partition_by.is_empty() {
                         &inferred_names
@@ -365,7 +459,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             .transpose()?;
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             output_projection,
-            table_paths: urls.into_iter().flatten().collect(),
+            table_paths: urls.into_iter().flatten().zip(values).collect(),
             recursive_file_lookup: recursive,
             base_path,
             schema,
@@ -379,64 +473,8 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         })?;
         Ok(Arc::new(source))
     }
-
-    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
-        let Some(path) = find_path_in_options(&info.options) else {
-            return plan_err!("missing path in listing table options");
-        };
-        let SinkInfo {
-            input,
-            mode,
-            partition_by,
-            bucket_by,
-            sort_order,
-            options,
-            lakehouse_table,
-            sql_insert: _,
-            identity_columns_to_track: _,
-        } = info;
-        let catalog_managed = lakehouse_table.is_some();
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing data source");
-        }
-        if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for writing listing data source");
-        }
-        let url = resolve_listing_writer_url(path.clone())?;
-        let overwrite = match mode {
-            SinkMode::ErrorIfExists => {
-                if (!catalog_managed && listing_target_exists(ctx, &url).await?)
-                    || (catalog_managed && listing_target_nonempty(ctx, &url).await?)
-                {
-                    return plan_err!("listing table path already exists: {path}");
-                }
-                false
-            }
-            SinkMode::IgnoreIfExists => {
-                if listing_target_exists(ctx, &url).await? {
-                    return LogicalPlanBuilder::empty(false).build();
-                }
-                false
-            }
-            SinkMode::Append => false,
-            SinkMode::Overwrite => true,
-            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
-        };
-        let write_format = T::write(ctx, options)?;
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(FileWriteNode::new(
-                Arc::new(input),
-                FileWriteOptions {
-                    format: Arc::new(write_format),
-                    url,
-                    overwrite,
-                    partition_by,
-                    sort_by: sort_order,
-                },
-            )),
-        }))
-    }
 }
+
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file"
@@ -447,6 +485,7 @@ async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     }
     listing_target_nonempty(ctx, url).await
 }
+
 async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;

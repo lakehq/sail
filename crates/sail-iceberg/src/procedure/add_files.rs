@@ -139,7 +139,7 @@ impl AddFiles {
                     })?;
                     sources.push((
                         location,
-                        partition.format,
+                        partition.format.unwrap_or_else(|| "unknown".to_string()),
                         (!names.is_empty()).then_some(values),
                     ));
                 }

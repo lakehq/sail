@@ -1162,10 +1162,10 @@ impl CatalogProvider for HmsCatalogProvider {
                 values: vec![],
                 location: crate::convert::table_location(&metadata)
                     .map(sail_catalog::hive_format::file_source_location),
-                format: crate::convert::resolve_data_source_format(
+                format: Some(crate::convert::resolve_data_source_format(
                     metadata.parameters.as_ref(),
                     metadata.sd.as_ref(),
-                ),
+                )),
             }]));
         }
         let database = validate_namespace(database)?;
@@ -1222,7 +1222,10 @@ impl CatalogProvider for HmsCatalogProvider {
             partitions.extend(batch.into_iter().map(|partition| {
                 CatalogFilePartition {
                     values: partition.values.unwrap_or_default(),
-                    format: crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
+                    format: Some(crate::convert::resolve_data_source_format(
+                        None,
+                        partition.sd.as_ref(),
+                    )),
                     location: partition
                         .sd
                         .and_then(|sd| sd.location)

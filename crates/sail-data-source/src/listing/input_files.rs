@@ -40,7 +40,7 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
         let path_glob_filter = source.config().path_glob_filter.as_ref();
         let direct_only = source.config().base_path.is_some()
             && source.config().schema.table_partition_cols().is_empty();
-        for table_path in &source.config().table_paths {
+        for (table_path, _) in &source.config().table_paths {
             if !listed.insert((
                 table_path.as_str().to_string(),
                 path_glob_filter.map(|filter| filter.as_str().to_string()),

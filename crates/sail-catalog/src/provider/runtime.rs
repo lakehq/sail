@@ -265,6 +265,10 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
+    fn uses_registered_file_partitions(&self) -> bool {
+        self.inner.uses_registered_file_partitions()
+    }
+
     async fn list_file_partitions(
         &self,
         database: &Namespace,
