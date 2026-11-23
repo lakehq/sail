@@ -2929,14 +2929,29 @@ mod tests {
 
     #[test]
     fn partition_statistics_updates_round_trip_through_rest_commit() -> serde_json::Result<()> {
-        for update in [
-            serde_json::json!({"action": "set-partition-statistics", "partition-statistics": {
-                "snapshot-id": 17, "statistics-path": "file:///stats.parquet", "file-size-in-bytes": 401
-            }}),
-            serde_json::json!({"action": "remove-partition-statistics", "snapshot-id": 17}),
+        use sail_iceberg::spec::{PartitionStatisticsFile, TableUpdate};
+
+        for (update, expected) in [
+            (
+                TableUpdate::SetPartitionStatistics {
+                    partition_statistics: PartitionStatisticsFile {
+                        snapshot_id: 17,
+                        statistics_path: "file:///stats.parquet".to_owned(),
+                        file_size_in_bytes: 401,
+                    },
+                },
+                serde_json::json!({"action": "set-partition-statistics", "partition-statistics": {
+                    "snapshot-id": 17, "statistics-path": "file:///stats.parquet", "file-size-in-bytes": 401
+                }}),
+            ),
+            (
+                TableUpdate::RemovePartitionStatistics { snapshot_id: 17 },
+                serde_json::json!({"action": "remove-partition-statistics", "snapshot-id": 17}),
+            ),
         ] {
-            let typed: crate::r#gen::TableUpdate = serde_json::from_value(update.clone())?;
-            assert_eq!(serde_json::to_value(typed)?, update);
+            let rest: crate::r#gen::TableUpdate =
+                serde_json::from_value(serde_json::to_value(update)?)?;
+            assert_eq!(serde_json::to_value(rest)?, expected);
         }
         Ok(())
     }
