@@ -807,9 +807,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Result values (migrated from test_schema_of_json.txt doctests)
 
-    # Doctests #5 and #9-#13 stay separate: #5 asserts the auto-derived column
-    # name instead of `AS r`, and #9-#13 contain backslashes, which a data-table
-    # cell would re-escape.
     Scenario Outline: Doctest result: <case>
       When query
         """
@@ -827,6 +824,11 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | schema_of_json doctest #4 (result)  | '{a: {"b": [1.5], c: "x: {y: 1}"}}', map('allowUnquotedFieldNames', 'true')                 | STRUCT<a: STRUCT<b: ARRAY<DOUBLE>, c: STRING>> |
         | schema_of_json doctest #6 (result)  | '{"a": 2}', map('allowUnquotedFieldNames', 'false')                                         | STRUCT<a: BIGINT>                              |
         | schema_of_json doctest #8 (result)  | '{"a": 1}', map('myImaginaryOption', 'banana')                                              | STRUCT<a: BIGINT>                              |
+        | schema_of_json doctest #9 (result)  | '{"a": \\'x\\'}'                                                                          | STRUCT<a: STRING>                              |
+        | schema_of_json doctest #10 (result) | '{\\'a\\': 1}'                                                                           | STRUCT<a: BIGINT>                              |
+        | schema_of_json doctest #11 (result) | '{\\'a\\': \\'it\\\\\\'s\\'}'                                                            | STRUCT<a: STRING>                              |
+        | schema_of_json doctest #12 (result) | '{\\'a\\': \\'say "hi"\\'}'                                                              | STRUCT<a: STRING>                              |
+        | schema_of_json doctest #13 (result) | '{"a": "it\\'s"}'                                                                        | STRUCT<a: STRING>                              |
         | schema_of_json doctest #15 (result) | '{"x y": 1}'                                                                                | STRUCT<`x y`: BIGINT>                          |
         | schema_of_json doctest #16 (result) | '{"x-y": 1}'                                                                                | STRUCT<`x-y`: BIGINT>                          |
         | schema_of_json doctest #17 (result) | '{"x.y": 1}'                                                                                | STRUCT<`x.y`: BIGINT>                          |
@@ -902,6 +904,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | schema_of_json doctest #92 (result) | '{ключ: 1}', map('allowUnquotedFieldNames', 'true')                                         | STRUCT<`ключ`: BIGINT>                         |
         | schema_of_json doctest #93 (result) | '{aé: 1}', map('allowUnquotedFieldNames', 'true')                                           | STRUCT<`aé`: BIGINT>                           |
 
+    # Check the automatically generated column name.
     Scenario: schema_of_json doctest #5 (result)
       When query
         """
@@ -911,53 +914,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | schema_of_json({a: 1}) |
         | STRUCT<a: BIGINT>      |
 
-    Scenario: schema_of_json doctest #9 (result)
-      When query
-        """
-        SELECT schema_of_json('{"a": \'x\'}') AS r
-        """
-      Then query result
-        | r                 |
-        | STRUCT<a: STRING> |
-
-    Scenario: schema_of_json doctest #10 (result)
-      When query
-        """
-        SELECT schema_of_json('{\'a\': 1}') AS r
-        """
-      Then query result
-        | r                 |
-        | STRUCT<a: BIGINT> |
-
-    Scenario: schema_of_json doctest #11 (result)
-      When query
-        """
-        SELECT schema_of_json('{\'a\': \'it\\\'s\'}') AS r
-        """
-      Then query result
-        | r                 |
-        | STRUCT<a: STRING> |
-
-    Scenario: schema_of_json doctest #12 (result)
-      When query
-        """
-        SELECT schema_of_json('{\'a\': \'say "hi"\'}') AS r
-        """
-      Then query result
-        | r                 |
-        | STRUCT<a: STRING> |
-
-    Scenario: schema_of_json doctest #13 (result)
-      When query
-        """
-        SELECT schema_of_json('{"a": "it\'s"}') AS r
-        """
-      Then query result
-        | r                 |
-        | STRUCT<a: STRING> |
-
-    # Doctests #14 and #100 stay separate: their SQL contains backslashes, which
-    # a data-table cell would re-escape.
     Scenario Outline: Doctest error: <case>
       When query
         """
@@ -968,6 +924,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Examples:
         | case                               | args                                                  |
         | schema_of_json doctest #7 (error)  | '{"a": 1}', map('allowUnquotedFieldNames', 'yes')     |
+        | schema_of_json doctest #14 (error) | '{\\'a\\': 1}', map('allowSingleQuotes', 'false')    |
         | schema_of_json doctest #57 (error) | '{"a": 1.5E2}', map('prefersDecimal', 'true')         |
         | schema_of_json doctest #58 (error) | '{"a": 1E2}', map('prefersDecimal', 'true')           |
         | schema_of_json doctest #59 (error) | '{"a": 15E2}', map('prefersDecimal', 'true')          |
@@ -979,17 +936,4 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | schema_of_json doctest #97 (error) | '{<a: 1}', map('allowUnquotedFieldNames', 'true')     |
         | schema_of_json doctest #98 (error) | '{a<b: 1}', map('allowUnquotedFieldNames', 'true')    |
         | schema_of_json doctest #99 (error) | '{>a: 1}', map('allowUnquotedFieldNames', 'true')     |
-
-    Scenario: schema_of_json doctest #14 (error)
-      When query
-        """
-        SELECT schema_of_json('{\'a\': 1}', map('allowSingleQuotes', 'false')) AS r
-        """
-      Then query error (?i).*
-
-    Scenario: schema_of_json doctest #100 (error)
-      When query
-        """
-        SELECT schema_of_json('{\\a: 1}', map('allowUnquotedFieldNames', 'true')) AS r
-        """
-      Then query error (?i).*
+        | schema_of_json doctest #100 (error) | '{\\\\a: 1}', map('allowUnquotedFieldNames', 'true') |

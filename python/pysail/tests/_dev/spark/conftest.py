@@ -32,6 +32,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "function(group): categorize a function BDD scenario",
     )
+    config.addinivalue_line("markers", "sail-bug: known failure when running against Sail")
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing._dev.spark.steps.files")
     config.pluginmanager.import_plugin("pysail.testing._dev.spark.steps.sql")
@@ -43,6 +44,15 @@ def pytest_configure(config: pytest.Config) -> None:
 FUNCTION_TAG_PATTERN = re.compile(r"function\((.*)\)")
 FUNCTION_TAG_VALUES = ["nullability", "columnargs", "lambda", "sketch"]
 SPARK_TAG_PATTERN = re.compile(r"spark-(.*)")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # pytest-bdd applies Examples tags directly as marks, bypassing pytest_bdd_apply_tag.
+    sail_bug = pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+    for item in items:
+        if item.get_closest_marker("sail-bug") is not None:
+            item.add_marker(sail_bug)
 
 
 def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | None:
@@ -60,11 +70,6 @@ def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | No
 
     if tag == "skip-on-windows":
         pytest.mark.skipif(platform.system() == "Windows", reason="Not supported on Windows")(function)
-        return True
-
-    if tag == "sail-bug":
-        # We set `strict=True` so that outdated markers are reported as errors so that we can remove them timely.
-        pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)(function)
         return True
 
     if (m := SPARK_TAG_PATTERN.fullmatch(tag)) is not None:
