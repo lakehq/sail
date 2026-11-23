@@ -203,13 +203,12 @@ pub(super) async fn sample_listing_files<'a>(
         let mut has_direct_file = false;
         'roots: for url in roots {
             let start = objects.len();
-            let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
+            let mut files = if registered {
+                list_partition_files(url, store.as_ref(), None).await?
+            } else {
+                list_all_files(url, ctx, store.as_ref(), None).await?
+            };
             while let Some(file) = files.try_next().await? {
-                // A registered partition owns the files directly in its storage directory.
-                // Child directories can belong to other partitions or contain unregistered data.
-                if registered && !is_direct_input(url, &file.location) {
-                    continue;
-                }
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
                 let name = file.location.filename().unwrap_or_default();
                 let metadata_file = is_metadata_file(name);
@@ -402,6 +401,26 @@ fn keep_parquet_footer<'a>(
 pub(super) fn is_direct_input(url: &ListingTableUrl, path: &Path) -> bool {
     url.strip_prefix(path)
         .is_some_and(|mut parts| parts.nth(1).is_none())
+}
+
+/// List only direct children. Nested prefixes may belong to other registered partitions.
+pub(super) async fn list_partition_files<'a>(
+    url: &'a ListingTableUrl,
+    store: &dyn ObjectStore,
+    filter: Option<&'a PathGlobFilter>,
+) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+    let listing = store.list_with_delimiter(Some(url.prefix())).await?;
+    Ok(futures::stream::iter(
+        listing
+            .objects
+            .into_iter()
+            .filter(move |object| {
+                !has_hidden_path_component(url, &object.location)
+                    && matches_path_glob_filter(filter, &object.location)
+            })
+            .map(Ok),
+    )
+    .boxed())
 }
 
 pub async fn list_all_files<'a>(

@@ -3,10 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::provider_as_source;
-use datafusion_common::{ScalarValue, TableReference, plan_datafusion_err};
+use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::datasource::{
@@ -14,13 +13,10 @@ use sail_common_datafusion::datasource::{
     is_lakehouse_format,
 };
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_data_source::listing::cast_catalog_partition_value;
 use sail_data_source::parse_absolute_directory_url;
-use sail_function::scalar::conversion::cast_string_to_int32::parse_spark_legacy_string_to_i64;
-use sail_function::scalar::datetime::date::Date;
-use sail_function::scalar::datetime::timestamp::TimestampParser;
 use url::Position;
 
-use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -79,7 +75,14 @@ impl PlanResolver<'_> {
                 .values
                 .into_iter()
                 .zip(&fields)
-                .map(|(value, field)| cast_partition_value(value, field.data_type(), &self.config))
+                .map(|(value, field)| {
+                    cast_catalog_partition_value(
+                        value,
+                        field.data_type(),
+                        self.config.ansi_mode,
+                        &self.config.session_timezone,
+                    )
+                })
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
             groups
                 .entry((
@@ -134,47 +137,5 @@ impl PlanResolver<'_> {
         let plan = rename_logical_plan(plan, &names)?;
         state.register_missing_input_boundary(&plan);
         Ok(plan)
-    }
-}
-
-fn cast_partition_value(
-    value: String,
-    ty: &DataType,
-    config: &PlanConfig,
-) -> datafusion_common::Result<ScalarValue> {
-    if value == "__HIVE_DEFAULT_PARTITION__" {
-        return ScalarValue::try_from(ty);
-    }
-    let scalar = match ty {
-        DataType::Date32 => {
-            Date::string_to_date32(&value, !config.ansi_mode).map(ScalarValue::Date32)
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            let parser = match tz {
-                Some(_) => TimestampParser::Ltz {
-                    default_timezone: config.session_timezone.to_string(),
-                },
-                None => TimestampParser::Ntz,
-            };
-            parser
-                .parse_unformatted(&value)
-                .map(|micros| ScalarValue::TimestampMicrosecond(Some(micros), tz.clone()))
-        }
-        ty if ty.is_signed_integer() && !config.ansi_mode => {
-            ScalarValue::Int64(parse_spark_legacy_string_to_i64(&value)).cast_to(ty)
-        }
-        DataType::Boolean => match value.trim().to_ascii_lowercase().as_str() {
-            "t" | "true" | "y" | "yes" | "1" => Ok(ScalarValue::Boolean(Some(true))),
-            "f" | "false" | "n" | "no" | "0" => Ok(ScalarValue::Boolean(Some(false))),
-            _ => Err(plan_datafusion_err!(
-                "invalid boolean partition value: {value}"
-            )),
-        },
-        ty if ty.is_numeric() => ScalarValue::try_from_string(value.trim().to_owned(), ty),
-        _ => ScalarValue::try_from_string(value, ty),
-    };
-    match scalar {
-        Err(_) if !config.ansi_mode => ScalarValue::try_from(ty),
-        result => result,
     }
 }

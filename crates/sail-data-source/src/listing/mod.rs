@@ -9,3 +9,5 @@ pub mod source;
 pub mod table;
 pub mod utils;
 pub mod write;
+
+pub use partition::cast_catalog_partition_value;

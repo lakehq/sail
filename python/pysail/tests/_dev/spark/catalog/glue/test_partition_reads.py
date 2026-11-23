@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from decimal import Decimal
 from urllib.parse import unquote
 
 import boto3
@@ -107,5 +108,36 @@ def test_registered_partition_reads(spark, moto_endpoint, tmp_path):
             assert spark.table(table).where("label = 'legacy'").select("p", "day").collect() == [(None, None)]
         finally:
             spark.conf.set(ansi, previous)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_registered_decimal_with_nested_directory(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    root = tmp_path / "partition"
+    nested = root / "child"
+    nested.mkdir(parents=True)
+    (root / "data.json").write_text('{"id":1}')
+    (nested / "data.json").write_text('{"id":2}')
+    table = "test_db.registered_decimal_partition"
+    spark.sql(
+        f"CREATE TABLE {table} (id INT, p DECIMAL(6,2)) USING json PARTITIONED BY (p) LOCATION '{tmp_path.as_uri()}'"
+    )
+    try:
+        for value, path in [("1E+2", root), ("9.995E-1", nested)]:
+            glue.create_partition(
+                DatabaseName="test_db",
+                TableName="registered_decimal_partition",
+                PartitionInput={"Values": [value], "StorageDescriptor": {"Location": str(path)}},
+            )
+        assert spark.table(table).orderBy("id").collect() == [(1, Decimal("100.00")), (2, Decimal("1.00"))]
+        mode = nested.stat().st_mode
+        nested.chmod(0)
+        try:
+            parent = spark.table(table).where("p = 100")
+            assert parent.collect() == [(1, Decimal("100.00"))]
+            assert parent.inputFiles() == [(root / "data.json").as_uri()]
+        finally:
+            nested.chmod(mode)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

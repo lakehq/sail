@@ -6,9 +6,9 @@ use std::fmt::Write;
 use std::num::NonZeroU8;
 use std::sync::{Arc, LazyLock};
 
-use arrow::datatypes::Date32Type;
+use arrow::datatypes::{Date32Type, Decimal128Type, DecimalType};
 use arrow_schema::{DataType, Field, FieldRef, IntervalUnit, Schema, SchemaRef, TimeUnit};
-use bigdecimal::{BigDecimal, ToPrimitive};
+use bigdecimal::{BigDecimal, RoundingMode, ToPrimitive, Zero};
 use chrono::NaiveDate;
 use datafusion::catalog::Session;
 use datafusion_common::{
@@ -24,6 +24,8 @@ use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
+use sail_function::scalar::conversion::cast_string_to_int32::parse_spark_legacy_string_to_i64;
+use sail_function::scalar::datetime::date::Date;
 use sail_function::scalar::datetime::timestamp::TimestampParser;
 use sail_function::scalar::datetime::utils::parse_time_nanoseconds;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
@@ -575,6 +577,81 @@ impl PartitionDiscovery {
             })
             .collect()
     }
+}
+
+/// Cast a raw catalog value without interpreting file-path escapes.
+pub fn cast_catalog_partition_value(
+    value: String,
+    ty: &DataType,
+    ansi: bool,
+    session_timezone: &str,
+) -> Result<ScalarValue> {
+    if value == HIVE_NULL {
+        return ScalarValue::try_from(ty);
+    }
+    let scalar = match ty {
+        DataType::Date32 => Date::string_to_date32(&value, !ansi).map(ScalarValue::Date32),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let parser = match tz {
+                Some(_) => TimestampParser::Ltz {
+                    default_timezone: session_timezone.to_string(),
+                },
+                None => TimestampParser::Ntz,
+            };
+            parser
+                .parse_unformatted(&value)
+                .map(|micros| ScalarValue::TimestampMicrosecond(Some(micros), tz.clone()))
+        }
+        ty if ty.is_signed_integer() && !ansi => {
+            ScalarValue::Int64(parse_spark_legacy_string_to_i64(&value)).cast_to(ty)
+        }
+        DataType::Boolean => match value.trim().to_ascii_lowercase().as_str() {
+            "t" | "true" | "y" | "yes" | "1" => Ok(ScalarValue::Boolean(Some(true))),
+            "f" | "false" | "n" | "no" | "0" => Ok(ScalarValue::Boolean(Some(false))),
+            _ => Err(plan_datafusion_err!(
+                "invalid boolean partition value: {value}"
+            )),
+        },
+        DataType::Decimal128(precision, scale) => catalog_decimal(value.trim(), *precision, *scale),
+        DataType::Float32 | DataType::Float64 => match java_double(&value) {
+            Some(v) => ScalarValue::Float64(Some(v)).cast_to(ty),
+            None => ScalarValue::try_from_string(value.trim().to_owned(), ty),
+        },
+        ty if ty.is_numeric() => ScalarValue::try_from_string(value.trim().to_owned(), ty),
+        _ => ScalarValue::try_from_string(value, ty),
+    };
+    match scalar {
+        Err(_) if !ansi => ScalarValue::try_from(ty),
+        result => result,
+    }
+}
+
+fn catalog_decimal(value: &str, precision: u8, scale: i8) -> Result<ScalarValue> {
+    let invalid =
+        || plan_datafusion_err!("invalid DECIMAL({precision},{scale}) partition value: {value}");
+    // BigDecimal also accepts underscores, which are invalid in Spark decimal strings.
+    let decimal = value
+        .parse::<BigDecimal>()
+        .ok()
+        .filter(|_| !value.contains('_'))
+        .ok_or_else(invalid)?;
+    let digits_before_point =
+        i128::from(decimal.digits()) - i128::from(decimal.fractional_digit_count());
+    // Bound exponent expansion before rounding a scientific-notation value to the target scale.
+    let unscaled = if decimal.is_zero() || digits_before_point < -i128::from(scale) {
+        0
+    } else if digits_before_point > i128::from(precision) - i128::from(scale) {
+        return Err(invalid());
+    } else {
+        decimal
+            .with_scale_round(i64::from(scale), RoundingMode::HalfUp)
+            .into_bigint_and_exponent()
+            .0
+            .to_i128()
+            .ok_or_else(invalid)?
+    };
+    Decimal128Type::validate_decimal_precision(unscaled, precision, scale)?;
+    Ok(ScalarValue::Decimal128(Some(unscaled), precision, scale))
 }
 
 fn cast_partition_value(

@@ -26,12 +26,12 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{DFSchema, Statistics, internal_err, plan_err};
-use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
     FileScanConfig, output_partitioning_from_partition_fields,
 };
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_cache::scope::{scoped_listing_url, scoped_path};
@@ -47,7 +47,8 @@ use crate::listing::registered::prepare_registered_scan;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    has_hidden_path_component, is_direct_input, is_metadata_file, matches_path_glob_filter,
+    has_hidden_path_component, is_direct_input, is_metadata_file, list_partition_files,
+    matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -401,8 +402,8 @@ async fn list_files_for_scan<'a>(
         .filter(|_| !partition_fields.is_empty());
     let direct_only = source.config().direct_files_only();
     let registered = table_paths.iter().any(|(_, values)| values.is_some());
-    let partition_schema = (registered || base_path.is_some())
-        .then(|| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
+    let partition_schema = base_path
+        .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
         .transpose()?;
     // The listing helper inspects the boolean value bit. IS TRUE also tests validity.
     let predicate = datafusion_expr::utils::conjunction(filters.iter().cloned()).map(Expr::is_true);
@@ -416,6 +417,21 @@ async fn list_files_for_scan<'a>(
     };
     let file_list = future::try_join_all(table_paths.iter().map(
         |(table_path, registered_values)| async move {
+            if let Some(values) = registered_values {
+                let files = list_partition_files(table_path, store_ref, path_glob_filter)
+                    .await?
+                    .try_filter_map(move |object| async move {
+                        if object.location.filename().is_some_and(is_metadata_file) {
+                            return Ok(None);
+                        }
+                        let mut file = PartitionedFile::from(object)
+                            .with_table_reference(table_path.get_table_ref().clone());
+                        file.partition_values.clone_from(values);
+                        Ok(Some(file))
+                    })
+                    .boxed();
+                return Ok(files);
+            }
             let files = pruned_partition_list(
                 ctx,
                 store_ref,
@@ -438,8 +454,7 @@ async fn list_files_for_scan<'a>(
             let files = if let Some(schema) = partition_schema {
                 files
                     .try_filter_map(move |mut file| async move {
-                        let Some(values) = registered_values.or_else(|| {
-                            let dir = file.object_meta.location.parent()?;
+                        let Some(values) = file.object_meta.location.parent().and_then(|dir| {
                             base_path?.get(&qualified_partition_path(table_path, dir.as_ref()))
                         }) else {
                             return Ok(None);

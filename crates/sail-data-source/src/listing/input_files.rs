@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::listing::registered::prune_paths;
 use crate::listing::table::ListingTableSource;
-use crate::listing::utils::{is_direct_input, list_all_files};
+use crate::listing::utils::{is_direct_input, list_all_files, list_partition_files};
 
 /// Deduplicated, percent-encoded URIs of the files composing `plan` (Spark's `DataFrame.inputFiles`).
 pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<String>> {
@@ -44,7 +44,7 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     for config in &configs {
         let path_glob_filter = config.path_glob_filter.as_ref();
         let direct_only = config.direct_files_only();
-        for (table_path, _) in &config.table_paths {
+        for (table_path, values) in &config.table_paths {
             if !listed.insert((
                 table_path.as_str().to_string(),
                 path_glob_filter.map(|filter| filter.as_str().to_string()),
@@ -55,10 +55,13 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
             let store = ctx.runtime_env().object_store(table_path)?;
             let base = Url::parse(table_path.object_store().as_str())
                 .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;
-            let metas = list_all_files(table_path, &state, store.as_ref(), path_glob_filter)
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?;
+            let metas = if values.is_some() {
+                list_partition_files(table_path, store.as_ref(), path_glob_filter).await?
+            } else {
+                list_all_files(table_path, &state, store.as_ref(), path_glob_filter).await?
+            }
+            .try_collect::<Vec<_>>()
+            .await?;
             for meta in metas {
                 if direct_only && !is_direct_input(table_path, &meta.location) {
                     continue;
