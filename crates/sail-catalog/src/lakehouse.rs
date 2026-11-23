@@ -44,11 +44,18 @@ pub struct ResolveLakehouseTableRequest {
     pub options: Vec<(String, String)>,
 }
 
+/// Storage defaults for a table whose file partitions are registered in the catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct RegisteredFileTable {
+    pub read_options: Vec<(String, String)>,
+    /// The catalog identifies a file table even when its table-level reader is unavailable.
+    pub infer_reader_from_partitions: bool,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct LakehouseResolvedTable {
-    /// File reader defaults from the catalog storage descriptor.
     #[serde(default)]
-    pub file_read_options: Vec<(String, String)>,
+    pub registered_file_table: Option<RegisteredFileTable>,
     pub status: LakehouseStatusHints,
     pub execution: LakehouseExecutionContext,
     pub runtime: Option<LakehouseRuntimeAccess>,
@@ -226,7 +233,7 @@ pub fn resolve_lakehouse_table_status(
         scan,
     );
     LakehouseResolvedTable {
-        file_read_options: vec![],
+        registered_file_table: None,
         status: LakehouseStatusHints {
             lifecycle,
             format,
@@ -302,7 +309,7 @@ pub fn plan_lakehouse_create_from_requirement(
 
     LakehouseCreatePlan {
         table: LakehouseResolvedTable {
-            file_read_options: vec![],
+            registered_file_table: None,
             status: LakehouseStatusHints {
                 lifecycle,
                 format,

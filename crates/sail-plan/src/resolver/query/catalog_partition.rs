@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource, Union};
-use sail_catalog::hive_format::HiveStorageFormat;
+use sail_catalog::lakehouse::RegisteredFileTable;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::datasource::{
     DataSourceRegistry, OptionLayer, RegisteredPartition, SourceInfo,
@@ -27,26 +27,30 @@ impl PlanResolver<'_> {
         registry: &DataSourceRegistry,
         reference: &[String],
         format: &str,
-        file_read_options: Vec<(String, String)>,
+        registered: Option<RegisteredFileTable>,
         info: SourceInfo,
     ) -> PlanResult<Vec<Arc<dyn TableSource>>> {
         // A registered non-file provider owns its reads. An unsupported Hive file format
         // can still have readable partitions with explicit storage descriptors.
         let provider = registry.get_data_source_if_registered(format)?;
         let format = provider.as_ref().map_or(format, |source| source.name());
-        let partitions = if !info.partition_by.is_empty()
-            && provider.as_ref().map_or_else(
-                || HiveStorageFormat::from_format(format).is_ok(),
-                |s| s.supports_registered_partitions(),
-            ) {
-            manager
-                .file_partitions_for_scan(reference, info.partition_by.len())
+        let registered = registered.filter(|table| {
+            !info.partition_by.is_empty()
+                && provider
+                    .as_ref()
+                    .map_or(table.infer_reader_from_partitions, |s| {
+                        s.supports_registered_partitions()
+                    })
+        });
+        let listing = match registered {
+            Some(table) => manager
+                .list_file_partitions(reference, &vec![None; info.partition_by.len()])
                 .await?
-        } else {
-            None
+                .map(|partitions| (partitions, table.read_options)),
+            None => None,
         };
         let ctx = self.ctx.state();
-        let Some(partitions) = partitions else {
+        let Some((partitions, file_read_options)) = listing else {
             return Ok(vec![
                 registry
                     .get_data_source(format)?

@@ -288,3 +288,36 @@ def test_registered_json_provider_alias(spark, moto_endpoint, tmp_path):
         assert spark.table(f"test_db.{name}").collect() == [(42, 3)]
     finally:
         glue.delete_table(DatabaseName="test_db", Name=name)
+
+
+def test_registered_partition_supplies_format(spark, moto_endpoint, tmp_path):
+    glue = boto3.client("glue", region_name="us-east-1", endpoint_url=moto_endpoint)
+    name = "registered_partition_supplies_format"
+    path = tmp_path / "partition"
+    path.mkdir()
+    pq.write_table(pa.table({"id": [42]}), path / "data.parquet")
+    glue.create_table(
+        DatabaseName="test_db",
+        TableInput={
+            "Name": name,
+            "TableType": "EXTERNAL_TABLE",
+            "StorageDescriptor": {"Columns": [{"Name": "id", "Type": "bigint"}], "Location": str(tmp_path)},
+            "PartitionKeys": [{"Name": "p", "Type": "float"}],
+        },
+    )
+    try:
+        glue.create_partition(
+            DatabaseName="test_db",
+            TableName=name,
+            PartitionInput={
+                "Values": ["1.0000000596046448"],
+                "StorageDescriptor": {
+                    "Location": str(path),
+                    "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+                },
+            },
+        )
+        # This value rounds up when parsed directly to FLOAT. Narrowing a DOUBLE rounds it down.
+        assert spark.table(f"test_db.{name}").where("p > 1.0").collect() == [(42, 1.0 + 2**-23)]
+    finally:
+        glue.delete_table(DatabaseName="test_db", Name=name)

@@ -12,7 +12,8 @@ use aws_sdk_glue::types::{
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
 use sail_catalog::lakehouse::{
-    LakehouseResolvedTable, ResolveLakehouseTableRequest, resolve_lakehouse_table_status,
+    LakehouseResolvedTable, RegisteredFileTable, ResolveLakehouseTableRequest,
+    resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
@@ -740,10 +741,6 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
-    fn uses_registered_file_partitions(&self) -> bool {
-        true
-    }
-
     async fn list_file_partitions(
         &self,
         database: &Namespace,
@@ -834,8 +831,13 @@ impl CatalogProvider for GlueCatalogProvider {
             request.operation,
             &self.lakehouse_capabilities(),
         );
-        if !table.partition_keys().is_empty() {
-            resolved.file_read_options = csv_read_options(table.storage_descriptor());
+        if !table.partition_keys().is_empty() && !iceberg::is_iceberg_parameters(table.parameters())
+        {
+            resolved.registered_file_table = Some(RegisteredFileTable {
+                read_options: csv_read_options(table.storage_descriptor()),
+                infer_reader_from_partitions: table_provider_format(table.parameters())
+                    .is_none_or(|provider| HiveStorageFormat::from_format(&provider).is_ok()),
+            });
         }
         Ok((status, resolved))
     }

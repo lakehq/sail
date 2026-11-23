@@ -407,10 +407,6 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             .await
     }
 
-    fn uses_registered_file_partitions(&self) -> bool {
-        self.inner.uses_registered_file_partitions()
-    }
-
     async fn list_file_partitions(
         &self,
         database: &Namespace,

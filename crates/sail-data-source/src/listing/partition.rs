@@ -267,13 +267,17 @@ fn decoded(value: &str) -> Cow<'_, str> {
     Cow::Owned(result)
 }
 
-fn java_double(value: &str) -> Option<f64> {
-    // Double.parseDouble accepts ASCII whitespace, numeric suffixes, and C99 hex floats.
+fn java_float<F>(value: &str) -> Option<F>
+where
+    F: std::str::FromStr
+        + std::ops::Neg<Output = F>
+        + lexical_core::FromLexicalWithOptions<Options = lexical_core::ParseFloatOptions>,
+{
+    // Java floating-point parsers accept ASCII whitespace, numeric suffixes, and C99 hex floats.
     let value = value.trim_matches(|c| c <= ' ');
     let unsigned = value.strip_prefix(['+', '-']).unwrap_or(value);
     let number = match unsigned {
-        "Infinity" => f64::INFINITY,
-        "NaN" => f64::NAN,
+        "Infinity" | "NaN" => unsigned.parse::<F>().ok()?,
         _ => {
             let literal = unsigned
                 .strip_suffix(['d', 'D', 'f', 'F'])
@@ -282,7 +286,7 @@ fn java_double(value: &str) -> Option<f64> {
                 .strip_prefix("0x")
                 .or_else(|| literal.strip_prefix("0X"))
             {
-                hex_double(hex)?
+                hex_float::<F>(hex)?
             } else {
                 if !literal.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
                     return None;
@@ -298,7 +302,9 @@ fn java_double(value: &str) -> Option<f64> {
     })
 }
 
-fn hex_double(hex: &str) -> Option<f64> {
+fn hex_float<F: lexical_core::FromLexicalWithOptions<Options = lexical_core::ParseFloatOptions>>(
+    hex: &str,
+) -> Option<F> {
     // A Java hex float uses a binary exponent. Express its significand in binary too,
     // so lexical can round the entire value once, including subnormal values.
     const FORMAT: u128 = lexical_core::NumberFormatBuilder::new()
@@ -318,7 +324,7 @@ fn hex_double(hex: &str) -> Option<f64> {
     }
     binary.push('p');
     binary.push_str(exponent);
-    lexical_core::parse_with_options::<f64, FORMAT>(
+    lexical_core::parse_with_options::<F, FORMAT>(
         binary.as_bytes(),
         &lexical_core::parse_float_options::HEX_FLOAT,
     )
@@ -409,7 +415,7 @@ fn infer_partition_type(
     } else if let Some(decimal @ ScalarValue::Decimal128(_, _, 0)) = partition_decimal(&normalized)
     {
         decimal.data_type()
-    } else if java_double(value).is_some() {
+    } else if java_float::<f64>(value).is_some() {
         DataType::Float64
     } else if PARTITION_DATETIME.is_match(value) && value.parse::<NaiveDate>().is_ok() {
         DataType::Date32
@@ -613,8 +619,12 @@ pub fn cast_catalog_partition_value(
             )),
         },
         DataType::Decimal128(precision, scale) => catalog_decimal(value.trim(), *precision, *scale),
-        DataType::Float32 | DataType::Float64 => match java_double(&value) {
-            Some(v) => ScalarValue::Float64(Some(v)).cast_to(ty),
+        DataType::Float32 => match java_float::<f32>(&value) {
+            Some(v) => Ok(ScalarValue::Float32(Some(v))),
+            None => ScalarValue::try_from_string(value.trim().to_owned(), ty),
+        },
+        DataType::Float64 => match java_float::<f64>(&value) {
+            Some(v) => Ok(ScalarValue::Float64(Some(v))),
             None => ScalarValue::try_from_string(value.trim().to_owned(), ty),
         },
         ty if ty.is_numeric() => ScalarValue::try_from_string(value.trim().to_owned(), ty),
@@ -690,7 +700,7 @@ fn parse_partition_value(
     let ty = field.data_type();
     match ty {
         DataType::Float32 | DataType::Float64 => {
-            let number = java_double(value).ok_or_else(|| {
+            let number = java_float::<f64>(value).ok_or_else(|| {
                 plan_datafusion_err!("invalid floating-point partition value: {value}")
             })?;
             ScalarValue::Float64(Some(number)).cast_to(ty)
