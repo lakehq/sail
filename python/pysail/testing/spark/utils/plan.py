@@ -116,11 +116,12 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # Normalize Sail Parquet filenames: part-<partition>-<UUID>-c<counter>[.<codec>].parquet
+    # Normalize Sail Parquet filenames: part-<partition>-<UUID>-c<counter>[.<codec>].parquet,
+    # with a dot in place of the hyphen before the counter for a file in a partition directory.
     # Preserve the partition number and the counter so multi-file plans stay distinguishable.
     text = re.sub(
-        r"part-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c(\d+)((?:\.[a-z0-9]+)?\.parquet)",
-        r"part-\1-<uuid>-c\2\3",
+        r"part-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}([-.])c(\d+)((?:\.[a-z0-9]+)?\.parquet)",
+        r"part-\1-<uuid>\2c\3\4",
         text,
     )
     # Normalize Sail default CSV filenames: <16-char random>_<partition>.csv.

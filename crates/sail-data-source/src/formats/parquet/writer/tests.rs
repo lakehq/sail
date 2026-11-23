@@ -1924,7 +1924,7 @@ async fn test_partition_columns_are_not_written() -> Result<()> {
     let task = partition_task(Arc::clone(&store), 4, &["b", "a"]);
     let manifest = run_task(task, &schema, batches).await?;
     let files = list_files(store.as_ref()).await?;
-    let name = |directory: &str| format!("table/{directory}/part-00004-{WRITE_ID}-c000.parquet");
+    let name = |directory: &str| format!("table/{directory}/part-00004-{WRITE_ID}.c000.parquet");
     assert_eq!(
         files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
         vec![
@@ -1962,7 +1962,7 @@ async fn test_partition_single_value_batch() -> Result<()> {
     let batch = partitioned_batch(&[(1, 7, "x"), (2, 7, "x"), (3, 7, "x")])?;
     let task = partition_task(Arc::clone(&store), 0, &["a", "b"]);
     let manifest = run_task(task, &schema, vec![batch.clone()]).await?;
-    let name = format!("table/a=7/b=x/part-00000-{WRITE_ID}-c000.parquet");
+    let name = format!("table/a=7/b=x/part-00000-{WRITE_ID}.c000.parquet");
     let files = list_files(store.as_ref()).await?;
     assert_eq!(
         manifest_rows(&manifest)?,
@@ -2122,7 +2122,7 @@ async fn test_partition_null_and_empty_string_are_in_default_partition() -> Resu
     // The rows without a value are not in the directory of the value 0, and the rows
     // without a value and with the empty string are in the same file.
     let default = "__HIVE_DEFAULT_PARTITION__";
-    let name = format!("part-00000-{WRITE_ID}-c000.parquet");
+    let name = format!("part-00000-{WRITE_ID}.c000.parquet");
     assert_eq!(
         rows,
         vec![
@@ -2157,7 +2157,7 @@ async fn test_partition_open_file_limit() -> Result<()> {
     let manifest = run_task(task, &schema, batches.clone()).await?;
     let files = list_files(store.as_ref()).await?;
     // No file is completed to make room for another one, so each directory has one file.
-    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}.c000.parquet");
     let mut rows = manifest_rows(&manifest)?;
     rows.sort();
     assert_eq!(
@@ -2400,7 +2400,7 @@ async fn test_partition_clustered_input_with_repeated_key() -> Result<()> {
     }
     // The second file of the directory does not replace the first file.
     let name = |directory: &str, counter: usize| {
-        format!("table/p={directory}/part-00000-{WRITE_ID}-c{counter:03}.parquet")
+        format!("table/p={directory}/part-00000-{WRITE_ID}.c{counter:03}.parquet")
     };
     assert_eq!(
         rows,
@@ -2899,9 +2899,9 @@ async fn test_partition_row_limit_starts_new_file() -> Result<()> {
     assert_eq!(
         files.iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
         vec![
-            format!("table/a=1/part-00000-{WRITE_ID}-c000.parquet"),
-            format!("table/a=1/part-00000-{WRITE_ID}-c001.parquet"),
-            format!("table/a=2/part-00000-{WRITE_ID}-c000.parquet"),
+            format!("table/a=1/part-00000-{WRITE_ID}.c000.parquet"),
+            format!("table/a=1/part-00000-{WRITE_ID}.c001.parquet"),
+            format!("table/a=2/part-00000-{WRITE_ID}.c000.parquet"),
         ]
     );
     Ok(())
@@ -3681,7 +3681,7 @@ async fn test_rows_require_column_in_files() -> Result<()> {
     assert_eq!(count_value(&output)?, vec![3]);
     let files = list_files(store.as_ref()).await?;
     let files: Vec<_> = files.iter().map(|(path, _)| path.as_str()).collect();
-    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}.c000.parquet");
     assert_eq!(files, vec!["table/_SUCCESS", &name(0), &name(1), &name(2)]);
     Ok(())
 }
@@ -3817,7 +3817,7 @@ async fn test_write_plan_passes_task_limits() -> Result<()> {
         partitioned_batch(&[(2, 2, "x")])?,
         partitioned_batch(&[(3, 1, "x")])?,
     ];
-    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}-c000.parquet");
+    let name = |a: i32| format!("table/a={a}/part-00000-{WRITE_ID}.c000.parquet");
     let expected = vec![name(1), name(2)];
     // The row of `a=2` is sorted when one directory can be open.
     for (max_open_files, rows_sorted) in [(1, 1), (2, 0)] {
@@ -4816,7 +4816,7 @@ async fn test_jobs_with_row_limit_and_partitions() -> Result<()> {
     // Each directory has 2500 rows, and the row limit applies to
     // the files of each directory.
     let name =
-        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}-c{counter:03}.parquet");
+        |a: i32, counter: usize| format!("table/a={a}/part-00000-{WRITE_ID}.c{counter:03}.parquet");
     assert_eq!(
         manifest,
         vec![

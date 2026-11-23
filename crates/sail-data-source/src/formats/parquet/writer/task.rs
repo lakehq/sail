@@ -236,6 +236,8 @@ pub(super) struct FileFactory {
     partition: usize,
     file_suffix: String,
     schema: SchemaRef,
+    /// Whether the files are in partition directories.
+    partitioned: bool,
     props: WriterProperties,
     skip_arrow_metadata: bool,
     buffer_size: usize,
@@ -284,6 +286,7 @@ impl FileFactory {
             partition: task.partition,
             file_suffix: task.file_suffix,
             schema,
+            partitioned: !task.partition_columns.is_empty(),
             props: builder.build(),
             skip_arrow_metadata,
             buffer_size: task.buffer_size,
@@ -295,7 +298,13 @@ impl FileFactory {
 
     fn create(&self, directory: &Path, counter: u32) -> Result<ParquetFileWriter> {
         let files = &self.files;
-        let name = part_file_name(self.partition, &files.write_id, counter, &self.file_suffix);
+        let name = part_file_name(
+            self.partition,
+            &files.write_id,
+            counter,
+            &self.file_suffix,
+            self.partitioned,
+        );
         let location = directory.clone().join(name);
         let upload = files.publisher.upload(
             &files.table_path,

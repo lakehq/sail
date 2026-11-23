@@ -10,8 +10,9 @@ from pyspark.sql import functions as F  # noqa: N812
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# A file in a partition directory has a dot before its counter, as it has for Spark.
 _PART_FILE_RE = re.compile(
-    rf"^part-(?P<partition>\d{{5,}})-(?P<uuid>{_UUID})-c(?P<counter>\d{{3}})(?:\.[a-z0-9]+)?\.parquet$"
+    rf"^part-(?P<partition>\d{{5,}})-(?P<uuid>{_UUID})[-.]c(?P<counter>\d{{3}})(?:\.[a-z0-9]+)?\.parquet$"
 )
 
 
@@ -118,6 +119,7 @@ def test_parquet_partitioned_write_layout(spark, tmp_path):
     df.write.partitionBy("k").parquet(str(path))
     files = data_files(path)
     assert {str(f.parent) for f in files} == {"k=0", "k=1"}
+    assert all(re.fullmatch(rf"part-\d{{5}}-{_UUID}\.c000(\.[a-z0-9]+)?\.parquet", f.name) for f in files), files
     assert len(write_ids(path)) == 1
     assert_success_marker(path)
     # The schema gives the type of the partition column, which is otherwise read as a string.
