@@ -75,7 +75,7 @@ use sail_physical_plan::key_distribution::KeyDistributionExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use uuid::Uuid;
 
-use crate::formats::parquet::writer::encoder::logical_size;
+use crate::formats::parquet::writer::encoder::{logical_size, row_group_byte_limit};
 use crate::formats::parquet::writer::exec::ParquetWriteExec;
 use crate::formats::parquet::writer::file::{MAX_UPLOAD_CONCURRENCY, ParquetFileWriter};
 use crate::formats::parquet::writer::resources::{EncodeBudget, EncodeResources};
@@ -5572,6 +5572,34 @@ async fn test_small_batches_with_dictionaries_of_their_own_are_written() -> Resu
         assert!(nested == expected);
     }
     Ok(())
+}
+
+#[test]
+fn test_row_group_byte_limit_follows_the_largest_column() {
+    const MB: usize = 1024 * 1024;
+    // The file has not received rows, so only the limit on a row group applies.
+    assert_eq!(row_group_byte_limit(usize::MAX, 128 * MB, 0, 0), usize::MAX);
+    assert_eq!(row_group_byte_limit(7, 128 * MB, 0, 0), 7);
+    // One column has all values: a row group has the limit on a column.
+    assert_eq!(
+        row_group_byte_limit(usize::MAX, 128 * MB, 500, 500),
+        128 * MB
+    );
+    // The largest of many columns has a tenth of the values.
+    assert_eq!(
+        row_group_byte_limit(usize::MAX, 128 * MB, 5000, 500),
+        1280 * MB
+    );
+    // The smaller of the two limits applies.
+    assert_eq!(
+        row_group_byte_limit(256 * MB, 128 * MB, 5000, 500),
+        256 * MB
+    );
+    assert_eq!(row_group_byte_limit(64 * MB, usize::MAX, 500, 500), 64 * MB);
+    assert_eq!(
+        row_group_byte_limit(usize::MAX, usize::MAX, 5000, 500),
+        usize::MAX
+    );
 }
 
 #[test]

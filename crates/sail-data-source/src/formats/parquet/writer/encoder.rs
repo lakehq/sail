@@ -47,11 +47,22 @@ const UPLOAD_THRESHOLD: usize = 1024 * 1024;
 /// 1.8 times the memory.
 const TIME_SLICE: Duration = Duration::from_millis(10);
 
-/// The size of the values of a row group at which the row group ends when
-/// the options of the write do not limit the size of a row group.
+/// The size of the values of the largest column of a row group at which
+/// the row group ends when the options of the write do not limit the size
+/// of a row group.
 ///
-/// PROVISIONAL: see the measurements in the log of this change.
-const ROW_GROUP_BYTES: usize = 128 * 1024 * 1024;
+/// The values of a column of a row group are encoded by one thread at
+/// a time, so a file whose rows are mostly in one column is encoded by as
+/// many threads as it has row groups that are not complete. Measured with
+/// 2 million rows of one string of 1 KiB that were written to one file:
+/// 2.61 s without a limit, where a row group has 1 GiB, 1.84 s with 512 MiB,
+/// 1.58 s with 256 MiB, 1.06 s with 128 MiB, and 0.95 s with 64 MiB.
+/// The limit is on the largest column and not on the row group, since a row
+/// group with fewer rows costs a table with many columns: with a limit of
+/// 128 MiB on the row group, 10 million rows of 121 columns took 2.76 s
+/// for a file of 4,281 MB, and 1.64 s for a file of 3,213 MB without it.
+/// This is also the size at which Spark ends a row group.
+const COLUMN_CHUNK_BYTES: usize = 128 * 1024 * 1024;
 
 /// The number of rows below which a batch is combined with the batches after it
 /// before its rows are encoded or kept for the jobs.
@@ -137,6 +148,12 @@ pub(super) struct ColumnEncoder {
     slab_bytes: usize,
     /// The largest size of the values of a row group before they are encoded.
     max_row_group_bytes: usize,
+    /// The largest size of the values of a column of a row group before they
+    /// are encoded.
+    max_column_chunk_bytes: usize,
+    /// The size of the values of each top-level column that the file has
+    /// received, without the batches of few rows that are not combined.
+    input_column_bytes: Vec<u64>,
     /// The size of the values of the row group that receives rows,
     /// without the batches of few rows that are not combined.
     row_group_bytes: usize,
@@ -312,7 +329,12 @@ impl ColumnEncoder {
         resources: Arc<EncodeResources>,
     ) -> Result<Self> {
         let max_row_group_row_count = props.max_row_group_row_count().unwrap_or(usize::MAX);
-        let max_row_group_bytes = props.max_row_group_bytes().unwrap_or(ROW_GROUP_BYTES);
+        // The size of a row group is limited by the size of its largest column
+        // when the options do not limit the size of the row group as a whole.
+        let (max_row_group_bytes, max_column_chunk_bytes) = match props.max_row_group_bytes() {
+            Some(bytes) => (bytes, usize::MAX),
+            None => (usize::MAX, COLUMN_CHUNK_BYTES),
+        };
         let buffer = SharedBuffer::new(UPLOAD_THRESHOLD);
         let options = ArrowWriterOptions::new()
             .with_properties(props)
@@ -328,6 +350,7 @@ impl ColumnEncoder {
             }
         }
         let slab_bytes = resources.slab_bytes(schema.fields().len());
+        let input_column_bytes = vec![0; schema.fields().len()];
         let combines_small = !schema
             .fields()
             .iter()
@@ -350,6 +373,8 @@ impl ColumnEncoder {
             max_row_group_row_count: max_row_group_row_count.max(1),
             slab_bytes,
             max_row_group_bytes: max_row_group_bytes.max(1),
+            max_column_chunk_bytes,
+            input_column_bytes,
             row_group_bytes: 0,
             leaf_counts,
             input_bytes: 0,
@@ -527,8 +552,14 @@ impl ColumnEncoder {
 
     /// The size of the values that the row group that receives rows can still take.
     fn row_group_byte_room(&self) -> usize {
-        self.max_row_group_bytes
-            .saturating_sub(self.row_group_bytes + self.small.bytes)
+        let largest = self.input_column_bytes.iter().copied().max().unwrap_or(0);
+        row_group_byte_limit(
+            self.max_row_group_bytes,
+            self.max_column_chunk_bytes,
+            self.input_bytes,
+            largest,
+        )
+        .saturating_sub(self.row_group_bytes + self.small.bytes)
     }
 
     /// The number of rows that the row group that receives rows has.
@@ -541,6 +572,9 @@ impl ColumnEncoder {
         let bytes: usize = column_bytes.iter().sum();
         self.input_bytes += bytes as u64;
         self.input_rows += piece.num_rows() as u64;
+        for (total, bytes) in self.input_column_bytes.iter_mut().zip(&column_bytes) {
+            *total += *bytes as u64;
+        }
         self.row_group_bytes += bytes;
         loop {
             if let Some(charge) = self.resources.try_charge(bytes) {
@@ -944,6 +978,30 @@ async fn encode_column(
     report(0);
     drop(charge);
     Ok(ColumnOutput::Closed(chunks, encoded))
+}
+
+/// The largest size of the values of a row group, given the limit on the size
+/// of a row group, the limit on the size of its largest column, and the size
+/// of the values that the file has received in all columns and in its largest
+/// column.
+///
+/// The largest column of a row group is expected to have the share of
+/// the values that it has had in the file so far, so the limit on a column
+/// is a limit on the row group that is larger by that share. A table with
+/// one column of long values has row groups of about the limit on a column,
+/// and a table with many columns of similar size has row groups of that
+/// limit for each column.
+pub(super) fn row_group_byte_limit(
+    max_row_group_bytes: usize,
+    max_column_chunk_bytes: usize,
+    input_bytes: u64,
+    largest_column_bytes: u64,
+) -> usize {
+    if largest_column_bytes == 0 {
+        return max_row_group_bytes;
+    }
+    let limit = max_column_chunk_bytes as u128 * input_bytes as u128 / largest_column_bytes as u128;
+    max_row_group_bytes.min(usize::try_from(limit).unwrap_or(usize::MAX))
 }
 
 /// The size of the values of each column of the batch.

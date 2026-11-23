@@ -576,7 +576,8 @@
     so a row group in a file is usually smaller than this.
     The writer ends a row group when either this limit or `max_row_group_size` is reached,
     whichever comes first.
-    If the value is `0`, the limit is 134217728 bytes (128 MiB).
+    If the value is `0`, the writer ends a row group when the values of its largest column
+    have about 134217728 bytes (128 MiB), whatever the size of the other columns.
     With content-defined chunking, the limit applies to the size of the encoded values instead,
     and the value `0` means that only the row count limit applies.
     Defaults to the Sail configuration option `parquet.max_row_group_bytes`.
