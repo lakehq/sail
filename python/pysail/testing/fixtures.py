@@ -3,6 +3,7 @@
 import importlib
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -30,8 +31,9 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     # Older supported PySpark clients use these deprecated APIs internally.
     for warning in (
+        r"ignore:The distutils package is deprecated:DeprecationWarning:pyspark\.sql\.pandas\.utils$",
         r"ignore:is_categorical_dtype is deprecated:DeprecationWarning:pyspark\.sql\.pandas\.serializers$",
-        r"ignore:is_datetime64tz_dtype is deprecated:DeprecationWarning:pyspark\.sql\.pandas\.types$",
+        r"ignore:is_datetime64tz_dtype is deprecated:DeprecationWarning:pyspark\.sql\.(pandas\.types|connect\.session)$",
         r"ignore:The 'warn' method is deprecated:DeprecationWarning:pyspark\.logger\.logger$",
     ):
         config.addinivalue_line("filterwarnings", warning)
@@ -45,6 +47,19 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report():
+    # With --pyargs, pytest can load this plugin after it applies its collection warning filters.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="The distutils package is deprecated",
+            category=DeprecationWarning,
+            module=r"pyspark\.sql\.pandas\.utils$",
+        )
+        return (yield)
 
 
 @pytest.fixture(scope="session", autouse=True)
