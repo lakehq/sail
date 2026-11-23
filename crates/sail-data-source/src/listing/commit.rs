@@ -636,6 +636,39 @@ async fn read_manifests(
     }
 }
 
+/// The end of the commit that receives what [`read_manifests`] has read.
+///
+/// The commit can be canceled when the manifests are sent and not yet
+/// received. Their staged files have no owner then, so they are removed
+/// when this is dropped.
+struct ManifestsReceiver {
+    receiver: oneshot::Receiver<Result<Received>>,
+    publisher: Publisher,
+}
+
+impl Drop for ManifestsReceiver {
+    fn drop(&mut self) {
+        // Manifests that are sent after this are removed by their sender.
+        self.receiver.close();
+        let Ok(Ok(Received::Complete(received))) = self.receiver.try_recv() else {
+            return;
+        };
+        if received.files.is_empty() {
+            return;
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                let publisher = self.publisher.clone();
+                runtime.spawn(async move { publisher.abort_all(&received.files).await });
+            }
+            Err(e) => log::warn!(
+                "{} staged files of a write that is canceled are not removed: {e}",
+                received.files.len()
+            ),
+        }
+    }
+}
+
 /// The work of the commit of a write.
 struct WriteCommit {
     publisher: Publisher,
@@ -677,10 +710,14 @@ impl WriteCommit {
             cancel.clone(),
             sender,
         ));
+        let mut manifests = ManifestsReceiver {
+            receiver: manifests,
+            publisher: self.publisher.clone(),
+        };
         let cancel = cancel.drop_guard();
         Ok(async move {
             let _cancel = cancel;
-            let received = match manifests.await {
+            let received = match (&mut manifests.receiver).await {
                 Ok(received) => received?,
                 Err(_) => return internal_err!("the manifests of the write were not read"),
             };
@@ -1754,6 +1791,29 @@ mod tests {
             drop(write.commit_future(manifests, false));
             write.store.wait_for(&["table/old.parquet"]).await?;
             assert_eq!(write.store.count(mode.publish_request()), 0);
+        }
+        Ok(())
+    }
+
+    /// The manifests are read, and the commit is canceled before it has
+    /// received them.
+    #[tokio::test]
+    async fn test_canceled_commit_removes_files_of_manifests_that_it_has_not_received() -> Result<()>
+    {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let b = write.stage("table/b.parquet").await?;
+            let manifests = vec![manifest(0, 2, &[&a]), manifest(1, 2, &[&b])];
+            let commit = write.commit_future(manifests, false);
+            // The input is read to its end while the commit is not polled.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(write.requests(), Vec::<String>::new());
+            drop(commit);
+            write.store.wait_for(&["table/old.parquet"]).await?;
+            assert_eq!(write.store.count(mode.publish_request()), 0);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
         }
         Ok(())
     }
