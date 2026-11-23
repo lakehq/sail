@@ -3,6 +3,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use datafusion::arrow::array::{
@@ -20,7 +21,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err, internal_err};
-use futures::{StreamExt, TryStreamExt, future, stream};
+use futures::{FutureExt, StreamExt, TryStreamExt, future, stream};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use sail_common_datafusion::error::CommitStateUnknownError;
@@ -567,14 +568,39 @@ async fn read_manifests(
     let mut result = Ok(());
     // The input is read after an error as well, since the manifests of
     // the writer tasks that have ended can follow the error of another task.
-    while let Some(manifest) = input.next().await {
-        let added = manifest.and_then(|manifest| manifests.add(&manifest, &mut files));
+    // A writer task that runs in this process can panic while the input is
+    // read. The panic is the error of the write then, and the input is not
+    // read again.
+    loop {
+        let next = AssertUnwindSafe(input.next()).catch_unwind().await;
+        let panicked = next.is_err();
+        let added = match next {
+            Ok(Some(manifest)) => {
+                manifest.and_then(|manifest| manifests.add(&manifest, &mut files))
+            }
+            Ok(None) => break,
+            Err(panic) => {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|x| x.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                internal_err!("a writer task of the write has panicked: {message}")
+            }
+        };
         if added.is_err() && result.is_ok() {
             cancel.cancel();
             result = added;
         }
+        if panicked {
+            break;
+        }
     }
-    drop(input);
+    if std::panic::catch_unwind(AssertUnwindSafe(|| drop(input))).is_err() {
+        log::warn!(
+            "the input of the commit of the write {write_id} has panicked when it was dropped"
+        );
+    }
     let remove = |files: Vec<StagedFile>| async move {
         if !files.is_empty() {
             log::warn!(
@@ -1175,7 +1201,6 @@ impl ExecutionPlan for FileWriteCommitExec {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::FutureExt;
     use futures::future::BoxFuture;
     use futures::stream::BoxStream;
 
@@ -1656,6 +1681,33 @@ mod tests {
                     write.abort_request("table/a.parquet"),
                     write.abort_request("table/b.parquet"),
                 ]
+            );
+            assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
+            assert_eq!(write.store.open_uploads(), Vec::<String>::new());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic)]
+    async fn test_commit_reports_the_panic_of_a_writer_task() -> Result<()> {
+        for mode in Mode::ALL {
+            let write = TestWrite::new(mode);
+            write.put("table/old.parquet").await?;
+            let a = write.stage("table/a.parquet").await?;
+            let a = manifest(0, 2, &[&a]);
+            let panic = stream::poll_fn(|_| -> std::task::Poll<Option<Result<RecordBatch>>> {
+                std::panic::panic_any("writer panic".to_string())
+            });
+            let manifests = stream::iter(vec![a]).chain(panic).boxed();
+            let result = write.commit_stream(manifests, true).await;
+            assert!(
+                matches!(&result, Err(DataFusionError::Internal(e)) if e.contains("has panicked: writer panic")),
+                "{result:?}"
+            );
+            assert_eq!(
+                write.requests(),
+                vec![write.abort_request("table/a.parquet")]
             );
             assert_eq!(write.store.objects().await?, vec!["table/old.parquet"]);
             assert_eq!(write.store.open_uploads(), Vec::<String>::new());
