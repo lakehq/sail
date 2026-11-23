@@ -101,3 +101,19 @@ pub fn task_context_with_extension<T: Send + Sync + 'static>(
         context.runtime_env(),
     ))
 }
+
+/// The number of the attempt of the task that a plan is executed for, starting at 0.
+///
+/// A job runner that can attempt a task again puts this in the session configuration
+/// of the task context of each attempt. A plan that is executed in another way is
+/// attempted once and does not have it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskAttempt(pub usize);
+
+impl TaskAttempt {
+    /// Returns the number of the attempt of the task that the task context is for.
+    pub fn of(context: &TaskContext) -> Option<usize> {
+        let attempt = context.session_config().get_extension::<Self>()?;
+        Some(attempt.0)
+    }
+}

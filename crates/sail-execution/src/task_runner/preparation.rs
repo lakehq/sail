@@ -17,6 +17,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use sail_common::actor::ActorHandle;
+use sail_common_datafusion::extension::{TaskAttempt, task_context_with_extension};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
@@ -58,6 +59,8 @@ impl TaskPreparation {
         canceled: &CancellationToken,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
+        // The plan can tell the attempts of its task apart.
+        let context = task_context_with_extension(&context, Arc::new(TaskAttempt(key.attempt)));
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
         let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
