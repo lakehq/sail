@@ -15,20 +15,16 @@ use datafusion::arrow::array::{
     StructArray, UInt32Array, UnionArray, make_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use datafusion::arrow::compute::{
-    SortOptions, can_cast_types, cast, concat, concat_batches, take, take_record_batch,
-};
+use datafusion::arrow::compute::{SortOptions, can_cast_types, cast, concat, concat_batches, take};
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Float16Type, Float32Type, Int32Type, Int64Type,
     IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
     UnionMode,
 };
+use datafusion::arrow::util::display::array_value_to_string;
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::config::ConfigOptions;
-use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::datasource::sink::DataSink;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::{
@@ -38,7 +34,6 @@ use datafusion::execution::memory_pool::{
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::dml::InsertOp;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
@@ -1257,47 +1252,6 @@ fn partition_task(
     task
 }
 
-/// Writes the batch with the DataFusion Parquet sink, which is how
-/// partitioned data was written before the writer task existed.
-async fn write_with_data_sink(
-    batch: &RecordBatch,
-    partition_columns: &[&str],
-) -> Result<DirectoryRows> {
-    write_batches_with_data_sink(std::slice::from_ref(batch), partition_columns).await
-}
-
-async fn write_batches_with_data_sink(
-    batches: &[RecordBatch],
-    partition_columns: &[&str],
-) -> Result<DirectoryRows> {
-    let batch = &batches[0];
-    let ctx = SessionContext::new();
-    let store = Arc::new(InMemory::new());
-    let url = ObjectStoreUrl::parse("memory://")?;
-    ctx.register_object_store(url.as_ref(), store.clone());
-    let sink = ParquetSink::new(
-        FileSinkConfig {
-            original_url: "memory:///table/".to_string(),
-            object_store_url: url,
-            file_group: Default::default(),
-            table_paths: vec![ListingTableUrl::parse("memory:///table/")?],
-            output_schema: batch.schema(),
-            table_partition_cols: partition_columns
-                .iter()
-                .map(|x| (x.to_string(), DataType::Null))
-                .collect(),
-            insert_op: InsertOp::Append,
-            keep_partition_by_columns: false,
-            file_extension: "parquet".to_string(),
-            file_output_mode: FileOutputMode::Automatic,
-        },
-        TableParquetOptions::default(),
-    );
-    let input = test_stream(&batch.schema(), batches.to_vec());
-    sink.write_all(input, &ctx.task_ctx()).await?;
-    read_directories(store.as_ref()).await
-}
-
 /// Returns whether each row of a partition column is in the default partition,
 /// which has the rows without a value and the rows with the empty string.
 fn default_partition_rows(column: &ArrayRef) -> Result<Vec<bool>> {
@@ -1318,58 +1272,83 @@ fn default_partition_rows(column: &ArrayRef) -> Result<Vec<bool>> {
         .collect())
 }
 
-/// Returns the directories and their rows that are expected for the batches.
+/// Checks that the directories have the rows of the batches, with the rows that
+/// have the same values of the partition columns in one directory, and the rows
+/// that have other values in other directories. The rows without a value and
+/// the rows with the empty string have the same value here.
 ///
-/// The rows are written with the DataFusion Parquet sink, which names the
-/// directories of the values in the same way. The sink has no default partition,
-/// so each partition column of a row in the default partition is replaced
-/// with a column of strings that has the name of the default partition.
-async fn expected_directories(
+/// The names of the directories are not checked. The values of the partition
+/// columns are compared as the text that Arrow displays for them, and not as
+/// the text that the writer formats for the names of the directories.
+/// The tests of the names of the directories give the names for the values.
+fn check_rows_by_key(
+    directories: &DirectoryRows,
     batches: &[RecordBatch],
     partition_columns: &[&str],
-) -> Result<DirectoryRows> {
-    let mut patterns: BTreeMap<Vec<bool>, Vec<RecordBatch>> = BTreeMap::new();
+) -> Result<()> {
+    let mut expected: BTreeMap<Vec<Option<String>>, Vec<String>> = BTreeMap::new();
     for batch in batches {
-        let defaults = partition_columns
+        let schema = batch.schema();
+        // A date with milliseconds is in the directory of its day.
+        let keys = partition_columns
             .iter()
-            .map(|name| default_partition_rows(batch.column(batch.schema().index_of(name)?)))
-            .collect::<Result<Vec<_>>>()?;
-        let mut rows: BTreeMap<Vec<bool>, Vec<u32>> = BTreeMap::new();
-        for i in 0..batch.num_rows() {
-            let pattern = defaults.iter().map(|x| x[i]).collect();
-            rows.entry(pattern).or_default().push(i as u32);
-        }
-        for (pattern, rows) in rows {
-            let part = take_record_batch(batch, &UInt32Array::from(rows))?;
-            let mut fields = part.schema().fields().to_vec();
-            let mut columns = part.columns().to_vec();
-            for (name, is_default) in partition_columns.iter().zip(&pattern) {
-                if *is_default {
-                    let i = part.schema().index_of(name)?;
-                    fields[i] = Arc::new(Field::new(*name, DataType::Utf8, true));
-                    columns[i] = Arc::new(StringArray::from(vec![
-                        "__HIVE_DEFAULT_PARTITION__";
-                        part.num_rows()
-                    ]));
+            .map(|name| {
+                let column = batch.column(schema.index_of(name)?);
+                match column.data_type() {
+                    DataType::Date64 => Ok(cast(column, &DataType::Date32)?),
+                    _ => Ok(Arc::clone(column)),
                 }
-            }
-            let part = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
-            patterns.entry(pattern).or_default().push(part);
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let defaults = keys
+            .iter()
+            .map(default_partition_rows)
+            .collect::<Result<Vec<_>>>()?;
+        let data: Vec<_> = schema
+            .fields()
+            .iter()
+            .zip(batch.columns())
+            .filter(|(field, _)| !partition_columns.contains(&field.name().as_str()))
+            .map(|(_, column)| column)
+            .collect();
+        for row in 0..batch.num_rows() {
+            let key = keys
+                .iter()
+                .zip(&defaults)
+                .map(|(column, defaults)| match defaults[row] {
+                    true => Ok(None),
+                    false => Ok(Some(array_value_to_string(column, row)?)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let cells = data
+                .iter()
+                .map(|column| Ok(array_value_to_string(column, row)?))
+                .collect::<Result<Vec<_>>>()?;
+            expected.entry(key).or_default().push(cells.join("|"));
         }
     }
-    let mut directories = DirectoryRows::new();
-    for batches in patterns.values() {
-        for (directory, rows) in write_batches_with_data_sink(batches, partition_columns).await? {
-            assert!(directories.insert(directory, rows).is_none());
-        }
+    let mut expected: Vec<_> = expected.into_values().collect();
+    // The width of a column in the text of a file depends on the values of the file.
+    let cells = |row: &String| {
+        let row = row.trim_matches('|');
+        row.split('|').map(str::trim).collect::<Vec<_>>().join("|")
+    };
+    let mut actual: Vec<Vec<String>> = directories
+        .values()
+        .map(|rows| rows.iter().map(cells).collect())
+        .collect();
+    for rows in actual.iter_mut().chain(expected.iter_mut()) {
+        rows.sort();
     }
-    Ok(directories)
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+    Ok(())
 }
 
 /// Writes rows with the partition column `p` and the data column `v`,
-/// and returns the directories of the rows. The directories and their rows
-/// must be the same as the ones that the DataFusion Parquet sink produces
-/// for the rows that are not in the default partition.
+/// and returns the directories of the rows. Each directory must have
+/// the rows of one value of the partition column.
 async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("p", values.data_type().clone(), true),
@@ -1381,7 +1360,7 @@ async fn partition_directories(values: ArrayRef) -> Result<Vec<String>> {
     let task = partition_task(Arc::clone(&store), 0, &["p"]);
     run_task(task, &schema, vec![batch.clone()]).await?;
     let actual = read_directories(store.as_ref()).await?;
-    assert_eq!(actual, expected_directories(&[batch], &["p"]).await?);
+    check_rows_by_key(&actual, &[batch], &["p"])?;
     Ok(actual.into_keys().collect())
 }
 
@@ -1705,7 +1684,7 @@ async fn write_partitioned(schema: &SchemaRef, batches: &[RecordBatch]) -> Resul
 }
 
 #[tokio::test]
-async fn test_partition_rows_match_data_sink() -> Result<()> {
+async fn test_partition_rows_are_in_the_directory_of_their_value() -> Result<()> {
     for (name, values) in partition_value_cases()? {
         let schema = Arc::new(Schema::new(vec![
             Field::new("p", values.data_type().clone(), true),
@@ -1763,12 +1742,8 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             }
             // A row without a value is written to the default partition,
             // whatever the content of the array at the row is.
-            let expected = expected_directories(&leftover, &["p"]).await?;
-            assert_eq!(
-                write_partitioned(&schema, &leftover).await?,
-                expected,
-                "{message}"
-            );
+            let expected = write_partitioned(&schema, &leftover).await?;
+            check_rows_by_key(&expected, &leftover, &["p"])?;
             assert_eq!(
                 write_partitioned(&schema, &zeroed).await?,
                 expected,
@@ -1776,11 +1751,7 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
             );
             // A row with the default value of the type is written to the directory
             // of that value, which is the default partition only for the empty string.
-            assert_eq!(
-                write_partitioned(&schema, &filled).await?,
-                expected_directories(&filled, &["p"]).await?,
-                "{message}"
-            );
+            check_rows_by_key(&write_partitioned(&schema, &filled).await?, &filled, &["p"])?;
             let default_rows = expected
                 .get("table/p=__HIVE_DEFAULT_PARTITION__")
                 .cloned()
@@ -1808,7 +1779,8 @@ async fn test_partition_rows_match_data_sink() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_partition_rows_match_data_sink_for_several_columns() -> Result<()> {
+async fn test_partition_rows_are_in_the_directory_of_their_values_of_several_columns() -> Result<()>
+{
     let cases = partition_value_cases()?;
     let column = |name: &str| -> Result<ArrayRef> {
         cases
@@ -1842,9 +1814,7 @@ async fn test_partition_rows_match_data_sink_for_several_columns() -> Result<()>
         let task = partition_task(Arc::clone(&store), 0, &["r", "p", "q"]);
         run_task(task, &schema, vec![leftover.clone(), leftover.clone()]).await?;
         let actual = read_directories(store.as_ref()).await?;
-        let expected =
-            expected_directories(&[leftover.clone(), leftover], &["r", "p", "q"]).await?;
-        assert_eq!(actual, expected, "{null_rows:?}");
+        check_rows_by_key(&actual, &[leftover.clone(), leftover], &["r", "p", "q"])?;
         assert!(actual.len() >= 3, "{null_rows:?}");
     }
     Ok(())
@@ -1872,12 +1842,11 @@ async fn test_partition_column_type_not_supported() -> Result<()> {
         )?;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let task = partition_task(Arc::clone(&store), 0, &["p"]);
-        let actual = run_task(task, &schema, vec![batch.clone()]).await;
-        let expected = write_with_data_sink(&batch, &["p"]).await;
-        let (Err(actual), Err(expected)) = (actual, expected) else {
-            return Err(internal_datafusion_err!("expected errors for {data_type}"));
+        let Err(actual) = run_task(task, &schema, vec![batch.clone()]).await else {
+            return Err(internal_datafusion_err!(
+                "expected an error for {data_type}"
+            ));
         };
-        assert_eq!(actual.strip_backtrace(), expected.strip_backtrace());
         assert!(
             actual.to_string().contains(&format!(
                 "it is not yet supported to write to hive partitions with datatype {data_type}"
