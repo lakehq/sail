@@ -65,7 +65,7 @@ impl PlanResolver<'_> {
                 table: table.into(),
             });
         }
-        let target = self.resolve_row_level_target(&table).await?;
+        let target = self.resolve_row_level_target(&table, state).await?;
         let source = registry.get_lake_source(&target.format)?;
         let target_plan = Arc::new(self.resolve_row_level_table_plan(table, state).await?);
         let truncate = source

@@ -8,6 +8,7 @@ use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_expr::LogicalPlan;
 use fancy_regex::Regex;
+use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
@@ -60,10 +61,21 @@ impl PlanResolver<'_> {
                 .await?;
             (properties, false)
         } else {
-            let status = self
+            let table_name: Vec<String> = table.clone().into();
+            // The table and its lakehouse resolution come from one catalog lookup.
+            let (status, resolved) = self
                 .ctx
                 .extension::<CatalogManager>()?
-                .get_table_or_view(table.parts())
+                .get_lakehouse_table_or_view(
+                    self.ctx,
+                    &table_name,
+                    ResolveLakehouseTableRequest {
+                        catalog_table: table_name.clone(),
+                        operation: LakehouseOperation::Read,
+                        requested_format: None,
+                        options: vec![],
+                    },
+                )
                 .await?;
             let temporary = status.kind.is_temporary();
             let properties = match &status.kind {
@@ -76,13 +88,14 @@ impl PlanResolver<'_> {
                     let location = location
                         .clone()
                         .ok_or_else(|| PlanError::invalid("table does not have a location"))?;
-                    let table_name: Vec<String> = table.clone().into();
+                    let resolved = resolved.ok_or_else(|| {
+                        PlanError::internal("catalog table without lakehouse resolution")
+                    })?;
                     let context = self
-                        .resolve_lakehouse_table_context(
+                        .begin_lakehouse_table_access(
                             &table_name,
-                            LakehouseOperation::Read,
-                            Some(format),
-                            vec![],
+                            resolved,
+                            TableAccessPurpose::DataRead,
                         )
                         .await?;
                     registry

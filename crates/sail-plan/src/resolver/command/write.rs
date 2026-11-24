@@ -13,7 +13,9 @@ use datafusion_expr::{
 };
 use sail_catalog::command::{CatalogCommand, staged_lake_source_create_table_info};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::{LakehouseCreateMaterialization, LakehouseCreateRequest};
+use sail_catalog::lakehouse::{
+    LakehouseCreateMaterialization, LakehouseCreateRequest, TableAccessPurpose,
+};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
@@ -355,7 +357,7 @@ impl PlanResolver<'_> {
                 table,
                 column_match,
             } => {
-                let info = self.resolve_table_info(&table).await?;
+                let info = self.resolve_table_info(&table, state).await?;
                 // An overwrite with `saveAsTable` keeps the definition of an existing table.
                 sink_info.replace_table_metadata =
                     info.is_some() && matches!(mode, WriteMode::Replace { .. });
@@ -881,14 +883,15 @@ impl PlanResolver<'_> {
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<Option<TableInfo>> {
-        let status = match self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table(table.parts())
+        let catalog_table: Vec<String> = table.clone().into();
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        // The table and its lakehouse resolution come from one lookup of the statement.
+        let (status, resolved) = match self
+            .lookup_catalog_table(&manager, &catalog_table, false, state)
             .await
         {
-            Ok(x) => x,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
+            Ok((status, Some(resolved))) => (status, resolved),
+            Ok((_, None)) | Err(CatalogError::NotFound(_, _)) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
         match status.kind {
@@ -896,6 +899,7 @@ impl PlanResolver<'_> {
                 mut columns,
                 comment: _,
                 constraints: _,
+        state: &mut PlanResolverState,
                 location,
                 format,
                 mut partition_by,
@@ -904,17 +908,11 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
-                let catalog_table = table
-                    .parts()
-                    .iter()
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>();
                 let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
+                    .begin_lakehouse_table_access(
                         &catalog_table,
-                        LakehouseOperation::Read,
-                        Some(&format),
-                        vec![],
+                        resolved,
+                        TableAccessPurpose::DataRead,
                     )
                     .await?;
                 let write_precondition_lakehouse_table =

@@ -12,12 +12,10 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
+use sail_catalog::lakehouse::TableAccessPurpose;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{
-    LakehouseFormat, LakehouseOperation, TableColumnStatus, TableKind,
-};
+use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::{
@@ -38,9 +36,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{
-    CatalogTableLookup, CatalogTableLookupKey, PlanResolverState, TableSourceKey,
-};
+use crate::resolver::state::{PlanResolverState, TableSourceKey};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -129,42 +125,6 @@ impl PlanResolver<'_> {
         .await
     }
 
-    /// Looks up a catalog table or view, reusing earlier successful lookups in the query.
-    /// Data-source identifier reads (with a required format) do not look up views.
-    async fn lookup_catalog_table(
-        &self,
-        manager: &CatalogManager,
-        reference: &[String],
-        required_format: Option<&str>,
-        state: &mut PlanResolverState,
-    ) -> Result<CatalogTableLookup, CatalogError> {
-        let key = CatalogTableLookupKey {
-            reference: reference.to_vec(),
-            required_format: required_format.map(ToString::to_string),
-        };
-        if let Some(lookup) = state.get_catalog_table_lookup(&key) {
-            return Ok(lookup);
-        }
-        let request = ResolveLakehouseTableRequest {
-            catalog_table: reference.to_vec(),
-            operation: LakehouseOperation::Read,
-            requested_format: required_format.map(LakehouseFormat::from_format_name),
-            options: vec![],
-        };
-        let lookup = if required_format.is_some() {
-            let (status, resolved) = manager
-                .get_lakehouse_table(self.ctx, reference, request)
-                .await?;
-            (status, Some(resolved))
-        } else {
-            manager
-                .get_lakehouse_table_or_view(self.ctx, reference, request)
-                .await?
-        };
-        state.insert_catalog_table_lookup(key, lookup.clone());
-        Ok(lookup)
-    }
-
     async fn resolve_query_read_catalog_table(
         &self,
         table: spec::ReadNamedTable,
@@ -183,8 +143,13 @@ impl PlanResolver<'_> {
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
         // The catalog lookups are boxed to keep this future small, since the recursive
         // query resolver reserves stack for it at every level of nesting.
-        let lookup =
-            Box::pin(self.lookup_catalog_table(&manager, &reference, required_format, state)).await;
+        let lookup = Box::pin(self.lookup_catalog_table(
+            &manager,
+            &reference,
+            required_format.is_none(),
+            state,
+        ))
+        .await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
@@ -198,7 +163,7 @@ impl PlanResolver<'_> {
                 let base_lookup = Box::pin(self.lookup_catalog_table(
                     &manager,
                     base_reference,
-                    required_format,
+                    required_format.is_none(),
                     state,
                 ))
                 .await;

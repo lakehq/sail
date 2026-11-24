@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
         // A temporary view created with `USING` is backed by a data source.
         // `INSERT INTO/OVERWRITE` writes to the same location, as Spark treats it as a table.
         if let Some((source, columns)) = self
-            .resolve_temporary_view_insert_target(&table, !partition.is_empty())
+            .resolve_temporary_view_insert_target(&table, !partition.is_empty(), state)
             .await?
         {
             return self
@@ -200,10 +200,16 @@ impl PlanResolver<'_> {
         &self,
         table: &spec::ObjectName,
         has_partition_clause: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Option<(TemporaryViewSource, Vec<TableColumnStatus>)>> {
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let status = match manager.get_table_or_view(table.parts()).await {
-            Ok(status) => status,
+        let reference: Vec<String> = table.clone().into();
+        // The lookup is the one that the write to a table uses afterwards.
+        let status = match self
+            .lookup_catalog_table(&manager, &reference, true, state)
+            .await
+        {
+            Ok((status, _)) => status,
             Err(CatalogError::NotFound(_, _)) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
