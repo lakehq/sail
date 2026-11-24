@@ -65,6 +65,6 @@ impl ScalarUDFImpl for Pmod {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        spark_pmod(&args.args, self.ansi_mode)
+        spark_pmod(&args.args, self.ansi_mode, args.return_type())
     }
 }

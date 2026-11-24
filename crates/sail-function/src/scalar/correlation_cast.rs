@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use arrow::array::builder::Decimal128Builder;
 use arrow::array::{Array, ArrayRef, AsArray, Decimal128Array, Float64Array, new_null_array};
-use arrow::compute::kernels::cast_utils::Parser;
-use arrow::compute::{CastOptions, cast_with_options, parse_string_to_decimal_native};
+use arrow::compute::kernels::cast_utils::{Parser, parse_decimal};
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal64Type, Decimal128Type, DecimalType,
     Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit,
@@ -521,7 +521,7 @@ fn decimal_values<'a>(
             .and_then(|v| v.checked_mul(factor));
         let parsed = match integer {
             Some(value) => value,
-            None => parse_string_to_decimal_native::<Decimal128Type>(value, scale as usize)
+            None => parse_decimal::<Decimal128Type>(value, Decimal128Type::MAX_PRECISION, scale)
                 .map_err(|_| {
                     ArrowError::CastError(format!(
                         "Cannot cast string '{value}' to value of {} type",

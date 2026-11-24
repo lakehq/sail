@@ -48,7 +48,8 @@ impl SessionFactory<()> for WorkerSessionFactory {
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =
             super::temporary_file_compression(self.config.runtime.temporary_files.compression);
-        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet);
+        execution.enable_nlj_coordinated_fallback = false;
+        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet)?;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -61,6 +62,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::common::parquet_config::{DFParquetCompression, DFTimeUnit};
     use sail_common_datafusion::extension::SessionExtensionAccessor;
 
     use super::*;
@@ -104,12 +106,12 @@ mod tests {
         assert!(parquet.pushdown_filters);
         assert!(!parquet.schema_force_view_types);
         assert!(parquet.binary_as_string);
-        assert_eq!(parquet.compression.as_deref(), Some("gzip(3)"));
+        assert_eq!(parquet.compression, Some(DFParquetCompression::Gzip(3)));
         assert_eq!(parquet.max_row_group_size, 2048);
         assert!(parquet.force_filter_selections);
         assert_eq!(parquet.max_in_list_size, 50);
         assert_eq!(parquet.max_row_group_bytes.map(|v| v.get()), Some(8192));
-        assert_eq!(parquet.coerce_int96.as_deref(), Some("us"));
+        assert_eq!(parquet.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(parquet.bloom_filter_ndv, None);
         assert_eq!(
             parquet.created_by,

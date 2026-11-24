@@ -73,7 +73,6 @@ use sail_common_datafusion::type_coercion::binary_type_coercion::{
     BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
 };
-use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 
 use crate::session_timestamp::convert_session_timestamp_casts;
@@ -147,9 +146,8 @@ fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Resu
     let session_time_zone = config
         .execution
         .time_zone
-        .as_deref()
-        .map(arrow_timezone_label);
-    let session_time_zone = session_time_zone.as_deref();
+        .as_ref()
+        .map(|zone| zone.as_str());
 
     // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
     //  so that the body of a materialized CTE is coerced before its continuation.
@@ -2338,10 +2336,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        // TODO: Use `MergeIntoOp::new` after DataFusion 56.
-        let merge_op = MergeIntoOp {
+        let merge_op = MergeIntoOp::new(
+            target_table_name.clone(),
             on,
-            clauses: vec![
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -2356,7 +2354,7 @@ mod test {
                     },
                 },
             ],
-        };
+        );
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,
@@ -3589,13 +3587,10 @@ mod test {
 
         use crate::type_coercion::case_result_type;
 
-        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata(
-            [(
-                UUID_METADATA_KEY.to_string(),
-                UUID_EXTENSION_NAME.to_string(),
-            )]
-            .into(),
-        );
+        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata([(
+            UUID_METADATA_KEY.to_string(),
+            UUID_EXTENSION_NAME.to_string(),
+        )]);
         let string = Field::new("x", DataType::Utf8, true);
         for fields in [vec![uuid.clone(), string.clone()], vec![string, uuid]] {
             let data_type = DataType::Struct(fields.into());
@@ -4105,7 +4100,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4235,7 +4230,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4259,7 +4254,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4283,7 +4278,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").lt_eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+05:30".into());
+        options.execution.time_zone = Some("+05:30".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4325,7 +4320,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("ntz").eq(col("ltz")), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4352,7 +4347,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -4385,7 +4380,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

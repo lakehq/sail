@@ -30,8 +30,8 @@ use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
+use datafusion::functions::core::overlay::OverlayFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
-use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
@@ -1017,6 +1017,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind,
+                ranking_field,
             }) => {
                 let [input] = inputs else {
                     return plan_err!(
@@ -1052,13 +1053,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         expr.len().saturating_sub(1)
                     );
                 }
-                Ok(Arc::new(PartitionedTopKExec::try_new(
+                let mut top_k = PartitionedTopKExec::try_new(
                     Arc::clone(input),
                     expr,
                     partition_prefix_len,
                     fetch,
                     window_fn_kind,
-                )?))
+                )?;
+                if let Some(ranking_field) = ranking_field {
+                    top_k = top_k.with_ranking_field(try_decode_field_ref(&ranking_field)?)?;
+                }
+                Ok(Arc::new(top_k))
             }
             NodeKind::DeltaWriter(delta_writer) => {
                 let r#gen::DeltaWriterExecNode {
@@ -2622,6 +2627,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind: Self::try_encode_partitioned_top_k_window_fn_kind(top_k.fn_kind()),
+                ranking_field: top_k
+                    .ranking_field()
+                    .map(try_encode_field_ref)
+                    .transpose()?,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
@@ -2696,8 +2705,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         options,
                     })
                 } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                    // The Parquet node carries the adapter configuration separately.
+                    let mut base_scan = file_scan.clone();
+                    base_scan.expr_adapter_factory = None;
                     let base_config = try_encode_message(serialize_file_scan_config(
-                        file_scan,
+                        &base_scan,
                         self,
                         proto_converter,
                     )?)?;
@@ -5370,7 +5382,7 @@ impl RemoteExecutionCodec {
 
     fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
         fn field_or_descendant_contains_metadata(field: &Field, keys: &[&str]) -> bool {
-            if keys.iter().any(|key| field.metadata().contains_key(*key)) {
+            if keys.iter().any(|key| field.metadata().contains_key(key)) {
                 return true;
             }
             match field.data_type() {
@@ -6104,6 +6116,7 @@ impl RemoteExecutionCodec {
             }
             r#gen::PartitionedTopKWindowFnKind::RowNumber => Ok(WindowFnKind::RowNumber),
             r#gen::PartitionedTopKWindowFnKind::Rank => Ok(WindowFnKind::Rank),
+            r#gen::PartitionedTopKWindowFnKind::DenseRank => Ok(WindowFnKind::DenseRank),
         }
     }
 
@@ -6111,6 +6124,7 @@ impl RemoteExecutionCodec {
         (match kind {
             WindowFnKind::RowNumber => r#gen::PartitionedTopKWindowFnKind::RowNumber,
             WindowFnKind::Rank => r#gen::PartitionedTopKWindowFnKind::Rank,
+            WindowFnKind::DenseRank => r#gen::PartitionedTopKWindowFnKind::DenseRank,
         }) as i32
     }
 
@@ -6793,16 +6807,13 @@ mod tests {
 
     #[test]
     fn uuid_codec_preserves_nested_metadata_and_error_mode() -> Result<()> {
-        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
-            [
-                (
-                    sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
-                    sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
-                ),
-                ("PARQUET:field_id".to_string(), "17".to_string()),
-            ]
-            .into(),
-        );
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata([
+            (
+                sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
+                sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
+            ),
+            ("PARQUET:field_id".to_string(), "17".to_string()),
+        ]);
         let target = Arc::new(Field::new(
             "s",
             DataType::Struct(vec![Arc::new(uuid)].into()),

@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn uuid_try_cast_preserves_infallible_leaf_metadata() -> Result<()> {
         let source = Field::new("key", DataType::FixedSizeBinary(16), false)
-            .with_metadata([("custom".to_string(), "kept".to_string())].into());
+            .with_metadata([("custom".to_string(), "kept".to_string())]);
         let target = uuid_field().with_name("key");
         let output = uuid_cast_field(&source, &target, true)?;
         assert!(!output.is_nullable());
@@ -779,7 +779,7 @@ mod tests {
             assert!(!is_uuid_field(
                 &fixed
                     .clone()
-                    .with_metadata([(key.into(), name.into())].into())
+                    .with_metadata([(key.to_owned(), name.to_owned())])
             ));
         }
         // Arrow's canonical UUID permits missing or empty parameters, but nothing else.
@@ -787,7 +787,7 @@ mod tests {
             let mut field = uuid.clone();
             field
                 .metadata_mut()
-                .insert(EXTENSION_TYPE_METADATA_KEY.into(), parameters.into());
+                .insert(EXTENSION_TYPE_METADATA_KEY, parameters);
             assert_eq!(is_uuid_field(&field), valid);
         }
     }
@@ -796,14 +796,14 @@ mod tests {
     fn uuid_input_replaces_former_extension_parameters() {
         use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
 
-        let source = Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
-            [
-                (UUID_METADATA_KEY.into(), "other.extension".into()),
-                (EXTENSION_TYPE_METADATA_KEY.into(), "parameters".into()),
-                ("custom".into(), "retained".into()),
-            ]
-            .into(),
-        );
+        let source = Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata([
+            (UUID_METADATA_KEY.to_owned(), "other.extension".to_owned()),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                "parameters".to_owned(),
+            ),
+            ("custom".to_owned(), "retained".to_owned()),
+        ]);
         let result = uuid_input_field(&source, &uuid_field());
         assert!(is_uuid_field(&result));
         assert!(!result.metadata().contains_key(EXTENSION_TYPE_METADATA_KEY));

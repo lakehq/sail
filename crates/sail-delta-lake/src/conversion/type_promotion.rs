@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn test_promote_field_types() {
         let table_field = Field::new("test", DataType::Int32, false)
-            .with_metadata([("comment".to_string(), "keep".to_string())].into());
+            .with_metadata([("comment".to_string(), "keep".to_string())]);
         let input_field = Field::new("test", DataType::Int32, true);
 
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
@@ -327,9 +327,9 @@ mod tests {
     #[test]
     fn test_nested_promotion_preserves_field_properties() -> Result<()> {
         let table_leaf = Field::new("value", DataType::Int32, false)
-            .with_metadata([("comment".to_string(), "keep".to_string())].into());
+            .with_metadata([("comment".to_string(), "keep".to_string())]);
         let input_leaf = Field::new("value", DataType::Int64, true)
-            .with_metadata([("comment".to_string(), "replace".to_string())].into());
+            .with_metadata([("comment".to_string(), "replace".to_string())]);
         let promoted_leaf = table_leaf.clone().with_data_type(DataType::Int64);
         let wrap = |leaf: Field| {
             let key = Field::new("key", DataType::Utf8, false);
@@ -352,7 +352,7 @@ mod tests {
             .zip(wrap(promoted_leaf))
         {
             let table_field = Field::new("nested", table_type, false)
-                .with_metadata([("comment".to_string(), "outer".to_string())].into());
+                .with_metadata([("comment".to_string(), "outer".to_string())]);
             let input_field = Field::new("nested", input_type, true);
             let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
             assert_eq!(result, table_field.with_data_type(expected_type));

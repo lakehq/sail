@@ -124,7 +124,7 @@ impl<'a> AggregateInput<'a> {
                 .with_projection(scan.projection.clone())
                 .with_filters(scan.filters.clone())
                 .with_fetch(scan.fetch)
-                .with_statistics_requests(scan.statistics_requests.clone())
+                .with_statistics_requests(scan.statistics_requests.as_ref().clone())
                 .build()?,
         );
         self.plan

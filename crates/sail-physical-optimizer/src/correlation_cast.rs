@@ -94,14 +94,20 @@ fn rewrite_projection(
                 let scaled: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
                     Arc::clone(cast.expr()),
                     DataType::Timestamp(unit, None),
-                    Some(cast.cast_options().clone()),
+                    Some(datafusion::arrow::compute::CastOptions {
+                        safe: false,
+                        format_options: datafusion::common::format::DEFAULT_FORMAT_OPTIONS,
+                    }),
                 ));
                 let integer: Arc<dyn PhysicalExpr> =
                     Arc::new(CastExpr::new(scaled, DataType::Int64, None));
                 Arc::new(CastExpr::new_with_target_field(
                     integer,
                     cast.return_field(&schema)?,
-                    Some(cast.cast_options().clone()),
+                    Some(datafusion::arrow::compute::CastOptions {
+                        safe: false,
+                        format_options: datafusion::common::format::DEFAULT_FORMAT_OPTIONS,
+                    }),
                 ))
             } else if CorrelationCast::supports(&from, cast.cast_type()) {
                 let field = cast.return_field(&schema)?;

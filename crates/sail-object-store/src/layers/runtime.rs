@@ -53,6 +53,7 @@ impl RuntimeAwareObjectStore {
                 meta,
                 range,
                 attributes,
+                extensions,
             } => GetResult {
                 payload: GetResultPayload::Stream(
                     RuntimeAwareStream::new(move |_| stream, (), self.handle.clone()).boxed(),
@@ -60,6 +61,7 @@ impl RuntimeAwareObjectStore {
                 meta,
                 range,
                 attributes,
+                extensions,
             },
         }
     }
@@ -444,6 +446,7 @@ mod tests {
                 resume.notified().await;
             }
             Ok(PutResult {
+                extensions: Default::default(),
                 e_tag: None,
                 version: None,
             })

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Metadata};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::{filter_partitioned_file, pruned_partition_list};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
@@ -28,9 +28,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{DFSchema, Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{
-    FileScanConfig, output_partitioning_from_partition_fields,
-};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -55,7 +53,6 @@ use crate::listing::write::{FileWriteNode, FileWriteOptions};
 struct ListFilesResult {
     file_groups: Vec<FileGroup>,
     statistics: Statistics,
-    grouped_by_partition: bool,
 }
 
 /// Physical planner for logical listing table scans.
@@ -122,7 +119,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let ListFilesResult {
             mut file_groups,
             statistics,
-            grouped_by_partition: partitioned_by_file_group,
         } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
@@ -176,16 +172,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )))));
         };
 
-        let output_partitioning = if partitioned_by_file_group {
-            output_partitioning_from_partition_fields(
-                table_schema,
-                source.config().schema.table_partition_cols(),
-                file_groups.len(),
-            )
-        } else {
-            None
-        };
-
         let config = source
             .config()
             .read_format
@@ -200,7 +186,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                     preserve_order: false,
                     output_ordering,
                     statistics,
-                    output_partitioning,
+                    output_partitioning: None,
                     schema: source.config().schema.clone(),
                     compression: source.config().compression,
                 },
@@ -356,7 +342,6 @@ async fn list_files_for_scan<'a>(
         return Ok(ListFilesResult {
             file_groups: vec![],
             statistics: Statistics::new_unknown(source.config().schema.file_schema()),
-            grouped_by_partition: false,
         });
     };
 
@@ -385,7 +370,7 @@ async fn list_files_for_scan<'a>(
         .filter(|_| !partition_fields.is_empty());
     let direct_only = source.config().base_path.is_some() && partition_fields.is_empty();
     let partition_schema = base_path
-        .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Default::default()))
+        .map(|_| DFSchema::from_unqualified_fields(partition_fields.clone(), Metadata::new()))
         .transpose()?;
     // The listing helper inspects the boolean value bit. IS TRUE also tests validity.
     let predicate = datafusion_expr::utils::conjunction(filters.iter().cloned()).map(Expr::is_true);
@@ -481,22 +466,16 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-    let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
+    let file_groups = if threshold > 0 && !partition_cols.is_empty() {
         let grouped = file_group.group_by_partition_values(source.config().target_partitions);
         if grouped.len() >= threshold {
-            (grouped, true)
+            grouped
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-            (
-                FileGroup::new(all_files).split_files(source.config().target_partitions),
-                false,
-            )
+            FileGroup::new(all_files).split_files(source.config().target_partitions)
         }
     } else {
-        (
-            file_group.split_files(source.config().target_partitions),
-            false,
-        )
+        file_group.split_files(source.config().target_partitions)
     };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
@@ -509,7 +488,6 @@ async fn list_files_for_scan<'a>(
     Ok(ListFilesResult {
         file_groups,
         statistics: stats,
-        grouped_by_partition,
     })
 }
 
