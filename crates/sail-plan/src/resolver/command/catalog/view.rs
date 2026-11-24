@@ -18,7 +18,6 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::query::TemporaryViewDefinitionNode;
 use crate::resolver::state::PlanResolverState;
 use crate::shared_cte::inline_deterministic_references;
 impl PlanResolver<'_> {
@@ -102,15 +101,7 @@ impl PlanResolver<'_> {
             replace,
             comment,
             properties,
-            kind,
         } = definition;
-        // A view created from a query resolves the query again at each read, unless the
-        // query reads relations that its client passed for this statement only.
-        let query = (kind == spec::TemporaryViewKind::Query && !state.has_client_relations())
-            .then(|| input.as_ref().clone());
-        if query.is_some() {
-            state.set_view_depth(1);
-        }
         // A view created with `USING` is backed by a data source. We keep the
         // format and options (which carry the `path`) so that `INSERT INTO` the
         // view can write to the same location, like Spark treats it as a table.
@@ -128,7 +119,6 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let input = self.resolve_query_plan(*input, state).await?;
-        let query_columns = Self::get_field_names(input.schema(), state)?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
         // that the references to a volatile CTE read one evaluation for each read of the view.
         let input = inline_deterministic_references(input)?;
@@ -154,28 +144,9 @@ impl PlanResolver<'_> {
             None => (Self::get_field_names(input.schema(), state)?, vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
-        let input = match query {
-            Some(query) => {
-                let schema = input.schema().clone();
-                let definition = self
-                    .create_view_definition(
-                        query,
-                        query_columns,
-                        &String::from(view.clone()),
-                        is_global,
-                        state,
-                    )
-                    .await?;
-                if definition.stores_plan() {
-                    Self::store_view_plan(input, state)?
-                } else {
-                    TemporaryViewDefinitionNode::new(schema, definition).into_plan()
-                }
-            }
-            // The view reads its tables again at each read, so its plan does not keep the
-            // table sources that the definition was resolved with.
-            None => Self::store_view_plan(input, state)?,
-        };
+        // The view reads its tables again at each read, so its plan does not keep the
+        // table sources that the definition was resolved with.
+        let input = Self::store_view_plan(input, state)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
         let input: CatalogLogicalPlanId = manager.track_logical_plan(Arc::new(input))?;
         let command = CatalogCommand::CreateTemporaryView {

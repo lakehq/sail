@@ -15,7 +15,6 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{
     CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
-    TemporaryViewName, ViewBodyContext, ViewBodyKey, ViewDefinition,
 };
 use crate::shared_cte::CteDefinition;
 
@@ -187,24 +186,11 @@ pub(super) struct PlanResolverState {
     /// The successful lookups so far of the tables that global temporary views read in a
     /// catalog of the session that created them (see [`SessionCatalogTable`]), by the
     /// catalog instance and the fully qualified name of the table.
-    session_catalog_table_lookups: HashMap<(usize, Vec<String>), CatalogTableLookup>,
+    session_catalog_table_lookups:
+        HashMap<(usize, Vec<String>), (TableStatus, LakehouseResolvedTable)>,
     /// What the table sources of the scans resolved so far read, by the address of the
     /// source, for the sources that a temporary view obtains again at each read.
     table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
-    /// The names that the view query being resolved sees, if any.
-    view_body: Option<Arc<ViewBodyContext>>,
-    /// The temporary views that the query at this level read, with the names as written.
-    referred_temp_views: std::collections::HashMap<TemporaryViewName, Vec<String>>,
-    /// The session functions that the query at this level called.
-    referred_functions: std::collections::HashSet<String>,
-    /// The temporary views read so far, at every level of nested views.
-    temp_view_reads: HashSet<TemporaryViewName>,
-    /// The plans of the view queries of this statement.
-    view_body_plans: HashMap<ViewBodyKey, (Arc<ViewDefinition>, Arc<LogicalPlan>)>,
-    /// The view queries being resolved, from the outermost one.
-    view_body_path: Vec<ViewBodyKey>,
-    /// The number of nested views around the query being resolved.
-    view_depth: usize,
 }
 
 /// Returns the address of a table source, which identifies the source while it is alive.
@@ -250,13 +236,6 @@ impl PlanResolverState {
             catalog_table_lookups: HashMap::new(),
             session_catalog_table_lookups: HashMap::new(),
             table_origins: HashMap::new(),
-            view_body: None,
-            referred_temp_views: std::collections::HashMap::new(),
-            referred_functions: std::collections::HashSet::new(),
-            temp_view_reads: HashSet::new(),
-            view_body_plans: HashMap::new(),
-            view_body_path: Vec::new(),
-            view_depth: 0,
         }
     }
 
@@ -596,7 +575,7 @@ impl PlanResolverState {
         &self,
         table: &SessionCatalogTable,
         name: &[String],
-    ) -> Option<CatalogTableLookup> {
+    ) -> Option<(TableStatus, LakehouseResolvedTable)> {
         self.session_catalog_table_lookups
             .get(&(table.catalog_id(), name.to_vec()))
             .cloned()
@@ -606,132 +585,10 @@ impl PlanResolverState {
         &mut self,
         table: &SessionCatalogTable,
         name: Vec<String>,
-        lookup: CatalogTableLookup,
+        lookup: (TableStatus, LakehouseResolvedTable),
     ) {
         self.session_catalog_table_lookups
             .insert((table.catalog_id(), name), lookup);
-    }
-
-    pub fn view_body(&self) -> Option<&Arc<ViewBodyContext>> {
-        self.view_body.as_ref()
-    }
-
-    /// Records a read of a temporary view by the query at this level. `is_own_view` tells
-    /// whether the view is a view of the session of the statement.
-    pub fn record_temporary_view_read(
-        &mut self,
-        name: TemporaryViewName,
-        reference: &[String],
-        is_own_view: bool,
-    ) {
-        if is_own_view {
-            self.temp_view_reads.insert(name.clone());
-        }
-        self.referred_temp_views
-            .entry(name)
-            .or_insert_with(|| reference.to_vec());
-    }
-
-    pub fn has_read_temporary_view(&self, name: &TemporaryViewName) -> bool {
-        self.temp_view_reads.contains(name)
-    }
-
-    pub fn record_session_function(&mut self, name: &str) {
-        if !self.referred_functions.contains(name) {
-            self.referred_functions.insert(name.to_string());
-        }
-    }
-
-    /// Returns the temporary views and the session functions that the query read.
-    pub fn take_referred_names(
-        &mut self,
-    ) -> (
-        std::collections::HashMap<TemporaryViewName, Vec<String>>,
-        std::collections::HashSet<String>,
-    ) {
-        (
-            std::mem::take(&mut self.referred_temp_views),
-            std::mem::take(&mut self.referred_functions),
-        )
-    }
-
-    pub fn view_body_plan(&self, key: &ViewBodyKey) -> Option<Arc<LogicalPlan>> {
-        self.view_body_plans
-            .get(key)
-            .map(|(_, plan)| Arc::clone(plan))
-    }
-
-    /// Stores the plan of a view query. The entry keeps the definition alive, since the
-    /// key identifies the definition by its address.
-    pub fn insert_view_body_plan(
-        &mut self,
-        key: ViewBodyKey,
-        definition: Arc<ViewDefinition>,
-        plan: Arc<LogicalPlan>,
-    ) {
-        self.view_body_plans.insert(key, (definition, plan));
-    }
-
-    pub fn is_resolving_view_body(&self, key: &ViewBodyKey) -> bool {
-        self.view_body_path.contains(key)
-    }
-
-    pub fn view_depth(&self) -> usize {
-        self.view_depth
-    }
-
-    pub fn set_view_depth(&mut self, depth: usize) {
-        self.view_depth = depth;
-    }
-
-    /// Returns the state for the query of a view. It has the catalog lookups and the table
-    /// sources of the statement until [`Self::exit_view_body`] returns them.
-    pub fn enter_view_body(
-        &mut self,
-        context: Arc<ViewBodyContext>,
-        key: ViewBodyKey,
-        depth: usize,
-    ) -> Self {
-        let mut body = Self::new();
-        self.swap_statement_state(&mut body);
-        body.view_body = Some(context);
-        body.view_body_path.push(key);
-        body.view_depth = depth;
-        body
-    }
-
-    pub fn exit_view_body(&mut self, mut body: Self) {
-        body.view_body_path.pop();
-        self.swap_statement_state(&mut body);
-    }
-
-    fn swap_statement_state(&mut self, other: &mut Self) {
-        std::mem::swap(&mut self.table_sources, &mut other.table_sources);
-        std::mem::swap(&mut self.lake_path_sources, &mut other.lake_path_sources);
-        std::mem::swap(
-            &mut self.catalog_table_lookups,
-            &mut other.catalog_table_lookups,
-        );
-        std::mem::swap(
-            &mut self.session_catalog_table_lookups,
-            &mut other.session_catalog_table_lookups,
-        );
-        std::mem::swap(&mut self.table_origins, &mut other.table_origins);
-        std::mem::swap(&mut self.temp_view_reads, &mut other.temp_view_reads);
-        std::mem::swap(&mut self.view_body_plans, &mut other.view_body_plans);
-        std::mem::swap(&mut self.view_body_path, &mut other.view_body_path);
-    }
-
-    /// Returns whether the statement has relations that its client passed with it, such
-    /// as the DataFrame arguments of `spark.sql`.
-    pub fn has_client_relations(&self) -> bool {
-        !self.subquery_references.is_empty()
-    }
-
-    /// Enters a scope for the query of a persistent view, which does not see the CTEs,
-    /// the outer query, or any other name scope of the query that reads the view.
-    pub fn enter_view_body_scope(&mut self) -> ViewBodyScope<'_> {
-        ViewBodyScope::new(self)
     }
 
     /// Records what the source of a scan reads. The first record of a source remains.
@@ -907,59 +764,6 @@ impl PlanResolverState {
         positional: Vec<ScalarValue>,
     ) -> ParamValuesScope<'_> {
         ParamValuesScope::new(self, named, positional)
-    }
-}
-
-/// Scope for the query of a view.
-pub(crate) struct ViewBodyScope<'a> {
-    state: &'a mut PlanResolverState,
-    outer_query_schema: Option<DFSchemaRef>,
-    missing_input_resolution: Option<MissingInputResolution>,
-    aggregate_state: AggregateState,
-    ctes: HashMap<TableReference, Arc<CteInfo>>,
-    subquery_references: HashMap<i64, spec::QueryPlan>,
-    config: PlanResolverStateConfig,
-    param_values: std::collections::HashMap<String, ScalarValue>,
-    positional_param_values: Vec<ScalarValue>,
-    lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
-    windows: std::collections::HashMap<String, spec::Window>,
-}
-
-impl<'a> ViewBodyScope<'a> {
-    fn new(state: &'a mut PlanResolverState) -> Self {
-        Self {
-            outer_query_schema: state.outer_query_schema.take(),
-            missing_input_resolution: state.missing_input_resolution.take(),
-            aggregate_state: std::mem::take(&mut state.aggregate_state),
-            ctes: std::mem::take(&mut state.ctes),
-            subquery_references: std::mem::take(&mut state.subquery_references),
-            config: std::mem::take(&mut state.config),
-            param_values: std::mem::take(&mut state.param_values),
-            positional_param_values: std::mem::take(&mut state.positional_param_values),
-            lambda_param_scopes: std::mem::take(&mut state.lambda_param_scopes),
-            windows: std::mem::take(&mut state.windows),
-            state,
-        }
-    }
-
-    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
-        self.state
-    }
-}
-
-impl Drop for ViewBodyScope<'_> {
-    fn drop(&mut self) {
-        let state = &mut *self.state;
-        state.outer_query_schema = self.outer_query_schema.take();
-        state.missing_input_resolution = self.missing_input_resolution.take();
-        state.aggregate_state = std::mem::take(&mut self.aggregate_state);
-        state.ctes = std::mem::take(&mut self.ctes);
-        state.subquery_references = std::mem::take(&mut self.subquery_references);
-        state.config = std::mem::take(&mut self.config);
-        state.param_values = std::mem::take(&mut self.param_values);
-        state.positional_param_values = std::mem::take(&mut self.positional_param_values);
-        state.lambda_param_scopes = std::mem::take(&mut self.lambda_param_scopes);
-        state.windows = std::mem::take(&mut self.windows);
     }
 }
 

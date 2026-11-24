@@ -22,7 +22,7 @@ FORMATS = [*LAKE_FORMATS, "parquet"]
 # The kinds of temporary views: SQL, SQL with a column list, global SQL, DataFrame, and global DataFrame.
 KINDS = ["sv", "svc", "gv", "dv", "dgv"]
 # The kinds whose stored plan refers to the table by its columns, as a Spark DataFrame view does.
-PLAN_KINDS = ["dv", "dgv"]
+PLAN_KINDS = ["gv", "dv", "dgv"]
 
 COLUMNS_CHANGED = "INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION"
 NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
@@ -312,9 +312,7 @@ def test_view_with_time_travel_reads_its_version(spark, tmp_path, kind):
         assert NOT_FOUND in error(spark, f"SELECT * FROM {view}")
         # The version of a Delta Lake table is not a version of an Iceberg table.
         table.create("id BIGINT", fmt="iceberg")
-        # A SQL view reads the version of the table that has the name now.
-        expected = "created again with another format" if kind in PLAN_KINDS else "not found"
-        assert expected in error(spark, f"SELECT * FROM {view}")
+        assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
     finally:
         table.drop()
 

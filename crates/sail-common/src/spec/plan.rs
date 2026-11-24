@@ -1067,19 +1067,6 @@ pub struct TemporaryViewDefinition {
     pub replace: bool,
     pub comment: Option<String>,
     pub properties: Vec<(String, String)>,
-    #[serde(default)]
-    pub kind: TemporaryViewKind,
-}
-
-/// What a temporary view is created from.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TemporaryViewKind {
-    /// A SQL query, which is resolved again each time the view is read.
-    Query,
-    /// A plan, such as a DataFrame or a data source.
-    #[default]
-    Plan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

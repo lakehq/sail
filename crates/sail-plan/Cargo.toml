@@ -25,7 +25,6 @@ sail-physical-plan = { path = "../sail-physical-plan" }
 sail-data-source = { path = "../sail-data-source" }
 sail-cache = { path = "../sail-cache" }
 
-stacker = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }

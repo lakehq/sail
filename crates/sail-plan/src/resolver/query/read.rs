@@ -11,7 +11,7 @@ use datafusion_expr::{
     Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
 };
 use rand::{RngExt, rng};
-use sail_catalog::error::{CatalogError, CatalogObject};
+use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     LakehouseResolvedTable, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
@@ -39,7 +39,6 @@ use url::Url;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
 use super::temp_view::{CatalogTableOrigin, LakePathOrigin, TableOrigin};
-use super::view_definition::TemporaryViewDefinitionNode;
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -163,10 +162,10 @@ impl PlanResolver<'_> {
     ) -> Result<CatalogTableLookup, CatalogError> {
         // A temporary view can have the name of a catalog table, so it is looked up by
         // the name as written, before that name is qualified.
-        if let Some(status) = Self::lookup_temporary_view(manager, reference, state).await? {
+        if let Some(status) = manager.find_temporary_view(reference).await? {
             return Ok((status, None));
         }
-        let table = Self::qualify_object_name(manager, reference, state)?;
+        let table = manager.resolve_fully_qualified_object_name(reference)?;
         Self::lookup_catalog_object(manager, table, state).await
     }
 
@@ -177,21 +176,6 @@ impl PlanResolver<'_> {
         table: Vec<String>,
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
-        if let Some((session, session_table)) =
-            Self::view_session_catalog_table(manager, &table, state)?
-        {
-            if let Some(lookup) = state.get_session_catalog_table_lookup(&session_table, &table) {
-                return Ok(lookup);
-            }
-            let lookup = session
-                .get_catalog_lakehouse_table_or_view(
-                    &table,
-                    Self::catalog_table_lookup_request(&table),
-                )
-                .await?;
-            state.insert_session_catalog_table_lookup(&session_table, table, lookup.clone());
-            return Ok(lookup);
-        }
         if let Some(lookup) = state.get_catalog_table_lookup(&table) {
             return Ok(lookup);
         }
@@ -220,19 +204,7 @@ impl PlanResolver<'_> {
         reference: &[String],
         state: &mut PlanResolverState,
     ) -> Result<(TableStatus, LakehouseResolvedTable), CatalogError> {
-        let table = Self::qualify_object_name(manager, reference, state)?;
-        if Self::view_session_catalog_table(manager, &table, state)?.is_some() {
-            return match Self::lookup_catalog_object(manager, table.clone(), state).await? {
-                (status, Some(resolved)) => Ok((status, resolved)),
-                _ => Err(CatalogError::NotFound(
-                    CatalogObject::Table,
-                    format!(
-                        "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {}",
-                        table.join(".")
-                    ),
-                )),
-            };
-        }
+        let table = manager.resolve_fully_qualified_object_name(reference)?;
         // An earlier lookup that found a view is not reused: the catalog is asked for
         // the table, and reports that there is none.
         if let Some((status, Some(resolved))) = state.get_catalog_table_lookup(&table) {
@@ -358,15 +330,10 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
-                let name = Self::qualify_object_name(&manager, &catalog_reference, state)?;
-                let view_session_table = Self::view_session_catalog_table(&manager, &name, state)?
-                    .map(|(_, table)| table);
+                let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
                 let origin = TableOrigin::CatalogTable(CatalogTableOrigin {
-                    session_table: match &view_session_table {
-                        Some(table) => Some(table.clone()),
-                        None => manager.session_catalog_table(&name)?,
-                    },
-                    name: name.clone(),
+                    session_table: manager.session_catalog_table(&name)?,
+                    name,
                     lake_relation: lake_relation
                         .as_ref()
                         .map(|(_, relation)| relation.name().to_string()),
@@ -380,8 +347,8 @@ impl PlanResolver<'_> {
                         CatalogTableRead {
                             status,
                             resolved,
-                            reference: &name,
-                            session_table: view_session_table.as_ref(),
+                            reference: &catalog_reference,
+                            session_table: None,
                             lake_relation,
                             options,
                             temporal_options,
@@ -421,14 +388,8 @@ impl PlanResolver<'_> {
                         "SQL time travel is not supported for temporary views",
                     ));
                 }
-                // The futures are boxed to keep them out of the recursive resolver futures.
-                let plan = match TemporaryViewDefinitionNode::try_from_plan(plan) {
-                    Some(node) => {
-                        Box::pin(self.resolve_view_definition(node, &status, state)).await?
-                    }
-                    None => Arc::clone(plan),
-                };
-                let plan = Box::pin(self.resolve_stored_view_plan(&plan, &status, state)).await?;
+                // The future is boxed to keep it out of the recursive resolver futures.
+                let plan = Box::pin(self.resolve_stored_view_plan(plan, &status, state)).await?;
                 let names = state.register_fields(plan.schema().inner().fields());
                 let plan = rename_logical_plan(plan, &names)?;
                 // The stored plan's internal field IDs belong to another resolver
@@ -601,11 +562,7 @@ impl PlanResolver<'_> {
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
         let plan = match spec_plan {
-            spec::Plan::Query(query_plan) => {
-                // The view does not see the CTEs and the outer query of the query that reads it.
-                let mut scope = state.enter_view_body_scope();
-                self.resolve_query_plan(query_plan, scope.state()).await?
-            }
+            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
             _ => {
                 return Err(PlanError::invalid("view definition must be a query"));
             }
@@ -733,7 +690,8 @@ impl PlanResolver<'_> {
             });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let udf = self.lookup_session_function(&canonical_function_name, state)?;
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
                 .and_then(|x| x.inner().downcast_ref::<PySparkUnresolvedUDF>())

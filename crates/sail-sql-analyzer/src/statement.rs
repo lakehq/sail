@@ -588,7 +588,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                 replace: or_replace.is_some(),
                                 comment,
                                 properties,
-                                kind: spec::TemporaryViewKind::Query,
                             },
                         }
                     } else {
@@ -661,7 +660,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                             replace: or_replace.is_some(),
                             comment: None,
                             properties: vec![],
-                            kind: spec::TemporaryViewKind::Plan,
                         },
                     }
                 }

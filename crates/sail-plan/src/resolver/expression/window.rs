@@ -11,6 +11,7 @@ use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
     AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, expr,
 };
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec::{self};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -102,8 +103,10 @@ impl PlanResolver<'_> {
                 // `is_user_defined_function` is always false on the wire, so a registered
                 // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
                 // catalog before falling back to the built-in window function registry.
-                let catalog_function =
-                    self.lookup_session_function(&canonical_function_name, state)?;
+                let catalog_function = self
+                    .ctx
+                    .extension::<CatalogManager>()?
+                    .get_function(&canonical_function_name)?;
                 let registered_udaf = catalog_function.as_ref().and_then(|udf| {
                     udf.inner()
                         .downcast_ref::<PySparkUnresolvedUDF>()
