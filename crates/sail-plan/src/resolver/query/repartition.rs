@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalUnit};
-use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, SortExpr};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, ScalarUDF, SortExpr};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_function::scalar::spark_order_key::SparkOrderKey;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
@@ -124,7 +125,14 @@ impl PlanResolver<'_> {
                     }
                     // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
                     let expr = normalize_range_floats(sort.expr.clone(), &data_type);
-                    Ok(sort.with_expr(expr))
+                    if !SparkOrderKey::is_needed(&data_type) {
+                        return Ok(sort.with_expr(expr));
+                    }
+                    // The sample, the split points, and the partitioning compare keys
+                    // one by one, which they cannot do for nested values. So they compare
+                    // bytes that are in the order of the key, in ascending order.
+                    let key = ScalarUDF::from(SparkOrderKey::new(!sort.asc)).call(vec![expr]);
+                    Ok(SortExpr::new(key, true, sort.nulls_first))
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
             ExplicitRepartitionKind::Range {

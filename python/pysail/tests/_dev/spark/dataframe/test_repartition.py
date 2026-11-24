@@ -11,7 +11,6 @@ from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException, IllegalArgumentException, PySparkException
 from pyspark.sql import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
 
@@ -130,6 +129,9 @@ def test_range_repartition_samples_only_when_the_query_runs(spark):
         df.collect()
 
 
+# JVM Spark cancels the query, but its task over the range runs on and holds the only
+# task slot of local mode, which the later tests wait for.
+@pytest.mark.spark(skip_if_jvm=True, reason="the interrupted task keeps the task slot of JVM Spark")
 def test_range_repartition_sample_can_be_interrupted(spark):
     # The sample of so many rows takes minutes. It runs under the operation, so the
     # operation can be interrupted while it samples.
@@ -287,25 +289,46 @@ def test_range_repartition_rejects_an_unorderable_key(spark, key, num_partitions
         source.repartitionByRange(num_partitions, "k").collect()
 
 
-SAIL_CANNOT_COMPARE_NESTED_SAMPLES = pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="the range sample compares keys as scalar values, which cannot compare a struct with an array",
-    strict=True,
-)
+def spark_order(value):
+    """The order of a value in Spark's ascending ordering, where a null value, element,
+    or field comes first, and arrays and structs (lists here) compare element by element."""
+    if value is None:
+        return (False, 0)
+    if isinstance(value, list):
+        return (True, [spark_order(element) for element in value])
+    return (True, value)
 
 
-@pytest.mark.parametrize(
-    "key",
-    [
-        "array(id)",
-        pytest.param("named_struct('a', id, 'b', array(id))", marks=SAIL_CANNOT_COMPARE_NESTED_SAMPLES),
-        pytest.param("array(named_struct('a', id))", marks=SAIL_CANNOT_COMPARE_NESTED_SAMPLES),
-    ],
-    ids=["array", "struct-of-array", "array-of-struct"],
-)
-def test_range_repartition_accepts_an_orderable_nested_key(spark, key):
-    result = spark.range(12).selectExpr("id", f"{key} AS k").repartitionByRange(3, "k")
-    assert sorted(row.id for row in result.collect()) == list(range(12))
+NESTED_KEYS = {
+    "array": ("array(id % 4, id)", lambda i: [i % 4, i]),
+    "array-with-null-elements": (
+        "array(IF(id % 3 = 0, NULL, id % 3), id)",
+        lambda i: [None if i % 3 == 0 else i % 3, i],
+    ),
+    "struct-of-array-with-null-fields": (
+        "named_struct('a', IF(id % 3 = 0, NULL, id % 3), 'b', array(id))",
+        lambda i: [None if i % 3 == 0 else i % 3, [i]],
+    ),
+    "array-of-structs": ("array(named_struct('a', id % 4), named_struct('a', id))", lambda i: [[i % 4], [i]]),
+    "null-key": ("IF(id = 5, NULL, array(named_struct('a', id)))", lambda i: None if i == 5 else [[i]]),
+}
+
+
+@pytest.mark.parametrize("key", NESTED_KEYS.values(), ids=NESTED_KEYS.keys())
+@pytest.mark.parametrize("descending", [False, True], ids=["asc", "desc"])
+def test_range_repartition_orders_nested_keys_like_spark(spark, key, descending):
+    # The sample has every row, so each partition gets 4 consecutive keys in the order.
+    sql, value = key
+    order = F.col("k").desc() if descending else F.col("k").asc()
+    rows = (
+        spark.range(12)
+        .selectExpr("id", f"{sql} AS k")
+        .repartitionByRange(3, order)
+        .select("id", F.spark_partition_id().alias("pid"))
+        .collect()
+    )
+    ranked = sorted(range(12), key=lambda i: spark_order(value(i)), reverse=descending)
+    assert {row.id: row.pid for row in rows} == {i: rank // 4 for rank, i in enumerate(ranked)}
 
 
 @pytest.mark.parametrize("input_partitions", [1, 5])

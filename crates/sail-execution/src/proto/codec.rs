@@ -253,6 +253,7 @@ use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_order_key::SparkOrderKey;
 use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::concat_ws::ConcatWs;
@@ -4242,6 +4243,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "normalize_nan_and_zero" => Ok(Arc::new(ScalarUDF::from(
                 NormalizeFloatKeys::nan_and_zero(),
             ))),
+            "spark_order_key" => Ok(Arc::new(ScalarUDF::from(SparkOrderKey::new(false)))),
+            "spark_order_key_desc" => Ok(Arc::new(ScalarUDF::from(SparkOrderKey::new(true)))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
@@ -4445,6 +4448,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RtrimFunc>()
             || node_inner.is::<ReplaceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
+            || node_inner.is::<SparkOrderKey>()
             || node_inner.is::<MixedNumeric>()
             || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
@@ -8830,6 +8834,16 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::nan_and_zero()))?;
         let decoded = downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
         assert_eq!(decoded, &NormalizeFloatKeys::nan_and_zero());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_order_key_udf() -> Result<()> {
+        for descending in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkOrderKey::new(descending)))?;
+            let decoded = downcast_udf::<SparkOrderKey>(&decoded, "SparkOrderKey")?;
+            assert_eq!(decoded, &SparkOrderKey::new(descending));
+        }
         Ok(())
     }
 

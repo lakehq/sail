@@ -14,6 +14,7 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.tests._dev.spark.dataframe.test_repartition import NESTED_KEYS, spark_order
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode")
 
@@ -85,6 +86,23 @@ def test_range_repartition_samples_only_when_the_query_runs(local_cluster_spark)
     df._explain_string(extended=True)  # noqa: SLF001
     with pytest.raises(Exception, match="range key computed"):
         df.collect()
+
+
+@pytest.mark.parametrize("key", NESTED_KEYS.values(), ids=NESTED_KEYS.keys())
+@pytest.mark.parametrize("descending", [False, True], ids=["asc", "desc"])
+def test_range_repartition_orders_nested_keys_like_spark(local_cluster_spark, key, descending):
+    # The workers encode the nested keys for the sample and the shuffle.
+    sql, value = key
+    order = F.col("k").desc() if descending else F.col("k").asc()
+    rows = (
+        local_cluster_spark.range(12)
+        .selectExpr("id", f"{sql} AS k")
+        .repartitionByRange(3, order)
+        .select("id", F.spark_partition_id().alias("pid"))
+        .collect()
+    )
+    ranked = sorted(range(12), key=lambda i: spark_order(value(i)), reverse=descending)
+    assert {row.id: row.pid for row in rows} == {i: rank // 4 for rank, i in enumerate(ranked)}
 
 
 def test_nested_range_repartitions_assign_key_ranges(local_cluster_spark):
