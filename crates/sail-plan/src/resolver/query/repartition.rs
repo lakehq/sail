@@ -65,8 +65,11 @@ impl PlanResolver<'_> {
             .filter(|expr| matches!(expr, spec::Expr::SortOrder(_)))
             .count();
         let is_range = num_sort_orders > 0 && num_sort_orders == partition_expressions.len();
+        // Without a count, Spark repartitions into `spark.sql.shuffle.partitions`, as the
+        // partitioning hints do.
+        let num_partitions = num_partitions.unwrap_or(self.config.shuffle_partitions);
         // Spark plans a single partition before it checks the expression kinds.
-        let is_single = num_partitions.unwrap_or(self.config.shuffle_partitions) == 1;
+        let is_single = num_partitions == 1;
         if !is_range && num_sort_orders > 0 && !is_single {
             return Err(PlanError::invalid(
                 "requirement failed: RepartitionByExpression expects that either all its `partitionExpressions` are of type `SortOrder`, which means `RangePartitioning`, or none of them are `SortOrder`, which means `HashPartitioning`",
@@ -121,7 +124,7 @@ impl PlanResolver<'_> {
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),
-                num_partitions,
+                Some(num_partitions),
                 kind,
             )),
         });

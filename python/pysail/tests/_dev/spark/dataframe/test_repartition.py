@@ -37,10 +37,8 @@ def normalized_plan(df):
 @pytest.mark.spark(cross_version=True)
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2
-    assert partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6
-    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
 
 
 # Ported from Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
@@ -197,6 +195,38 @@ def test_repartition_by_range_hint_rejects_invalid_parameters(spark, parameters)
 def test_repartition_rejects_mixed_sort_order_and_hash_expressions(spark):
     with pytest.raises(IllegalArgumentException, match="are of type `SortOrder`, which means `RangePartitioning`"):
         spark.range(12).repartition(3, F.col("id").asc(), F.col("id") + 1).collect()
+
+
+@pytest.mark.parametrize("input_partitions", [1, 5])
+def test_range_repartition_without_a_count_uses_shuffle_partitions(spark, input_partitions):
+    # As in Spark, the DataFrame API and the hint use `spark.sql.shuffle.partitions`,
+    # not the partitions of the input. The sample covers every row, so the ranges are exact.
+    source = spark.range(0, 24, 1, input_partitions)
+    try:
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        for df in (source.repartitionByRange("id"), source.hint("REPARTITION_BY_RANGE", "id")):
+            rows = df.select("id", F.spark_partition_id().alias("pid")).collect()
+            assert sorted((row.id, row.pid) for row in rows) == [(i, i // 8) for i in range(24)]
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+        spark.conf.unset("spark.sql.adaptive.enabled")
+
+
+@pytest.mark.parametrize("input_partitions", [1, 5])
+def test_hash_repartition_without_a_count_uses_shuffle_partitions(spark, input_partitions):
+    # As in Spark, the DataFrame API and the hint use `spark.sql.shuffle.partitions`,
+    # not the partitions of the input.
+    source = spark.range(0, 24, 1, input_partitions).withColumn("a", F.lit("foo"))
+    try:
+        spark.conf.set("spark.sql.adaptive.enabled", "false")
+        spark.conf.set("spark.sql.shuffle.partitions", "3")
+        for df in (source.repartition("a"), source.hint("REPARTITION", "a")):
+            assert partition_count(df) == 3
+            assert sorted(row.id for row in df.collect()) == list(range(24))
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+        spark.conf.unset("spark.sql.adaptive.enabled")
 
 
 def test_repartition_to_one_partition_accepts_mixed_sort_order_and_hash_expressions(spark):

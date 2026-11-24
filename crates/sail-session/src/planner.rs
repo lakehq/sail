@@ -850,12 +850,12 @@ async fn plan_range_repartition(
     session: &dyn Session,
     planning_ctx: &PhysicalPlanningContext,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    // Step 1: the number of partitions. Without a count, use the input's partition count.
-    // The resolver rejects zero, so zero here is an internal error.
+    // Step 1: the number of partitions. The resolver uses `spark.sql.shuffle.partitions`
+    // when the count is omitted, and rejects zero, so both are internal errors here.
     let num_partitions = match node.num_partitions() {
         Some(0) => return internal_err!("number of explicit partitions cannot be zero"),
         Some(num_partitions) => num_partitions,
-        None => input.output_partitioning().partition_count().max(1),
+        None => return internal_err!("range repartitioning requires a partition count"),
     };
     // Step 2: the physical range ordering. The resolver removes repeated keys, but the
     // optimizer can still make two keys equal, as it simplifies `id + 0` to `id`.
@@ -1002,12 +1002,16 @@ fn plan_explicit_partitioning(
                     "explicit hash repartitioning requires at least one partitioning expression"
                 );
             }
+            // The resolver uses `spark.sql.shuffle.partitions` when the count is omitted.
             let num_partitions = match num_partitions {
                 Some(0) => return internal_err!("number of explicit partitions cannot be zero"),
                 Some(num_partitions) => num_partitions,
-                None => input_partition_count,
+                None => {
+                    return internal_err!(
+                        "explicit hash repartitioning requires a partition count"
+                    );
+                }
             };
-            let num_partitions = num_partitions.max(1);
             let expressions = expressions
                 .iter()
                 .map(|e| planner.create_physical_expr(e, schema, session, planning_ctx))
@@ -2297,8 +2301,8 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_explicit_partitioning_uses_input_partition_count_for_hash_without_explicit_count()
-    {
+    fn test_plan_explicit_partitioning_requires_a_count_for_hash() {
+        // The resolver uses `spark.sql.shuffle.partitions` when the count is omitted.
         let schema = schema();
         let input = RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
@@ -2307,18 +2311,14 @@ mod tests {
         .unwrap();
         let expressions = vec![col("id")];
 
-        let partitioning = plan_partitioning(
+        let result = plan_partitioning(
             &input,
             &schema,
             None,
             ExplicitRepartitionKind::Hash(expressions),
-        )
-        .unwrap();
+        );
 
-        match partitioning {
-            Partitioning::Hash(expressions, 4) => assert_eq!(expressions.len(), 1),
-            other => panic!("expected hash partitioning with inherited count, got {other:?}"),
-        }
+        assert!(result.is_err(), "expected an error, got {result:?}");
     }
 
     #[test]
