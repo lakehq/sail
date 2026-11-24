@@ -105,3 +105,18 @@ def test_parquet_timestamp_functions(spark, session_timezone, tmp_path):
         for i, instant in enumerate(instants)
         if instant is not None and instant.astimezone(zone).hour == 0 and instant.astimezone(zone).day == 1
     ]
+
+
+@pytest.mark.parametrize("session_timezone", ["+05:30:45"], indirect=True)
+def test_fixed_offset_date_cast_parquet_nullability(spark, session_timezone, tmp_path):
+    _ = session_timezone
+    dates = spark.range(2).selectExpr(
+        "cast(timestamp_micros(id) as date) as required_date",
+        "cast(timestamp_micros(nullif(id, 0L)) as date) as optional_date",
+        "try_cast(timestamp_micros(id) as date) as try_date",
+    )
+    path = tmp_path / "dates"
+    dates.write.parquet(str(path))
+    expected = {"required_date": False, "optional_date": True, "try_date": True}
+    assert {field.name: field.nullable for field in dates.schema} == expected
+    assert {field.name: field.nullable for field in pq.read_schema(next(path.glob("*.parquet")))} == expected

@@ -5,9 +5,11 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
-use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, TimeUnit};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_date;
 
@@ -118,6 +120,24 @@ impl ScalarUDFImpl for Date {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Date32)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = match args.arg_fields {
+            [timestamp, offset]
+                if !self.is_try
+                    && matches!(timestamp.data_type(), DataType::Timestamp(_, Some(_)))
+                    && offset.data_type() == &DataType::Int32 =>
+            {
+                timestamp.is_nullable() || offset.is_nullable()
+            }
+            _ => true,
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
