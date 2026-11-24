@@ -19,7 +19,6 @@ use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::net::TcpListener;
-use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
@@ -36,7 +35,6 @@ pub type ServerSessionFactoryFn =
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
     shutdown: Arc<QueryCancellation>,
-    query_runtime: Handle,
 }
 
 impl fmt::Debug for SessionManager {
@@ -52,13 +50,8 @@ impl SessionManager {
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
         let shutdown = Arc::clone(&components.shutdown);
-        let query_runtime = options.runtime.io().clone();
         let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self {
-            handle,
-            shutdown,
-            query_runtime,
-        })
+        Ok(Self { handle, shutdown })
     }
 
     pub async fn get_or_create_session_context(
@@ -114,14 +107,10 @@ impl SessionManager {
         &self,
         query: impl Future<Output = Result<T, tonic::Status>> + Send + 'static,
     ) -> Result<T, tonic::Status> {
-        // Plan on the separate runtime. A synchronous user callback must leave the
-        // transport runtime free to deliver cancellation and close stalled connections.
+        // Run query work in its own task so the RPC can observe shutdown independently.
         let run = async move {
-            let task = {
-                let _guard = self.query_runtime.enter();
-                SpawnedTask::spawn(query)
-            };
-            task.await
+            SpawnedTask::spawn(query)
+                .await
                 .map_err(|e| tonic::Status::internal(format!("query task failed: {e}")))?
         };
         tokio::select! {

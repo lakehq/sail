@@ -86,8 +86,8 @@ impl JobRunner for LocalJobRunner {
         let plan = trace_execution_plan(plan, options)?;
         let input = execute_stream(plan, ctx.task_ctx())?;
         let schema = input.schema();
-        // Keep execution lazy and on the query runtime, even when Flight first polls
-        // the result stream on the transport runtime.
+        // Start the producer lazily on the runtime that created the stream. The
+        // consumer can observe shutdown while the producer finishes a batch.
         let runtime = Handle::try_current().ok();
         let output = stream::once(async move {
             let _guard = runtime.as_ref().map(Handle::enter);
