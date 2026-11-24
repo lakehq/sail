@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use datafusion::datasource::source_as_provider;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use sail_catalog::provider::DropTableOptions;
 use sail_common_datafusion::catalog::TableKind;
-use sail_plan::shared_cte::CteReference;
+use sail_plan::shared_cte::visit_scans;
 
 use super::*;
 
@@ -122,31 +121,15 @@ impl Fixture {
 /// Counts the scans of the plan, of its subqueries, and of the CTE definitions that
 /// it refers to, as the scans that have a table provider and the other scans.
 fn count_scans(plan: &LogicalPlan) -> datafusion_common::Result<(usize, usize)> {
-    fn count(
-        plan: &LogicalPlan,
-        definitions: &mut Vec<usize>,
-        scans: &mut (usize, usize),
-    ) -> datafusion_common::Result<()> {
-        plan.apply_with_subqueries(|plan| {
-            if let LogicalPlan::TableScan(scan) = plan {
-                if let Some(reference) = CteReference::try_from_scan(scan) {
-                    let definition = Arc::as_ptr(reference.definition()) as usize;
-                    if !definitions.contains(&definition) {
-                        definitions.push(definition);
-                        count(reference.definition().resolved(), definitions, scans)?;
-                    }
-                } else if source_as_provider(&scan.source).is_ok() {
-                    scans.0 += 1;
-                } else {
-                    scans.1 += 1;
-                }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        Ok(())
-    }
     let mut scans = (0, 0);
-    count(plan, &mut vec![], &mut scans)?;
+    visit_scans(plan, &mut |scan| {
+        if source_as_provider(&scan.source).is_ok() {
+            scans.0 += 1;
+        } else {
+            scans.1 += 1;
+        }
+        Ok(())
+    })?;
     Ok(scans)
 }
 
@@ -381,6 +364,34 @@ async fn temporary_view_over_views_reads_one_table_load() -> TestResult {
         let sql = "SELECT * FROM r JOIN t USING (k)";
         let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot);
+    }
+    Ok(())
+}
+
+#[test]
+fn test_deep_chain_of_temporary_views_reads_one_table_load() -> Result<(), String> {
+    run_on_large_stack(deep_chain_of_temporary_views_reads_one_table_load)
+}
+
+async fn deep_chain_of_temporary_views_reads_one_table_load() -> TestResult {
+    let fixture = Fixture::try_new(&["CREATE TEMPORARY VIEW c0 AS SELECT * FROM t"]).await?;
+    for i in 1..=101 {
+        fixture
+            .execute(&format!(
+                "CREATE TEMPORARY VIEW c{i} AS SELECT * FROM c{}",
+                i - 1
+            ))
+            .await?;
+    }
+    let stored = fixture.stored_view_plan(&["c101"]).await?;
+    assert_eq!(count_scans(&stored)?, (0, 1));
+    for sql in [
+        "SELECT * FROM c101",
+        "SELECT * FROM c101 JOIN c50 USING (k) JOIN t USING (k)",
+    ] {
+        let snapshot = fixture.next_snapshot();
+        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        assert_eq!(sources[0].snapshot, snapshot, "{sql}");
     }
     Ok(())
 }
