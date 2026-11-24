@@ -668,15 +668,25 @@ impl PlanResolver<'_> {
                         is_write_precondition: true,
                         staged: None,
                     };
-                    let create_plan = self
-                        .ctx
-                        .extension::<CatalogManager>()?
+                    let manager = self.ctx.extension::<CatalogManager>()?;
+                    // The catalog plans the replacement of a table from the lookup of
+                    // the statement.
+                    let existing = match &info {
+                        Some(_) => self
+                            .lookup_catalog_table(&manager, &catalog_table, false, state)
+                            .await
+                            .ok()
+                            .map(|(status, _)| Box::new(status)),
+                        None => None,
+                    };
+                    let create_plan = manager
                         .plan_lakehouse_create(
                             self.ctx,
                             &catalog_table,
                             LakehouseCreateRequest {
                                 catalog_table: catalog_table.clone(),
                                 options: create_options.clone(),
+                                existing,
                             },
                         )
                         .await?;

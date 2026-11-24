@@ -679,22 +679,26 @@ impl UnityCatalogProvider {
     }
 
     /// Returns the existing table that a `REPLACE` targets, or `None` when the table
-    /// is created instead.
+    /// is created instead. The table is `existing` when the caller has looked it up.
     async fn get_table_to_replace(
         &self,
         database: &Namespace,
         table: &str,
         options: &CreateTableOptions,
+        existing: Option<TableStatus>,
     ) -> CatalogResult<Option<TableStatus>> {
         if !options.mode.is_replace() {
             return Ok(None);
         }
-        let status = match self.get_table(database, table).await {
-            Ok(status) => status,
-            Err(CatalogError::NotFound(_, _)) if !options.mode.replace_requires_existing() => {
-                return Ok(None);
-            }
-            Err(e) => return Err(e),
+        let status = match existing {
+            Some(status) => status,
+            None => match self.get_table(database, table).await {
+                Ok(status) => status,
+                Err(CatalogError::NotFound(_, _)) if !options.mode.replace_requires_existing() => {
+                    return Ok(None);
+                }
+                Err(e) => return Err(e),
+            },
         };
         ensure_table_access(&status)?;
         let TableKind::Table {
@@ -732,6 +736,7 @@ impl UnityCatalogProvider {
         let LakehouseCreateRequest {
             catalog_table,
             options,
+            existing: _,
         } = request;
         let table = resolve_lakehouse_table_status(
             self.get_name(),
@@ -759,6 +764,7 @@ impl UnityCatalogProvider {
             table,
             materialization,
             staged: None,
+            replaces_in_place: true,
         }
     }
 
@@ -1173,7 +1179,10 @@ impl CatalogProvider for UnityCatalogProvider {
         // The replacement of an existing Delta table is a commit to its Delta log. The
         // commit of a managed table updates the catalog, and the catalog has no metadata
         // to update for an external table.
-        if let Some(status) = self.get_table_to_replace(database, table, &options).await? {
+        if let Some(status) = self
+            .get_table_to_replace(database, table, &options, None)
+            .await?
+        {
             return Ok(status);
         }
         let CreateTableOptions {
@@ -1687,11 +1696,12 @@ impl CatalogProvider for UnityCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        request: LakehouseCreateRequest,
+        mut request: LakehouseCreateRequest,
     ) -> CatalogResult<LakehouseCreatePlan> {
         let requirement = self.create_table_metadata_requirement(&request.options)?;
+        let existing = request.existing.take().map(|status| *status);
         if let Some(status) = self
-            .get_table_to_replace(database, table, &request.options)
+            .get_table_to_replace(database, table, &request.options, existing)
             .await?
         {
             let mut plan = self.plan_delta_table_replace(&status, request);
@@ -6072,6 +6082,7 @@ mod tests {
 
     fn lakehouse_create_request(options: CreateTableOptions) -> LakehouseCreateRequest {
         LakehouseCreateRequest {
+            existing: None,
             catalog_table: vec![
                 "test".to_string(),
                 "default".to_string(),
@@ -6559,6 +6570,38 @@ mod tests {
                 .all(|target| target.starts_with("GET /delta/v1/")),
             "{targets:?}"
         );
+
+        // The catalog is not asked again for the table that the statement has looked up.
+        let existing = provider.get_table(&database, "events").await.unwrap();
+        for is_write_precondition in [false, true] {
+            let plan = provider
+                .plan_lakehouse_create(
+                    &database,
+                    "events",
+                    LakehouseCreateRequest {
+                        existing: Some(Box::new(existing.clone())),
+                        ..lakehouse_create_request(replace_options(
+                            CreateTableMode::CreateOrReplace,
+                            is_write_precondition,
+                        ))
+                    },
+                )
+                .await
+                .unwrap();
+            // The table keeps its entry in the catalog, so the catalog has no table to
+            // create for the replacement.
+            assert!(plan.replaces_in_place);
+            assert_eq!(
+                plan.table.execution.table_identity.table_id.as_deref(),
+                Some(DELTA_TABLE_ID)
+            );
+        }
+        let targets = received_targets(&server).await;
+        let tables = targets
+            .iter()
+            .filter(|target| *target == "GET /tables/main.default.events")
+            .count();
+        assert_eq!(tables, 7, "{targets:?}");
     }
 
     #[tokio::test]

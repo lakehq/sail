@@ -54,10 +54,14 @@ pub struct LakehouseResolvedTable {
     pub runtime: Option<LakehouseRuntimeAccess>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LakehouseCreateRequest {
     pub catalog_table: Vec<String>,
     pub options: CreateTableOptions,
+    /// The table as the catalog returned it to the statement that asks for the plan,
+    /// when the statement has looked the table up and the table exists. The provider
+    /// looks the table up itself when it needs the table and this is `None`.
+    pub existing: Option<Box<TableStatus>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +70,10 @@ pub struct LakehouseCreatePlan {
     pub materialization: LakehouseCreateMaterialization,
     /// The state of the table when the catalog stages it before it is created.
     pub staged: Option<Box<StagedTableCreate>>,
+    /// Whether the plan replaces an existing table that keeps its entry in the catalog.
+    /// The storage metadata of the plan, or the commit of the write, is then all that
+    /// replaces the table, and the catalog has no table to create.
+    pub replaces_in_place: bool,
 }
 
 // TODO: Replace this compatibility materialization shape with protocol-specific
@@ -330,6 +338,7 @@ pub fn plan_lakehouse_create_from_requirement(
         },
         materialization,
         staged: options.staged.clone(),
+        replaces_in_place: false,
     }
 }
 

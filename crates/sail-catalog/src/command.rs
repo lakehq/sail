@@ -6,7 +6,7 @@ use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::delta::DeltaProtocolInfo;
 use sail_common_datafusion::catalog::{
-    FunctionStatus, LakehouseExecutionContext, LakehouseOperation, TableKind,
+    FunctionStatus, LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -386,7 +386,7 @@ impl CatalogCommand {
                 } else {
                     false
                 };
-                let Some((options, create_plan)) =
+                let Some((options, create_plan, existing)) =
                     prepare_create_table_storage_metadata(ctx, manager, &table, options).await?
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
@@ -397,7 +397,11 @@ impl CatalogCommand {
                     .is_write_precondition
                     .then(|| options.columns.clone())
                     .filter(|columns| !columns.is_empty());
-                let status = manager.create_table(&table, options).await?;
+                let status = match existing.filter(|_| create_plan.replaces_in_place) {
+                    // The table is replaced and keeps its entry in the catalog.
+                    Some(status) => status,
+                    None => manager.create_table(&table, options).await?,
+                };
                 if !existed_before {
                     prepare_created_table_storage_metadata(
                         ctx,
@@ -1053,8 +1057,9 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     manager: &CatalogManager,
     table: &[String],
     mut options: CreateTableOptions,
-) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan)>> {
-    match manager.get_table_or_view(table).await {
+) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan, Option<TableStatus>)>> {
+    // The catalog table that the statement replaces, which the catalog is asked for once.
+    let existing = match manager.get_table_or_view(table).await {
         Ok(_) if options.mode.ignore_if_exists() => return Ok(None),
         Ok(_) if !options.mode.is_replace() => {
             return Err(CatalogError::AlreadyExists(
@@ -1062,16 +1067,16 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                 table.join("."),
             ));
         }
-        Ok(_) => {}
+        Ok(status) => Some(status).filter(|status| matches!(status.kind, TableKind::Table { .. })),
         Err(CatalogError::NotFound(_, _)) if options.mode.replace_requires_existing() => {
             return Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 table.join("."),
             ));
         }
-        Err(CatalogError::NotFound(_, _)) => {}
+        Err(CatalogError::NotFound(_, _)) => None,
         Err(err) => return Err(err),
-    }
+    };
 
     let create_plan = manager
         .plan_lakehouse_create(
@@ -1080,6 +1085,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
             LakehouseCreateRequest {
                 catalog_table: table.to_vec(),
                 options: options.clone(),
+                existing: existing.clone().map(Box::new),
             },
         )
         .await?;
@@ -1087,7 +1093,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     let LakehouseCreateMaterialization::BeforeCatalogLakeSource { context, .. } =
         &create_plan.materialization
     else {
-        return Ok(Some((options, create_plan)));
+        return Ok(Some((options, create_plan, existing)));
     };
     // The catalog may plan the storage metadata at a location it allocated and, for a
     // staged table, with properties it requires.
@@ -1157,7 +1163,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         }
     }
     options.properties.extend(metadata.properties);
-    Ok(Some((options, create_plan)))
+    Ok(Some((options, create_plan, existing)))
 }
 
 async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
