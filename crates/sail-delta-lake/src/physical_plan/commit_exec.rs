@@ -44,10 +44,7 @@ use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata,
     MetadataValue, SaveMode, StructField, StructType,
 };
-use crate::table::{
-    CatalogSnapshotSource, SnapshotIntent, create_delta_table_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
-};
+use crate::table::{create_delta_table_with_object_store, open_catalog_table, open_table_error};
 use crate::transaction::{CommitBuilder, CommitProperties, FinalizedCommit, OperationMetrics};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
@@ -238,23 +235,34 @@ impl DeltaCommitExec {
         self.lakehouse_table.as_ref()
     }
 
+    /// Returns the table of the catalog that the write commits to. The table is the one
+    /// that the catalog resolved. A table that the statement itself registers in a catalog
+    /// that registers a table before version 0 is written is resolved without its ID, so
+    /// it is looked up.
     async fn load_catalog_managed_table(
         context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        table_url: &Url,
+        lakehouse_table: &LakehouseExecutionContext,
     ) -> Result<Option<DeltaCatalogManagedTable>> {
+        if let Some(table) = DeltaCatalogManagedTable::from_context(lakehouse_table) {
+            return Ok(Some(table));
+        }
         let manager = context.extension::<CatalogManager>()?;
         let status = manager
-            .get_table(catalog_table)
+            .get_table(lakehouse_table.catalog_table())
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let Some(table) = catalog_managed_delta_table(status.kind) else {
             return Ok(None);
         };
-
+        let Some(table_uri) = table
+            .location
+            .or(lakehouse_table.table_identity.table_uri.clone())
+        else {
+            return Ok(None);
+        };
         Ok(Some(DeltaCatalogManagedTable {
             table_id: table.table_id,
-            table_uri: table.location.unwrap_or_else(|| table_url.to_string()),
+            table_uri,
         }))
     }
 
@@ -310,50 +318,24 @@ impl DeltaCommitExec {
     async fn load_reference_snapshot(
         context: &Arc<TaskContext>,
         lakehouse_table: Option<&LakehouseExecutionContext>,
-        table_url: &Url,
         log_store: &LogStoreRef,
         version: Option<i64>,
         require_files: bool,
         use_catalog_managed_replay: bool,
     ) -> Result<Arc<crate::table::DeltaSnapshot>> {
-        let source = if use_catalog_managed_replay {
-            let lakehouse_table = lakehouse_table.ok_or_else(|| {
-                DataFusionError::Internal(
-                    "catalog-managed Delta snapshot replay missing lakehouse context".to_string(),
-                )
-            })?;
-            load_catalog_managed_commits_for_snapshot(
-                context.as_ref(),
-                lakehouse_table,
-                table_url,
-                log_store.clone(),
-                version,
-                SnapshotIntent::Write,
-                Some(&DeltaSnapshotConfig {
-                    require_files,
-                    ..Default::default()
-                }),
-            )
-            .await?
-        } else {
-            CatalogSnapshotSource::default()
-        };
-        if let Some(snapshot) = source.snapshot {
-            return Ok(snapshot);
-        }
-        let snapshot = crate::table::DeltaSnapshot::try_new(
-            log_store.as_ref(),
+        let table = open_catalog_table(
+            context.as_ref(),
+            lakehouse_table.filter(|_| use_catalog_managed_replay),
+            log_store.clone(),
             DeltaSnapshotConfig {
                 require_files,
-                catalog_managed_commits: source.commits,
                 ..Default::default()
             },
             version,
-            source.replay_hint.as_ref(),
         )
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Arc::new(snapshot))
+        .map_err(open_table_error)?;
+        Ok(table.snapshot()?.clone())
     }
 
     fn split_create_actions_for_catalog_managed_commit(
@@ -594,7 +576,6 @@ impl ExecutionPlan for DeltaCommitExec {
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
-        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let output = self.output;
         // The write creates the table that the catalog staged, and the catalog registers
         // the table after the commit.
@@ -716,12 +697,12 @@ impl ExecutionPlan for DeltaCommitExec {
                 return output.empty_batch();
             }
 
-            let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
-                (Some(catalog_table), Some(lakehouse_table))
+            let catalog_managed_table = match lakehouse_table.as_ref() {
+                Some(lakehouse_table)
                     if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit
                         && staged_table.is_none() =>
                 {
-                    Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
+                    Self::load_catalog_managed_table(&context, lakehouse_table).await?
                 }
                 _ => None,
             };
@@ -838,7 +819,6 @@ impl ExecutionPlan for DeltaCommitExec {
                         Self::load_reference_snapshot(
                             &context,
                             lakehouse_table.as_ref(),
-                            &table_url,
                             &log_store,
                             commit_context.base_version(),
                             true,
@@ -864,7 +844,6 @@ impl ExecutionPlan for DeltaCommitExec {
                             Self::load_reference_snapshot(
                                 &context,
                                 lakehouse_table.as_ref(),
-                                &table_url,
                                 &log_store,
                                 commit_context.base_version(),
                                 false,
@@ -972,11 +951,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 .as_ref()
                 .filter(|_| use_catalog_managed_commit)
             {
-                let catalog_table = catalog_table.as_deref().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "catalog-managed Delta commit missing catalog table reference".to_string(),
-                    )
-                })?;
                 let lakehouse_context = lakehouse_table.as_ref().ok_or_else(|| {
                     DataFusionError::Internal(
                         "catalog-managed Delta commit missing lakehouse context".to_string(),
@@ -1068,11 +1042,9 @@ impl ExecutionPlan for DeltaCommitExec {
                     result =
                         commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
                     let staged =
-                        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+                        DeltaCatalogCommitCoordinator::new(context.as_ref(), lakehouse_context)
                             .commit_actions(
-                                lakehouse_context,
                                 table,
-                                &table_url,
                                 &log_store,
                                 reference,
                                 &final_actions,

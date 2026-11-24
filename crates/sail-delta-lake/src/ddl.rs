@@ -4,21 +4,15 @@ use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result, plan_err};
-use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::catalog::coordinator::{
-    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, stage_and_publish_ratified_commits,
-};
-use crate::catalog_managed::catalog_managed_delta_table;
+use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::delta_log::{LogStoreRef, StorageConfig};
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
-    CatalogSnapshotSource, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
-    create_logstore_with_object_store, is_catalog_managed_commit,
-    load_catalog_managed_commits_for_snapshot,
+    DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
+    is_catalog_managed_commit, open_catalog_table, open_table_error,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 
@@ -781,29 +775,9 @@ async fn open_table_with_config(
         require_files,
         ..Default::default()
     };
-    let source = match catalog_managed_commit_context(lakehouse) {
-        Some(lakehouse) => {
-            load_catalog_managed_commits_for_snapshot(
-                ctx,
-                lakehouse,
-                &url,
-                log_store.clone(),
-                None,
-                SnapshotIntent::Write,
-                Some(&config),
-            )
-            .await?
-        }
-        None => CatalogSnapshotSource::default(),
-    };
-    let mut table = source.into_table(log_store, config);
-    if table.state.is_none() {
-        table
-            .load()
-            .await
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    }
-    Ok(table)
+    open_catalog_table(ctx, lakehouse, log_store, config, None)
+        .await
+        .map_err(open_table_error)
 }
 
 /// Commits the actions to the table, and returns whether the commit went to the catalog.
@@ -828,41 +802,19 @@ pub(crate) async fn commit(
             .map(|_| false)
             .map_err(|error| DataFusionError::External(Box::new(error)));
     };
-    let manager = ctx.extension::<CatalogManager>()?;
-    let status = manager
-        .get_table(lakehouse.catalog_table())
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let Some(table) = catalog_managed_delta_table(status.kind) else {
+    let Some(table) = DeltaCatalogManagedTable::from_context(lakehouse) else {
         return plan_err!("Missing Unity Catalog identity for managed Delta ALTER TABLE");
     };
-    let table = DeltaCatalogManagedTable {
-        table_id: table.table_id,
-        table_uri: table.location.ok_or_else(|| {
-            DataFusionError::Plan("Missing managed Delta table location".to_string())
-        })?,
-    };
-    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse.catalog_table());
-    let response = coordinator
-        .get_ratified_commits(lakehouse, table.table_uri.clone(), 1, None)
-        .await?;
-    let staging = CommitBuilder::from(commit_properties)
-        .with_actions(actions.clone())
-        .build(Some(snapshot.clone()), log_store.clone(), operation)
-        .into_staged_commit_future_with_catalog_latest_version(response.latest_table_version);
-    let (staged, backfilled) =
-        stage_and_publish_ratified_commits(&log_store, &response, staging).await?;
     // The coordinator deletes the staged file when the catalog rejects the commit. An
     // uncertain catalog response must retain the staged file for reconciliation.
-    coordinator
-        .commit_staged(
-            lakehouse,
+    DeltaCatalogCommitCoordinator::new(ctx, lakehouse)
+        .commit_actions(
             &table,
             &log_store,
-            Some(snapshot.as_ref()),
-            &staged,
+            Some(snapshot),
             &actions,
-            backfilled,
+            &operation,
+            commit_properties,
         )
         .await?;
     Ok(true)

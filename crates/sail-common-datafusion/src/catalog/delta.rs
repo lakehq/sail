@@ -108,6 +108,53 @@ pub struct DeltaCommitActions {
     pub domain_metadata: Vec<DeltaDomainMetadataInfo>,
 }
 
+/// A commit of a catalog-managed Delta table that a catalog ratified.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct DeltaRatifiedCommit {
+    pub version: i64,
+    pub timestamp: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+}
+
+/// The latest version of a catalog-managed Delta table that a catalog ratified, and the
+/// ratified commits that the catalog returns, which are the ones that are not reported to
+/// it as published.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct DeltaRatifiedCommits {
+    pub latest_table_version: i64,
+    pub commits: Vec<DeltaRatifiedCommit>,
+}
+
+/// Whether a Delta table is catalog-managed, as the catalog told when it resolved the table.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum DeltaCatalogManaged {
+    /// The catalog ratifies the commits of the table.
+    Yes,
+    /// The table is committed to the file system.
+    No,
+    /// The catalog did not tell, so the protocol of the published Delta log decides.
+    #[default]
+    Undetermined,
+}
+
+/// What a catalog told about a Delta table whose commits it may ratify, when it resolved
+/// the table. A statement reads and commits the table from this state, so that the catalog
+/// is asked once.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct DeltaCatalogState {
+    pub catalog_managed: DeltaCatalogManaged,
+    /// All the ratified commits of the table when it was resolved, for a catalog that
+    /// returned them with the table. They are requested from the catalog otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits: Option<DeltaRatifiedCommits>,
+    /// Whether the catalog registers a table before version 0 of the table is written, in
+    /// which case the first reader or writer of a table without a Delta log writes it.
+    #[serde(default)]
+    pub registered_before_log: bool,
+}
+
 /// Properties that bind a Delta log to a catalog or commit coordinator.
 pub fn is_delta_coordinated_property(key: &str) -> bool {
     key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)

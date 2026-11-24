@@ -175,14 +175,23 @@ impl CatalogManager {
         status: &TableStatus,
         operation: sail_common_datafusion::catalog::LakehouseOperation,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let resolved =
-            self.resolve_lakehouse_table_status_without_storage(table, status, operation)?;
+        let (provider, database, name) = self.resolve_object(table)?;
+        let request = ResolveLakehouseTableRequest {
+            catalog_table: owned_table(table),
+            operation,
+            requested_format: None,
+            options: vec![],
+        };
+        let resolved = provider
+            .resolve_lakehouse_table(&database, &name, status, request)
+            .await?;
         install_table_storage_credentials(ctx, &owned_table(table), &resolved).await?;
         Ok(resolved)
     }
 
     /// Like [`Self::resolve_lakehouse_table_status`], but for a caller that does not
-    /// access the storage of the table, so no storage credentials are requested.
+    /// access the table, so the catalog is not asked for anything more than the status,
+    /// and no storage credentials are requested.
     pub fn resolve_lakehouse_table_status_without_storage<T: AsRef<str>>(
         &self,
         table: &[T],

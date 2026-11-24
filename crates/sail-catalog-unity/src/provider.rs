@@ -23,13 +23,12 @@ use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaCatalogCommit,
-    DeltaCommitActions, DeltaCreatedVersion, DeltaDomainMetadataInfo, DeltaMetadataInfo,
-    DeltaProtocolInfo, unity_table_id_value,
+    DeltaCatalogManaged, DeltaCatalogState, DeltaCommitActions, DeltaCreatedVersion,
+    DeltaDomainMetadataInfo, DeltaMetadataInfo, DeltaProtocolInfo,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, DatabaseStatus, LakehouseFormat, LakehouseOperation, StorageAccess,
-    StorageCredential, TableColumnStatus, TableKind, TableStatus, TableStorageCredentials,
-    identity_partition_fields,
+    CommitAuthority, DatabaseStatus, LakehouseOperation, StorageAccess, StorageCredential,
+    TableColumnStatus, TableKind, TableStatus, TableStorageCredentials, identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
@@ -353,6 +352,92 @@ impl UnityCatalogProvider {
         self.delta_commit_api_cache()?
             .insert(catalog_name.to_string(), api);
         Ok(api)
+    }
+
+    /// Asks the catalog whether a managed Delta table is catalog-managed.
+    ///
+    /// A catalog with the Delta REST API states it when it loads the table, and the
+    /// response has the ratified commits of the table as well. Any failure to load the
+    /// table is an error, since the table may be catalog-managed, unless the server does
+    /// not serve the table with the Delta REST API (400, 404, or 501). The legacy API
+    /// cannot tell. In both of these cases the table properties may still state that the
+    /// table is catalog-managed, and otherwise the published Delta log decides.
+    async fn get_delta_catalog_state(
+        &self,
+        database: &Namespace,
+        table: &str,
+        resolved: &LakehouseResolvedTable,
+    ) -> CatalogResult<DeltaCatalogState> {
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let client = self
+            .get_delta_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let api = self
+            .get_delta_commit_api(&client, &catalog_name, &schema_name, table)
+            .await?;
+        let from_properties = |registered_before_log| {
+            let properties = resolved.status.display_properties.iter();
+            let catalog_managed = properties
+                .into_iter()
+                .any(|(key, value)| is_catalog_managed_property(key, Some(value)));
+            DeltaCatalogState {
+                catalog_managed: if catalog_managed {
+                    DeltaCatalogManaged::Yes
+                } else {
+                    DeltaCatalogManaged::Undetermined
+                },
+                commits: None,
+                registered_before_log,
+            }
+        };
+        if api == DeltaCommitApi::Preview {
+            // The legacy API registers a table before version 0 of the table is written.
+            return Ok(from_properties(true));
+        }
+        let result = get_with_resends(|| {
+            client.load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
+        })
+        .await;
+        match result {
+            Ok(response) if is_catalog_managed_load_table(&response.inner) => {
+                let table_id = resolved.execution.table_identity.table_id.as_deref();
+                let commits = delta_ratified_commits_from_load_table(
+                    response.inner,
+                    table,
+                    table_id.unwrap_or_default(),
+                )?;
+                Ok(DeltaCatalogState {
+                    catalog_managed: DeltaCatalogManaged::Yes,
+                    commits: Some(commits),
+                    registered_before_log: false,
+                })
+            }
+            Ok(_) => Ok(DeltaCatalogState {
+                catalog_managed: DeltaCatalogManaged::No,
+                commits: None,
+                registered_before_log: false,
+            }),
+            Err(e)
+                if matches!(
+                    e.status(),
+                    Some(
+                        reqwest::StatusCode::NOT_FOUND
+                            | reqwest::StatusCode::BAD_REQUEST
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                    )
+                ) =>
+            {
+                Ok(from_properties(false))
+            }
+            Err(e) => Err(request_error(
+                e.status(),
+                format!(
+                    "Failed to load Delta table {} from Unity Catalog: {e}",
+                    quote_names_if_needed(&[&catalog_name, &schema_name, table])
+                ),
+            )),
+        }
     }
 
     fn delta_commit_api_cache(
@@ -1395,14 +1480,35 @@ impl CatalogProvider for UnityCatalogProvider {
     ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
         ensure_table_access(&status)?;
-        let resolved = resolve_lakehouse_table_status(
+        let resolved = self
+            .resolve_lakehouse_table(database, table, &status, request)
+            .await?;
+        Ok((status, resolved))
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let mut resolved = resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
-            &status,
+            status,
             request.operation,
             &self.lakehouse_capabilities(),
         );
-        Ok((status, resolved))
+        // A managed Delta table of Unity Catalog may be catalog-managed, which is decided
+        // here once for the statement.
+        if resolved.execution.commit == CommitAuthority::DeltaRatifiedCommit {
+            let state = self
+                .get_delta_catalog_state(database, table, &resolved)
+                .await?;
+            resolved.execution.delta = Some(state);
+        }
+        Ok(resolved)
     }
 
     async fn get_table_storage_credentials(
@@ -1743,73 +1849,35 @@ impl CatalogProvider for UnityCatalogProvider {
         let api = self
             .get_delta_commit_api(&delta_client, &catalog_name, &schema_name, table)
             .await?;
-        // The legacy API serves only catalog-managed tables, so the table is not looked up.
-        if api == DeltaCommitApi::Preview && request.discover {
-            return Ok(DeltaRatifiedCommitResponse::default());
-        }
-
-        // The Delta REST API returns the ID of the table, which is compared with the ID in
-        // the resolved table, so the table is not looked up again with the legacy API.
-        let resolved_table_id = request.context.table_identity.table_id.clone().filter(|_| {
-            api == DeltaCommitApi::V1 && request.context.format == LakehouseFormat::Delta
-        });
-        let (table_id, table_uri) = if let Some(table_id) = resolved_table_id {
-            if let Some(location) = &request.context.table_identity.table_uri
-                && location.trim_end_matches('/') != request.table_uri.trim_end_matches('/')
-            {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
-                    request.table_uri
-                )));
-            }
-            (table_id, request.table_uri)
-        } else {
-            let status = self.get_table(database, table).await?;
-            ensure_table_access(&status)?;
-            let (format, location, properties) = match status.kind {
-                TableKind::Table {
-                    format,
-                    location,
-                    properties,
-                    ..
-                } => (format, location, properties),
-                _ => {
-                    return Err(CatalogError::InvalidArgument(format!(
-                        "Unity Catalog commit discovery expects a table: {table}"
-                    )));
+        // The table is the one that the catalog resolved, so it is not looked up again. A
+        // table that the statement itself registered is resolved without its ID, and is
+        // looked up.
+        let identity = &request.context.table_identity;
+        let (table_id, table_uri) = match (&identity.table_id, &identity.table_uri) {
+            (Some(table_id), Some(table_uri)) => (table_id.clone(), table_uri.clone()),
+            _ => {
+                let status = self.get_table(database, table).await?;
+                ensure_table_access(&status)?;
+                let identity = resolve_lakehouse_table_status(
+                    self.get_name(),
+                    request.context.catalog_table.clone(),
+                    &status,
+                    request.context.operation,
+                    &self.lakehouse_capabilities(),
+                )
+                .execution
+                .table_identity;
+                match (identity.table_id, identity.table_uri) {
+                    (Some(table_id), Some(table_uri)) => (table_id, table_uri),
+                    _ => {
+                        return Err(CatalogError::InvalidArgument(format!(
+                            "Unity Catalog Delta table `{table}` has no table ID or no location"
+                        )));
+                    }
                 }
-            };
-            if !format.eq_ignore_ascii_case("delta") {
-                return Err(CatalogError::NotSupported(format!(
-                    "Unity Catalog commit discovery for {format} tables"
-                )));
             }
-            let table_uri = if let Some(location) = location {
-                if location.trim_end_matches('/') != request.table_uri.trim_end_matches('/') {
-                    return Err(CatalogError::InvalidArgument(format!(
-                        "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
-                        request.table_uri
-                    )));
-                }
-                location
-            } else {
-                request.table_uri
-            };
-            let table_id = unity_table_id_value(
-                properties
-                    .iter()
-                    .map(|(key, value)| (key.as_str(), value.as_str())),
-            )
-            .ok_or_else(|| {
-                CatalogError::InvalidArgument(format!(
-                    "Unity Catalog Delta table `{table}` is missing table id property"
-                ))
-            })?
-            .to_string();
-            (table_id, table_uri)
         };
-        let table_id = table_id.as_str();
-
+        let (table_id, table_uri) = (&table_id, &table_uri);
         let (status, error) = match api {
             DeltaCommitApi::V1 => {
                 let result = get_with_resends(|| {
@@ -1822,30 +1890,18 @@ impl CatalogProvider for UnityCatalogProvider {
                 .await;
                 match result {
                     Ok(response) => {
-                        return delta_ratified_commits_from_load_table(
+                        let mut commits = delta_ratified_commits_from_load_table(
                             response.inner,
                             table,
                             table_id,
-                            request.start_version,
-                            request.end_version,
-                            request.discover,
-                        );
-                    }
-                    // The server does not serve the table with the Delta REST API, so the
-                    // table is not known to be catalog-managed. Any other failure is an
-                    // error, since the table may be catalog-managed.
-                    Err(e)
-                        if request.discover
-                            && matches!(
-                                e.status(),
-                                Some(
-                                    reqwest::StatusCode::NOT_FOUND
-                                        | reqwest::StatusCode::BAD_REQUEST
-                                        | reqwest::StatusCode::NOT_IMPLEMENTED
-                                )
-                            ) =>
-                    {
-                        return Ok(DeltaRatifiedCommitResponse::default());
+                        )?;
+                        // The server returns every ratified commit that is not reported
+                        // as published, without version filtering.
+                        commits.commits.retain(|commit| {
+                            commit.version >= request.start_version
+                                && request.end_version.is_none_or(|end| commit.version <= end)
+                        });
+                        return Ok(commits);
                     }
                     Err(e) => (e.status(), e.to_string()),
                 }
@@ -1854,8 +1910,8 @@ impl CatalogProvider for UnityCatalogProvider {
                 let legacy_request = r#gen::DeltaGetCommits {
                     end_version: request.end_version,
                     start_version: request.start_version,
-                    table_id: table_id.to_string(),
-                    table_uri,
+                    table_id: table_id.clone(),
+                    table_uri: table_uri.clone(),
                 };
                 let client = self
                     .get_client()
@@ -1877,8 +1933,6 @@ impl CatalogProvider for UnityCatalogProvider {
                                     file_modification_timestamp: commit.file_modification_timestamp,
                                 })
                                 .collect(),
-                            requires_published_log: false,
-                            catalog_managed: false,
                         });
                     }
                     Err(e) => (e.status(), e.to_string()),
@@ -1946,37 +2000,33 @@ fn is_same_location(left: &str, right: &str) -> bool {
     normalize(left) == normalize(right)
 }
 
-/// Converts the table loaded via the Delta REST API to the ratified commits
-/// in the requested version range, in ascending version order.
-/// The loaded table is catalog-managed if and only if its properties have the
-/// `delta.feature.catalogManaged` property with the `supported` value, so the response
-/// to a discovery request for another table has no commits.
+/// Whether the table properties state that the table is catalog-managed.
+fn is_catalog_managed_property(key: &str, value: Option<&str>) -> bool {
+    key.eq_ignore_ascii_case("delta.feature.catalogManaged")
+        && value.is_some_and(|value| value.eq_ignore_ascii_case("supported"))
+}
+
+/// Whether the table loaded via the Delta REST API is catalog-managed, which it is if and
+/// only if its properties have the `delta.feature.catalogManaged` property with the
+/// `supported` value.
+fn is_catalog_managed_load_table(response: &delta_gen::DeltaLoadTableResponse) -> bool {
+    let properties = response.metadata.properties.iter().flatten();
+    properties
+        .into_iter()
+        .any(|(key, value)| is_catalog_managed_property(key, value.as_str()))
+}
+
+/// Converts the table loaded via the Delta REST API to its latest version and all its
+/// ratified commits that are not reported as published, in ascending version order.
 fn delta_ratified_commits_from_load_table(
     response: delta_gen::DeltaLoadTableResponse,
     table: &str,
     table_id: &str,
-    start_version: i64,
-    end_version: Option<i64>,
-    discover: bool,
 ) -> CatalogResult<DeltaRatifiedCommitResponse> {
-    let catalog_managed = response
-        .metadata
-        .properties
-        .iter()
-        .flatten()
-        .any(|(key, value)| {
-            key.eq_ignore_ascii_case("delta.feature.catalogManaged")
-                && value
-                    .as_str()
-                    .is_some_and(|value| value.eq_ignore_ascii_case("supported"))
-        });
-    if discover && !catalog_managed {
-        return Ok(DeltaRatifiedCommitResponse::default());
-    }
     let actual_table_id = response.metadata.table_uuid.as_str();
     if !actual_table_id.eq_ignore_ascii_case(table_id) {
         return Err(CatalogError::InvalidArgument(format!(
-            "Unity Catalog Delta commit discovery table id mismatch for `{table}`: expected `{table_id}`, got `{actual_table_id}`"
+            "Unity Catalog Delta table id mismatch for `{table}`: expected `{table_id}`, got `{actual_table_id}`"
         )));
     }
     let commits = response.commits.unwrap_or_default();
@@ -1985,12 +2035,8 @@ fn delta_ratified_commits_from_load_table(
         .latest_table_version
         .or_else(|| commits.iter().map(|commit| commit.version).max())
         .unwrap_or(-1);
-    // The server returns all the unbackfilled ratified commits without version filtering.
     let mut commits = commits
         .into_iter()
-        .filter(|commit| {
-            commit.version >= start_version && end_version.is_none_or(|end| commit.version <= end)
-        })
         .map(|commit| DeltaRatifiedCommit {
             version: commit.version,
             timestamp: commit.timestamp,
@@ -2003,9 +2049,6 @@ fn delta_ratified_commits_from_load_table(
     Ok(DeltaRatifiedCommitResponse {
         latest_table_version,
         commits,
-        // A table is created by the Delta API with version 0 published.
-        requires_published_log: true,
-        catalog_managed,
     })
 }
 
@@ -3188,12 +3231,107 @@ mod tests {
     ) -> DeltaRatifiedCommitRequest {
         DeltaRatifiedCommitRequest {
             context: delta_execution_context(),
-            table_uri: DELTA_TABLE_URI.to_string(),
             start_version,
             end_version,
-            discover: false,
         }
     }
+
+    fn ratified_commits(
+        latest_table_version: i64,
+        versions: &[i64],
+    ) -> DeltaRatifiedCommitResponse {
+        DeltaRatifiedCommitResponse {
+            latest_table_version,
+            commits: versions
+                .iter()
+                .map(|version| DeltaRatifiedCommit {
+                    version: *version,
+                    timestamp: 1700000000000 + version,
+                    file_name: format!("{version:020}.uuid.json"),
+                    file_size: 100 + version,
+                    file_modification_timestamp: 1700000001000 + version,
+                })
+                .collect(),
+        }
+    }
+
+    fn delta_catalog_state(
+        catalog_managed: DeltaCatalogManaged,
+        commits: Option<DeltaRatifiedCommitResponse>,
+        registered_before_log: bool,
+    ) -> DeltaCatalogState {
+        DeltaCatalogState {
+            catalog_managed,
+            commits,
+            registered_before_log,
+        }
+    }
+
+    fn lakehouse_table_request(operation: LakehouseOperation) -> ResolveLakehouseTableRequest {
+        ResolveLakehouseTableRequest {
+            catalog_table: vec![
+                "main".to_string(),
+                "default".to_string(),
+                "events".to_string(),
+            ],
+            operation,
+            requested_format: None,
+            options: vec![],
+        }
+    }
+
+    /// Resolves the table for a read, and returns what the catalog told about its commits.
+    async fn resolve_delta_catalog_state(
+        provider: &UnityCatalogProvider,
+    ) -> CatalogResult<Option<DeltaCatalogState>> {
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let request = lakehouse_table_request(LakehouseOperation::Read);
+        let (_, resolved) = provider
+            .get_lakehouse_table(&database, "events", request)
+            .await?;
+        Ok(resolved.execution.delta)
+    }
+
+    /// Mounts the table of the legacy API, which the catalog returns when it resolves a table.
+    async fn mount_legacy_table(
+        server: &MockServer,
+        table_type: &str,
+        format: &str,
+        table_id: Option<&str>,
+        properties: serde_json::Value,
+    ) {
+        let mut table = serde_json::json!({
+            "catalog_name": "main",
+            "schema_name": "default",
+            "name": "events",
+            "table_type": table_type,
+            "data_source_format": format,
+            "storage_location": DELTA_TABLE_URI,
+            "properties": properties,
+            "columns": []
+        });
+        if let Some(table_id) = table_id {
+            table["table_id"] = serde_json::json!(table_id);
+        }
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(table))
+            .mount(server)
+            .await;
+    }
+
+    /// Mounts the table of the Delta REST API.
+    async fn mount_load_table(server: &MockServer, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    const LEGACY_TABLE_TARGET: &str = "GET /tables/main.default.events";
+    const DELTA_CONFIG_TARGET: &str = "GET /delta/v1/config?catalog=main&protocol-versions=1.0";
+    const DELTA_TABLE_TARGET: &str = "GET /delta/v1/catalogs/main/schemas/default/tables/events";
 
     fn delta_commit_request(commit: serde_json::Value) -> DeltaCatalogCommit {
         serde_json::from_value(commit).unwrap()
@@ -3318,7 +3456,6 @@ mod tests {
     async fn test_delta_ratified_commits_use_delta_api() {
         let server = MockServer::start().await;
         mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
         // The server returns the commits in descending version order.
         Mock::given(method("GET"))
             .and(path(DELTA_TABLE_PATH))
@@ -3376,166 +3513,570 @@ mod tests {
             vec![3, 4]
         );
 
-        // The API is negotiated only once and the legacy endpoints are not used,
-        // since the ID of the resolved table is compared with the loaded table.
+        // The API is negotiated only once and the legacy endpoints are not used: the table
+        // is the one of the context, whose ID is compared with the loaded table.
+        let targets = vec![DELTA_CONFIG_TARGET, DELTA_TABLE_TARGET, DELTA_TABLE_TARGET];
+        assert_eq!(received_targets(&server).await, targets);
+
+        // A context without the ID or the location of the table is the one of a table that
+        // the statement itself registered. The table is looked up for them.
+        mount_legacy_delta_table(&server).await;
+        let mut targets = targets;
+        for (table_id, table_uri) in [
+            (None, Some(DELTA_TABLE_URI)),
+            (Some(DELTA_TABLE_ID), None),
+            (None, None),
+        ] {
+            let mut request = delta_ratified_commit_request(4, None);
+            request.context.table_identity = CatalogTableIdentity {
+                table_id: table_id.map(str::to_string),
+                table_uri: table_uri.map(str::to_string),
+            };
+            let response = provider
+                .get_delta_ratified_commits(&database, "events", request)
+                .await
+                .unwrap();
+            assert_eq!(response, ratified_commits(5, &[4, 5]));
+            targets.extend([LEGACY_TABLE_TARGET, DELTA_TABLE_TARGET]);
+            assert_eq!(
+                received_targets(&server).await,
+                targets,
+                "{table_id:?} {table_uri:?}"
+            );
+        }
+    }
+
+    /// The commits of a table whose context has no table ID are requested with the ID and
+    /// the location of the table that the catalog returns.
+    #[tokio::test]
+    async fn test_delta_ratified_commits_look_up_a_table_without_identity() {
+        let request = || {
+            let mut request = delta_ratified_commit_request(1, None);
+            request.context.table_identity.table_id = None;
+            // The location of the catalog is used with its ID.
+            request.context.table_identity.table_uri = Some("s3://bucket/other".to_string());
+            request
+        };
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+
+        // A server without the Delta REST API.
+        let server = MockServer::start().await;
+        mount_delta_config(&server, ResponseTemplate::new(404)).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "commits": [{
+                    "version": 2,
+                    "timestamp": 1700000000002i64,
+                    "file_name": "00000000000000000002.uuid.json",
+                    "file_size": 102,
+                    "file_modification_timestamp": 1700000001002i64
+                }],
+                "latest_table_version": 2
+            })))
+            .mount(&server)
+            .await;
+        let provider = mock_provider(&server, "main");
+        let response = provider
+            .get_delta_ratified_commits(&database, "events", request())
+            .await
+            .unwrap();
+        assert_eq!(response, ratified_commits(2, &[2]));
         assert_eq!(
             received_targets(&server).await,
             vec![
-                "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
-                format!("GET {DELTA_TABLE_PATH}"),
-                format!("GET {DELTA_TABLE_PATH}"),
+                DELTA_CONFIG_TARGET,
+                DELTA_TABLE_TARGET,
+                LEGACY_TABLE_TARGET,
+                "GET /delta/preview/commits",
             ]
         );
-
-        // The table is looked up with the legacy API when the resolved table has no ID.
-        let mut request = delta_ratified_commit_request(3, None);
-        request.context.table_identity.table_id = None;
-        let response = provider
-            .get_delta_ratified_commits(&database, "events", request)
-            .await
-            .unwrap();
-        assert_eq!(response.latest_table_version, 5);
-        let targets = received_targets(&server).await;
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[3].body).unwrap();
         assert_eq!(
-            targets[3..],
-            [
-                "GET /tables/main.default.events".to_string(),
-                format!("GET {DELTA_TABLE_PATH}"),
-            ]
+            body,
+            serde_json::json!({
+                "table_id": DELTA_TABLE_ID,
+                "table_uri": DELTA_TABLE_URI,
+                "start_version": 1
+            })
         );
-    }
 
-    async fn discover_delta_catalog_managed(
-        server: &MockServer,
-    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
-        let provider = mock_provider(server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let request = DeltaRatifiedCommitRequest {
-            discover: true,
-            ..delta_ratified_commit_request(1, None)
-        };
-        provider
-            .get_delta_ratified_commits(&database, "events", request)
-            .await
-    }
-
-    #[tokio::test]
-    async fn test_delta_api_states_whether_table_is_catalog_managed() {
-        // The legacy table properties do not have the catalog-managed feature.
-        let delta_api_targets = vec![
-            "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
-            format!("GET {DELTA_TABLE_PATH}"),
-        ];
-
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                    DELTA_TABLE_ID,
-                    Some(vec![2, 1]),
-                    Some(2),
-                )),
-            )
-            .mount(&server)
-            .await;
-        let response = discover_delta_catalog_managed(&server).await.unwrap();
-        assert!(response.catalog_managed);
-        assert_eq!(response.latest_table_version, 2);
-        let versions = response.commits.iter().map(|commit| commit.version);
-        assert_eq!(versions.collect::<Vec<_>>(), vec![1, 2]);
-        // The table is loaded once for the answer and the commits.
-        assert_eq!(received_targets(&server).await, delta_api_targets);
-
-        // A table without the property is not catalog-managed, whatever else the response has.
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
-        let mut table = delta_load_table_json("another-table-id", Some(vec![1]), Some(1));
-        table["metadata"]["properties"] = serde_json::json!({"delta.enableChangeDataFeed": "true"});
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(ResponseTemplate::new(200).set_body_json(table))
-            .mount(&server)
-            .await;
-        let response = discover_delta_catalog_managed(&server).await.unwrap();
-        assert!(!response.catalog_managed);
-        assert_eq!(response.commits, vec![]);
-        assert_eq!(received_targets(&server).await, delta_api_targets);
-
-        // A table that the Delta REST API does not serve is not known to be catalog-managed.
-        for status in [400, 404, 501] {
+        // A server with the Delta REST API, whose table is compared with the ID.
+        for (table_uuid, matched) in [
+            (DELTA_TABLE_ID, true),
+            ("00000000-0000-0000-0000-000000000000", false),
+        ] {
             let server = MockServer::start().await;
             mount_delta_config_ok(&server).await;
             mount_legacy_delta_table(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(ResponseTemplate::new(status).set_body_string("failed"))
-                .mount(&server)
+            let table = delta_load_table_json(table_uuid, Some(vec![2, 1, 0]), Some(2));
+            mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+            let provider = mock_provider(&server, "main");
+            let result = provider
+                .get_delta_ratified_commits(&database, "events", request())
                 .await;
-            let response = discover_delta_catalog_managed(&server).await.unwrap();
-            assert!(!response.catalog_managed, "status {status}");
-            assert_eq!(received_targets(&server).await, delta_api_targets);
+            if matched {
+                assert_eq!(result.unwrap(), ratified_commits(2, &[1, 2]));
+            } else {
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(&error, CatalogError::InvalidArgument(message) if message.contains("table id mismatch")),
+                    "{error:?}"
+                );
+            }
+            assert_eq!(
+                received_targets(&server).await,
+                vec![DELTA_CONFIG_TARGET, LEGACY_TABLE_TARGET, DELTA_TABLE_TARGET]
+            );
         }
 
-        // Any other failure is an error, since the catalog did not tell. The reader then lets
-        // the published Delta protocol decide.
-        for status in [401, 403, 429, 500, 503] {
+        // The table of the catalog has no table ID either, so no commits are requested.
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_table(&server, "MANAGED", "DELTA", None, serde_json::json!({})).await;
+        let provider = mock_provider(&server, "main");
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", request())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::InvalidArgument(message)
+                if message.contains("`events` has no table ID or no location")),
+            "{error:?}"
+        );
+        assert_eq!(
+            received_targets(&server).await,
+            vec![DELTA_CONFIG_TARGET, LEGACY_TABLE_TARGET]
+        );
+    }
+
+    /// A server with the Delta REST API states whether a managed Delta table is
+    /// catalog-managed when the table is resolved, with one request to load the table.
+    #[tokio::test]
+    async fn test_lakehouse_table_states_whether_delta_table_is_catalog_managed() {
+        use DeltaCatalogManaged::{No, Undetermined, Yes};
+
+        let managed = |commits: Option<Vec<i64>>, latest: Option<i64>| {
+            ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                DELTA_TABLE_ID,
+                commits,
+                latest,
+            ))
+        };
+        // A table without the feature is not catalog-managed, whatever else the response has.
+        let mut other = delta_load_table_json("another-table-id", Some(vec![1]), Some(1));
+        other["metadata"]["properties"] = serde_json::json!({
+            "delta.enableChangeDataFeed": "true",
+            "delta.feature.catalogManaged": "enabled"
+        });
+        let mut feature_in_any_case = delta_load_table_json(DELTA_TABLE_ID, None, Some(0));
+        feature_in_any_case["metadata"]["properties"] =
+            serde_json::json!({"Delta.Feature.CatalogManaged": "Supported"});
+        let no_legacy_properties = serde_json::json!({});
+        let legacy_feature = serde_json::json!({"Delta.Feature.CatalogManaged": "SUPPORTED"});
+        let not_served = |status| ResponseTemplate::new(status).set_body_string("not served");
+
+        // The properties of the table of the legacy API, the answer of the Delta REST API
+        // for the table, and the expected state.
+        let cases = [
+            // The response has all the ratified commits of the table, in any order.
+            (
+                &no_legacy_properties,
+                managed(Some(vec![5, 2, 4]), Some(5)),
+                delta_catalog_state(Yes, Some(ratified_commits(5, &[2, 4, 5])), false),
+            ),
+            // The latest version is the one of the latest commit when it is not stated, and
+            // a table with neither is a table without a version.
+            (
+                &no_legacy_properties,
+                managed(Some(vec![7, 6]), None),
+                delta_catalog_state(Yes, Some(ratified_commits(7, &[6, 7])), false),
+            ),
+            (
+                &no_legacy_properties,
+                managed(Some(vec![]), Some(9)),
+                delta_catalog_state(Yes, Some(ratified_commits(9, &[])), false),
+            ),
+            (
+                &no_legacy_properties,
+                managed(None, None),
+                delta_catalog_state(Yes, Some(ratified_commits(-1, &[])), false),
+            ),
+            (
+                &no_legacy_properties,
+                ResponseTemplate::new(200).set_body_json(feature_in_any_case),
+                delta_catalog_state(Yes, Some(ratified_commits(0, &[])), false),
+            ),
+            // The answer of the Delta REST API decides, and not the legacy properties.
+            (
+                &legacy_feature,
+                ResponseTemplate::new(200).set_body_json(other.clone()),
+                delta_catalog_state(No, None, false),
+            ),
+            (
+                &no_legacy_properties,
+                ResponseTemplate::new(200).set_body_json(other),
+                delta_catalog_state(No, None, false),
+            ),
+            // The server does not serve the table with the Delta REST API, so the legacy
+            // properties tell that the table is catalog-managed, or nothing does.
+            (
+                &no_legacy_properties,
+                not_served(400),
+                delta_catalog_state(Undetermined, None, false),
+            ),
+            (
+                &no_legacy_properties,
+                not_served(404),
+                delta_catalog_state(Undetermined, None, false),
+            ),
+            (
+                &no_legacy_properties,
+                not_served(501),
+                delta_catalog_state(Undetermined, None, false),
+            ),
+            (
+                &legacy_feature,
+                not_served(400),
+                delta_catalog_state(Yes, None, false),
+            ),
+            (
+                &legacy_feature,
+                not_served(404),
+                delta_catalog_state(Yes, None, false),
+            ),
+            (
+                &legacy_feature,
+                not_served(501),
+                delta_catalog_state(Yes, None, false),
+            ),
+        ];
+        for (index, (properties, table, expected)) in cases.into_iter().enumerate() {
             let server = MockServer::start().await;
             mount_delta_config_ok(&server).await;
+            mount_legacy_table(
+                &server,
+                "MANAGED",
+                "DELTA",
+                Some(DELTA_TABLE_ID),
+                properties.clone(),
+            )
+            .await;
+            mount_load_table(&server, table).await;
+            let provider = mock_provider(&server, "main");
+            let state = resolve_delta_catalog_state(&provider).await.unwrap();
+            assert_eq!(state, Some(expected), "case {index}");
+            // The table is loaded once for the answer and the commits.
+            assert_eq!(
+                received_targets(&server).await,
+                vec![LEGACY_TABLE_TARGET, DELTA_CONFIG_TARGET, DELTA_TABLE_TARGET],
+                "case {index}"
+            );
+        }
+    }
+
+    /// A resolution for a statement costs the table of the legacy API and the table of the
+    /// Delta REST API, once the provider knows which API the catalog has.
+    #[tokio::test]
+    async fn test_lakehouse_table_of_known_delta_api_costs_two_requests() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        let table = delta_load_table_json(DELTA_TABLE_ID, Some(vec![2, 1]), Some(2));
+        mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+        let provider = mock_provider(&server, "main");
+        let expected = Some(delta_catalog_state(
+            DeltaCatalogManaged::Yes,
+            Some(ratified_commits(2, &[1, 2])),
+            false,
+        ));
+        assert_eq!(
+            resolve_delta_catalog_state(&provider).await.unwrap(),
+            expected
+        );
+        server.reset().await;
+        // The configuration of the catalog is not mounted any more.
+        mount_legacy_delta_table(&server).await;
+        let table = delta_load_table_json(DELTA_TABLE_ID, Some(vec![3, 2, 1]), Some(3));
+        mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+        for operation in [LakehouseOperation::Read, LakehouseOperation::Write] {
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let (_, resolved) = provider
+                .get_lakehouse_table(&database, "events", lakehouse_table_request(operation))
+                .await
+                .unwrap();
+            // The state is the one of the table now, and not one that is remembered.
+            assert_eq!(
+                resolved.execution.delta,
+                Some(delta_catalog_state(
+                    DeltaCatalogManaged::Yes,
+                    Some(ratified_commits(3, &[1, 2, 3])),
+                    false,
+                ))
+            );
+            assert_eq!(
+                received_targets(&server).await,
+                vec![LEGACY_TABLE_TARGET, DELTA_TABLE_TARGET],
+                "{operation:?}"
+            );
+            server.reset().await;
             mount_legacy_delta_table(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(ResponseTemplate::new(status).set_body_string("failed"))
-                .mount(&server)
-                .await;
-            let error = discover_delta_catalog_managed(&server).await.unwrap_err();
-            assert!(
-                error.to_string().contains("failed"),
-                "status {status}: {error}"
+            let table = delta_load_table_json(DELTA_TABLE_ID, Some(vec![3, 2, 1]), Some(3));
+            mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+        }
+    }
+
+    /// A failure to load the table is an error of the resolution, unless the server does not
+    /// serve the table with the Delta REST API, since the table may be catalog-managed.
+    #[tokio::test]
+    async fn test_lakehouse_table_fails_when_the_delta_table_is_not_loaded() {
+        // The answer of the Delta REST API for the table, and the number of requests for it.
+        let resent = 1 + MAX_LOAD_TABLE_RESENDS as usize;
+        let failed = |status| ResponseTemplate::new(status).set_body_string("table answer");
+        let mismatch = delta_load_table_json(
+            "00000000-0000-0000-0000-000000000000",
+            Some(vec![1]),
+            Some(1),
+        );
+        for (case, table, requests) in [
+            ("401", failed(401), 1),
+            ("403", failed(403), 1),
+            ("409", failed(409), 1),
+            ("429", failed(429).insert_header("Retry-After", "0"), resent),
+            ("500", failed(500), resent),
+            ("503", failed(503), resent),
+            // The response is not one of the Delta REST API.
+            (
+                "undecodable",
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"commits": []})),
+                1,
+            ),
+            // The loaded table is not the table that the catalog resolved.
+            (
+                "another table",
+                ResponseTemplate::new(200).set_body_json(mismatch),
+                1,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            // The legacy properties do not decide when the table is not loaded.
+            let properties = serde_json::json!({"delta.feature.catalogManaged": "supported"});
+            mount_legacy_table(
+                &server,
+                "MANAGED",
+                "DELTA",
+                Some(DELTA_TABLE_ID),
+                properties,
+            )
+            .await;
+            mount_load_table(&server, table).await;
+            let provider = mock_provider(&server, "main");
+            let error = resolve_delta_catalog_state(&provider).await.unwrap_err();
+            let message = error.to_string();
+            let expected = match case {
+                "401" => {
+                    matches!(error, CatalogError::Unauthorized(_))
+                        && message.contains("table answer")
+                }
+                "403" => {
+                    matches!(error, CatalogError::Forbidden(_)) && message.contains("table answer")
+                }
+                "another table" => {
+                    matches!(error, CatalogError::InvalidArgument(_))
+                        && message.contains("table id mismatch for `events`")
+                }
+                "undecodable" => {
+                    matches!(error, CatalogError::External(_))
+                        && message.contains("missing field `metadata`")
+                }
+                _ => matches!(error, CatalogError::External(_)) && message.contains("table answer"),
+            };
+            assert!(expected, "{case}: {error:?}");
+            if case != "another table" {
+                assert!(
+                    message.contains(
+                        "Failed to load Delta table main.default.events from Unity Catalog"
+                    ),
+                    "{case}: {message}"
+                );
+            }
+            let mut targets = vec![LEGACY_TABLE_TARGET, DELTA_CONFIG_TARGET];
+            targets.extend(std::iter::repeat_n(DELTA_TABLE_TARGET, requests));
+            assert_eq!(received_targets(&server).await, targets, "{case}");
+
+            // The failure does not change the API of the catalog, and nothing of the failed
+            // resolution is remembered: the next resolution loads the table.
+            assert_eq!(
+                provider.delta_commit_api_cache().unwrap().get("main"),
+                Some(&DeltaCommitApi::V1),
+                "{case}"
+            );
+            server.reset().await;
+            mount_legacy_delta_table(&server).await;
+            let table = delta_load_table_json(DELTA_TABLE_ID, Some(vec![1]), Some(1));
+            mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+            assert_eq!(
+                resolve_delta_catalog_state(&provider).await.unwrap(),
+                Some(delta_catalog_state(
+                    DeltaCatalogManaged::Yes,
+                    Some(ratified_commits(1, &[1])),
+                    false,
+                )),
+                "{case}"
+            );
+            assert_eq!(
+                received_targets(&server).await,
+                vec![LEGACY_TABLE_TARGET, DELTA_TABLE_TARGET],
+                "{case}"
             );
         }
 
         // A server that fails to tell which API the catalog has may serve the table with
-        // the Delta REST API.
+        // the Delta REST API, so the resolution fails and the table is not loaded.
         for status in [500, 503] {
             let server = MockServer::start().await;
             mount_delta_config(&server, ResponseTemplate::new(status)).await;
             mount_legacy_delta_table(&server).await;
-            let error = discover_delta_catalog_managed(&server).await.unwrap_err();
+            let provider = mock_provider(&server, "main");
+            let error = resolve_delta_catalog_state(&provider).await.unwrap_err();
             assert!(
                 matches!(&error, CatalogError::External(message) if message.contains("Delta API configuration")),
                 "status {status}: {error:?}"
             );
+            let mut targets = vec![LEGACY_TABLE_TARGET];
+            targets.extend(std::iter::repeat_n(DELTA_CONFIG_TARGET, resent));
+            assert_eq!(received_targets(&server).await, targets, "status {status}");
+            assert_eq!(provider.delta_commit_api_cache().unwrap().len(), 0);
         }
 
-        // A request without a response is an error as well.
+        // A request without a response is an error as well, whether or not the API of the
+        // catalog is known.
+        let server = MockServer::start().await;
+        mount_legacy_delta_table(&server).await;
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let status = mock_provider(&server, "main")
+            .get_table(&database, "events")
+            .await
+            .unwrap();
         let options = UnityCatalogOptions {
             uri: "http://127.0.0.1:1".to_string(),
             ..empty_options("main")
         };
         let provider = UnityCatalogProvider::new("test".to_string(), options).unwrap();
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let request = DeltaRatifiedCommitRequest {
-            discover: true,
-            ..delta_ratified_commit_request(1, None)
-        };
-        let error = provider
-            .get_delta_ratified_commits(&database, "events", request.clone())
-            .await
-            .unwrap_err();
-        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
-        provider
-            .delta_commit_api_cache()
-            .unwrap()
-            .insert("main".to_string(), DeltaCommitApi::V1);
-        let error = provider
-            .get_delta_ratified_commits(&database, "events", request)
-            .await
-            .unwrap_err();
-        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
+        for api in [None, Some(DeltaCommitApi::V1)] {
+            if let Some(api) = api {
+                let mut cache = provider.delta_commit_api_cache().unwrap();
+                cache.insert("main".to_string(), api);
+            }
+            let request = lakehouse_table_request(LakehouseOperation::Read);
+            let error = provider
+                .resolve_lakehouse_table(&database, "events", &status, request)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CatalogError::External(_)),
+                "{api:?}: {error:?}"
+            );
+        }
+    }
+
+    /// A server without the Delta REST API cannot tell whether a table is catalog-managed,
+    /// and it registers a table before the Delta log of the table is written.
+    #[tokio::test]
+    async fn test_lakehouse_table_of_legacy_server_is_decided_by_the_legacy_properties() {
+        use DeltaCatalogManaged::{Undetermined, Yes};
+
+        for (properties, catalog_managed) in [
+            (serde_json::json!({}), Undetermined),
+            (
+                serde_json::json!({"delta.feature.catalogManaged": "disabled"}),
+                Undetermined,
+            ),
+            (
+                serde_json::json!({"delta.feature.catalogManaged": "supported"}),
+                Yes,
+            ),
+            (
+                serde_json::json!({"DELTA.FEATURE.CATALOGMANAGED": "Supported"}),
+                Yes,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(404)).await;
+            mount_refusing_legacy_commits(&server).await;
+            let case = properties.to_string();
+            mount_legacy_table(
+                &server,
+                "MANAGED",
+                "DELTA",
+                Some(DELTA_TABLE_ID),
+                properties,
+            )
+            .await;
+            let provider = mock_provider(&server, "main");
+            let expected = Some(delta_catalog_state(catalog_managed, None, true));
+            for _ in 0..2 {
+                let state = resolve_delta_catalog_state(&provider).await.unwrap();
+                assert_eq!(state, expected, "{case}");
+            }
+            // The table of the Delta REST API is requested once, to learn that the server
+            // does not have the API. The legacy commits are not requested.
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    LEGACY_TABLE_TARGET,
+                    DELTA_CONFIG_TARGET,
+                    DELTA_TABLE_TARGET,
+                    LEGACY_TABLE_TARGET,
+                ],
+                "{case}"
+            );
+        }
+    }
+
+    /// Only a managed Delta table with a Unity Catalog table ID may be catalog-managed. Any
+    /// other table is resolved with the table of the legacy API alone.
+    #[tokio::test]
+    async fn test_lakehouse_table_of_other_tables_sends_no_delta_request() {
+        for (table_type, format, table_id) in [
+            ("EXTERNAL", "DELTA", Some(DELTA_TABLE_ID)),
+            ("EXTERNAL_SHALLOW_CLONE", "DELTA", Some(DELTA_TABLE_ID)),
+            ("MANAGED", "PARQUET", Some(DELTA_TABLE_ID)),
+            ("MANAGED", "ICEBERG", Some(DELTA_TABLE_ID)),
+            ("EXTERNAL", "CSV", Some(DELTA_TABLE_ID)),
+            ("MANAGED", "DELTA", None),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            // The properties do not make such a table catalog-managed.
+            let properties = serde_json::json!({"delta.feature.catalogManaged": "supported"});
+            mount_legacy_table(&server, table_type, format, table_id, properties).await;
+            let table = delta_load_table_json(DELTA_TABLE_ID, Some(vec![1]), Some(1));
+            mount_load_table(&server, ResponseTemplate::new(200).set_body_json(table)).await;
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            for operation in [LakehouseOperation::Read, LakehouseOperation::Write] {
+                let (_, resolved) = provider
+                    .get_lakehouse_table(&database, "events", lakehouse_table_request(operation))
+                    .await
+                    .unwrap();
+                let case = format!("{table_type} {format} {table_id:?} {operation:?}");
+                assert_eq!(resolved.execution.delta, None, "{case}");
+                assert_ne!(
+                    resolved.execution.commit,
+                    CommitAuthority::DeltaRatifiedCommit,
+                    "{case}"
+                );
+            }
+            assert_eq!(
+                received_targets(&server).await,
+                vec![LEGACY_TABLE_TARGET, LEGACY_TABLE_TARGET],
+                "{table_type} {format} {table_id:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3547,6 +4088,9 @@ mod tests {
                 .into_iter()
                 .filter(|t| *t == target)
                 .count()
+        }
+        async fn load(server: &MockServer) -> CatalogResult<Option<DeltaCatalogState>> {
+            resolve_delta_catalog_state(&mock_provider(server, "main")).await
         }
         async fn server_with_failures(failure: ResponseTemplate, failures: u64) -> MockServer {
             let server = MockServer::start().await;
@@ -3578,8 +4122,15 @@ mod tests {
             ResponseTemplate::new(429).insert_header("Retry-After", "0"),
         ] {
             let server = server_with_failures(failure, 2).await;
-            let response = discover_delta_catalog_managed(&server).await.unwrap();
-            assert!(response.catalog_managed);
+            let state = load(&server).await.unwrap();
+            assert_eq!(
+                state,
+                Some(delta_catalog_state(
+                    DeltaCatalogManaged::Yes,
+                    Some(ratified_commits(2, &[1, 2])),
+                    false,
+                ))
+            );
             assert_eq!(table_requests(&server).await, 3);
         }
 
@@ -3588,17 +4139,38 @@ mod tests {
             let server =
                 server_with_failures(ResponseTemplate::new(status).set_body_string("failed"), 1)
                     .await;
-            let _ = discover_delta_catalog_managed(&server).await;
+            let _ = load(&server).await;
             assert_eq!(table_requests(&server).await, 1, "status {status}");
         }
 
-        // A failure that persists is an error after a bounded number of requests.
+        // A failure that persists is an error after a bounded number of requests, when the
+        // table is resolved and when its commits are requested.
         let server = server_with_failures(
             ResponseTemplate::new(503).set_body_string("unavailable"),
             10,
         )
         .await;
-        let error = discover_delta_catalog_managed(&server).await.unwrap_err();
+        let error = load(&server).await.unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::External(message)
+                if message.contains("Failed to load Delta table") && message.contains("unavailable")),
+            "{error:?}"
+        );
+        assert_eq!(
+            table_requests(&server).await,
+            1 + MAX_LOAD_TABLE_RESENDS as usize
+        );
+        let server = server_with_failures(
+            ResponseTemplate::new(503).set_body_string("unavailable"),
+            10,
+        )
+        .await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap_err();
         assert!(
             matches!(&error, CatalogError::External(message)
                 if message.contains("Failed to get Delta commits") && message.contains("unavailable")),
@@ -3746,28 +4318,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_legacy_api_does_not_state_whether_table_is_catalog_managed() {
-        let server = MockServer::start().await;
-        mount_delta_config(&server, ResponseTemplate::new(404)).await;
-        mount_legacy_delta_table(&server).await;
-        let response = discover_delta_catalog_managed(&server).await.unwrap();
-        assert!(!response.catalog_managed);
-        // Neither the table nor its legacy commits are requested. The table of the Delta
-        // REST API is requested once to learn that the server does not have the API.
-        assert_eq!(
-            received_targets(&server).await,
-            vec![
-                "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
-                "GET /delta/v1/catalogs/main/schemas/default/tables/events",
-            ]
-        );
-    }
-
-    #[tokio::test]
     async fn test_delta_ratified_commits_without_latest_table_version() {
         let server = MockServer::start().await;
         mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
         Mock::given(method("GET"))
             .and(path(DELTA_TABLE_PATH))
             .respond_with(
@@ -3847,7 +4400,6 @@ mod tests {
         for status in [404, 501, 400] {
             let server = MockServer::start().await;
             mount_delta_config(&server, ResponseTemplate::new(status)).await;
-            mount_legacy_delta_table(&server).await;
             Mock::given(method("GET"))
                 .and(path("/delta/preview/commits"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -3929,10 +4481,22 @@ mod tests {
                     // asked once.
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
                     "GET /delta/v1/catalogs/main/schemas/default/tables/events",
-                    "GET /tables/main.default.events",
+                    // The table is the one of the context, so it is not looked up.
                     "GET /delta/preview/commits",
                     "POST /delta/preview/commits",
                 ],
+                "status {status}"
+            );
+            // The legacy commits are requested with the ID and the location of the context.
+            let requests = server.received_requests().await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&requests[2].body).unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "table_id": DELTA_TABLE_ID,
+                    "table_uri": DELTA_TABLE_URI,
+                    "start_version": 1
+                }),
                 "status {status}"
             );
             assert_eq!(
@@ -4183,7 +4747,6 @@ mod tests {
     async fn test_legacy_api_is_remembered_and_reports_its_own_error() {
         for status in [401, 403, 500] {
             let server = MockServer::start().await;
-            mount_legacy_delta_table(&server).await;
             Mock::given(method("GET"))
                 .and(path("/delta/preview/commits"))
                 .respond_with(ResponseTemplate::new(status).set_body_string("legacy answer"))
@@ -4217,9 +4780,7 @@ mod tests {
                 vec![
                     "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
                     table.as_str(),
-                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
-                    "GET /tables/main.default.events",
                     "GET /delta/preview/commits",
                 ],
                 "status {status}"
@@ -6595,12 +7156,11 @@ mod tests {
                     "unexpected error: {error:?}"
                 );
             }
+            // The commits of the object are not requested when it is looked up for them.
+            let mut request = delta_ratified_commit_request(0, None);
+            request.context.table_identity.table_id = None;
             let error = provider
-                .get_delta_ratified_commits(
-                    &database,
-                    "events",
-                    delta_ratified_commit_request(0, None),
-                )
+                .get_delta_ratified_commits(&database, "events", request)
                 .await
                 .unwrap_err();
             assert!(
@@ -6608,18 +7168,17 @@ mod tests {
                 "unexpected error: {error:?}"
             );
 
-            // No Delta API request is made for the object, other than the configuration
-            // of the catalog.
-            let mut targets = received_targets(&server).await;
-            targets.dedup();
+            // No Delta API request is made for the object, other than the requests that
+            // learn which API the catalog has.
             assert_eq!(
-                targets,
+                received_targets(&server).await,
                 vec![
                     "GET /tables/main.default.events",
                     "GET /tables?catalog_name=main&schema_name=default",
                     "GET /tables/main.default.events",
-                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
-                    "GET /delta/v1/catalogs/main/schemas/default/tables/events",
+                    "GET /tables/main.default.events",
+                    DELTA_CONFIG_TARGET,
+                    DELTA_TABLE_TARGET,
                     "GET /tables/main.default.events",
                 ],
                 "table type {table_type}"
@@ -6653,6 +7212,14 @@ mod tests {
         assert_eq!(
             resolved.execution.commit,
             sail_common_datafusion::catalog::CommitAuthority::DeltaRatifiedCommit
+        );
+        assert_eq!(
+            resolved.execution.delta,
+            Some(delta_catalog_state(
+                DeltaCatalogManaged::Undetermined,
+                None,
+                true
+            ))
         );
     }
 

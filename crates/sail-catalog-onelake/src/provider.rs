@@ -298,6 +298,18 @@ impl CatalogProvider for OneLakeCatalogProvider {
         Ok((self.normalize_table_status(status), resolved))
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, status, request)
+            .await
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,

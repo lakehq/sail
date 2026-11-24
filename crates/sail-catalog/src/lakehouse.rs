@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub use sail_common_datafusion::catalog::delta::DeltaRatifiedCommit;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaRatifiedCommits,
+    unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,
@@ -186,43 +188,16 @@ pub enum DeltaCommitOutcome {
     Unknown(String),
 }
 
+/// A request for the ratified commits of the table of the context, with the versions from
+/// the start version to the end version, or to the latest version of the table.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DeltaRatifiedCommitRequest {
     pub context: LakehouseExecutionContext,
-    pub table_uri: String,
     pub start_version: i64,
     pub end_version: Option<i64>,
-    /// Whether the request is made to learn if the table is catalog-managed, when neither the
-    /// table properties nor the Delta log have shown that it is. The catalog answers such a
-    /// request only with an API that serves every Delta table, and the response states
-    /// whether the table is catalog-managed.
-    #[serde(default)]
-    pub discover: bool,
 }
 
-#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct DeltaRatifiedCommitResponse {
-    pub latest_table_version: i64,
-    pub commits: Vec<DeltaRatifiedCommit>,
-    /// Whether the catalog registers a table only after version 0 of the table is published.
-    /// A table of such a catalog always has a Delta log, so a client never creates the log
-    /// of a registered table.
-    #[serde(default)]
-    pub requires_published_log: bool,
-    /// Whether the catalog states that the table is catalog-managed. A catalog that does not
-    /// state it leaves the decision to the table properties and the Delta log.
-    #[serde(default)]
-    pub catalog_managed: bool,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct DeltaRatifiedCommit {
-    pub version: i64,
-    pub timestamp: i64,
-    pub file_name: String,
-    pub file_size: i64,
-    pub file_modification_timestamp: i64,
-}
+pub type DeltaRatifiedCommitResponse = DeltaRatifiedCommits;
 
 pub fn resolve_lakehouse_table_status(
     provider_id: impl Into<String>,

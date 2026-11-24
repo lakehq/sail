@@ -72,10 +72,10 @@ use crate::spec::{
     route_table_property_key,
 };
 use crate::table::{
-    DeltaSnapshot, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    DeltaSnapshot, DeltaTable, catalog_managed_commit_context,
     create_delta_table_with_object_store, create_logstore_with_object_store,
-    infer_delta_logical_metadata, infer_delta_logical_schema,
-    load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
+    infer_delta_logical_metadata, infer_delta_logical_schema, open_catalog_table,
+    open_table_with_object_store_and_table_config,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 use crate::{DeltaTableError, create_delta_source};
@@ -1120,37 +1120,8 @@ async fn open_delta_write_planning_table(
         ..Default::default()
     };
 
-    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
-        let log_store = create_logstore_with_object_store(
-            Arc::clone(&object_store),
-            table_url.clone(),
-            StorageConfig,
-        )?;
-        let source = load_catalog_managed_commits_for_snapshot(
-            &ctx,
-            lakehouse_table,
-            &table_url,
-            log_store.clone(),
-            None,
-            SnapshotIntent::Write,
-            Some(&table_config),
-        )
-        .await
-        .map_err(DeltaTableError::from)?;
-        let mut table = source.into_table(log_store, table_config);
-        if table.state.is_none() {
-            table.load().await?;
-        }
-        Ok(table)
-    } else {
-        open_table_with_object_store_and_table_config(
-            table_url,
-            object_store,
-            Default::default(),
-            table_config,
-        )
-        .await
-    }
+    let log_store = create_logstore_with_object_store(object_store, table_url, StorageConfig)?;
+    open_catalog_table(&ctx, lakehouse_table, log_store, table_config, None).await
 }
 
 impl DeltaLakeSource {

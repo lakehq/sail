@@ -341,6 +341,18 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             .await
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, status, request)
+            .await
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
@@ -789,8 +801,6 @@ mod tests {
             Ok(DeltaRatifiedCommitResponse {
                 latest_table_version: request.start_version,
                 commits: vec![],
-                requires_published_log: false,
-                catalog_managed: false,
             })
         }
 
@@ -1188,10 +1198,8 @@ mod tests {
                 "t1",
                 DeltaRatifiedCommitRequest {
                     context: context.clone(),
-                    table_uri: "file:///tmp/table".to_string(),
                     start_version: 7,
                     end_version: None,
-                    discover: false,
                 },
             )
             .await

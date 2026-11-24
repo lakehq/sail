@@ -22,9 +22,8 @@ use crate::physical_plan::{
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{Metadata, Protocol};
 use crate::table::{
-    CatalogSnapshotSource, DeltaSnapshot, DeltaTable, SnapshotIntent,
-    catalog_managed_commit_context, create_delta_table_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
+    DeltaSnapshot, DeltaTable, create_delta_table_with_object_store, open_catalog_table,
+    open_table_error,
 };
 
 /// Configuration shared by all Delta planners.
@@ -375,31 +374,15 @@ impl<'a> PlannerContext<'a> {
             table.state = Some(Arc::clone(snapshot));
             Ok(table)
         } else {
-            let log_store = self.log_store()?;
-            let source = match catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
-            {
-                Some(lakehouse_table) => {
-                    load_catalog_managed_commits_for_snapshot(
-                        &self.session,
-                        lakehouse_table,
-                        &self.config.table_url,
-                        log_store.clone(),
-                        None,
-                        SnapshotIntent::Write,
-                        Some(&table_config),
-                    )
-                    .await?
-                }
-                None => CatalogSnapshotSource::default(),
-            };
-            let mut table = source.into_table(log_store, table_config);
-            if table.state.is_none() {
-                table
-                    .load()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            }
-            Ok(table)
+            open_catalog_table(
+                &self.session,
+                self.config.lakehouse_table.as_ref(),
+                self.log_store()?,
+                table_config,
+                None,
+            )
+            .await
+            .map_err(open_table_error)
         }
     }
 }
