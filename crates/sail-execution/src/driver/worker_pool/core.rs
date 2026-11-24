@@ -12,6 +12,7 @@ use log::{debug, error, info, warn};
 use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_object_store::StorageRoutes;
 use sail_python_udf::error::PyErrExtractor;
 use sail_system_store::SystemEvent;
 use tokio::time::Instant;
@@ -334,6 +335,7 @@ impl WorkerPool {
         stage: usize,
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
+        storage_routes: Option<Arc<StorageRoutes>>,
     ) {
         let running_workers = self.list_running_workers();
         let prepare = || -> ExecutionResult<_> {
@@ -366,7 +368,14 @@ impl WorkerPool {
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(error) = client
-                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                .run_task_batch(
+                    job_id,
+                    stage,
+                    tasks.clone(),
+                    definition,
+                    peers,
+                    storage_routes,
+                )
                 .await
             {
                 for task in tasks {

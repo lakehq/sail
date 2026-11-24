@@ -88,11 +88,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     ProtoBuilder::new("stream", &["common.proto"]).build()?;
     ProtoBuilder::new("task", &["common.proto"]).build()?;
+    // The messages with storage credentials cannot be formatted, so that they are not logged.
     ProtoBuilder::new("driver", &["service.proto", "celeborn.proto"])
+        .skip_debug(&[
+            "sail.driver.GetStorageCredentialsRequest",
+            "sail.driver.GetStorageCredentialsResponse",
+            "sail.driver.S3StorageCredential",
+            "sail.driver.S3StorageEndpoint",
+            "sail.driver.AzureSasStorageCredential",
+            "sail.driver.GcsOauthStorageCredential",
+        ])
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
-        .skip_debug(&["sail.worker.RunTaskBatchRequest"])
+        .skip_debug(&[
+            "sail.worker.RunTaskBatchRequest",
+            "sail.worker.StorageRoutes",
+        ])
         .with_service()
         .build()?;
     Ok(())

@@ -66,6 +66,17 @@ fn credential_error(message: String) -> object_store::Error {
     }
 }
 
+/// Returns the message of an error that says why a credential cannot be fetched.
+fn credential_error_message(error: object_store::Error) -> String {
+    match error {
+        object_store::Error::Generic {
+            store: "vended credentials",
+            source,
+        } => source.to_string(),
+        error => error.to_string(),
+    }
+}
+
 /// A credential of an object store that is created from a storage credential.
 pub trait VendedCredential: Sized + Send + Sync + 'static {
     fn try_from_credential(credential: StorageCredential) -> Option<Self>;
@@ -117,6 +128,12 @@ impl VendedCredential for GcpCredential {
     }
 }
 
+impl VendedCredential for StorageCredential {
+    fn try_from_credential(credential: StorageCredential) -> Option<Self> {
+        Some(credential)
+    }
+}
+
 struct CurrentCredential<C> {
     credential: Arc<C>,
     expires_at_ms: Option<i64>,
@@ -157,6 +174,16 @@ struct CredentialState<C> {
     failure: Option<(tokio::time::Instant, String)>,
 }
 
+impl<C> CredentialState<C> {
+    /// Whether a valid credential may be replaced now, which is not the case right
+    /// after a failure to replace it.
+    fn may_refresh(&self) -> bool {
+        self.failure
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() >= REFRESH_INTERVAL)
+    }
+}
+
 struct CredentialSource<C> {
     access: StorageAccess,
     fetch: StorageCredentialFetch,
@@ -184,7 +211,7 @@ impl<C: VendedCredential> CredentialSource<C> {
 
     /// Fetches the credential. The state is not locked while the credential is fetched.
     /// A fetch that times out or returns an expired credential fails.
-    async fn fetch(&self) -> Result<Arc<C>> {
+    async fn fetch(&self) -> Result<(Arc<C>, Option<i64>)> {
         let fetched = match tokio::time::timeout(FETCH_TIMEOUT, (self.fetch)(self.access)).await {
             Ok(Ok(credentials)) => Self::current(credentials).and_then(|current| {
                 if current.is_expired() {
@@ -202,7 +229,7 @@ impl<C: VendedCredential> CredentialSource<C> {
         let mut state = self.state();
         match fetched {
             Ok(fetched) => {
-                let credential = Arc::clone(&fetched.credential);
+                let credential = (Arc::clone(&fetched.credential), fetched.expires_at_ms);
                 state.current = Some(fetched);
                 state.failure = None;
                 Ok(credential)
@@ -253,11 +280,10 @@ impl<C> fmt::Debug for VendedCredentialProvider<C> {
     }
 }
 
-#[async_trait::async_trait]
-impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
-    type Credential = C;
-
-    async fn get_credential(&self) -> Result<Arc<C>> {
+impl<C: VendedCredential> VendedCredentialProvider<C> {
+    /// Returns the credential and the time when it expires, in milliseconds since
+    /// the Unix epoch.
+    async fn get(&self) -> Result<(Arc<C>, Option<i64>)> {
         let source = &self.source;
         {
             let state = source.state();
@@ -266,12 +292,8 @@ impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
             {
                 // A valid credential is replaced in the background, so that the requests
                 // to the storage do not wait for the catalog.
-                let refresh = current.needs_refresh()
-                    && state
-                        .failure
-                        .as_ref()
-                        .is_none_or(|(at, _)| at.elapsed() >= REFRESH_INTERVAL);
-                let credential = Arc::clone(&current.credential);
+                let refresh = current.needs_refresh() && state.may_refresh();
+                let credential = (Arc::clone(&current.credential), current.expires_at_ms);
                 drop(state);
                 if refresh && let Ok(guard) = Arc::clone(&source.refresh).try_lock_owned() {
                     let source = Arc::clone(source);
@@ -292,7 +314,7 @@ impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
             if let Some(current) = state.current.as_ref()
                 && !current.is_expired()
             {
-                return Ok(Arc::clone(&current.credential));
+                return Ok((Arc::clone(&current.credential), current.expires_at_ms));
             }
             if let Some((at, message)) = state.failure.as_ref()
                 && at.elapsed() < FAILURE_BACKOFF
@@ -302,6 +324,167 @@ impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
         }
         source.fetch().await
     }
+
+    /// Returns the credential for one who keeps it and asks again before it expires.
+    /// A valid credential that should be replaced is replaced first, and is returned
+    /// if it cannot be replaced.
+    async fn get_fresh(&self) -> Result<(Arc<C>, Option<i64>)> {
+        let source = &self.source;
+        let stale = |state: &CredentialState<C>| {
+            state
+                .current
+                .as_ref()
+                .is_some_and(|x| !x.is_expired() && x.needs_refresh())
+                && state.may_refresh()
+        };
+        if stale(&source.state()) {
+            let _guard = source.refresh.lock().await;
+            if stale(&source.state())
+                && let Err(e) = source.fetch().await
+            {
+                warn!("failed to replace a storage credential before it expires: {e}");
+            }
+        }
+        self.get().await
+    }
+}
+
+#[async_trait::async_trait]
+impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
+    type Credential = C;
+
+    async fn get_credential(&self) -> Result<Arc<C>> {
+        Ok(self.get().await?.0)
+    }
+}
+
+/// The storage credentials issued for an owner in a session.
+///
+/// The object stores of the session and the workers of the session get the credentials
+/// from here, so that the catalog is asked once for all of them.
+struct SessionCredentials {
+    read: VendedCredentialProvider<StorageCredential>,
+    write: VendedCredentialProvider<StorageCredential>,
+}
+
+impl SessionCredentials {
+    async fn get(
+        &self,
+        access: StorageAccess,
+    ) -> std::result::Result<TableStorageCredentials, String> {
+        let provider = match access {
+            StorageAccess::Read => &self.read,
+            StorageAccess::ReadWrite => &self.write,
+        };
+        let (credential, expires_at_ms) = provider
+            .get_fresh()
+            .await
+            .map_err(credential_error_message)?;
+        Ok(TableStorageCredentials {
+            credential: credential.as_ref().clone(),
+            expires_at_ms,
+            access,
+        })
+    }
+}
+
+/// A storage location that the workers of a session access in the same way as
+/// the session. It has no storage credentials.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct StorageRoute {
+    pub location: String,
+    pub owner: String,
+    /// The version of the storage locations of the session in which the session started
+    /// to access the location in this way. The workers replace the object stores of a
+    /// location that the session accesses anew, e.g. for another storage.
+    pub version: u64,
+    /// The reason why the catalog issued no storage credentials for the owner, in which
+    /// case the location is accessed with the storage credentials of the environment.
+    pub not_issued: Option<String>,
+}
+
+/// The storage locations that the workers of a session access in the same way as
+/// the session, with the storage credentials that they request from the session.
+#[derive(Clone, Eq, PartialEq)]
+pub struct StorageRoutes {
+    /// The number of changes to the storage locations in the session.
+    pub version: u64,
+    /// The value that a request for storage credentials of the session must have.
+    pub token: Vec<u8>,
+    pub routes: Vec<StorageRoute>,
+}
+
+impl fmt::Debug for StorageRoutes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StorageRoutes")
+            .field("version", &self.version)
+            .field("token", &"<redacted>")
+            .field("routes", &self.routes)
+            .finish()
+    }
+}
+
+/// A request of a worker for the storage credentials of its session.
+#[derive(Clone)]
+pub struct StorageCredentialsRequest {
+    pub token: Arc<[u8]>,
+    pub owner: String,
+    pub location: String,
+    pub access: StorageAccess,
+}
+
+/// Gets the storage credentials for a worker from its session.
+/// The error message must not contain secret values.
+pub type SessionStorageCredentialFetch = Arc<
+    dyn Fn(
+            StorageCredentialsRequest,
+        ) -> BoxFuture<'static, std::result::Result<TableStorageCredentials, String>>
+        + Send
+        + Sync,
+>;
+
+/// The reason why a session does not give storage credentials to a worker.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum StorageCredentialsError {
+    /// The request is not from a worker of the session.
+    Denied,
+    /// The session has no credentials for the request, with a message without
+    /// secret values.
+    Unavailable(String),
+}
+
+#[derive(Clone)]
+struct SessionRoute {
+    location: Url,
+    /// The version of the routes of the session in which the route was added.
+    version: u64,
+    not_issued: Option<String>,
+    /// The credentials issued for the owner, which a worker does not have.
+    credentials: Option<Arc<SessionCredentials>>,
+}
+
+impl SessionRoute {
+    fn is(&self, route: &StorageRoute) -> bool {
+        self.location.as_str() == route.location
+            && self.version == route.version
+            && self.not_issued == route.not_issued
+    }
+}
+
+#[derive(Default)]
+struct SessionRoutes {
+    /// The number of changes to the routes in the session, or for a worker, the version
+    /// of the routes that it has from its session.
+    version: u64,
+    /// The routes by owner.
+    routes: HashMap<String, SessionRoute>,
+    /// The routes for the workers of the session, until the routes change.
+    snapshot: Option<Arc<StorageRoutes>>,
+}
+
+fn same_token(a: &[u8], b: &[u8]) -> bool {
+    // The time of the comparison does not depend on where the values differ.
+    a.len() == b.len() && a.iter().zip(b).fold(0, |x, (a, b)| x | (a ^ b)) == 0
 }
 
 /// The description of an object store that accesses a storage location
@@ -795,12 +978,10 @@ impl ObjectStore for PrefixRoutingObjectStore {
 /// The object stores are registered in the object store registry of the session,
 /// so the credentials are not visible to other sessions.
 pub struct VendedObjectStores {
-    enabled: bool,
     factory: VendedStoreFactory,
     /// The object stores registered in the object store registry of the session,
     /// by URL scheme and authority.
     stores: Mutex<HashMap<(String, String), Arc<PrefixRoutingObjectStore>>>,
-    reported_disabled: AtomicBool,
     /// The owners for which a refusal to issue credentials is reported.
     reported_refused: Mutex<HashSet<String>>,
     /// The time until which no credentials are requested for a storage location
@@ -810,6 +991,11 @@ pub struct VendedObjectStores {
     /// the storage of the object stores of the owner, which are replaced when the
     /// table is next used.
     storage_changed: Arc<Mutex<HashSet<String>>>,
+    /// What the workers of the session need to access the storage locations in the
+    /// same way as the session.
+    session: Mutex<SessionRoutes>,
+    /// A random value that the workers of the session get with the routes.
+    token: Arc<[u8]>,
 }
 
 impl SessionExtension for VendedObjectStores {
@@ -819,41 +1005,24 @@ impl SessionExtension for VendedObjectStores {
 }
 
 impl VendedObjectStores {
-    /// Creates the object stores of a session. Storage credentials issued by catalogs
-    /// are not used if `enabled` is false.
-    pub fn new(runtime: RuntimeHandle, enabled: bool) -> Self {
+    /// Creates the object stores of a session, or of a worker of a session.
+    pub fn new(runtime: RuntimeHandle) -> Self {
         // The region of a bucket is discovered once for all tables in the bucket.
         let regions = Arc::new(BucketRegions::default());
-        let mut stores = Self::with_factory(Arc::new(move |request| {
+        Self::with_factory(Arc::new(move |request| {
             create_vended_store(&runtime, &regions, request)
-        }));
-        stores.enabled = enabled;
-        stores
+        }))
     }
 
     pub fn with_factory(factory: VendedStoreFactory) -> Self {
         Self {
-            enabled: true,
             factory,
             stores: Mutex::new(HashMap::new()),
-            reported_disabled: AtomicBool::new(false),
             reported_refused: Mutex::new(HashSet::new()),
             not_issued: Mutex::new(HashMap::new()),
             storage_changed: Arc::default(),
-        }
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// Reports once that the storage credentials issued by catalogs are not used.
-    pub fn report_disabled(&self) {
-        if !self.reported_disabled.swap(true, Ordering::Relaxed) {
-            warn!(
-                "storage credentials issued by catalogs are not used in cluster mode; \
-                 tables are accessed with the storage credentials of the environment"
-            );
+            session: Mutex::new(SessionRoutes::default()),
+            token: Arc::from(rand::random::<[u8; 32]>()),
         }
     }
 
@@ -954,6 +1123,7 @@ impl VendedObjectStores {
             store.remove_routes(owner);
         }
         drop(stores);
+        self.record(owner, None);
         self.not_issued
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1016,6 +1186,27 @@ impl VendedObjectStores {
         // A credential that the catalog issued for writing is also the first credential
         // for writing, so that the catalog is not asked again before it expires.
         let initial_write = (initial.access == StorageAccess::ReadWrite).then(|| initial.clone());
+        // The object stores and the workers of the session get the credentials from
+        // the same place, which asks the catalog.
+        let credentials = Arc::new(SessionCredentials {
+            read: VendedCredentialProvider::try_new(
+                StorageAccess::Read,
+                Some(initial.clone()),
+                Arc::clone(&fetch),
+            )?,
+            write: VendedCredentialProvider::try_new(
+                StorageAccess::ReadWrite,
+                initial_write.clone(),
+                fetch,
+            )?,
+        });
+        let fetch: StorageCredentialFetch = {
+            let credentials = Arc::clone(&credentials);
+            Arc::new(move |access| {
+                let credentials = Arc::clone(&credentials);
+                Box::pin(async move { credentials.get(access).await })
+            })
+        };
         let read = (self.factory)(VendedStoreRequest {
             location,
             access: StorageAccess::Read,
@@ -1040,6 +1231,15 @@ impl VendedObjectStores {
         };
         self.routing_store(registry, location, owner)?
             .set_route(prefix, owner, read, write);
+        self.record(
+            owner,
+            Some(SessionRoute {
+                location: location.clone(),
+                version: 0,
+                not_issued: None,
+                credentials: Some(credentials),
+            }),
+        );
         Ok(())
     }
 
@@ -1057,6 +1257,218 @@ impl VendedObjectStores {
         let prefix = Self::prefix(location)?;
         self.routing_store(registry, location, owner)?
             .set_not_issued_route(prefix, owner, reason);
+        self.record(
+            owner,
+            Some(SessionRoute {
+                location: location.clone(),
+                version: 0,
+                not_issued: Some(reason.to_string()),
+                credentials: None,
+            }),
+        );
+        Ok(())
+    }
+
+    fn session(&self) -> MutexGuard<'_, SessionRoutes> {
+        self.session.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Remembers the route of the owner for the workers of the session.
+    fn record(&self, owner: &str, route: Option<SessionRoute>) {
+        let mut session = self.session();
+        let version = session.version + 1;
+        let changed = match route {
+            Some(route) => {
+                let route = SessionRoute { version, ..route };
+                session.routes.insert(owner.to_string(), route);
+                true
+            }
+            None => session.routes.remove(owner).is_some(),
+        };
+        if changed {
+            session.version = version;
+            session.snapshot = None;
+        }
+    }
+
+    /// Returns what the workers of the session need to access the storage locations
+    /// in the same way as the session, or nothing if the session never accessed a
+    /// storage location in a way that differs from the environment.
+    pub fn routes(&self) -> Option<Arc<StorageRoutes>> {
+        let mut session = self.session();
+        if session.version == 0 {
+            return None;
+        }
+        if session.snapshot.is_none() {
+            let mut routes = session
+                .routes
+                .iter()
+                .map(|(owner, route)| StorageRoute {
+                    location: route.location.to_string(),
+                    owner: owner.clone(),
+                    version: route.version,
+                    not_issued: route.not_issued.clone(),
+                })
+                .collect::<Vec<_>>();
+            routes.sort_by(|a, b| a.owner.cmp(&b.owner));
+            session.snapshot = Some(Arc::new(StorageRoutes {
+                version: session.version,
+                token: self.token.to_vec(),
+                routes,
+            }));
+        }
+        session.snapshot.clone()
+    }
+
+    /// Returns the storage credentials issued for the owner in the session, for a
+    /// worker of the session that accesses the storage location of the owner.
+    pub async fn credentials(
+        &self,
+        request: &StorageCredentialsRequest,
+    ) -> std::result::Result<TableStorageCredentials, StorageCredentialsError> {
+        if !same_token(&request.token, &self.token) {
+            return Err(StorageCredentialsError::Denied);
+        }
+        let credentials = self
+            .session()
+            .routes
+            .get(&request.owner)
+            .filter(|route| route.location.as_str() == request.location)
+            .and_then(|route| route.credentials.clone())
+            .ok_or_else(|| {
+                StorageCredentialsError::Unavailable(format!(
+                    "the session has no storage credentials for {}",
+                    request.location
+                ))
+            })?;
+        credentials
+            .get(request.access)
+            .await
+            .map_err(StorageCredentialsError::Unavailable)
+    }
+
+    /// Accesses the storage locations in the same way as the session of the worker
+    /// from now on, with the storage credentials that are fetched from the session
+    /// when a location is first read or written, and before they expire.
+    /// Nothing changes if the worker has the routes of this or a later version.
+    pub fn apply_routes(
+        &self,
+        registry: &dyn ObjectStoreRegistry,
+        routes: &StorageRoutes,
+        fetch: &SessionStorageCredentialFetch,
+    ) -> DataFusionResult<()> {
+        // The lock is held, so that the routes of one version are applied at a time.
+        let mut session = self.session();
+        if routes.version <= session.version {
+            return Ok(());
+        }
+        let current = |owner: &String, route: &SessionRoute| {
+            routes
+                .routes
+                .iter()
+                .any(|x| &x.owner == owner && route.is(x))
+        };
+        let removed = session
+            .routes
+            .extract_if(|owner, route| !current(owner, route))
+            .map(|(owner, _)| owner)
+            .collect::<Vec<_>>();
+        if !removed.is_empty() {
+            let stores = self.stores.lock().unwrap_or_else(|e| e.into_inner());
+            for store in stores.values() {
+                for owner in &removed {
+                    store.remove_routes(owner);
+                }
+            }
+        }
+        let token: Arc<[u8]> = Arc::from(routes.token.as_slice());
+        for route in &routes.routes {
+            if session.routes.contains_key(&route.owner) {
+                continue;
+            }
+            let location = Url::parse(&route.location).map_err(|e| {
+                plan_datafusion_err!("invalid storage location {}: {e}", route.location)
+            })?;
+            let prefix = Self::prefix(&location)?;
+            let store = self.routing_store(registry, &location, &route.owner)?;
+            match &route.not_issued {
+                Some(reason) => store.set_not_issued_route(prefix, &route.owner, reason),
+                None => {
+                    let fetch: StorageCredentialFetch = {
+                        let fetch = Arc::clone(fetch);
+                        let request = StorageCredentialsRequest {
+                            token: Arc::clone(&token),
+                            owner: route.owner.clone(),
+                            location: route.location.clone(),
+                            access: StorageAccess::Read,
+                        };
+                        Arc::new(move |access| {
+                            fetch(StorageCredentialsRequest {
+                                access,
+                                ..request.clone()
+                            })
+                        })
+                    };
+                    // An object store is created when the location is first read or
+                    // written, for the storage that the first credential is for.
+                    let lazy = |access| -> Arc<dyn ObjectStore> {
+                        let factory = Arc::clone(&self.factory);
+                        let location = location.clone();
+                        let fetch = Arc::clone(&fetch);
+                        Arc::new(LazyObjectStore::new(move || {
+                            let factory = Arc::clone(&factory);
+                            let location = location.clone();
+                            let fetch = Arc::clone(&fetch);
+                            async move {
+                                let initial = fetch(access).await.map_err(credential_error)?;
+                                let kind = initial.credential.clone();
+                                // The object store is not given a credential for another
+                                // storage, which the session uses for a new route.
+                                let fetch: StorageCredentialFetch = {
+                                    let kind = kind.clone();
+                                    Arc::new(move |access| {
+                                        let (fetched, kind) = (fetch(access), kind.clone());
+                                        Box::pin(async move {
+                                            let credentials = fetched.await?;
+                                            if credentials.credential.is_for_storage_of(&kind) {
+                                                Ok(credentials)
+                                            } else {
+                                                Err("the storage credential is for another \
+                                                     storage than before"
+                                                    .to_string())
+                                            }
+                                        })
+                                    })
+                                };
+                                factory(VendedStoreRequest {
+                                    location: &location,
+                                    access,
+                                    kind: &kind,
+                                    initial: Some(initial),
+                                    fetch,
+                                })
+                            }
+                        }))
+                    };
+                    store.set_route(
+                        prefix,
+                        &route.owner,
+                        lazy(StorageAccess::Read),
+                        lazy(StorageAccess::ReadWrite),
+                    );
+                }
+            }
+            session.routes.insert(
+                route.owner.clone(),
+                SessionRoute {
+                    location,
+                    version: route.version,
+                    not_issued: route.not_issued.clone(),
+                    credentials: None,
+                },
+            );
+        }
+        session.version = routes.version;
         Ok(())
     }
 
@@ -1727,7 +2139,6 @@ mod tests {
 
         let session = registry();
         let (stores, read, write, requests) = memory_stores();
-        assert!(stores.is_enabled());
         assert!(!stores.contains(&location, "table"));
         stores
             .install(
@@ -1794,14 +2205,9 @@ mod tests {
         let store = session.get_store(&location).unwrap();
         assert!(store.get(&path).await.is_err());
 
-        let disabled = VendedObjectStores::new(
-            RuntimeHandle::new(Handle::current(), Handle::current()),
-            false,
-        );
-        assert!(!disabled.is_enabled());
-        assert!(disabled.report_refused("table", "items", "forbidden"));
-        assert!(!disabled.report_refused("table", "items", "forbidden"));
-        assert!(disabled.report_refused("other", "items", "forbidden"));
+        assert!(stores.report_refused("table", "items", "forbidden"));
+        assert!(!stores.report_refused("table", "items", "forbidden"));
+        assert!(stores.report_refused("other", "items", "forbidden"));
     }
 
     #[tokio::test]
@@ -1929,7 +2335,10 @@ mod tests {
         // next used.
         for (changed, endpoint) in [(Some("http://c:9000"), Some("http://c:9000")), (None, None)] {
             *issued.lock().unwrap() = changed;
-            let error = fetch_of_a(StorageAccess::Read).await.unwrap_err();
+            // The session has no credential for writing yet, so the catalog is asked
+            // for the object stores that the table has now.
+            let fetch_of_a = fetch_of_store.lock().unwrap().clone().unwrap();
+            let error = fetch_of_a(StorageAccess::ReadWrite).await.unwrap_err();
             assert!(error.contains("another storage"), "{error}");
             assert!(!error.contains("key-value"), "{error}");
             assert!(!stores.contains(&a, "a"));
@@ -1943,5 +2352,315 @@ mod tests {
                 &(a.to_string(), endpoint.map(|x| x.to_string()))
             );
         }
+    }
+
+    type Providers = Arc<Mutex<Vec<(StorageAccess, Arc<VendedCredentialProvider<AwsCredential>>)>>>;
+
+    /// Returns object stores in memory, and the credential provider of each object store
+    /// that is created.
+    fn provider_stores() -> (Arc<VendedObjectStores>, Providers) {
+        let providers = Providers::default();
+        let factory: VendedStoreFactory = {
+            let providers = providers.clone();
+            Arc::new(move |request| {
+                let provider = Arc::new(VendedCredentialProvider::try_new(
+                    request.access,
+                    request.initial,
+                    request.fetch,
+                )?);
+                providers.lock().unwrap().push((request.access, provider));
+                Ok(Arc::new(InMemory::new()) as Arc<dyn ObjectStore>)
+            })
+        };
+        (
+            Arc::new(VendedObjectStores::with_factory(factory)),
+            providers,
+        )
+    }
+
+    fn provider(
+        providers: &Providers,
+        access: StorageAccess,
+    ) -> Arc<VendedCredentialProvider<AwsCredential>> {
+        let providers = providers.lock().unwrap();
+        let (_, provider) = providers.iter().rfind(|(x, _)| *x == access).unwrap();
+        Arc::clone(provider)
+    }
+
+    /// Returns how a worker fetches the storage credentials of the session, and the
+    /// requests of the worker so far.
+    fn session_fetch(
+        session: &Arc<VendedObjectStores>,
+    ) -> (
+        SessionStorageCredentialFetch,
+        Arc<Mutex<Vec<StorageAccess>>>,
+    ) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let fetch: SessionStorageCredentialFetch = {
+            let (session, requests) = (Arc::clone(session), Arc::clone(&requests));
+            Arc::new(move |request| {
+                requests.lock().unwrap().push(request.access);
+                let session = Arc::clone(&session);
+                Box::pin(async move {
+                    session
+                        .credentials(&request)
+                        .await
+                        .map_err(|e| format!("{e:?}"))
+                })
+            })
+        };
+        (fetch, requests)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn workers_use_the_storage_credentials_of_their_session() {
+        let location = Url::parse("memory:///warehouse/items").unwrap();
+        let path = Path::from("warehouse/items/part-0");
+        let (catalog, catalog_requests) = counting_fetch(Some(now_ms() + 3_600_000));
+        let (session, session_providers) = provider_stores();
+        let session_registry = registry();
+        // Nothing is sent to the workers of a session without such storage locations.
+        assert!(session.routes().is_none());
+        session
+            .install(
+                &session_registry,
+                &location,
+                "table",
+                s3_credentials("initial", Some(now_ms() + 60_000)),
+                catalog,
+            )
+            .unwrap();
+        let routes = session.routes().unwrap();
+        assert_eq!(routes.version, 1);
+        assert_eq!(
+            routes.routes,
+            vec![StorageRoute {
+                location: location.to_string(),
+                owner: "table".to_string(),
+                version: 1,
+                not_issued: None,
+            }]
+        );
+        let debug = format!("{routes:?}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert!(!debug.contains(&format!("{:?}", routes.token)), "{debug}");
+
+        // The worker requests the credentials when the location is first read or written.
+        let (worker, worker_providers) = provider_stores();
+        let worker_registry = registry();
+        let (fetch, requests) = session_fetch(&session);
+        worker
+            .apply_routes(&worker_registry, &routes, &fetch)
+            .unwrap();
+        assert!(worker.contains(&location, "table"));
+        assert!(requests.lock().unwrap().is_empty());
+        let store = worker_registry.get_store(&location).unwrap();
+        for _ in 0..2 {
+            store.put(&path, "x".into()).await.unwrap();
+            let _ = store.head(&path).await;
+        }
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![StorageAccess::ReadWrite, StorageAccess::Read]
+        );
+        let worker_read = provider(&worker_providers, StorageAccess::Read);
+        let worker_write = provider(&worker_providers, StorageAccess::ReadWrite);
+        assert_eq!(key_id(&worker_read).await, "initial");
+        assert_eq!(key_id(&worker_write).await, "ReadWrite-1");
+
+        // The catalog is asked once for the session and its workers.
+        session_registry
+            .get_store(&location)
+            .unwrap()
+            .put(&path, "x".into())
+            .await
+            .unwrap();
+        let session_write = provider(&session_providers, StorageAccess::ReadWrite);
+        assert_eq!(key_id(&session_write).await, "ReadWrite-1");
+        assert_eq!(
+            *catalog_requests.lock().unwrap(),
+            vec![StorageAccess::ReadWrite]
+        );
+
+        // The worker replaces a credential before it expires with one that the session
+        // fetches once from the catalog, and uses the current credential until then.
+        age(REFRESH_INTERVAL).await;
+        assert_eq!(key_id(&worker_read).await, "initial");
+        wait_for_refresh(&worker_read).await;
+        assert_eq!(key_id(&worker_read).await, "Read-2");
+        let session_read = provider(&session_providers, StorageAccess::Read);
+        assert_eq!(key_id(&session_read).await, "initial");
+        wait_for_refresh(&session_read).await;
+        assert_eq!(key_id(&session_read).await, "Read-2");
+        assert_eq!(
+            *catalog_requests.lock().unwrap(),
+            vec![StorageAccess::ReadWrite, StorageAccess::Read]
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                StorageAccess::ReadWrite,
+                StorageAccess::Read,
+                StorageAccess::Read
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_credentials_are_only_given_to_the_workers_of_the_session() {
+        let location = Url::parse("memory:///warehouse/items").unwrap();
+        let (catalog, catalog_requests) = counting_fetch(None);
+        let (session, _) = provider_stores();
+        let session_registry = registry();
+        session
+            .install(
+                &session_registry,
+                &location,
+                "table",
+                s3_credentials("initial", None),
+                catalog.clone(),
+            )
+            .unwrap();
+        let routes = session.routes().unwrap();
+        let request = StorageCredentialsRequest {
+            token: Arc::from(routes.token.as_slice()),
+            owner: "table".to_string(),
+            location: location.to_string(),
+            access: StorageAccess::Read,
+        };
+        let credentials = session.credentials(&request).await.unwrap();
+        assert_eq!(credentials, s3_credentials("initial", None));
+
+        // Another session has the same table, and its workers have another token.
+        let (other, _) = provider_stores();
+        other
+            .install(
+                &registry(),
+                &location,
+                "table",
+                s3_credentials("other", None),
+                catalog,
+            )
+            .unwrap();
+        assert_ne!(other.routes().unwrap().token, routes.token);
+        assert_eq!(
+            other.credentials(&request).await,
+            Err(StorageCredentialsError::Denied)
+        );
+        for token in [vec![], vec![0; 32], routes.token[..31].to_vec()] {
+            let request = StorageCredentialsRequest {
+                token: Arc::from(token),
+                ..request.clone()
+            };
+            assert_eq!(
+                session.credentials(&request).await,
+                Err(StorageCredentialsError::Denied)
+            );
+        }
+
+        // The credentials are for the table at its location.
+        for (owner, location) in [
+            ("other", location.as_str()),
+            ("table", "memory:///warehouse/other"),
+        ] {
+            let request = StorageCredentialsRequest {
+                owner: owner.to_string(),
+                location: location.to_string(),
+                ..request.clone()
+            };
+            assert!(matches!(
+                session.credentials(&request).await,
+                Err(StorageCredentialsError::Unavailable(_))
+            ));
+        }
+
+        // The credentials are not given after the table is dropped.
+        session.remove("table");
+        let error = session.credentials(&request).await.unwrap_err();
+        assert!(matches!(error, StorageCredentialsError::Unavailable(_)));
+        let message = format!("{error:?}");
+        for secret in ["initial", "secret-value", "token-value"] {
+            assert!(!message.contains(secret), "{message}");
+        }
+        assert_eq!(session.routes().unwrap().version, 2);
+        assert!(session.routes().unwrap().routes.is_empty());
+        assert!(catalog_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workers_follow_the_storage_routes_of_their_session() {
+        let items = Url::parse("memory:///warehouse/items").unwrap();
+        let moved = Url::parse("memory:///warehouse/moved").unwrap();
+        let refused = Url::parse("memory:///warehouse/refused").unwrap();
+        let (fetch, _) = counting_fetch(None);
+        let (session, _) = provider_stores();
+        let session_registry = registry();
+        let install = |location: &Url| {
+            session
+                .install(
+                    &session_registry,
+                    location,
+                    "table",
+                    s3_credentials("k", None),
+                    fetch.clone(),
+                )
+                .unwrap();
+            session.routes().unwrap()
+        };
+        let (worker, _) = provider_stores();
+        let worker_registry = registry();
+        let (fetch, requests) = session_fetch(&session);
+        let apply = |routes: &StorageRoutes| {
+            worker
+                .apply_routes(&worker_registry, routes, &fetch)
+                .unwrap()
+        };
+
+        let first = install(&items);
+        apply(&first);
+        assert!(worker.contains(&items, "table"));
+
+        // The table is created again at another location, and the catalog does not
+        // issue credentials for another table.
+        let second = install(&moved);
+        session
+            .install_not_issued(&session_registry, &refused, "refused", "no privilege")
+            .unwrap();
+        let third = session.routes().unwrap();
+        assert_eq!((second.version, third.version), (2, 3));
+        assert_eq!(third.routes[0].not_issued.as_deref(), Some("no privilege"));
+        apply(&third);
+        assert!(!worker.contains(&items, "table"));
+        assert!(worker.contains(&moved, "table"));
+        assert_eq!(worker.session().routes.len(), 2);
+
+        // The routes of an earlier version do not replace the routes of a later version.
+        apply(&first);
+        apply(&second);
+        assert!(worker.contains(&moved, "table"));
+        assert_eq!(worker.session().routes.len(), 2);
+
+        // The tables are dropped.
+        session.remove("table");
+        session.remove("refused");
+        session.remove("refused");
+        let last = session.routes().unwrap();
+        assert_eq!(last.version, 5);
+        apply(&last);
+        assert!(!worker.contains(&moved, "table"));
+        assert!(worker.session().routes.is_empty());
+        // The object stores of a location that the session accesses anew are replaced,
+        // since they can be for another storage.
+        for version in [6, 7] {
+            let routes = install(&items);
+            assert_eq!(
+                (routes.version, routes.routes[0].version),
+                (version, version)
+            );
+            apply(&routes);
+            assert_eq!(worker.session().routes["table"].version, version);
+        }
+        // The credentials are requested when a location is read or written only.
+        assert!(requests.lock().unwrap().is_empty());
     }
 }

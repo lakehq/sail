@@ -11,6 +11,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
+use sail_object_store::VendedObjectStores;
 
 use crate::runtime::RuntimeEnvFactory;
 use crate::session_factory::SessionFactory;
@@ -18,14 +19,16 @@ use crate::session_factory::SessionFactory;
 pub struct WorkerSessionFactory {
     runtime_env: RuntimeEnvFactory,
     config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
 }
 
 impl WorkerSessionFactory {
     pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
-        let runtime_env = RuntimeEnvFactory::new(Arc::clone(&config), runtime);
+        let runtime_env = RuntimeEnvFactory::new(Arc::clone(&config), runtime.clone());
         Self {
             runtime_env,
             config,
+            runtime,
         }
     }
 }
@@ -43,7 +46,11 @@ impl SessionFactory<()> for WorkerSessionFactory {
             )))
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,
-            )));
+            )))
+            // The storage locations that the session of the driver accesses with storage
+            // credentials issued by catalogs are accessed in the same way, with the
+            // credentials that the worker requests from the driver.
+            .with_extension(Arc::new(VendedObjectStores::new(self.runtime.clone())));
         let execution = &mut config.options_mut().execution;
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =

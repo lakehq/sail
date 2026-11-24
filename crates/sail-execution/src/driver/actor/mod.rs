@@ -6,11 +6,13 @@ mod message;
 mod options;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub(crate) use message::{DriverMessage, TaskStatus};
 pub use options::{DriverComponents, DriverOptions};
 use sail_celeborn::lifecycle::LocalLifecycleManager;
 use sail_common::actor::ActorHandle;
+use sail_object_store::VendedObjectStores;
 use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::JobScheduler;
@@ -33,6 +35,9 @@ pub struct DriverActor {
     worker_scaler: WorkerScaler,
     task_runner: Option<ActorHandle<TaskRunnerActor>>,
     extensions: DriverExtensions,
+    /// The object stores of the session that use storage credentials issued by catalogs,
+    /// once the session has run a job.
+    vended_object_stores: Option<Arc<VendedObjectStores>>,
     activated: bool,
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.

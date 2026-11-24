@@ -15,6 +15,29 @@ message TaskAttempt {
   uint64 attempt = 2;
 }
 
+// A storage location that the worker accesses in the same way as the session of the driver.
+message StorageRoute {
+  string location = 1;
+  // The table that the storage credentials are issued for.
+  string owner = 2;
+  // The version of the routes in which the route was added. The worker replaces
+  // the object stores of a route that the driver added again.
+  uint64 version = 3;
+  // The reason why no storage credentials are issued for the owner, in which case
+  // the location is accessed with the storage credentials of the environment.
+  optional string not_issued = 4;
+}
+
+// The storage locations that the worker accesses with the storage credentials
+// that it requests from the driver. There are no storage credentials here.
+message StorageRoutes {
+  // The worker ignores the routes if it has the routes of this or a later version.
+  uint64 version = 1;
+  // The value to send to the driver when requesting storage credentials.
+  bytes token = 2;
+  repeated StorageRoute routes = 3;
+}
+
 // Accepts all tasks together. Tasks share a stage and belong to one task region.
 // Completion is reported separately for each task attempt.
 message RunTaskBatchRequest {
@@ -30,6 +53,8 @@ message RunTaskBatchRequest {
   // of peer information to the driver so that duplicate peer
   // information does not need to be sent again in the future.
   repeated WorkerLocation peers = 6;
+  // The storage routes of the session, if it has any.
+  optional StorageRoutes storage_routes = 7;
 }
 
 message RunTaskBatchResponse {

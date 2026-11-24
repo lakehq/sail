@@ -7631,6 +7631,7 @@ dependencies = [
  "log",
  "object_store",
  "percent-encoding",
+ "rand 0.10.4",
  "regex",
  "reqwest 0.12.28",
  "sail-common",

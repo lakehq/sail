@@ -141,12 +141,9 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()))
-            // The storage credentials issued by catalogs are not sent to workers,
-            // so they are only used when the session runs in a single process.
-            .with_extension(Arc::new(VendedObjectStores::new(
-                self.runtime.clone(),
-                matches!(self.config.mode, ExecutionMode::Local),
-            )));
+            // The storage credentials issued by catalogs stay in the session.
+            // In cluster mode, the workers of the session request them from the driver.
+            .with_extension(Arc::new(VendedObjectStores::new(self.runtime.clone())));
         self.apply_execution_config(&mut config)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,

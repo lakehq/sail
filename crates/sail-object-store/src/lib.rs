@@ -12,6 +12,8 @@ pub use path::{
 };
 pub use registry::DynamicObjectStoreRegistry;
 pub use vended::{
-    PrefixRoutingObjectStore, StorageCredentialFetch, VendedCredential, VendedCredentialProvider,
-    VendedObjectStores, VendedStoreFactory, VendedStoreRequest,
+    PrefixRoutingObjectStore, SessionStorageCredentialFetch, StorageCredentialFetch,
+    StorageCredentialsError, StorageCredentialsRequest, StorageRoute, StorageRoutes,
+    VendedCredential, VendedCredentialProvider, VendedObjectStores, VendedStoreFactory,
+    VendedStoreRequest,
 };

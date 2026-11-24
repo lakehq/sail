@@ -11,6 +11,7 @@ use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_object_store::VendedObjectStores;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -216,6 +217,12 @@ impl DriverActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
+        if self.vended_object_stores.is_none() {
+            // All jobs of the driver are from the same session.
+            self.vended_object_stores = context
+                .session_config()
+                .get_extension::<VendedObjectStores>();
+        }
         let out = self.job_scheduler.accept_job(ctx, plan, context);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
@@ -638,6 +645,11 @@ impl DriverActor {
             }
         }
         let mut definitions = std::collections::HashMap::new();
+        // The workers access the storage locations in the same way as the session does now.
+        let storage_routes = self
+            .vended_object_stores
+            .as_ref()
+            .and_then(|stores| stores.routes());
         for ((job_id, _, stage, worker_id), keys) in batches {
             let Some(first) = keys.first() else { continue };
             let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
@@ -685,8 +697,15 @@ impl DriverActor {
                 })
                 .collect::<Vec<_>>();
             if let Some(worker_id) = worker_id {
-                self.worker_pool
-                    .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
+                self.worker_pool.run_task_batch(
+                    ctx,
+                    worker_id,
+                    job_id,
+                    stage,
+                    tasks,
+                    definition,
+                    storage_routes.clone(),
+                );
             } else {
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();

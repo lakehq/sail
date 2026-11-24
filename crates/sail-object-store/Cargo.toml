@@ -38,6 +38,7 @@ regex = { workspace = true }
 log = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
+rand = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }

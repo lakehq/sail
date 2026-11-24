@@ -67,25 +67,6 @@ pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccesso
         return Ok(());
     }
     let name = table.join(".");
-    if !stores.is_enabled() {
-        // The catalog is not asked, since the workers cannot use the credentials. If the
-        // storage cannot be accessed with the credentials of the environment, the error
-        // of the storage says why the credentials of the catalog were not used.
-        stores.report_disabled();
-        stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
-        let reason = format!(
-            "the storage credentials that the catalog may issue for table {name} are not \
-             used in cluster mode, so the storage credentials of the environment were used"
-        );
-        return stores
-            .install_not_issued(
-                ctx.runtime_env().object_store_registry.as_ref(),
-                &url,
-                &owner,
-                &reason,
-            )
-            .map_err(|e| CatalogError::External(e.to_string()));
-    }
     let get = {
         let table = table.clone();
         let location = location.clone();
@@ -380,7 +361,7 @@ mod tests {
     impl TestSession {
         fn new(
             response: fn() -> CatalogResult<Option<TableStorageCredentials>>,
-            stores: Option<bool>,
+            stores: bool,
         ) -> Self {
             let provider = Arc::new(VendingProvider {
                 response,
@@ -407,18 +388,8 @@ mod tests {
                 })
             };
             let mut config = SessionConfig::new().with_extension(Arc::new(manager));
-            match stores {
-                Some(true) => {
-                    config =
-                        config.with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
-                }
-                Some(false) => {
-                    let handle = tokio::runtime::Handle::current();
-                    let runtime = sail_common::runtime::RuntimeHandle::new(handle.clone(), handle);
-                    config =
-                        config.with_extension(Arc::new(VendedObjectStores::new(runtime, false)));
-                }
-                None => {}
+            if stores {
+                config = config.with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
             }
             let ctx = SessionContext::new_with_config(config);
             ctx.runtime_env()
@@ -497,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_are_installed_once_for_catalog_managed_delta_tables() {
-        let session = TestSession::new(issued, Some(true));
+        let session = TestSession::new(issued, true);
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -512,6 +483,13 @@ mod tests {
         // The credentials are fetched from the catalog again for the requested access.
         let fetch = session.fetch.lock().unwrap().clone().unwrap();
         let fetched = fetch(StorageAccess::ReadWrite).await;
+        let expected = issued().unwrap().map(|x| TableStorageCredentials {
+            access: StorageAccess::ReadWrite,
+            ..x
+        });
+        assert_eq!(fetched.ok(), expected);
+        // The credential for reading that the session has is not fetched again.
+        let fetched = fetch(StorageAccess::Read).await;
         assert_eq!(fetched.ok(), issued().unwrap());
         assert_eq!(
             session.requests(),
@@ -522,21 +500,15 @@ mod tests {
     #[tokio::test]
     async fn storage_credentials_are_not_requested_for_other_tables_and_sessions() {
         // The commits of the table are not coordinated by the catalog.
-        let session = TestSession::new(issued, Some(true));
+        let session = TestSession::new(issued, true);
         session.install(CommitAuthority::Filesystem).await.unwrap();
-        // The session runs in cluster mode.
-        let cluster = TestSession::new(issued, Some(false));
-        cluster
-            .install(CommitAuthority::DeltaRatifiedCommit)
-            .await
-            .unwrap();
         // The session does not use storage credentials issued by catalogs.
-        let plain = TestSession::new(issued, None);
+        let plain = TestSession::new(issued, false);
         plain
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
             .unwrap();
-        for session in [session, cluster, plain] {
+        for session in [session, plain] {
             assert!(session.requests().is_empty());
             assert!(!session.is_vended().await);
         }
@@ -544,7 +516,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_not_issued_and_refused() {
-        let session = TestSession::new(|| Ok(None), Some(true));
+        let session = TestSession::new(|| Ok(None), true);
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -558,7 +530,7 @@ mod tests {
             || Err(CatalogError::Unauthorized("no token".to_string())),
             || Err(CatalogError::CredentialUnavailable("HTTP 400".to_string())),
         ] {
-            let session = TestSession::new(response, Some(true));
+            let session = TestSession::new(response, true);
             session
                 .install(CommitAuthority::DeltaRatifiedCommit)
                 .await
@@ -570,7 +542,7 @@ mod tests {
         // The catalog fails to issue credentials.
         let session = TestSession::new(
             || Err(CatalogError::External("server error".to_string())),
-            Some(true),
+            true,
         );
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
@@ -579,10 +551,7 @@ mod tests {
         assert!(!session.is_vended().await);
 
         // Other errors are reported.
-        let session = TestSession::new(
-            || Err(CatalogError::Internal("bug".to_string())),
-            Some(true),
-        );
+        let session = TestSession::new(|| Err(CatalogError::Internal("bug".to_string())), true);
         let result = session.install(CommitAuthority::DeltaRatifiedCommit).await;
         assert!(
             matches!(result, Err(CatalogError::Internal(_))),
@@ -623,7 +592,7 @@ mod tests {
                 FAILED_TTL,
             ),
         ] {
-            let session = TestSession::new(response, Some(true));
+            let session = TestSession::new(response, true);
             session
                 .install(CommitAuthority::DeltaRatifiedCommit)
                 .await
@@ -688,7 +657,7 @@ mod tests {
                     Err(CatalogError::CredentialUnavailable(ANSWER.to_string()))
                 }
             },
-            Some(true),
+            true,
         );
         let install = || session.install(CommitAuthority::DeltaRatifiedCommit);
         install().await.unwrap();
@@ -703,38 +672,6 @@ mod tests {
         assert!(!error.to_string().contains(ANSWER), "{error}");
     }
 
-    /// In cluster mode the catalog is not asked for credentials, and an error of the
-    /// storage on the driver says so.
-    #[tokio::test]
-    async fn storage_errors_in_cluster_mode_say_that_catalog_credentials_are_not_used() {
-        let session = TestSession::new(issued, Some(false));
-        for _ in 0..2 {
-            session
-                .install(CommitAuthority::DeltaRatifiedCommit)
-                .await
-                .unwrap();
-        }
-        assert!(session.requests().is_empty());
-        let store = session
-            .ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&Url::parse(LOCATION).unwrap())
-            .unwrap();
-        let path = Path::from("warehouse/items/file");
-        store.put(&path, "data".into()).await.unwrap();
-        assert_eq!(
-            store.get(&path).await.unwrap().bytes().await.unwrap(),
-            "data"
-        );
-        let error = store.get_range(&path, 100..200).await.unwrap_err();
-        let message = error.to_string();
-        assert!(
-            message.contains("cluster mode") && message.contains("default.items"),
-            "{message}"
-        );
-    }
-
     #[tokio::test]
     async fn storage_credentials_not_issued_are_not_requested_again_for_a_while() {
         for response in [
@@ -742,7 +679,7 @@ mod tests {
             || Err(CatalogError::Forbidden("no privilege".to_string())),
             || Err(CatalogError::External("server error".to_string())),
         ] {
-            let session = TestSession::new(response, Some(true));
+            let session = TestSession::new(response, true);
             for _ in 0..3 {
                 session
                     .install(CommitAuthority::DeltaRatifiedCommit)
@@ -775,7 +712,7 @@ mod tests {
                 FAILED_TTL,
             ),
         ] {
-            let session = TestSession::new(response, Some(true));
+            let session = TestSession::new(response, true);
             let install = || session.install(CommitAuthority::DeltaRatifiedCommit);
             install().await.unwrap();
             tokio::time::advance(ttl - Duration::from_secs(1)).await;
@@ -793,7 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_are_fetched_for_the_table_resolved_at_installation() {
-        let session = TestSession::new(issued, Some(true));
+        let session = TestSession::new(issued, true);
         session
             .install_as(&["items"], CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -813,21 +750,16 @@ mod tests {
         manager.set_default_database(vec!["other"]).await.unwrap();
         let fetch = session.fetch.lock().unwrap().clone().unwrap();
         assert!(fetch(StorageAccess::ReadWrite).await.is_ok());
-        assert!(fetch(StorageAccess::Read).await.is_ok());
         // All requests are for `default.items`, which is checked here.
         assert_eq!(
             session.requests(),
-            vec![
-                StorageAccess::Read,
-                StorageAccess::ReadWrite,
-                StorageAccess::Read
-            ]
+            vec![StorageAccess::Read, StorageAccess::ReadWrite]
         );
     }
 
     #[tokio::test]
     async fn storage_credentials_are_removed_with_the_table() {
-        let session = TestSession::new(issued, Some(true));
+        let session = TestSession::new(issued, true);
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -850,7 +782,7 @@ mod tests {
     #[tokio::test]
     async fn storage_credentials_are_installed_when_the_catalog_resolves_the_table() {
         let table = ["items".to_string()];
-        let resolve = TestSession::new(issued, Some(true));
+        let resolve = TestSession::new(issued, true);
         let manager = resolve.ctx.extension::<CatalogManager>().unwrap();
         let request = ResolveLakehouseTableRequest {
             catalog_table: table.to_vec(),
@@ -863,7 +795,7 @@ mod tests {
             .await
             .unwrap();
 
-        let resolve_status = TestSession::new(issued, Some(true));
+        let resolve_status = TestSession::new(issued, true);
         let manager = resolve_status.ctx.extension::<CatalogManager>().unwrap();
         let status = manager.get_table(&table).await.unwrap();
         manager
