@@ -222,8 +222,7 @@ impl OptimizerRule for DecorrelateLimit {
         let LogicalPlan::Limit(limit) = &plan else {
             return Ok(Transformed::no(plan));
         };
-        let outer = limit.input.all_out_ref_exprs();
-        if outer.is_empty() {
+        if limit.input.all_out_ref_exprs().is_empty() {
             return Ok(Transformed::no(plan));
         }
         let (SkipType::Literal(skip), FetchType::Literal(fetch)) =
@@ -290,13 +289,6 @@ impl OptimizerRule for DecorrelateLimit {
         let Some(correlation) = conjunction(pull_up.join_filters) else {
             return Ok(Transformed::no(plan));
         };
-        let correlation = correlation.transform_up(|expr| {
-            if let Expr::Column(column) = &expr
-                && let Some(reference) = outer.iter().find(|reference| matches!(reference, Expr::OuterReferenceColumn(_, c) if c == column)) {
-                    return Ok(Transformed::yes(reference.clone()));
-            }
-            Ok(Transformed::no(expr))
-        })?.data;
         let result = LogicalPlanBuilder::from(input)
             .window(vec![rank])?
             .filter(predicate)?

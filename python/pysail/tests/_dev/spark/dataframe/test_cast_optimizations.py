@@ -5,7 +5,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from pyspark.errors import SparkRuntimeException
 from pyspark.sql.types import FloatType, IntegerType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
@@ -137,7 +136,7 @@ def test_mixed_join_preserves_rounded_bigint_classes_and_unmatched_rows(spark, a
 @pytest.mark.parametrize("ansi", [False, True])
 @pytest.mark.parametrize("source", ["float", "double"])
 @pytest.mark.parametrize("windowed", [False, True])
-def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, windowed, request):
+def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, windowed):
     inner = [(0, 1.0, 10), (1, 1.00390625, 20), (2, 1.0078125, 40), (3, None, 99)]
     outer = [(0, Decimal("1.00")), (1, Decimal("1.01")), (2, None)]
     if windowed:
@@ -155,18 +154,6 @@ def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, 
         _view(spark, "followup_decimal_inner", inner, f"seq int,k {source},v int"),
         _view(spark, "followup_decimal_outer", outer, "seq int,k decimal(12,2)"),
     ):
-        if not is_jvm_spark() and windowed and not ansi:
-            request.node.add_marker(
-                pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        SparkRuntimeException,
-                        match=r'^Schema contains qualified field name "\?table\?"\.k and unqualified field name k '
-                        r"which would be ambiguous$",
-                    ),
-                    reason="Non-ANSI decimal windows already failed before #2843; the current qualifier error is unchanged",
-                )
-            )
         assert [tuple(row) for row in spark.sql(query).collect()] == expected
 
 

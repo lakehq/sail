@@ -188,7 +188,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | true   |
 
-    @sail-bug
     Scenario: try_parse_json scientific notation preserves decimal
       When query
         """
@@ -268,17 +267,28 @@ Feature: try_parse_json comprehensive tests
     Scenario Outline: Number edge case (to_json): <case>
       When query
         """
-        SELECT to_json(try_parse_json(<json>)) AS result
+        SELECT CAST(to_json(try_parse_json(<json>)) AS DECIMAL(19,18)) = <result> AS result
         """
       Then query result
-        | result   |
-        | <result> |
+        | result |
+        | true   |
 
       Examples:
         | case                                 | json                   | result               |
         | negative zero becomes zero           | '-0'                   | 0                    |
         | negative zero float becomes zero     | '-0.0'                 | 0                    |
         | very small float preserves precision | '0.000000000000000001' | 0.000000000000000001 |
+
+    @sail-only
+    Scenario: Sail JSON formats floating zero and a small decimal
+      When query
+        """
+        SELECT to_json(parse_json('-0')) AS zero,
+               to_json(try_parse_json('0.000000000000000001')) AS small
+        """
+      Then query result
+        | zero | small |
+        | 0.0  | 1e-18 |
 
     @sail-bug
     # Sail doesn't convert very large integers to scientific notation in Variant

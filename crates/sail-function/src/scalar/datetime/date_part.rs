@@ -145,7 +145,14 @@ impl ScalarUDFImpl for DatePart {
                     true,
                 )))
             })
-            .unwrap_or_else(|| self.inner.return_field_from_args(args))
+            .unwrap_or_else(|| {
+                // Spark reports the nullability of the temporal input.
+                let [_, input] = take_function_args(self.name(), args.arg_fields)?;
+                let field = self.inner.return_field_from_args(args)?;
+                Ok(Arc::new(
+                    field.as_ref().clone().with_nullable(input.is_nullable()),
+                ))
+            })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

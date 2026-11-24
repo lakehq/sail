@@ -86,7 +86,12 @@ message ExtendedPhysicalPlanNode {
     TailExecNode tail = 69;
     IcebergImportedExecNode iceberg_imported = 70;
     bytes unsupported_iceberg_row_scan_schema = 71;
+    HivePartitionWriteExecNode hive_partition_write = 72;
   }
+}
+
+message HivePartitionWriteExecNode {
+  bytes input = 1;
 }
 
 message IdentityGenerateExecNode {

@@ -19,13 +19,18 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion::physical_expr::create_lex_ordering;
+use datafusion::physical_expr::expressions::{Column, Literal, cast};
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr, create_lex_ordering};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
 use datafusion_common::stats::Precision;
-use datafusion_common::{DFSchema, Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{
+    DFSchema, ScalarValue, Statistics, internal_err, plan_err, project_schema,
+};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -40,6 +45,7 @@ use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::partition::qualified_partition_path;
+use crate::listing::partition_write::HivePartitionWriteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -221,6 +227,38 @@ async fn plan_file_write(
         .iter()
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
+    let physical_input = if table_partition_cols.is_empty() {
+        physical_input
+    } else {
+        let schema = physical_input.schema();
+        let exprs = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let column = if field.is_nullable()
+                    && table_partition_cols
+                        .iter()
+                        .any(|(name, _)| name == field.name())
+                {
+                    let value = cast(column, &schema, DataType::Utf8)?;
+                    let null_marker =
+                        Arc::new(Literal::new(ScalarValue::from(HIVE_DEFAULT_PARTITION_NAME)));
+                    Arc::new(ScalarFunctionExpr::try_new(
+                        datafusion::functions::core::coalesce(),
+                        vec![value, null_marker],
+                        &schema,
+                        Arc::clone(session.config().options()),
+                    )?)
+                } else {
+                    column
+                };
+                Ok((column, field.name().clone()))
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Arc::new(ProjectionExec::try_new(exprs, physical_input)?)
+    };
     let conf = FileSinkConfig {
         original_url: url.to_string(),
         object_store_url: object_store_url.clone(),
@@ -244,6 +282,11 @@ async fn plan_file_write(
             },
         )
         .await?;
+    let plan: Arc<dyn ExecutionPlan> = if partition_by.is_empty() {
+        plan
+    } else {
+        Arc::new(HivePartitionWriteExec::new(plan))
+    };
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,

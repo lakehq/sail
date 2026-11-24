@@ -10,6 +10,7 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::config::{CsvOptions, TableParquetOptions};
 use datafusion::common::parsers::CompressionTypeVariant;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{
     Constraint, Constraints, JoinSide, Result, ScalarValue, Statistics, plan_datafusion_err,
     plan_err,
@@ -49,6 +50,7 @@ use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
@@ -131,6 +133,7 @@ use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_data_source::listing::partition_write::HivePartitionWriteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -1487,6 +1490,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
                 Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
             }
+            NodeKind::HivePartitionWrite(r#gen::HivePartitionWriteExecNode { input }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(HivePartitionWriteExec::new(input)))
+            }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -2396,10 +2404,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 stage_input.properties().equivalence_properties(),
                 proto_converter,
             )?;
-            let partitioning = self.try_encode_partitioning(
-                stage_input.properties().output_partitioning(),
-                proto_converter,
-            )?;
+            let partitioning = stage_input.properties().output_partitioning();
+            let partitioning = match partitioning {
+                Partitioning::Hash(exprs, count) if exprs.iter().any(uses_stage_scalar) => self
+                    .try_encode_partitioning(
+                        &Partitioning::UnknownPartitioning(*count),
+                        proto_converter,
+                    )?,
+                _ => self.try_encode_partitioning(partitioning, proto_converter)?,
+            };
             let bounded = match stage_input.properties().boundedness {
                 Boundedness::Bounded => true,
                 Boundedness::Unbounded {
@@ -3690,6 +3703,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 rewrite_data_files,
             })
+        } else if let Some(write) = node.downcast_ref::<HivePartitionWriteExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                Arc::clone(write.input()),
+            )?;
+            NodeKind::HivePartitionWrite(r#gen::HivePartitionWriteExecNode { input })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
@@ -6212,6 +6232,7 @@ impl RemoteExecutionCodec {
     ) -> Result<r#gen::EquivalenceClass> {
         let exprs = class
             .iter()
+            .filter(|expr| !uses_stage_scalar(expr))
             .map(|expr| try_encode_physical_expr_with_converter(self, proto_converter, expr))
             .collect::<Result<Vec<_>>>()?;
         Ok(r#gen::EquivalenceClass { exprs })
@@ -6318,6 +6339,10 @@ impl RemoteExecutionCodec {
             .iter()
             .map(|class| self.try_encode_equivalence_class(class, proto_converter))
             .collect::<Result<Vec<_>>>()?;
+        let classes = classes
+            .into_iter()
+            .filter(|class| !class.exprs.is_empty())
+            .collect();
         Ok(r#gen::EquivalenceGroup { classes })
     }
 
@@ -6367,10 +6392,15 @@ impl RemoteExecutionCodec {
         let constants = eq_properties
             .constants()
             .iter()
+            .filter(|constant| !uses_stage_scalar(&constant.expr))
             .map(|x| self.try_encode_constant_expression(x, proto_converter))
             .collect::<Result<Vec<_>>>()?;
-        let orderings =
-            self.try_encode_lex_orderings(eq_properties.oeq_class(), proto_converter)?;
+        let orderings = eq_properties
+            .oeq_class()
+            .iter()
+            .filter(|ordering| !ordering.iter().any(|expr| uses_stage_scalar(&expr.expr)))
+            .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+            .collect::<Result<_>>()?;
         let constraints = eq_properties
             .constraints()
             .iter()
@@ -6639,6 +6669,13 @@ impl RemoteExecutionCodec {
     fn try_encode_statistics(&self, statistics: &Statistics) -> Result<Vec<u8>> {
         try_encode_message::<gen_datafusion_common::Statistics>(statistics.into())
     }
+}
+
+/// Stage metadata can infer constants from scalar predicates in the producer.
+/// The consumer receives the materialized rows and has no access to that scalar scope.
+fn uses_stage_scalar(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.exists(|part| Ok(part.is::<ScalarSubqueryExpr>()))
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
