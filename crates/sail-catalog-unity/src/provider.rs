@@ -6540,13 +6540,18 @@ mod tests {
             assert_eq!(status.name, "events");
         }
 
-        // The table is neither staged, created, nor dropped.
+        // The table is neither staged, created, nor dropped. The replacement without a
+        // query also asks once what the catalog tells about the Delta table.
         let targets = received_targets(&server).await;
-        assert_eq!(targets.len(), 6);
+        let (tables, delta): (Vec<_>, Vec<_>) = targets
+            .iter()
+            .partition(|target| *target == "GET /tables/main.default.events");
+        assert_eq!(tables.len(), 6, "{targets:?}");
+        assert_eq!(delta.len(), 2, "{targets:?}");
         assert!(
-            targets
+            delta
                 .iter()
-                .all(|target| target == "GET /tables/main.default.events"),
+                .all(|target| target.starts_with("GET /delta/v1/")),
             "{targets:?}"
         );
     }
