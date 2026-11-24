@@ -1517,8 +1517,8 @@ mod catalog_managed_tests {
         DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseResolvedTable,
         ResolveLakehouseTableRequest, resolve_lakehouse_table_status,
     };
-    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::*;
+    use sail_catalog::testing::single_catalog_manager;
     use sail_common_datafusion::catalog::delta::DeltaCatalogManaged::{No, Undetermined, Yes};
     use sail_common_datafusion::catalog::delta::{
         DeltaCatalogCommit, DeltaCatalogManaged, DeltaCatalogState,
@@ -1599,16 +1599,7 @@ mod catalog_managed_tests {
         catalog: &Arc<UnityManagedCatalog>,
         operation: LakehouseOperation,
     ) -> (SessionContext, LakehouseExecutionContext) {
-        let manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([(
-                "unity".into(),
-                catalog.clone() as Arc<dyn CatalogProvider>,
-            )]),
-            default_catalog: "unity".into(),
-            default_database: vec!["default".into()],
-            global_temporary_database: vec!["global_temp".into()],
-        })
-        .unwrap();
+        let manager = single_catalog_manager(catalog.clone()).unwrap();
         let manager = Arc::new(manager);
         let session =
             SessionContext::new_with_config(SessionConfig::new().with_extension(manager.clone()));
@@ -2020,27 +2011,28 @@ mod catalog_managed_tests {
         (catalog.ratified_commit_requests(), result)
     }
 
-    async fn store_with_published_version_0(protocol: &str) -> Arc<InMemory> {
-        let store = Arc::new(InMemory::new());
-        let commit = format!(
+    /// The protocol and the metadata of version 0 of a table with the column `id`, with the
+    /// table properties (`,"<key>":"<value>"...`) in addition to the Unity Catalog table ID.
+    fn version_0_actions(protocol: &str, configuration: &str) -> String {
+        format!(
             concat!(
                 "{{\"protocol\":{protocol}}}\n",
                 "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
                 "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
                 "\\\"fields\\\":[{{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\",",
                 "\\\"nullable\\\":true,\\\"metadata\\\":{{}}}}]}}\",\"partitionColumns\":[],",
-                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"}},",
+                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"{configuration}}},",
                 "\"createdTime\":0}}}}\n"
             ),
-            protocol = protocol
-        );
-        store
-            .put(
-                &Path::from("items/_delta_log/00000000000000000000.json"),
-                commit.into(),
-            )
-            .await
-            .unwrap();
+            protocol = protocol,
+            configuration = configuration,
+        )
+    }
+
+    async fn store_with_published_version_0(protocol: &str) -> Arc<InMemory> {
+        let store = Arc::new(InMemory::new());
+        let version_0 = version_0_actions(protocol, "");
+        put_log_files(store.as_ref(), &[(published_commit(0), version_0.as_str())]).await;
         store
     }
 
@@ -2327,32 +2319,8 @@ mod catalog_managed_tests {
         use sail_object_store::{VendedObjectStores, VendedStoreFactory};
 
         // The table only exists in the store that is used with the vended credentials.
-        let vended = Arc::new(InMemory::new());
-        let commit = format!(
-            concat!(
-                "{{\"protocol\":{protocol}}}\n",
-                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
-                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
-                "\\\"fields\\\":[]}}\",\"partitionColumns\":[],",
-                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"}},",
-                "\"createdTime\":0}}}}\n"
-            ),
-            protocol = CATALOG_MANAGED_PROTOCOL
-        );
-        vended
-            .put(
-                &Path::from("items/_delta_log/00000000000000000000.json"),
-                commit.into(),
-            )
-            .await
-            .unwrap();
-        vended
-            .put(
-                &Path::from(format!("items/_delta_log/{}", staged_commit(1, "a"))),
-                EMPTY_COMMIT.to_string().into(),
-            )
-            .await
-            .unwrap();
+        let vended = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        put_log_files(vended.as_ref(), &[(staged_commit(1, "a"), EMPTY_COMMIT)]).await;
         let ambient: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let (_, result) = read_unity_managed_table_in_store(
             ambient.clone(),
@@ -2864,18 +2832,10 @@ mod catalog_managed_tests {
         use crate::transaction::CommitProperties;
 
         let store = Arc::new(InMemory::new());
+        let configuration = format!(r#","delta.enableInCommitTimestamps":"true"{configuration}"#);
         let version_0 = format!(
-            concat!(
-                "{{\"commitInfo\":{{\"timestamp\":1,\"inCommitTimestamp\":1}}}}\n",
-                "{{\"protocol\":{protocol}}}\n{metadata}\n"
-            ),
-            protocol = protocol,
-            metadata = METADATA_ACTION
-                .replace(r#"\"type\":\"string\""#, r#"\"type\":\"long\""#)
-                .replace(
-                    r#""delta.enableInCommitTimestamps":"true""#,
-                    &format!(r#""delta.enableInCommitTimestamps":"true"{configuration}"#),
-                ),
+            "{EMPTY_COMMIT}{}",
+            version_0_actions(protocol, &configuration)
         );
         store
             .put(
@@ -3797,23 +3757,14 @@ mod catalog_managed_tests {
 
         let store = Arc::new(InMemory::new());
         let version_0 = format!(
-            concat!(
-                "{{\"commitInfo\":{{\"timestamp\":1,\"inCommitTimestamp\":1}}}}\n",
-                "{{\"protocol\":{protocol}}}\n",
-                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
-                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
-                "\\\"fields\\\":[{{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\",",
-                "\\\"nullable\\\":true,\\\"metadata\\\":{{}}}}]}}\",\"partitionColumns\":[],",
-                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"{configuration}}},",
-                "\"createdTime\":0}}}}\n"
-            ),
-            protocol = protocol,
-            configuration = configuration,
+            "{EMPTY_COMMIT}{}",
+            version_0_actions(protocol, configuration)
         );
-        for (version, commit) in [(0, version_0.as_str()), (1, version_1)] {
-            let path = Path::from(format!("items/_delta_log/{}", published_commit(version)));
-            store.put(&path, commit.to_string().into()).await.unwrap();
-        }
+        let files = [
+            (published_commit(0), version_0.as_str()),
+            (published_commit(1), version_1),
+        ];
+        put_log_files(store.as_ref(), &files).await;
         let catalog = Arc::new(UnityManagedCatalog {
             commit_error: Some(|| CatalogError::External("unexpected commit request".into())),
             ..UnityManagedCatalog::new(state, Some(ratified(1, &[])))
@@ -3968,16 +3919,7 @@ mod catalog_managed_tests {
         use crate::physical_plan::{DeltaCommitContext, DeltaCommitExec};
 
         let catalog = Arc::new(UnityManagedCatalog::new(None, None));
-        let manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([(
-                "unity".into(),
-                catalog.clone() as Arc<dyn CatalogProvider>,
-            )]),
-            default_catalog: "unity".into(),
-            default_database: vec!["default".into()],
-            global_temporary_database: vec!["global_temp".into()],
-        })
-        .unwrap();
+        let manager = single_catalog_manager(catalog.clone()).unwrap();
         let table = vec!["unity".to_string(), "default".into(), "items".into()];
         let owner = format!(
             "{:?}",

@@ -1180,11 +1180,12 @@ mod tests {
         /// The published commits whose lookup fails.
         failing: &'static [i64],
         latest_table_version: i64,
-        /// The versions and the file names that the catalog returns.
+        /// The versions and the staged commits (`<version>.<id>`) that the catalog returns.
         commits: &'static [(i64, &'static str)],
         version: i64,
         expected: Option<i64>,
-        /// The published commits after publishing.
+        /// The published commits after publishing. Each has the bytes of the staged commits
+        /// of its version, unless it was written by another writer.
         published: &'static [i64],
     }
 
@@ -1247,7 +1248,7 @@ mod tests {
                 files: &["0", "1", "2", "3.a", "5.b"],
                 failing: &[],
                 latest_table_version: 5,
-                commits: &[(3, "a"), (5, "b")],
+                commits: &[(3, "3.a"), (5, "5.b")],
                 version: 6,
                 expected: Some(3),
                 published: &[0, 1, 2, 3],
@@ -1257,7 +1258,7 @@ mod tests {
                 files: &["0", "1.a", "2.b"],
                 failing: &[1],
                 latest_table_version: 2,
-                commits: &[(1, "a"), (2, "b")],
+                commits: &[(1, "1.a"), (2, "2.b")],
                 version: 3,
                 expected: Some(0),
                 published: &[0],
@@ -1267,7 +1268,7 @@ mod tests {
                 files: &["0", "1", "1.a"],
                 failing: &[],
                 latest_table_version: 1,
-                commits: &[(1, "a")],
+                commits: &[(1, "1.a")],
                 version: 2,
                 expected: Some(1),
                 published: &[0, 1],
@@ -1277,7 +1278,7 @@ mod tests {
                 files: &["0", "1!", "1.a", "2.b"],
                 failing: &[],
                 latest_table_version: 2,
-                commits: &[(1, "a"), (2, "b")],
+                commits: &[(1, "1.a"), (2, "2.b")],
                 version: 3,
                 expected: Some(0),
                 published: &[0, 1],
@@ -1287,7 +1288,8 @@ mod tests {
                 files: &["0", "1.a"],
                 failing: &[],
                 latest_table_version: 2,
-                commits: &[(2, "a")],
+                // The file name of the commit has the version before it.
+                commits: &[(2, "1.a")],
                 version: 3,
                 expected: Some(1),
                 published: &[0],
@@ -1318,15 +1320,10 @@ mod tests {
                     .commits
                     .iter()
                     .map(
-                        |(version, id)| sail_catalog::lakehouse::DeltaRatifiedCommit {
-                            // The file name of a misplaced commit has the version before it.
+                        |(version, file)| sail_catalog::lakehouse::DeltaRatifiedCommit {
                             version: *version,
                             timestamp: 1,
-                            file_name: if case.name.contains("another version") {
-                                format!("{:020}.{id}.json", version - 1)
-                            } else {
-                                format!("{version:020}.{id}.json")
-                            },
+                            file_name: log_file(file).filename().unwrap_or_default().to_string(),
                             file_size: 1,
                             file_modification_timestamp: 1,
                         },
@@ -1337,23 +1334,25 @@ mod tests {
             assert_eq!(actual.version, case.expected, "{}", case.name);
             let mut published = vec![];
             for version in 0..case.version {
-                if !case.failing.contains(&version)
-                    && store.head(&commit_path(version)).await.is_ok()
-                {
-                    published.push(version);
+                if case.failing.contains(&version) {
+                    continue;
                 }
-            }
-            assert_eq!(published, case.published, "{}", case.name);
-            if case.name.contains("not written again") {
-                let bytes = store
-                    .get(&commit_path(1))
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                let Ok(commit) = store.get(&commit_path(version)).await else {
+                    continue;
+                };
+                let bytes = commit
                     .bytes()
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                assert_eq!(bytes.as_ref(), b"1\n", "{}", case.name);
+                let expected = if case.files.contains(&format!("{version}!").as_str()) {
+                    "another writer\n".to_string()
+                } else {
+                    format!("{version}\n")
+                };
+                assert_eq!(bytes.as_ref(), expected.as_bytes(), "{}", case.name);
+                published.push(version);
             }
+            assert_eq!(published, case.published, "{}", case.name);
         }
         Ok(())
     }
