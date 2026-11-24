@@ -296,7 +296,7 @@ class KafkaDataSourceReader(DataSourceReader):
     max_records_per_partition: int | None
 
     # ------------------------------------------------------------------
-    # Partition planning — talks to the broker once on the driver
+    # Partition planning — discovers and resolves endpoints on the driver
     # ------------------------------------------------------------------
 
     def partitions(self) -> list[InputPartition]:
@@ -304,30 +304,38 @@ class KafkaDataSourceReader(DataSourceReader):
         # earliest/latest remain -2/-1 sentinels until each task binds them in read().
         admin = AdminClient(build_admin_config(self.client_config))
 
-        topic_partitions = list_topic_partitions(admin, self.subscription, timeout_s=self.admin_timeout_s)
-        validate_limit_partitions(self.starting, topic_partitions, boundary="starting")
-        validate_limit_partitions(self.ending, topic_partitions, boundary="ending")
-
+        start_partitions = list_topic_partitions(admin, self.subscription, timeout_s=self.admin_timeout_s)
+        validate_limit_partitions(self.starting, start_partitions, boundary="starting")
         starts = resolve_endpoint_offsets(
             admin,
-            topic_partitions,
+            start_partitions,
             self.starting,
             timeout_s=self.admin_timeout_s,
             strategy=self.starting_ts_strategy,
             isolation_level=self.isolation_level,
         )
+
+        end_partitions = list_topic_partitions(admin, self.subscription, timeout_s=self.admin_timeout_s)
+        validate_limit_partitions(self.ending, end_partitions, boundary="ending")
         ends = resolve_endpoint_offsets(
             admin,
-            topic_partitions,
+            end_partitions,
             self.ending,
             timeout_s=self.admin_timeout_s,
             strategy=TimestampStrategy.LATEST,
             isolation_level=self.isolation_level,
         )
 
+        if starts.keys() != ends.keys():
+            msg = (
+                "different topic partitions for starting and ending offsets: "
+                f"starting={sorted(starts)}, ending={sorted(ends)}"
+            )
+            raise ValueError(msg)
+
         offset_ranges = [
             OffsetRange(topic_partition=topic_partition, start=starts[topic_partition], end=ends[topic_partition])
-            for topic_partition in topic_partitions
+            for topic_partition in sorted(starts)
         ]
 
         # Match Spark 4.1 shouldDivvyUpLargePartitions (tests unresolved sizes), then
@@ -550,7 +558,9 @@ class KafkaDataSourceReader(DataSourceReader):
         if next_offset >= watermarks.high or watermarks.low >= end_offset:
             return None
         recovered = max(next_offset, watermarks.low)
-        consumer.seek(TopicPartition(topic_partition.topic, topic_partition.partition, recovered))
+        # Re-assigning the single partition restarts fetching after _AUTO_OFFSET_RESET
+        # puts librdkafka in FETCH_NONE (where consumer.seek() fails with _STATE).
+        consumer.assign([TopicPartition(topic_partition.topic, topic_partition.partition, recovered)])
         return recovered
 
     def _check_offset_gap(

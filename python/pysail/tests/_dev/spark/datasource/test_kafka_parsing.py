@@ -23,6 +23,7 @@ from confluent_kafka.admin import AdminClient
 from pyspark.sql.datasource import CaseInsensitiveDict, DataSourceReader
 
 from pysail.spark.datasource.kafka import KafkaDataSource
+from pysail.spark.datasource.kafka import reader as kafka_reader
 from pysail.spark.datasource.kafka.options import (
     AssignPartitions,
     GlobalTimestamp,
@@ -660,6 +661,92 @@ class TestValidateOffsets:
             validate_offsets({_topic_partition(0): 5, _topic_partition(3): -7}, boundary="starting")
 
 
+class TestValidateRangeLimits:
+    @staticmethod
+    def _forbid_admin(monkeypatch):
+        def _fail(_config):
+            pytest.fail("AdminClient should not be instantiated before range-limit validation")
+
+        monkeypatch.setattr(kafka_reader, "AdminClient", _fail)
+
+    @pytest.mark.parametrize(
+        ("start_opt", "end_opt", "start_val", "end_val", "match"),
+        [
+            ("startingOffsets", "endingOffsets", 8, 3, "Inverted offset range"),
+            ("startingOffsetsByTimestamp", "endingOffsetsByTimestamp", 200, 100, "Inverted timestamp range"),
+            ("startingOffsetsByTimestamp", "endingOffsetsByTimestamp", -100, -200, "Inverted timestamp range"),
+            ("startingOffsetsByTimestamp", "endingOffsetsByTimestamp", 100, -5, "Inverted timestamp range"),
+        ],
+    )
+    def test_inverted_paired_maps_rejected_before_broker_access(
+        self, monkeypatch, start_opt, end_opt, start_val, end_val, match
+    ):
+        self._forbid_admin(monkeypatch)
+        with pytest.raises(ValueError, match=match):
+            _resolved(
+                **{
+                    start_opt: json.dumps({"t": {"0": start_val}}),
+                    end_opt: json.dumps({"t": {"0": end_val}}),
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("start_opt", "end_opt"),
+        [
+            ("startingOffsets", "endingOffsets"),
+            ("startingOffsetsByTimestamp", "endingOffsetsByTimestamp"),
+        ],
+    )
+    def test_mismatched_paired_map_keys_rejected_before_broker_access(self, monkeypatch, start_opt, end_opt):
+        self._forbid_admin(monkeypatch)
+        with pytest.raises(ValueError, match="must specify the same TopicPartitions"):
+            _resolved(
+                **{
+                    start_opt: json.dumps({"t": {"0": 1}}),
+                    end_opt: json.dumps({"t": {"0": 1, "1": 2}}),
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("start_opt", "end_opt", "val"),
+        [
+            ("startingOffsets", "endingOffsets", 5),
+            ("startingOffsetsByTimestamp", "endingOffsetsByTimestamp", 100),
+        ],
+    )
+    def test_equal_paired_endpoints_accepted(self, start_opt, end_opt, val):
+        resolved = _resolved(
+            **{
+                start_opt: json.dumps({"t": {"0": val}}),
+                end_opt: json.dumps({"t": {"0": val}}),
+            }
+        )
+        assert resolved.starting is not None
+        assert resolved.ending is not None
+
+    def test_paired_offset_sentinels_accepted(self):
+        resolved = _resolved(
+            startingOffsets='{"t": {"0": -2, "1": 5}}',
+            endingOffsets='{"t": {"0": 0, "1": -1}}',
+        )
+        assert resolved.starting == PartitionOffsets({_topic_partition(0): -2, _topic_partition(1): 5})
+        assert resolved.ending == PartitionOffsets({_topic_partition(0): 0, _topic_partition(1): -1})
+
+    @pytest.mark.parametrize(
+        "opts",
+        [
+            {"startingOffsets": '{"t": {"0": 8}}', "endingOffsets": "latest"},
+            {"startingOffsets": '{"t": {"0": 8}}', "endingOffsetsByTimestamp": '{"t": {"0": 100}}'},
+            {"startingTimestamp": "200", "endingTimestamp": "100"},
+            {"startingTimestamp": "200", "startingOffsets": '{"t": {"0": 8}}', "endingOffsets": '{"t": {"0": 3}}'},
+        ],
+    )
+    def test_mixed_global_and_shadowed_limits_not_rejected_pairwise(self, opts):
+        resolved = _resolved(**opts)
+        assert resolved.starting is not None
+        assert resolved.ending is not None
+
+
 # ---------------------------------------------------------------------------
 # minPartitions / maxRecordsPerPartition splitting
 # ---------------------------------------------------------------------------
@@ -697,9 +784,10 @@ class TestDivideRange:
         ]
 
     def test_large_partition_hint_skips_empty_iterations(self, monkeypatch):
-        def bounded_range(parts):
-            assert parts == 1, "the splitter must not iterate billions of empty chunks"
-            return range(parts)
+        def bounded_range(*args):
+            iterations = range(*args)
+            assert len(iterations) == 1, "the splitter must not iterate billions of empty chunks"
+            return iterations
 
         monkeypatch.setattr("pysail.spark.datasource.kafka.planning.range", bounded_range, raising=False)
         assert divide_range(OffsetRange(_topic_partition(0), 9, 10), 2**31 - 1) == [

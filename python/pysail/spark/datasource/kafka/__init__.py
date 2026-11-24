@@ -38,6 +38,7 @@ from pysail.spark.datasource.kafka.options import (
     parse_range_limit,
     parse_subscription,
     parse_timestamp_strategy,
+    validate_range_limits,
 )
 from pysail.spark.datasource.kafka.reader import KafkaDataSourceReader, KafkaInputPartition, build_schema
 
@@ -101,6 +102,7 @@ class KafkaDataSource(DataSource):
         starting_ts_strategy = parse_timestamp_strategy(
             opts.get("startingOffsetsByTimestampStrategy", TimestampStrategy.ERROR.value)
         )
+        validate_range_limits(starting, ending)
 
         include_headers = parse_option(opts, "includeHeaders", parse_bool, False)
         fail_on_data_loss = parse_option(opts, "failOnDataLoss", parse_bool, True)

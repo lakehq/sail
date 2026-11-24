@@ -144,7 +144,7 @@ class _FakeConsumer:
         self.watermarks_after_assign = watermarks_after_assign
         self.positions = list(positions or [])
         self.assigned = None
-        self.seeks = []
+        self.assignments = []
         self.closed = False
 
     # -- reading -------------------------------------------------------
@@ -158,6 +158,7 @@ class _FakeConsumer:
 
     def assign(self, partitions):
         self.assigned = partitions
+        self.assignments.append([(item.topic, item.partition, item.offset) for item in partitions])
 
     def poll(self, timeout=None):  # noqa: ARG002
         return self.messages.pop(0) if self.messages else None
@@ -166,9 +167,6 @@ class _FakeConsumer:
         topic_partition = partitions[0]
         offset = self.positions.pop(0) if self.positions else topic_partition.offset
         return [kafka_reader.TopicPartition(topic_partition.topic, topic_partition.partition, offset)]
-
-    def seek(self, topic_partition):
-        self.seeks.append(topic_partition)
 
     def close(self):
         self.closed = True
@@ -299,20 +297,15 @@ class TestPlanning:
         assert _ranges(partitions) == [(_TOPIC, 0, _EARLIEST, _LATEST)]
         assert _bound_ranges(reader, consumer, partitions) == [OffsetRange(TopicPartitionKey(_TOPIC, 0), 0, 10)]
 
-    def test_concrete_inverted_range_raises_during_planning(self, consumer_factory):
-        # Spark asserts `fromOffset <= untilOffset` in `KafkaSourceRDD.compute`,
-        # per task. With both endpoints concrete the verdict cannot change
-        # between the driver and the task, so the query fails either way and
-        # failing here names the partition before any task is launched.
+    def test_concrete_inverted_range_raises_before_planning(self, consumer_factory):
         consumer = _FakeConsumer()
-        reader = _reader(
-            consumer_factory,
-            consumer,
-            startingOffsets='{"orders": {"0": 8}}',
-            endingOffsets='{"orders": {"0": 3}}',
-        )
         with pytest.raises(ValueError, match="Inverted offset range"):
-            reader.partitions()
+            _reader(
+                consumer_factory,
+                consumer,
+                startingOffsets='{"orders": {"0": 8}}',
+                endingOffsets='{"orders": {"0": 3}}',
+            )
 
     def test_late_bound_inverted_range_raises_at_task_time(self, consumer_factory):
         # A sentinel endpoint has no size until the task binds it, so this one
@@ -338,19 +331,45 @@ class TestPlanning:
         assert _ranges(partitions) == [(_TOPIC, 0, 3, 3)]
         assert _read_all(reader, partitions[0]) == []
 
-    @pytest.mark.parametrize("ending_offsets", ['{"orders": {"0": 3}}', "latest"])
-    def test_inverted_range_raises_during_planning_when_splitting(self, consumer_factory, ending_offsets):
-        # `minPartitions` forces an early resolve, so the same range is caught
-        # on the driver instead.
+    def test_concrete_inverted_range_with_splitting_raises_before_planning(self, consumer_factory):
+        with pytest.raises(ValueError, match="Inverted offset range"):
+            _reader(
+                consumer_factory,
+                _FakeConsumer(watermarks={(_TOPIC, 0): (0, 3)}),
+                startingOffsets='{"orders": {"0": 8}}',
+                endingOffsets='{"orders": {"0": 3}}',
+                minPartitions="4",
+            )
+
+    def test_sentinel_inverted_range_raises_during_planning_when_splitting(self, consumer_factory):
+        # `minPartitions` forces an early resolve, so a sentinel end is caught
+        # on the driver during planning instead of waiting for task execution.
         reader = _reader(
             consumer_factory,
             _FakeConsumer(watermarks={(_TOPIC, 0): (0, 3)}),
             startingOffsets='{"orders": {"0": 8}}',
-            endingOffsets=ending_offsets,
+            endingOffsets="latest",
             minPartitions="4",
         )
         with pytest.raises(ValueError, match="Inverted offset range"):
             reader.partitions()
+
+    @pytest.mark.parametrize(("initial_parts", "updated_parts"), [([0], [0, 1]), ([0, 1], [0])])
+    def test_partition_set_change_between_endpoints_raises(self, monkeypatch, initial_parts, updated_parts):
+        state = _FakeConsumer(topics={_TOPIC: _FakeTopicMeta(initial_parts)})
+
+        class ChangingAdmin(_FakeAdminClient):
+            def describe_topics(self, topic_collection, request_timeout=None):
+                result = super().describe_topics(topic_collection, request_timeout)
+                state.topics[_TOPIC] = _FakeTopicMeta(updated_parts)
+                return result
+
+        admin = ChangingAdmin(state)
+        monkeypatch.setattr(kafka_reader, "AdminClient", lambda _: admin)
+        reader = KafkaDataSource(options={"kafka.bootstrap.servers": "unused:9092", "subscribe": _TOPIC}).reader(None)
+        with pytest.raises(ValueError, match="different topic partitions"):
+            reader.partitions()
+        assert admin.list_offsets_calls == 0
 
     def test_topic_error_is_relayed(self, consumer_factory):
         consumer = _FakeConsumer(topics={_TOPIC: _FakeTopicMeta([0], error=KafkaError(29, "authorization failed"))})
@@ -706,10 +725,7 @@ class TestRead:
             watermarks_after={(_TOPIC, 0): (2, 5)},
         )
         assert [r["offset"] for r in _read_all(reader, partition)] == [2, 3, 4]
-        assert [
-            (topic_partition.topic, topic_partition.partition, topic_partition.offset)
-            for topic_partition in consumer.seeks
-        ] == [(_TOPIC, 0, 2)]
+        assert consumer.assignments == [[(_TOPIC, 0, 0)], [(_TOPIC, 0, 2)]]
 
     def test_fail_on_data_loss_false_stops_when_nothing_overlaps(self, consumer_factory):
         # The planned range and what is left of the log have no overlap, so
@@ -724,7 +740,7 @@ class TestRead:
             watermarks_after={(_TOPIC, 0): (7, 9)},
         )
         assert _read_all(reader, partition) == []
-        assert consumer.seeks == []
+        assert consumer.assignments == [[(_TOPIC, 0, 0)]]
 
     def test_forward_gap_within_the_log_is_skipped(self, consumer_factory):
         # Compacted offsets, transaction control markers and aborted records are

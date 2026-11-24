@@ -260,6 +260,34 @@ def parse_range_limit(options: Mapping[str, str], *, boundary: RangeBoundary) ->
     return sentinel
 
 
+def validate_range_limits(starting: RangeLimit, ending: RangeLimit) -> None:
+    """Validate paired specific limits before broker lookup, matching Spark."""
+    match starting, ending:
+        case PartitionOffsets(offsets=starts), PartitionOffsets(offsets=ends):
+            kind = "offset"
+            has_sentinels = True
+        case PartitionTimestamps(timestamps=starts), PartitionTimestamps(timestamps=ends):
+            kind = "timestamp"
+            has_sentinels = False
+        case _:
+            return
+
+    if starts.keys() != ends.keys():
+        msg = (
+            f"Starting and ending {kind} maps must specify the same TopicPartitions: "
+            f"starting={sorted(starts)}, ending={sorted(ends)}"
+        )
+        raise ValueError(msg)
+
+    for key, start in starts.items():
+        end = ends[key]
+        if has_sentinels and (start < 0 or end < 0):
+            continue
+        if start > end:
+            msg = f"Inverted {kind} range for {key.topic}[{key.partition}]: start {start} is past end {end}"
+            raise ValueError(msg)
+
+
 def parse_timestamp_strategy(option_value: str) -> TimestampStrategy:
     """Parse ``startingOffsetsByTimestampStrategy`` (case-insensitive ``error``/``latest``)."""
     try:

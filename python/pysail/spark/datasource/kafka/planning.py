@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, replace
+from itertools import groupby
+from operator import attrgetter
 from typing import TYPE_CHECKING, TypeVar
 
 from confluent_kafka import KafkaError, KafkaException, TopicCollection, TopicPartition
@@ -60,25 +62,22 @@ class OffsetRange:
         return self.end - self.start
 
 
-def divide_range(offset_range: OffsetRange, parts: int) -> list[OffsetRange]:
-    """Split a concrete range into ``parts`` chunks, placing remainders last.
+def divide_range(offset_range: OffsetRange, n_parts: int) -> list[OffsetRange]:
+    """Split a range into ``n_parts`` near-equal chunks, with the larger chunks last.
 
-    Mirrors ``KafkaOffsetRangeCalculator.getDividedPartition`` (10 over 3 -> 3/3/4)
-    and drops empty chunks.
+    Mirrors Spark's ``KafkaOffsetRangeCalculator.getDividedPartition`` (10 over 3 -> 3/3/4).
+    Never makes more chunks than there are offsets, so no chunk is empty.
     """
+    n_parts = min(max(n_parts, 1), offset_range.size)
+    chunks: list[OffsetRange] = []
+    start = offset_range.start
     remaining = offset_range.size
-    # Clamp parts to skip empty leading iterations when parts > remaining.
-    parts = min(max(parts, 1), max(remaining, 1))
-    out: list[OffsetRange] = []
-    offset = offset_range.start
-    for i in range(parts):
-        length = remaining // (parts - i)
+    for parts_left in range(n_parts, 0, -1):
+        length = remaining // parts_left
+        chunks.append(replace(offset_range, start=start, end=start + length))
+        start += length
         remaining -= length
-        chunk_end = offset + length
-        if chunk_end > offset:
-            out.append(replace(offset_range, start=offset, end=chunk_end))
-        offset = chunk_end
-    return out
+    return chunks
 
 
 def resolve_sentinels(
@@ -117,25 +116,23 @@ def resolve_sentinels(
 
 
 def restore_outer_bounds(
-    offset_ranges: list[OffsetRange], original_ranges: dict[TopicPartitionKey, OffsetRange]
+    split_ranges: list[OffsetRange], original_ranges: dict[TopicPartitionKey, OffsetRange]
 ) -> list[OffsetRange]:
-    """Restore each partition's original endpoints onto its first and last chunk.
+    """Swap each partition's resolved outer endpoints back to the original values.
 
     Mirrors ``getOffsetRangesFromUnresolvedOffsets``: only interior split points
-    are fixed; late-bound outer sentinels stay late-bound.
+    are fixed; late-bound outer sentinels stay late-bound. Expects each
+    partition's split ranges to be adjacent and in offset order, as
+    ``split_offset_ranges`` produces them.
     """
-    first: dict[TopicPartitionKey, int] = {}
-    last: dict[TopicPartitionKey, int] = {}
-    for i, offset_range in enumerate(offset_ranges):
-        first.setdefault(offset_range.topic_partition, i)
-        last[offset_range.topic_partition] = i
-
-    out = list(offset_ranges)
-    for key, i in first.items():
-        out[i] = replace(out[i], start=original_ranges[key].start)
-    for key, i in last.items():
-        out[i] = replace(out[i], end=original_ranges[key].end)
-    return out
+    restored: list[OffsetRange] = []
+    for topic_partition, group in groupby(split_ranges, key=attrgetter("topic_partition")):
+        partition_splits = list(group)
+        original = original_ranges[topic_partition]
+        partition_splits[0] = replace(partition_splits[0], start=original.start)
+        partition_splits[-1] = replace(partition_splits[-1], end=original.end)
+        restored.extend(partition_splits)
+    return restored
 
 
 def part_count(size: int, total_size: int, min_parts: int) -> int:
@@ -153,8 +150,8 @@ def split_offset_ranges(
     if max_records_per_partition is not None:
         divided: list[OffsetRange] = []
         for offset_range in offset_ranges:
-            parts = (offset_range.size + max_records_per_partition - 1) // max_records_per_partition
-            divided.extend(divide_range(offset_range, parts))
+            n_parts = (offset_range.size + max_records_per_partition - 1) // max_records_per_partition
+            divided.extend(divide_range(offset_range, n_parts))
         offset_ranges = divided
 
     if min_partitions is None or min_partitions <= len(offset_ranges):
@@ -176,12 +173,12 @@ def split_offset_ranges(
 
     out: list[OffsetRange] = []
     for offset_range in offset_ranges:
-        parts = (
+        n_parts = (
             1
             if offset_range.topic_partition in unsplit_keys
             else part_count(offset_range.size, split_total_size, split_min_partitions)
         )
-        out.extend(divide_range(offset_range, parts))
+        out.extend(divide_range(offset_range, n_parts))
     return out
 
 
