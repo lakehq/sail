@@ -98,6 +98,17 @@ def _unique_database(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+@pytest.fixture
+def database(spark: SparkSession):
+    """A new schema that is dropped with its tables after the test."""
+    name = _unique_database("unity_test")
+    spark.sql(f"CREATE SCHEMA {name}")
+    try:
+        yield name
+    finally:
+        spark.sql(f"DROP SCHEMA {name} CASCADE")
+
+
 def _qualified_table_name(table_name: str) -> str:
     parts = table_name.split(".")
     if len(parts) == 3:
@@ -111,6 +122,23 @@ def _unity_table_info(unity_rest_url: str, table_name: str) -> dict:
     full_name = _qualified_table_name(table_name)
     response = requests.get(
         f"{unity_rest_url}/tables/{quote(full_name, safe='')}",
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _columns(unity_rest_url: str, table: str) -> list[tuple[str, str]]:
+    columns = sorted(_unity_table_info(unity_rest_url, table).get("columns") or [], key=lambda c: c["position"])
+    return [(column["name"], column["type_name"]) for column in columns]
+
+
+def _delta_api_table(unity_rest_url: str, table: str) -> dict:
+    """Loads the table with the Unity Catalog Delta REST API."""
+    catalog_name, schema_name, name = _unity_table_parts(table)
+    response = requests.get(
+        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}"
+        f"/schemas/{quote(schema_name, safe='')}/tables/{quote(name, safe='')}",
         timeout=10,
     )
     response.raise_for_status()
@@ -421,6 +449,12 @@ def _delta_commit_file(location: Path, version: int) -> Path:
     return location / "_delta_log" / f"{version:020}.json"
 
 
+def _published_versions(location: Path) -> list[int]:
+    # A v2 checkpoint can be a JSON file (`<version>.checkpoint.<uuid>.json`) as well.
+    paths = (location / "_delta_log").glob("[0-9]*.json")
+    return sorted(int(path.stem) for path in paths if path.stem.isdigit())
+
+
 def _staged_delta_commit_files(location: Path, version: int) -> list[Path]:
     return sorted((location / "_delta_log" / "_staged_commits").glob(f"{version:020}.*.json"))
 
@@ -430,6 +464,10 @@ def _delta_commit_actions(location: Path, version: int) -> list[dict]:
     assert commit_file.exists(), f"Delta commit does not exist: {commit_file}"
     with commit_file.open(encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _actions(actions: list[dict], kind: str) -> list[dict]:
+    return [action[kind] for action in actions if kind in action]
 
 
 def _unity_delta_commit_info(unity_rest_url: str, table_name: str, version: int) -> dict:

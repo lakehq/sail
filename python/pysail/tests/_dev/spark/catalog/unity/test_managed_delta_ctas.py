@@ -13,58 +13,28 @@ import pytest
 import requests
 
 from pysail.tests._dev.spark.catalog.unity.conftest import (
+    _actions,
     _create_unity_managed_delta_table_with_delta_api,
+    _delta_api_table,
     _delta_commit_actions,
     _location_to_path,
+    _published_versions,
     _qualified_table_name,
     _table_location,
-    _unique_database,
     _unity_column,
     _unity_table_info,
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pyspark.sql import DataFrame, SparkSession
 
 FAILING_QUERY = "SELECT id, CASE WHEN id = 3 THEN raise_error('ctas failure') ELSE 'x' END AS name FROM range(5)"
-
-
-@pytest.fixture
-def database(spark: SparkSession):
-    name = _unique_database("unity_ctas")
-    spark.sql(f"CREATE SCHEMA {name}")
-    try:
-        yield name
-    finally:
-        spark.sql(f"DROP SCHEMA {name} CASCADE")
 
 
 @pytest.fixture(autouse=True)
 def _require_delta_api(unity_uses_delta_api: bool) -> None:  # noqa: FBT001
     if not unity_uses_delta_api:
         pytest.skip("only a server with the Delta REST API registers a managed table after its data is written")
-
-
-def _delta_api_table(unity_rest_url: str, table: str) -> dict:
-    catalog_name, schema_name, name = _qualified_table_name(table).split(".", 2)
-    response = requests.get(
-        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}"
-        f"/schemas/{quote(schema_name, safe='')}/tables/{quote(name, safe='')}",
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-def _published_versions(location: Path) -> list[int]:
-    paths = (location / "_delta_log").glob("[0-9]*.json")
-    return sorted(int(path.stem) for path in paths if path.stem.isdigit())
-
-
-def _actions(actions: list[dict], kind: str) -> list[dict]:
-    return [action[kind] for action in actions if kind in action]
 
 
 def _assert_created_with_data(spark: SparkSession, unity_rest_url: str, table: str, rows: int) -> list[dict]:
