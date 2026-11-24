@@ -268,6 +268,33 @@ def test_range_repartition_to_one_partition(spark):
     assert sorted(row.id for row in result.collect()) == list(range(12))
 
 
+def partition_rows(df):
+    """The number of rows of each partition, including the empty ones, in ascending order."""
+
+    def counter(iterator):
+        yield pd.DataFrame({"n": [sum(len(pdf) for pdf in iterator)]})
+
+    return sorted(row.n for row in df.mapInPandas(counter, schema="n: long").collect())
+
+
+@pytest.mark.parametrize(("rows", "expected"), [(0, [0]), (24, [0, 24])], ids=["empty", "constant"])
+def test_range_repartition_has_a_partition_per_spark_bound_and_one_more(spark, rows, expected):
+    # Spark's `RangePartitioner` can have fewer partitions than asked for. An empty input
+    # has no bounds, and a constant key has one bound with an empty partition after it.
+    source = spark.range(0, rows, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k")) == expected
+
+
+def test_nested_range_repartition_has_a_partition_per_spark_bound(spark):
+    source = spark.range(0, 24, 1, 1).selectExpr("id", "1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "id").repartitionByRange(6, "k")) == [0, 24]
+
+
+def test_coalesce_does_not_add_partitions_to_a_range_repartition(spark):
+    source = spark.range(0, 24, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k").coalesce(4)) == [0, 24]
+
+
 def test_explicit_repartition_spreads_identical_rows(spark):
     partition_ids = {
         row["pid"]

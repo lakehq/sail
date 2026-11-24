@@ -584,7 +584,7 @@ impl RangeSketch {
         self,
         sort_options: &[SortOptions],
         partitions: usize,
-    ) -> Result<Vec<SplitPoint>> {
+    ) -> Result<RangeSplit> {
         if !self.imbalanced_partitions.is_empty() && !self.resampled {
             return internal_err!(
                 "range partition sample has imbalanced partitions to sample again"
@@ -680,19 +680,55 @@ fn candidate_size(key: &[ScalarValue]) -> usize {
     size_of::<RangeCandidate>() + key.iter().map(ScalarValue::size).sum::<usize>()
 }
 
+/// The split points of a range repartitioning, and its number of partitions, which is
+/// the number of Spark bounds plus one, as in Spark's `RangePartitioner`.
+///
+/// Each Spark bound has a split point, except a bound at the largest sampled key (see
+/// [`range_split_points`]). So there are as many partitions as split points plus one,
+/// or plus two when the last bound has no split point. The last partition is then
+/// empty, as it is in Spark for the sampled keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeSplit {
+    split_points: Vec<SplitPoint>,
+    partitions: usize,
+}
+
+impl RangeSplit {
+    pub fn try_new(split_points: Vec<SplitPoint>, partitions: usize) -> Result<Self> {
+        if partitions != split_points.len() + 1 && partitions != split_points.len() + 2 {
+            return internal_err!(
+                "a range repartitioning with {} split points cannot have {partitions} partitions",
+                split_points.len()
+            );
+        }
+        Ok(Self {
+            split_points,
+            partitions,
+        })
+    }
+
+    pub fn split_points(&self) -> &[SplitPoint] {
+        &self.split_points
+    }
+
+    pub fn partitions(&self) -> usize {
+        self.partitions
+    }
+}
+
 /// Picks range split points from weighted candidates, like
 /// `RangePartitioner.determineBounds` in Spark, for at most `partitions` partitions.
 ///
 /// Spark puts a row equal to a bound in the partition below the bound, while
 /// DataFusion puts a row equal to a split point in the partition above it.
 /// So each split point is the smallest sampled key greater than its Spark bound.
-/// A bound at the largest sampled key has no such key and is dropped, which leaves
-/// out the empty last partition Spark would have.
+/// A bound at the largest sampled key has no such key, so it has no split point, and
+/// the partition after it, which is the last one, is empty.
 pub fn range_split_points(
     mut candidates: Vec<RangeCandidate>,
     sort_options: &[SortOptions],
     partitions: usize,
-) -> Result<Vec<SplitPoint>> {
+) -> Result<RangeSplit> {
     // Step 1: every candidate is a key and its weight. The weight is the number of
     // input rows that one sampled row stands for.
     if let Some((key, _)) = candidates
@@ -708,7 +744,7 @@ pub fn range_split_points(
     // There cannot be more partitions than sampled rows. No split points means one partition.
     let partitions = partitions.min(candidates.len());
     if partitions <= 1 {
-        return Ok(vec![]);
+        return RangeSplit::try_new(vec![], 1);
     }
 
     // Step 2: sort the candidates in the range ordering, so "greater" below means
@@ -764,7 +800,7 @@ pub fn range_split_points(
     // not sampled and lies between the bound and that candidate goes one partition
     // lower than in Spark.
     let mut split_points = vec![];
-    for bound in bounds {
+    for &bound in &bounds {
         let mut next = bound + 1;
         while next < candidates.len()
             && compare_rows(&candidates[next].0, &candidates[bound].0, sort_options)?
@@ -776,7 +812,7 @@ pub fn range_split_points(
             split_points.push(SplitPoint::new(key.clone()));
         }
     }
-    Ok(split_points)
+    RangeSplit::try_new(split_points, bounds.len() + 1)
 }
 
 #[cfg(test)]
@@ -802,8 +838,12 @@ mod tests {
             .collect()
     }
 
-    fn values(split_points: &[SplitPoint]) -> Vec<Vec<ScalarValue>> {
-        split_points.iter().map(|s| s.values().to_vec()).collect()
+    fn values(split: &RangeSplit) -> Vec<Vec<ScalarValue>> {
+        split
+            .split_points()
+            .iter()
+            .map(|s| s.values().to_vec())
+            .collect()
     }
 
     const ASC: SortOptions = SortOptions {
@@ -813,48 +853,56 @@ mod tests {
 
     #[test]
     fn test_split_points_without_partitions_or_samples() {
+        // Spark has no bounds, so one partition, for one partition or an empty sample.
         let candidates = sample(vec![Some(1), Some(2)], 1.0);
-        assert!(
-            range_split_points(candidates, &[ASC], 1)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(range_split_points(vec![], &[ASC], 4).unwrap().is_empty());
+        let split = range_split_points(candidates, &[ASC], 1).unwrap();
+        assert!(split.split_points().is_empty());
+        assert_eq!(split.partitions(), 1);
+        let split = range_split_points(vec![], &[ASC], 4).unwrap();
+        assert!(split.split_points().is_empty());
+        assert_eq!(split.partitions(), 1);
     }
 
     #[test]
     fn test_split_points_move_spark_bounds_to_the_next_key() {
         // Spark bounds for 0..12 in 3 partitions are 3 and 7, so the split points are 4 and 8.
         let candidates = sample((0..12).map(Some).collect(), 1.0);
-        let split_points = range_split_points(candidates, &[ASC], 3).unwrap();
+        let split = range_split_points(candidates, &[ASC], 3).unwrap();
         assert_eq!(
-            values(&split_points),
+            values(&split),
             vec![
                 vec![ScalarValue::Int64(Some(4))],
                 vec![ScalarValue::Int64(Some(8))]
             ]
         );
+        assert_eq!(split.partitions(), 3);
     }
 
     #[test]
-    fn test_split_points_skip_repeated_keys_and_drop_the_last_bound() {
-        // Spark bounds are 0, 1, 2 for 3 distinct keys in 10 partitions.
-        // The bound 2 is the largest key, so only two split points remain.
+    fn test_split_points_skip_repeated_keys_and_leave_the_last_partition_empty() {
+        // Spark bounds are 0, 1, 2 for 3 distinct keys in 10 partitions, so Spark has
+        // 4 partitions. The bound 2 is the largest key, so it has no split point, and the
+        // last partition is empty.
         let keys = (0..3).flat_map(|k| vec![Some(k); 4]).collect();
-        let split_points = range_split_points(sample(keys, 1.0), &[ASC], 10).unwrap();
+        let split = range_split_points(sample(keys, 1.0), &[ASC], 10).unwrap();
         assert_eq!(
-            values(&split_points),
+            values(&split),
             vec![
                 vec![ScalarValue::Int64(Some(1))],
                 vec![ScalarValue::Int64(Some(2))]
             ]
         );
+        assert_eq!(split.partitions(), 4);
     }
 
     #[test]
-    fn test_split_points_for_all_null_keys() {
-        let split_points = range_split_points(sample(vec![None; 12], 1.0), &[ASC], 4).unwrap();
-        assert!(split_points.is_empty());
+    fn test_split_points_of_a_constant_key_leave_one_empty_partition() {
+        // Spark has one bound at the only key, so 2 partitions, the last one empty.
+        for key in [Some(1), None] {
+            let split = range_split_points(sample(vec![key; 24], 1.0), &[ASC], 8).unwrap();
+            assert!(split.split_points().is_empty());
+            assert_eq!(split.partitions(), 2);
+        }
     }
 
     #[test]
@@ -864,12 +912,10 @@ mod tests {
             nulls_first: false,
         };
         let keys = vec![Some(1), None, Some(3), Some(2), None, Some(4)];
-        let split_points = range_split_points(sample(keys, 1.0), &[options], 2).unwrap();
+        let split = range_split_points(sample(keys, 1.0), &[options], 2).unwrap();
         // Sorted: 4, 3, 2, 1, null, null. The Spark bound is 2, so the split point is 1.
-        assert_eq!(
-            values(&split_points),
-            vec![vec![ScalarValue::Int64(Some(1))]]
-        );
+        assert_eq!(values(&split), vec![vec![ScalarValue::Int64(Some(1))]]);
+        assert_eq!(split.partitions(), 2);
     }
 
     #[test]
@@ -877,18 +923,15 @@ mod tests {
         // The first partition read 10 rows per kept row, so its keys weigh more.
         let mut candidates = sample(vec![Some(0), Some(1)], 10.0);
         candidates.extend(sample(vec![Some(2), Some(3), Some(4), Some(5)], 1.0));
-        let split_points = range_split_points(candidates, &[ASC], 2).unwrap();
+        let split = range_split_points(candidates, &[ASC], 2).unwrap();
         // Total weight 24: the Spark bound is 1 (cumulative weight 20), so the split point is 2.
-        assert_eq!(
-            values(&split_points),
-            vec![vec![ScalarValue::Int64(Some(2))]]
-        );
+        assert_eq!(values(&split), vec![vec![ScalarValue::Int64(Some(2))]]);
     }
 
     #[test]
     fn test_split_points_pass_range_partitioning_validation() {
         let keys = (0..100).map(|k| Some(k % 7)).collect();
-        let split_points = range_split_points(sample(keys, 1.0), &[ASC], 5).unwrap();
+        let split = range_split_points(sample(keys, 1.0), &[ASC], 5).unwrap();
         let schema = key_schema(DataType::Int64);
         let ordering = datafusion::physical_expr::LexOrdering::new(vec![
             datafusion::physical_expr::PhysicalSortExpr::new(
@@ -900,9 +943,13 @@ mod tests {
             ),
         ])
         .unwrap();
-        let range =
-            datafusion::physical_expr::RangePartitioning::try_new(ordering, split_points).unwrap();
+        let range = datafusion::physical_expr::RangePartitioning::try_new(
+            ordering,
+            split.split_points().to_vec(),
+        )
+        .unwrap();
         assert_eq!(range.partition_count(), 5);
+        assert_eq!(split.partitions(), 5);
     }
 
     /// The output of the first sample for one input partition.
@@ -1003,11 +1050,8 @@ mod tests {
             .map(|(_, w)| *w)
             .collect::<Vec<_>>();
         assert_eq!(weights, vec![25_000.0; 4]);
-        let split_points = sketch.split_points(&[ASC], 2).unwrap();
-        assert_eq!(
-            values(&split_points),
-            vec![vec![ScalarValue::Int64(Some(3))]]
-        );
+        let split = sketch.split_points(&[ASC], 2).unwrap();
+        assert_eq!(values(&split), vec![vec![ScalarValue::Int64(Some(3))]]);
     }
 
     #[tokio::test]
@@ -1286,8 +1330,9 @@ mod tests {
         let sketch = sketch(wide_sample(), 2_400.0, 7_200, &pool).await.unwrap();
         assert_eq!(sketch.candidates.len(), 2_000);
         assert!(pool.reserved() >= 2_000 * 8_192, "{}", pool.reserved());
-        let split_points = sketch.split_points(&[ASC], 24).unwrap();
-        assert_eq!(split_points.len(), 23);
+        let split = sketch.split_points(&[ASC], 24).unwrap();
+        assert_eq!(split.split_points().len(), 23);
+        assert_eq!(split.partitions(), 24);
         assert_eq!(pool.reserved(), 0);
     }
 

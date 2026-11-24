@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
-    LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
 };
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, reset_plan_states,
 };
@@ -16,17 +17,21 @@ use datafusion::physical_plan::projection::{
     ProjectionExec, all_columns, make_with_child, update_expr,
 };
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, apply_expression_roots, execute_stream,
+    PlanProperties, apply_expression_roots, execute_stream, replace_children_if_necessary,
 };
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use tokio::sync::OnceCell;
 
-use crate::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec, RangeSketch};
+use crate::range_sample::{
+    RangePartitionResampleExec, RangePartitionSampleExec, RangeSketch, RangeSplit,
+};
 use crate::range_split::RangeSampleOptions;
 
 type SharedResult<T> = std::result::Result<T, Arc<DataFusionError>>;
@@ -46,7 +51,7 @@ pub struct RangeSample {
     sample_size: f64,
     sort_options: Vec<SortOptions>,
     num_partitions: usize,
-    split_points: OnceCell<SharedResult<Vec<SplitPoint>>>,
+    split: OnceCell<SharedResult<RangeSplit>>,
 }
 
 impl RangeSample {
@@ -61,7 +66,7 @@ impl RangeSample {
             sample_size,
             sort_options,
             num_partitions,
-            split_points: OnceCell::new(),
+            split: OnceCell::new(),
         }
     }
 
@@ -110,24 +115,24 @@ impl RangeSample {
         }
     }
 
-    fn get(&self) -> Option<Result<&[SplitPoint]>> {
-        self.split_points.get().map(|result| match result {
-            Ok(split_points) => Ok(split_points.as_slice()),
+    fn get(&self) -> Option<Result<&RangeSplit>> {
+        self.split.get().map(|result| match result {
+            Ok(split) => Ok(split),
             Err(error) => Err(DataFusionError::Shared(Arc::clone(error))),
         })
     }
 
     /// Runs the sample in this process once, and returns the split points.
     /// A failed sample fails every later call instead of running again.
-    async fn get_or_run(&self, context: Arc<TaskContext>) -> Result<Vec<SplitPoint>> {
-        self.split_points
+    async fn get_or_run(&self, context: Arc<TaskContext>) -> Result<RangeSplit> {
+        self.split
             .get_or_init(|| async { self.run(context).await.map_err(Arc::new) })
             .await
             .clone()
             .map_err(DataFusionError::Shared)
     }
 
-    async fn run(&self, context: Arc<TaskContext>) -> Result<Vec<SplitPoint>> {
+    async fn run(&self, context: Arc<TaskContext>) -> Result<RangeSplit> {
         let pool = context.memory_pool();
         let sample = execute_stream(self.plan(), Arc::clone(&context))?;
         let mut sketch = self.sketch(sample, pool).await?;
@@ -147,8 +152,11 @@ impl RangeSample {
 /// so EXPLAIN does not run it, and it runs as part of the operation that executes
 /// the query.
 ///
-/// The node always has `num_partitions` output partitions. When the sample
-/// gives fewer split points, the last partitions are empty.
+/// Spark's `RangePartitioner` has one partition per bound plus one, which can be fewer
+/// than the partitions asked for, for an input with few keys. The node has as many
+/// partitions once its sample has run before the plan is executed (see
+/// [`resolve_range_partitions`]). Until then, it has the partitions asked for, and the
+/// ones that the sample does not give are empty.
 ///
 /// In a job, the sample runs in stages of the same job as the shuffle (see
 /// [`RangeSample::split_points_exec`]).
@@ -158,6 +166,8 @@ pub struct RangeRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
     sample: Arc<RangeSample>,
     ordering: LexOrdering,
+    /// The number of output partitions.
+    partitions: usize,
     properties: Arc<PlanProperties>,
     /// The repartitioning of the input, created once for all output partitions
     /// of this node. Each copy has its own, because a repartitioning runs only once.
@@ -170,8 +180,21 @@ impl RangeRepartitionExec {
         sample: Arc<RangeSample>,
         ordering: LexOrdering,
     ) -> Result<Self> {
-        if sample.num_partitions == 0 {
-            return internal_err!("range repartitioning requires at least one partition");
+        let partitions = sample.num_partitions;
+        Self::try_new_with_partitions(input, sample, ordering, partitions)
+    }
+
+    fn try_new_with_partitions(
+        input: Arc<dyn ExecutionPlan>,
+        sample: Arc<RangeSample>,
+        ordering: LexOrdering,
+        partitions: usize,
+    ) -> Result<Self> {
+        if partitions == 0 || partitions > sample.num_partitions {
+            return internal_err!(
+                "range repartitioning into {} partitions cannot have {partitions} partitions",
+                sample.num_partitions
+            );
         }
         if ordering
             .iter()
@@ -189,7 +212,7 @@ impl RangeRepartitionExec {
         }
         let properties = Arc::new(PlanProperties::new(
             equivalence,
-            Partitioning::UnknownPartitioning(sample.num_partitions),
+            Partitioning::UnknownPartitioning(partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
@@ -197,6 +220,7 @@ impl RangeRepartitionExec {
             input,
             sample,
             ordering,
+            partitions,
             properties,
             state: Arc::new(OnceCell::new()),
         })
@@ -211,7 +235,7 @@ impl RangeRepartitionExec {
     }
 
     pub fn num_partitions(&self) -> usize {
-        self.sample.num_partitions
+        self.partitions
     }
 
     pub fn ordering(&self) -> &LexOrdering {
@@ -228,8 +252,9 @@ impl DisplayAs for RangeRepartitionExec {
             self.num_partitions()
         )?;
         match self.sample.get() {
-            Some(Ok(split_points)) => {
-                let split_points = split_points
+            Some(Ok(split)) => {
+                let split_points = split
+                    .split_points()
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>();
@@ -281,10 +306,11 @@ impl ExecutionPlan for RangeRepartitionExec {
         let [input] = children.as_slice() else {
             return internal_err!("{} requires exactly one child", self.name());
         };
-        Ok(Arc::new(Self::try_new(
+        Ok(Arc::new(Self::try_new_with_partitions(
             Arc::clone(input),
             Arc::clone(&self.sample),
             self.ordering.clone(),
+            self.partitions,
         )?))
     }
 
@@ -379,10 +405,11 @@ impl ExecutionPlan for RangeRepartitionExec {
             return Ok(None);
         };
         // The sample plan computes the keys from its own input, so it stays the same.
-        Ok(Some(Arc::new(Self::try_new(
+        Ok(Some(Arc::new(Self::try_new_with_partitions(
             make_with_child(projection, self.input())?,
             Arc::clone(&self.sample),
             ordering,
+            self.partitions,
         )?)))
     }
 }
@@ -395,12 +422,80 @@ async fn repartition_by_sample(
     ordering: LexOrdering,
     context: Arc<TaskContext>,
 ) -> Result<Arc<RepartitionExec>> {
-    let split_points = sample.get_or_run(context).await?;
-    let partitioning = RangePartitioning::try_new(ordering, split_points)?;
+    let split = sample.get_or_run(context).await?;
+    let partitioning = RangePartitioning::try_new(ordering, split.split_points().to_vec())?;
     Ok(Arc::new(RepartitionExec::try_new(
         input,
         Partitioning::Range(partitioning),
     )?))
+}
+
+/// Runs the sample of every range repartitioning in the plan, and gives each one the
+/// partitions of Spark's `RangePartitioner`, before the plan is executed in this
+/// process. The partitions of a plan cannot change once it runs.
+///
+/// The sample can read scalar subqueries, whose values a [`ScalarSubqueryExec`] above
+/// the range repartitioning gives when it runs. So such a node runs its subqueries
+/// here first, and is then left out, since it only passes its input through.
+///
+/// The sample of a range repartitioning that reads another one is planned with the
+/// partitions asked for of the other one. Its empty partitions add no sampled keys, but
+/// the rows that each partition keeps are counted for the partitions asked for.
+pub async fn resolve_range_partitions(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    resolve(plan, context).await
+}
+
+fn resolve(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> BoxFuture<'static, Result<Arc<dyn ExecutionPlan>>> {
+    Box::pin(async move {
+        if !plan.exists(|node| Ok(node.is::<RangeRepartitionExec>()))? {
+            return Ok(plan);
+        }
+        if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
+            let mut subqueries = vec![];
+            for link in scalar.subqueries() {
+                subqueries.push(ScalarSubqueryLink {
+                    plan: resolve(Arc::clone(&link.plan), Arc::clone(&context)).await?,
+                    index: link.index,
+                });
+            }
+            // The node runs the subqueries before its input, so this runs only them.
+            let input = Arc::clone(scalar.input());
+            let subqueries = ScalarSubqueryExec::new(
+                Arc::new(EmptyExec::new(input.schema())),
+                subqueries,
+                scalar.results().clone(),
+            );
+            subqueries
+                .execute(0, Arc::clone(&context))?
+                .try_collect::<Vec<_>>()
+                .await?;
+            return resolve(input, context).await;
+        }
+        let mut children = vec![];
+        for child in plan.children() {
+            children.push(resolve(Arc::clone(child), Arc::clone(&context)).await?);
+        }
+        let plan = replace_children_if_necessary(plan, children)?;
+        let Some(range) = plan.downcast_ref::<RangeRepartitionExec>() else {
+            return Ok(plan);
+        };
+        let partitions = range.sample.get_or_run(context).await?.partitions();
+        if partitions == range.partitions {
+            return Ok(plan);
+        }
+        Ok(Arc::new(RangeRepartitionExec::try_new_with_partitions(
+            Arc::clone(&range.input),
+            Arc::clone(&range.sample),
+            range.ordering.clone(),
+            partitions,
+        )?) as Arc<dyn ExecutionPlan>)
+    })
 }
 
 #[cfg(test)]
@@ -556,5 +651,52 @@ mod tests {
         assert_eq!(rows.iter().sum::<usize>(), 100_000);
         // The sample of about 40 keys splits the rows near the middle.
         assert!(rows.iter().all(|&n| n > 30_000), "{rows:?}");
+    }
+
+    /// The rows of each partition of a range repartitioning into 8 partitions by `k`,
+    /// once the partitions come from its sample.
+    async fn resolved_partition_rows(keys: Vec<i64>) -> Vec<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int64Array::from(keys))])
+                .unwrap();
+        let input = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let options = SortOptions::default();
+        let sample = Arc::new(RangeSample::new(
+            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input) as _, 100).unwrap()),
+            800.0,
+            vec![options],
+            8,
+        ));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("k", 0)),
+            options,
+        )])
+        .unwrap();
+        let node: Arc<dyn ExecutionPlan> =
+            Arc::new(RangeRepartitionExec::try_new(input, sample, ordering).unwrap());
+        assert_eq!(node.output_partitioning().partition_count(), 8);
+        let context = SessionContext::new().task_ctx();
+        let node = resolve_range_partitions(node, Arc::clone(&context))
+            .await
+            .unwrap();
+        collect_partitioned(node, context)
+            .await
+            .unwrap()
+            .iter()
+            .map(|batches| batches.iter().map(|batch| batch.num_rows()).sum())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_partitions_are_those_of_the_spark_bounds() {
+        // Spark has no bounds for an empty input, so one partition.
+        assert_eq!(resolved_partition_rows(vec![]).await, vec![0]);
+        // A constant key is one bound, so two partitions, the last one empty.
+        assert_eq!(resolved_partition_rows(vec![1; 24]).await, vec![24, 0]);
+        // Enough distinct keys give all the partitions asked for.
+        let rows = resolved_partition_rows((0..800).collect()).await;
+        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.iter().sum::<usize>(), 800);
     }
 }

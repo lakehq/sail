@@ -9,6 +9,7 @@ use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use sail_common::actor::ActorSystem;
 use sail_common_datafusion::session::job::JobRunner;
+use sail_physical_plan::range_repartition::resolve_range_partitions;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
@@ -71,6 +72,9 @@ impl JobRunner for LocalJobRunner {
             return internal_err!("job runner is stopped");
         }
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+        // The partitions of a range repartitioning come from its sample, which runs here,
+        // since the partitions of the plan cannot change once it runs.
+        let plan = resolve_range_partitions(plan, ctx.task_ctx()).await?;
         let options = TracingExecOptions {
             metrics: global_metrics(),
             session_id: Some(self.session_id.clone()),

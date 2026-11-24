@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array, new_empty_array};
+use datafusion::arrow::array::{
+    ArrayRef, AsArray, BooleanArray, RecordBatch, UInt64Array, new_empty_array,
+};
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -30,10 +32,14 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use futures::{StreamExt, TryStreamExt};
 
-use crate::range_sample::{RangeSketch, range_sample_imbalance, resample_partition};
+use crate::range_sample::{RangeSketch, RangeSplit, range_sample_imbalance, resample_partition};
 
 /// The column of [`RangeChannelExec`] with the output channel of each row.
 pub const CHANNEL_COLUMN: &str = "__channel";
+
+/// The column of [`RangeSplitPointsExec`] that tells whether a Spark bound has a
+/// split point.
+pub const SPLIT_POINT_COLUMN: &str = "__split_point";
 
 /// How the split points of a range repartitioning are picked from its sample.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,8 +101,11 @@ impl RangeSampleOptions {
     }
 }
 
-/// Picks the split points of a range repartitioning, and emits them as one row per
-/// split point, in order, with one column per range key.
+/// Picks the split points of a range repartitioning, and emits one row per Spark bound,
+/// in order: the split point of the bound in one column per range key, and whether the
+/// bound has one in [`SPLIT_POINT_COLUMN`]. Only the last bound can have no split
+/// point (see [`crate::range_sample::range_split_points`]), and then its keys are null.
+/// So the range repartitioning has as many partitions as rows plus one.
 ///
 /// The first child is the output of [`crate::range_sample::RangePartitionSampleExec`],
 /// and the second child is the output of [`RangeResampleExec`] for the imbalanced
@@ -120,7 +129,12 @@ impl RangeSplitPointsExec {
     ) -> Result<Self> {
         options.check_sample(&sample)?;
         let num_keys = options.sort_options.len();
-        let schema = Arc::new(Schema::new(sample.schema().fields()[..num_keys].to_vec()));
+        let mut fields = sample.schema().fields()[..num_keys]
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>();
+        fields.push(Field::new(SPLIT_POINT_COLUMN, DataType::Boolean, false));
+        let schema = Arc::new(Schema::new(fields));
         if resample.schema().fields().len() != num_keys {
             return internal_err!("a range resample needs {num_keys} key columns");
         }
@@ -234,9 +248,8 @@ impl ExecutionPlan for RangeSplitPointsExec {
             sketch
                 .add_resample(execute_stream(resample, Arc::clone(&context))?)
                 .await?;
-            let split_points =
-                sketch.split_points(&options.sort_options, options.num_partitions)?;
-            split_points_batch(&split_points, schema)
+            let split = sketch.split_points(&options.sort_options, options.num_partitions)?;
+            split_points_batch(&split, schema)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             output_schema,
@@ -382,7 +395,7 @@ impl ExecutionPlan for RangeResampleExec {
 
 /// Adds the output channel of each input row of a range repartitioning, as the last
 /// column [`CHANNEL_COLUMN`]. The channel is the range partition of the row for the
-/// split points that the second child emits (see [`RangeSplitPointsExec`]).
+/// split points in the rows that the second child emits (see [`RangeSplitPointsExec`]).
 ///
 /// Each partition reads all the split points before its first input row.
 #[derive(Debug, Clone)]
@@ -400,10 +413,10 @@ impl RangeChannelExec {
         split_points: Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
     ) -> Result<Self> {
-        if split_points.schema().fields().len() != ordering.len() {
+        if split_points.schema().fields().len() != ordering.len() + 1 {
             return internal_err!(
                 "range channels need {} split point columns, found {}",
-                ordering.len(),
+                ordering.len() + 1,
                 split_points.schema().fields().len()
             );
         }
@@ -545,36 +558,54 @@ impl ExecutionPlan for RangeChannelExec {
     }
 }
 
-/// The rows of the split points, one column per range key.
-fn split_points_batch(split_points: &[SplitPoint], schema: SchemaRef) -> Result<RecordBatch> {
-    let columns = schema
-        .fields()
+/// The rows of [`RangeSplitPointsExec`] for the split points.
+fn split_points_batch(split: &RangeSplit, schema: SchemaRef) -> Result<RecordBatch> {
+    let bounds = split.partitions() - 1;
+    let split_points = split.split_points();
+    let (keys, _) = schema.fields().split_at(schema.fields().len() - 1);
+    let mut columns = keys
         .iter()
         .enumerate()
         .map(|(i, field)| {
-            if split_points.is_empty() {
+            if bounds == 0 {
                 return Ok(new_empty_array(field.data_type()));
             }
-            ScalarValue::iter_to_array(split_points.iter().map(|x| x.values()[i].clone()))
+            let null = ScalarValue::try_from(field.data_type())?;
+            ScalarValue::iter_to_array((0..bounds).map(|bound| match split_points.get(bound) {
+                Some(split_point) => split_point.values()[i].clone(),
+                None => null.clone(),
+            }))
         })
         .collect::<Result<Vec<ArrayRef>>>()?;
+    columns.push(Arc::new(BooleanArray::from_iter(
+        (0..bounds).map(|bound| Some(bound < split_points.len())),
+    )));
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-/// The split points in the rows of the batches, one column per range key.
-fn split_points_from_batches(batches: &[RecordBatch]) -> Result<Vec<SplitPoint>> {
+/// The split points in the rows of [`RangeSplitPointsExec`].
+pub fn range_split_from_batches(batches: &[RecordBatch]) -> Result<RangeSplit> {
+    let mut bounds = 0;
     let mut split_points = vec![];
     for batch in batches {
+        let Some((has_split_point, keys)) = batch.columns().split_last() else {
+            return internal_err!("range split points need a column for each bound");
+        };
+        let Some(has_split_point) = has_split_point.as_boolean_opt() else {
+            return internal_err!("range split points need a boolean column for each bound");
+        };
         for row in 0..batch.num_rows() {
-            let values = batch
-                .columns()
-                .iter()
-                .map(|column| ScalarValue::try_from_array(column, row))
-                .collect::<Result<Vec<_>>>()?;
-            split_points.push(SplitPoint::new(values));
+            bounds += 1;
+            if has_split_point.value(row) {
+                let values = keys
+                    .iter()
+                    .map(|column| ScalarValue::try_from_array(column, row))
+                    .collect::<Result<Vec<_>>>()?;
+                split_points.push(SplitPoint::new(values));
+            }
         }
     }
-    Ok(split_points)
+    RangeSplit::try_new(split_points, bounds + 1)
 }
 
 /// The range partitioning of the ordering at the split points, unless there are none.
@@ -582,11 +613,14 @@ fn range_partitioning(
     ordering: LexOrdering,
     batches: &[RecordBatch],
 ) -> Result<Option<RangePartitioning>> {
-    let split_points = split_points_from_batches(batches)?;
-    if split_points.is_empty() {
+    let split = range_split_from_batches(batches)?;
+    if split.split_points().is_empty() {
         return Ok(None);
     }
-    Ok(Some(RangePartitioning::try_new(ordering, split_points)?))
+    Ok(Some(RangePartitioning::try_new(
+        ordering,
+        split.split_points().to_vec(),
+    )?))
 }
 
 #[cfg(test)]
@@ -609,6 +643,13 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]))
     }
 
+    fn split_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new(SPLIT_POINT_COLUMN, DataType::Boolean, false),
+        ]))
+    }
+
     fn keys(values: Vec<Option<i64>>) -> RecordBatch {
         RecordBatch::try_new(key_schema(), vec![Arc::new(Int64Array::from(values))]).unwrap()
     }
@@ -628,12 +669,15 @@ mod tests {
         options: SortOptions,
     ) -> Vec<Vec<(Option<i64>, u64)>> {
         let input = TestMemoryExec::try_new_exec(&partitions, key_schema(), None).unwrap();
-        let split_points = TestMemoryExec::try_new_exec(
-            &[vec![keys(split_points.into_iter().map(Some).collect())]],
-            key_schema(),
-            None,
-        )
-        .unwrap();
+        let split_points = split_points
+            .into_iter()
+            .map(|k| SplitPoint::new(vec![ScalarValue::Int64(Some(k))]))
+            .collect::<Vec<_>>();
+        let partitions = split_points.len() + 1;
+        let split = RangeSplit::try_new(split_points, partitions).unwrap();
+        let rows = split_points_batch(&split, split_schema()).unwrap();
+        let split_points =
+            TestMemoryExec::try_new_exec(&[vec![rows]], split_schema(), None).unwrap();
         let exec =
             Arc::new(RangeChannelExec::try_new(input, split_points, ordering(options)).unwrap());
         let ctx = SessionContext::new();
@@ -717,7 +761,7 @@ mod tests {
     async fn job_and_local_split_points(
         partitions: Vec<Vec<RecordBatch>>,
         options: RangeSampleOptions,
-    ) -> (Vec<SplitPoint>, Vec<SplitPoint>, bool) {
+    ) -> (RangeSplit, RangeSplit, bool) {
         let input = || TestMemoryExec::try_new_exec(&partitions, key_schema(), None).unwrap();
         let sample = || -> Arc<dyn ExecutionPlan> {
             Arc::new(
@@ -758,7 +802,7 @@ mod tests {
         let exec = RangeSplitPointsExec::try_new(sample(), Arc::new(resample), options).unwrap();
         let batches = collect(Arc::new(exec), ctx.task_ctx()).await.unwrap();
         (
-            split_points_from_batches(&batches).unwrap(),
+            range_split_from_batches(&batches).unwrap(),
             local,
             resampled,
         )
@@ -777,7 +821,7 @@ mod tests {
         let (job, local, resampled) =
             job_and_local_split_points(balanced_partitions(), sample_options(4, 40.0, 60)).await;
         assert!(!resampled);
-        assert_eq!(local.len(), 3);
+        assert_eq!(local.split_points().len(), 3);
         assert_eq!(job, local);
     }
 
@@ -793,7 +837,7 @@ mod tests {
         let (job, local, resampled) =
             job_and_local_split_points(partitions, sample_options(4, 40.0, 15)).await;
         assert!(resampled);
-        assert_eq!(local.len(), 3);
+        assert_eq!(local.split_points().len(), 3);
         assert_eq!(job, local);
     }
 
@@ -817,13 +861,18 @@ mod tests {
 
     #[test]
     fn split_points_round_trip_through_their_rows() {
-        let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Int64(Some(4))]),
-            SplitPoint::new(vec![ScalarValue::Int64(None)]),
-        ];
-        let batch = split_points_batch(&split_points, key_schema()).unwrap();
-        assert_eq!(split_points_from_batches(&[batch]).unwrap(), split_points);
-        let empty = split_points_batch(&[], key_schema()).unwrap();
-        assert_eq!(empty.num_rows(), 0);
+        let point = |k| SplitPoint::new(vec![ScalarValue::Int64(k)]);
+        for (split_points, partitions, rows) in [
+            (vec![point(Some(4)), point(None)], 3, 2),
+            // The last bound has no split point, so the last partition is empty.
+            (vec![point(Some(4))], 3, 2),
+            (vec![], 2, 1),
+            (vec![], 1, 0),
+        ] {
+            let split = RangeSplit::try_new(split_points, partitions).unwrap();
+            let batch = split_points_batch(&split, split_schema()).unwrap();
+            assert_eq!(batch.num_rows(), rows);
+            assert_eq!(range_split_from_batches(&[batch]).unwrap(), split);
+        }
     }
 }

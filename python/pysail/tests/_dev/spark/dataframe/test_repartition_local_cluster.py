@@ -9,6 +9,7 @@ where the sample covers every row.
 
 from collections import Counter
 
+import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
@@ -35,6 +36,42 @@ def test_range_repartition_assigns_key_ranges(local_cluster_spark, descending):
         expected = (11 - row.key) // 4 if descending else row.key // 4
         assert row.pid == expected, row
     assert len(rows) == 36
+
+
+def partition_rows(df):
+    """The number of rows of each partition, including the empty ones, in ascending order."""
+
+    def counter(iterator):
+        yield pd.DataFrame({"n": [sum(len(pdf) for pdf in iterator)]})
+
+    return sorted(row.n for row in df.mapInPandas(counter, schema="n: long").collect())
+
+
+@pytest.mark.parametrize(("rows", "expected"), [(0, [0]), (24, [0, 24])], ids=["empty", "constant"])
+def test_range_repartition_has_a_partition_per_spark_bound_and_one_more(local_cluster_spark, rows, expected):
+    # The driver reads the split points before it plans the tasks that read the shuffle.
+    source = local_cluster_spark.range(0, rows, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k")) == expected
+
+
+def test_coalesce_does_not_add_partitions_to_a_range_repartition(local_cluster_spark):
+    source = local_cluster_spark.range(0, 24, 1, 1).selectExpr("1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "k").coalesce(4)) == [0, 24]
+
+
+def test_nested_range_repartition_has_a_partition_per_spark_bound(local_cluster_spark):
+    # The outer split points read the output of the inner range shuffle.
+    source = local_cluster_spark.range(0, 24, 1, 1).selectExpr("id", "1 AS k")
+    assert partition_rows(source.repartitionByRange(8, "id").repartitionByRange(6, "k")) == [0, 24]
+
+
+def test_range_repartition_of_a_shared_cte_has_a_partition_per_spark_bound(local_cluster_spark):
+    # The CTE runs before the split points and keeps its output for the shuffle.
+    df = local_cluster_spark.sql(
+        "WITH t AS (SELECT 1 AS k FROM range(24)) "
+        "SELECT /*+ REPARTITION_BY_RANGE(8, k) */ k FROM t WHERE k IN (SELECT k FROM t)"
+    )
+    assert partition_rows(df) == [0, 24]
 
 
 def failing_key(_value):

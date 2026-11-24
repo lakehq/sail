@@ -8,7 +8,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::JobGraph;
 
 /// Tracks graph/topology and runtime state for a single job.
@@ -18,7 +18,20 @@ pub struct JobDescriptor {
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
+    /// The state of each range shuffle of the job graph.
+    pub range_shuffles: Vec<RangeShuffleState>,
     pub state: JobState,
+}
+
+/// How far the driver is in finding the partitions of a range shuffle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeShuffleState {
+    /// The split points are not picked yet.
+    Sampling,
+    /// The driver reads the split points.
+    Reading,
+    /// The shuffle and the stages that read it have their partitions.
+    Resolved,
 }
 
 pub enum JobState {
@@ -60,31 +73,67 @@ impl JobDescriptor {
         state: JobState,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<Self> {
-        let mut stages = vec![];
-        for stage in graph.stages().iter() {
-            let mut descriptor = StageDescriptor {
-                tasks: vec![],
+        let stages = graph
+            .stages()
+            .iter()
+            .map(|stage| StageDescriptor {
+                tasks: TaskDescriptor::new_tasks(
+                    stage.plan.output_partitioning().partition_count(),
+                ),
                 state: StageState::Active,
-            };
-            for _ in 0..stage.plan.output_partitioning().partition_count() {
-                descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
-            }
-            stages.push(descriptor);
-        }
-        let topology = JobTopology::try_new(&graph)?;
-        let regions = (0..topology.regions.len())
-            .map(|_| TaskRegionDescriptor {
-                state: TaskRegionState::Running,
             })
             .collect();
+        let topology = JobTopology::try_new(&graph)?;
+        let regions = TaskRegionDescriptor::new_regions(&topology);
+        let range_shuffles = vec![RangeShuffleState::Sampling; graph.range_shuffles().len()];
         Ok(Self {
             context,
             graph,
             topology,
             stages,
             regions,
+            range_shuffles,
             state,
         })
+    }
+
+    /// Gives the range shuffle its number of partitions, and the stages that read it
+    /// theirs, which have no task attempts yet. The task regions are found again for the
+    /// new partitions. Their states follow from the task attempts.
+    pub fn resolve_range_shuffle(
+        &mut self,
+        shuffle: usize,
+        partitions: usize,
+    ) -> ExecutionResult<()> {
+        for s in self.graph.resize_range_shuffle(shuffle, partitions)? {
+            let stage = &mut self.stages[s];
+            if stage.tasks.iter().any(|task| !task.attempts.is_empty()) {
+                return Err(ExecutionError::InternalError(format!(
+                    "stage {s} has run before the partitions of range shuffle {shuffle} are known"
+                )));
+            }
+            stage.tasks = TaskDescriptor::new_tasks(
+                self.graph.stages()[s]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+            );
+        }
+        self.topology = JobTopology::try_new(&self.graph)?;
+        self.regions = TaskRegionDescriptor::new_regions(&self.topology);
+        self.range_shuffles[shuffle] = RangeShuffleState::Resolved;
+        Ok(())
+    }
+
+    /// Whether the stage waits for the partitions of a range shuffle.
+    pub fn waits_for_range_shuffle(&self, stage: usize) -> bool {
+        self.range_shuffles
+            .iter()
+            .enumerate()
+            .any(|(shuffle, state)| {
+                *state != RangeShuffleState::Resolved
+                    && self.graph.waits_for_range_shuffle(stage, shuffle)
+            })
     }
 }
 
@@ -119,6 +168,16 @@ pub struct TaskRegionDescriptor {
     pub state: TaskRegionState,
 }
 
+impl TaskRegionDescriptor {
+    fn new_regions(topology: &JobTopology) -> Vec<Self> {
+        (0..topology.regions.len())
+            .map(|_| Self {
+                state: TaskRegionState::Running,
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TaskRegionState {
     Running,
@@ -129,6 +188,12 @@ pub enum TaskRegionState {
 #[derive(Debug)]
 pub struct TaskDescriptor {
     pub attempts: Vec<TaskAttemptDescriptor>,
+}
+
+impl TaskDescriptor {
+    fn new_tasks(partitions: usize) -> Vec<Self> {
+        (0..partitions).map(|_| Self { attempts: vec![] }).collect()
+    }
 }
 
 #[derive(Debug)]

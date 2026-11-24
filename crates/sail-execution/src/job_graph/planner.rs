@@ -54,8 +54,8 @@ use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
-    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, Stage, StageInput,
-    TaskPlacement,
+    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, RangeShuffle, Stage,
+    StageInput, TaskPlacement,
 };
 use crate::plan::{ShuffleConsumption, StageInputExec};
 use crate::shuffle::ShuffleBackendKind;
@@ -74,6 +74,7 @@ impl JobGraph {
             stages: vec![],
             schema: plan.schema(),
             options,
+            range_shuffles: vec![],
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
@@ -85,6 +86,9 @@ impl JobGraph {
             distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
             placement: TaskPlacement::Worker,
         });
+        for shuffle in &mut graph.range_shuffles {
+            shuffle.find_stages(&graph.stages);
+        }
         Ok(graph)
     }
 }
@@ -722,6 +726,11 @@ fn plan_job_graph_stages(
             DriverStageHandling::CreateStage,
             scalar_context,
         )?;
+        let read_in_full = if plan.is::<RangeChannelExec>() {
+            create_split_points_input(read_in_full, graph, properties, scalar_context)?
+        } else {
+            create_shared_input(read_in_full, graph, properties, scalar_context)?
+        };
         vec![
             plan_job_graph_stages(
                 Arc::clone(input),
@@ -730,12 +739,7 @@ fn plan_job_graph_stages(
                 DriverStageHandling::CreateStage,
                 scalar_context,
             )?,
-            PlannedSubtree::without_pending_scalar_subquery_expr(create_shared_input(
-                read_in_full,
-                graph,
-                properties,
-                scalar_context,
-            )?),
+            PlannedSubtree::without_pending_scalar_subquery_expr(read_in_full),
         ]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
@@ -853,6 +857,7 @@ fn plan_job_graph_stages(
         let properties = Arc::clone(&shuffle.properties);
         let channels = properties.output_partitioning().partition_count();
         let child = subtree.only_child()?;
+        let writer = graph.stages.len();
         let plan = push_shuffle(
             child,
             graph,
@@ -861,6 +866,10 @@ fn plan_job_graph_stages(
             consumption,
             scalar_context,
         )?;
+        let split_points = find_split_points_stage(graph, writer)?;
+        graph
+            .range_shuffles
+            .push(RangeShuffle::new(split_points, writer));
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
@@ -1278,6 +1287,56 @@ fn create_shared_input(
         ShuffleConsumption::Multiple,
         scalar_context,
     )
+}
+
+/// The split points of a range shuffle are picked on the driver, as in Spark, so that the
+/// driver can read their number before it runs the stages that read the shuffle (see
+/// [`RangeShuffle`]). Every task of the shuffle reads all of them.
+fn create_split_points_input(
+    plan: PlannedSubtree,
+    graph: &mut JobGraph,
+    properties: Arc<PlanProperties>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
+    let stage = push_stage(
+        plan,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Driver,
+        OutputMode::Pipelined,
+    )?;
+    Ok(stage_input_exec(stage, InputMode::Broadcast, properties))
+}
+
+/// The stage that picks the split points of the range shuffle that the given stage writes.
+fn find_split_points_stage(graph: &JobGraph, writer: usize) -> ExecutionResult<usize> {
+    let stage = graph.stages.get(writer).ok_or_else(|| {
+        ExecutionError::InternalError(format!("range shuffle stage {writer} not found"))
+    })?;
+    let mut inputs = vec![];
+    stage.plan.apply(|plan| {
+        if let Some(channel) = plan.downcast_ref::<RangeChannelExec>()
+            && let Some(input) = channel
+                .split_points()
+                .downcast_ref::<StageInputExec<usize>>()
+        {
+            inputs.push(*input.input());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let [input] = inputs.as_slice() else {
+        return Err(ExecutionError::InternalError(format!(
+            "range shuffle stage {writer} must read one stage of split points"
+        )));
+    };
+    let split_points = stage.inputs[*input].stage;
+    if graph.stages[split_points].placement != TaskPlacement::Driver {
+        return Err(ExecutionError::InternalError(format!(
+            "the split points stage {split_points} must run on the driver"
+        )));
+    }
+    Ok(split_points)
 }
 
 fn create_merge_input(
@@ -2992,6 +3051,93 @@ mod tests {
     }
 
     #[test]
+    fn range_shuffle_waits_for_its_split_points_on_the_driver() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let graph = JobGraph::try_new(range_repartition(), options).unwrap();
+            assert_eq!(graph.range_shuffles().len(), 1, "in\n{graph}");
+            let range = &graph.range_shuffles()[0];
+            let (split_points, writer) = (range.split_points, range.writer);
+            assert_eq!(
+                graph.stages()[split_points].plan.name(),
+                "RangeSplitPointsExec"
+            );
+            assert_eq!(
+                graph.stages()[split_points].placement,
+                TaskPlacement::Driver
+            );
+            assert_eq!(graph.stages()[writer].plan.name(), "RangeChannelExec");
+            // The driver reads the split points once, and each task of the shuffle reads them.
+            let shuffle_partitions = graph.stages()[writer]
+                .plan
+                .output_partitioning()
+                .partition_count();
+            assert_eq!(graph.replicas(split_points), shuffle_partitions + 1);
+            // The sample runs before the split points, and the shuffle after them.
+            for (s, stage) in graph.stages().iter().enumerate() {
+                if matches!(
+                    stage.plan.name(),
+                    "RangePartitionSampleExec" | "RangeResampleExec" | "RangeSplitPointsExec"
+                ) {
+                    assert!(
+                        !graph.waits_for_range_shuffle(s, 0),
+                        "stage {s} in\n{graph}"
+                    );
+                }
+            }
+            assert!(graph.waits_for_range_shuffle(writer, 0));
+            assert!(graph.waits_for_range_shuffle(graph.stages().len() - 1, 0));
+            assert!(graph.reads_after_range_split_points(split_points, writer));
+            assert!(!graph.bounded_output(split_points));
+        }
+    }
+
+    #[test]
+    fn range_shuffle_gives_its_partitions_to_the_stages_that_read_it() {
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            let mut graph = JobGraph::try_new(range_repartition(), options).unwrap();
+            let writer = graph.range_shuffles()[0].writer;
+            let last = graph.stages().len() - 1;
+            let changed = graph.resize_range_shuffle(0, 2).unwrap();
+            assert!(matches!(
+                graph.stages()[writer].distribution,
+                OutputDistribution::Channel { channels: 2 }
+            ));
+            assert!(changed.contains(&last), "{changed:?} in\n{graph}");
+            assert!(changed.iter().all(|&s| graph.waits_for_range_shuffle(s, 0)));
+            assert_eq!(
+                graph.stages()[last]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                2
+            );
+            // The shuffle cannot have more partitions than its channels.
+            assert!(graph.resize_range_shuffle(0, 3).is_err());
+        }
+    }
+
+    #[test]
+    fn coalesce_of_a_range_shuffle_has_no_more_partitions_than_the_shuffle() {
+        use sail_physical_plan::coalesce::CoalesceExec;
+
+        for (partitions, coalesced) in [(1, 1), (2, 2), (4, 3)] {
+            let plan = Arc::new(CoalesceExec::new(range_repartition(), 3));
+            let mut graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+            graph.resize_range_shuffle(0, partitions).unwrap();
+            let last = graph.stages().last().unwrap();
+            assert_eq!(
+                last.plan.output_partitioning().partition_count(),
+                coalesced,
+                "in\n{graph}"
+            );
+        }
+    }
+
+    #[test]
     fn range_sample_reads_the_stage_of_a_shared_cte() {
         use datafusion::common::tree_node::TreeNode;
         use sail_physical_plan::shared_cte::{SharedCteScanExec, share_ctes};
@@ -3123,6 +3269,7 @@ mod tests {
                 stages: vec![],
                 schema: schema(),
                 options,
+                range_shuffles: vec![],
             };
             let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
 
@@ -3779,6 +3926,7 @@ mod tests {
             ],
             schema: schema(),
             options: flight_shuffle_options(),
+            range_shuffles: vec![],
         };
         // The stages with a single reader that takes the data as it comes.
         assert!(graph.bounded_output(0));
