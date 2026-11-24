@@ -42,6 +42,32 @@ impl std::fmt::Display for IdentityDataError {
 
 impl std::error::Error for IdentityDataError {}
 
+/// The failure to load the S3 credentials of the environment for a storage that a
+/// catalog named without issuing credentials for it.
+///
+/// The message has the cause and is the innermost error, since the error that a client
+/// gets for a failed statement can be the innermost error only.
+#[derive(Debug)]
+struct EndpointWithoutCredentialsError {
+    endpoint: String,
+    cause: String,
+}
+
+impl std::fmt::Display for EndpointWithoutCredentialsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the catalog issued only the S3 endpoint {} for the table and no credentials, \
+             so the table is accessed with the S3 credentials of Sail, which could not be \
+             loaded ({}). Provide S3 credentials to Sail, for example with the environment \
+             variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.",
+            self.endpoint, self.cause
+        )
+    }
+}
+
+impl std::error::Error for EndpointWithoutCredentialsError {}
+
 /// Provide AWS credentials for S3.
 /// Cached credentials are used when available.
 ///
@@ -52,6 +78,9 @@ pub(crate) struct S3CredentialProvider {
     identity_resolver: SharedIdentityResolver,
     runtime_components: RuntimeComponents,
     config_bag: ConfigBag,
+    /// The S3-compatible storage that a catalog named without issuing credentials for
+    /// it, if the credentials of the environment are used for such a storage.
+    endpoint_without_credentials: Option<String>,
 }
 
 impl S3CredentialProvider {
@@ -72,7 +101,13 @@ impl S3CredentialProvider {
             identity_resolver: SharedIdentityResolver::new(provider),
             runtime_components,
             config_bag: ConfigBag::base(),
+            endpoint_without_credentials: None,
         })
+    }
+
+    fn with_endpoint_without_credentials(mut self, endpoint: Option<&S3Endpoint>) -> Self {
+        self.endpoint_without_credentials = endpoint.map(|endpoint| endpoint.url.clone());
+        self
     }
 }
 
@@ -91,7 +126,13 @@ impl CredentialProvider for S3CredentialProvider {
             .await
             .map_err(|e| object_store::Error::Generic {
                 store: "S3",
-                source: e,
+                source: match &self.endpoint_without_credentials {
+                    Some(endpoint) => Box::new(EndpointWithoutCredentialsError {
+                        endpoint: endpoint.clone(),
+                        cause: e.to_string(),
+                    }),
+                    None => e,
+                },
             })?;
         let Some(creds) = identity.data::<Credentials>() else {
             return Err(object_store::Error::Generic {
@@ -165,7 +206,10 @@ pub(crate) async fn get_s3_object_store_with_credentials(
         let cache = config
             .identity_cache()
             .unwrap_or_else(|| IdentityCache::lazy().build());
-        let credentials = S3CredentialProvider::try_new(provider, cache)?;
+        // A storage endpoint without credentials is what a catalog issues when it only
+        // names the storage of a table.
+        let credentials = S3CredentialProvider::try_new(provider, cache)?
+            .with_endpoint_without_credentials(endpoint);
         builder = builder.with_credentials(Arc::new(credentials));
     }
 
@@ -407,6 +451,54 @@ mod tests {
         )
         .unwrap();
         assert!(!should_resolve_bucket_region(&builder, &url).unwrap());
+    }
+
+    /// A catalog that issues an S3 endpoint without credentials leaves the access to the
+    /// credentials of the environment, and the error says so when there are none.
+    #[tokio::test]
+    async fn missing_credentials_for_an_endpoint_without_credentials_are_explained() {
+        use aws_credential_types::provider::error::CredentialsError;
+        use aws_credential_types::provider::{ProvideCredentials, future};
+
+        #[derive(Debug)]
+        struct NoCredentials;
+
+        impl ProvideCredentials for NoCredentials {
+            fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+            where
+                Self: 'a,
+            {
+                future::ProvideCredentials::ready(Err(CredentialsError::not_loaded(
+                    "no providers in chain provided credentials",
+                )))
+            }
+        }
+
+        let provider = |endpoint: Option<&S3Endpoint>| {
+            S3CredentialProvider::try_new(
+                SharedCredentialsProvider::new(NoCredentials),
+                IdentityCache::no_cache(),
+            )
+            .unwrap()
+            .with_endpoint_without_credentials(endpoint)
+        };
+        let endpoint = S3Endpoint {
+            url: "http://storage.test:9000".to_string(),
+            region: None,
+        };
+        let error = provider(Some(&endpoint))
+            .get_credential()
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the catalog issued only the S3 endpoint http://storage.test:9000")
+                && error.contains("Provide S3 credentials to Sail"),
+            "{error}"
+        );
+        // The credentials of the environment for AWS S3 keep the error of the provider.
+        let error = provider(None).get_credential().await.unwrap_err();
+        assert!(!error.to_string().contains("the catalog issued"), "{error}");
     }
 
     /// The requests for an S3-compatible storage go to its endpoint with path-style
