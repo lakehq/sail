@@ -128,6 +128,15 @@ impl<'a> OpenApiGenerator<'a> {
                         Self::Unknown(response) => Some(response.status),
                     }
                 }
+
+                /// Returns the response body text of an error response.
+                pub fn body(&self) -> Option<&str> {
+                    match self {
+                        Self::Response(response) => Some(response.body.as_str()),
+                        Self::Unknown(response) => Some(response.body.as_str()),
+                        Self::Sign(_) | Self::Request(_) => None,
+                    }
+                }
             }
 
             /// The maximum length of an error response body that is read. The error is

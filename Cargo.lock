@@ -7100,7 +7100,6 @@ dependencies = [
  "arrow",
  "async-trait",
  "chrono",
- "log",
  "percent-encoding",
  "reqwest 0.12.28",
  "sail-build-scripts",

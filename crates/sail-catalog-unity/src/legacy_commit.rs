@@ -149,9 +149,12 @@ fn struct_field_type_json(field: &Field) -> Result<serde_json::Value, String> {
 
 fn spark_data_type_json(data_type: &serde_json::Value) -> Result<serde_json::Value, String> {
     match data_type {
-        serde_json::Value::String(name) => Ok(serde_json::Value::String(
-            primitive_type(name)?.0.type_text_for_json(),
-        )),
+        serde_json::Value::String(name) => {
+            Ok(serde_json::Value::String(match primitive_type(name)?.0 {
+                Primitive::Named { .. } => name.clone(),
+                decimal @ Primitive::Decimal { .. } => decimal.type_text(),
+            }))
+        }
         _ => match complex_type(data_type)? {
             ComplexType::Array {
                 element_type,
@@ -244,8 +247,6 @@ fn column_type(data_type: &serde_json::Value) -> Result<ColumnType, String> {
 #[derive(Clone, Copy)]
 enum Primitive {
     Named {
-        /// The name of the type in the Delta log.
-        json: &'static str,
         /// The name of the type in the type text of a column.
         text: &'static str,
     },
@@ -258,14 +259,7 @@ enum Primitive {
 impl Primitive {
     fn type_text(self) -> String {
         match self {
-            Self::Named { text, .. } => text.to_string(),
-            Self::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
-        }
-    }
-
-    fn type_text_for_json(self) -> String {
-        match self {
-            Self::Named { json, .. } => json.to_string(),
+            Self::Named { text } => text.to_string(),
             Self::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         }
     }
@@ -273,20 +267,20 @@ impl Primitive {
 
 /// Returns a primitive type of the Delta log and its type name in the legacy commit API.
 fn primitive_type(name: &str) -> Result<(Primitive, &'static str), String> {
-    let named = |json, text, type_name| Ok((Primitive::Named { json, text }, type_name));
+    let named = |text, type_name| Ok((Primitive::Named { text }, type_name));
     match name {
-        "string" => named("string", "string", "STRING"),
-        "long" => named("long", "long", "LONG"),
-        "integer" => named("integer", "int", "INT"),
-        "short" => named("short", "short", "SHORT"),
-        "byte" => named("byte", "byte", "BYTE"),
-        "float" => named("float", "float", "FLOAT"),
-        "double" => named("double", "double", "DOUBLE"),
-        "boolean" => named("boolean", "boolean", "BOOLEAN"),
-        "binary" => named("binary", "binary", "BINARY"),
-        "date" => named("date", "date", "DATE"),
-        "timestamp" => named("timestamp", "timestamp", "TIMESTAMP"),
-        "timestamp_ntz" => named("timestamp_ntz", "timestamp_ntz", "TIMESTAMP_NTZ"),
+        "string" => named("string", "STRING"),
+        "long" => named("long", "LONG"),
+        "integer" => named("int", "INT"),
+        "short" => named("short", "SHORT"),
+        "byte" => named("byte", "BYTE"),
+        "float" => named("float", "FLOAT"),
+        "double" => named("double", "DOUBLE"),
+        "boolean" => named("boolean", "BOOLEAN"),
+        "binary" => named("binary", "BINARY"),
+        "date" => named("date", "DATE"),
+        "timestamp" => named("timestamp", "TIMESTAMP"),
+        "timestamp_ntz" => named("timestamp_ntz", "TIMESTAMP_NTZ"),
         "variant" => Err("Unity Catalog metadata payloads for Delta variant columns".to_string()),
         _ => {
             let (precision, scale) =

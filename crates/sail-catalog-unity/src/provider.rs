@@ -695,13 +695,10 @@ impl UnityCatalogProvider {
             // The table is created if the status code indicates success,
             // even if the response body cannot be deserialized.
             Err(e) if e.status().is_some_and(|status| status.is_success()) => {
-                self.staging_table_id_cache()?.remove(&staging_location);
                 return self.get_table(database, table).await;
             }
             Err(e) => e,
         };
-        // The staging table is not used after the request, whatever its outcome.
-        self.staging_table_id_cache()?.remove(&staging_location);
         let status = error.status();
         // The outcome is unknown when the request fails without a client error.
         // The table is created if it is loaded with the ID of the staging table,
@@ -1608,23 +1605,17 @@ impl CatalogProvider for UnityCatalogProvider {
         }
         // The response body and the error are not reported in full, since a response
         // that is not understood can contain credentials.
-        let (status, message) = if let Some(table_id) = staging_table_id {
-            match client.get_staging_table_credentials(table_id).await {
-                Ok(response) => {
-                    return select_storage_credentials(
-                        response.inner,
-                        &request.location,
-                        request.access,
-                    );
-                }
-                Err(e) => (e.status(), delta_error_message(&e)),
-            }
+        let result = if let Some(table_id) = staging_table_id {
+            client
+                .get_staging_table_credentials(table_id)
+                .await
+                .map_err(|e| (e.status(), delta_error_message(&e)))
         } else {
             let operation = match request.access {
                 StorageAccess::Read => delta_gen::DeltaCredentialOperation::Read,
                 StorageAccess::ReadWrite => delta_gen::DeltaCredentialOperation::ReadWrite,
             };
-            match client
+            client
                 .get_table_credentials(
                     catalog_name.clone(),
                     schema_name.clone(),
@@ -1632,16 +1623,17 @@ impl CatalogProvider for UnityCatalogProvider {
                     operation,
                 )
                 .await
-            {
-                Ok(response) => {
-                    return select_storage_credentials(
-                        response.inner,
-                        &request.location,
-                        request.access,
-                    );
-                }
-                Err(e) => (e.status(), delta_error_message(&e)),
+                .map_err(|e| (e.status(), delta_error_message(&e)))
+        };
+        let (status, message) = match result {
+            Ok(response) => {
+                return select_storage_credentials(
+                    response.inner,
+                    &request.location,
+                    request.access,
+                );
             }
+            Err(error) => error,
         };
         let name = quote_names_if_needed(&[&catalog_name, &schema_name, table]);
         let message = message.map(|x| format!(": {x}")).unwrap_or_default();
@@ -2626,12 +2618,7 @@ fn request_error(status: Option<reqwest::StatusCode>, message: String) -> Catalo
 /// Returns the error message that the server reports in the error response of a Delta
 /// REST API request.
 fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
-    let body = match error {
-        delta_gen::ApiError::Response(response) => response.body.as_str(),
-        delta_gen::ApiError::Unknown(response) => response.body.as_str(),
-        _ => return None,
-    };
-    let body: serde_json::Value = serde_json::from_str(body).ok()?;
+    let body: serde_json::Value = serde_json::from_str(error.body()?).ok()?;
     // An error that is not answered by the Delta REST API itself, such as a token that
     // the server does not accept, has the message at the top level, and a gateway that
     // gives up has an error code only.
@@ -2648,38 +2635,24 @@ fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
 /// Some servers report it as a bad request with an error code for the kind of object,
 /// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
 fn is_already_exists_error<E>(error: &r#gen::ApiError<E>, error_code: &str) -> bool {
-    let body = match error {
-        r#gen::ApiError::Response(response) => response.body.as_str(),
-        r#gen::ApiError::Unknown(response) => response.body.as_str(),
-        _ => "",
-    };
     match error.status() {
         Some(reqwest::StatusCode::CONFLICT) => true,
-        Some(reqwest::StatusCode::BAD_REQUEST) => serde_json::from_str::<serde_json::Value>(body)
-            .is_ok_and(|body| body["error_code"] == error_code),
+        Some(reqwest::StatusCode::BAD_REQUEST) => {
+            legacy_error_code(error).as_deref() == Some(error_code)
+        }
         _ => false,
     }
 }
 
 /// Returns the error code in the error response of the legacy API.
 fn legacy_error_code<E>(error: &r#gen::ApiError<E>) -> Option<String> {
-    let body = match error {
-        r#gen::ApiError::Response(response) => response.body.as_str(),
-        r#gen::ApiError::Unknown(response) => response.body.as_str(),
-        _ => return None,
-    };
-    let body = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let body = serde_json::from_str::<serde_json::Value>(error.body()?).ok()?;
     body["error_code"].as_str().map(str::to_string)
 }
 
 /// Returns the error type in the error response of the Delta REST API.
 fn delta_error_type<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
-    let body = match error {
-        delta_gen::ApiError::Response(response) => response.body.as_str(),
-        delta_gen::ApiError::Unknown(response) => response.body.as_str(),
-        _ => return None,
-    };
-    let body = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let body = serde_json::from_str::<serde_json::Value>(error.body()?).ok()?;
     body["error"]["type"].as_str().map(str::to_string)
 }
 
