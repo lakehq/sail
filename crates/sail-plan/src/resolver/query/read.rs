@@ -38,7 +38,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use url::Url;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
-use super::temp_view::{CatalogTableOrigin, LakePathOrigin, TableOrigin};
+use super::temp_view::{CatalogTableOrigin, LakePathOrigin, TableOrigin, view_definition_source};
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -1012,6 +1012,10 @@ impl PlanResolver<'_> {
             provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
         } else {
             table_source
+        };
+        let table_source = match &origin {
+            Some(_) if state.creating_temporary_view() => view_definition_source(table_source),
+            _ => table_source,
         };
         if let Some(origin) = origin {
             state.record_table_origin(&table_source, Arc::new(origin));

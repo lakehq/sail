@@ -510,6 +510,55 @@ def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tmp_path, fm
             table.drop()
 
 
+# Queries over `t (a INT, u INT)` whose column `a` had no nulls when a view of the query
+# was created, and has nulls when the view is read.
+NULLABLE_QUERIES = {
+    "null tests": "SELECT a, a IS NULL AS n, coalesce(a, -1) AS c, a + 1 AS p FROM {t}",
+    "count": "SELECT count(a) AS ca, count(*) AS n, min(a) AS m FROM {t}",
+    "distinct count": "SELECT count(DISTINCT a) AS cd, count(a, u) AS c2 FROM {t}",
+    "filter": "SELECT u FROM {t} WHERE a IS NOT NULL",
+    "group": "SELECT a, count(*) AS k FROM {t} GROUP BY a",
+    "join": "SELECT t1.u, t2.u AS u2 FROM {t} AS t1 JOIN {t} AS t2 ON t1.a = t2.a",
+    "null-safe join": "SELECT t1.u, t2.u AS u2 FROM {t} AS t1 JOIN {t} AS t2 ON t1.a <=> t2.a",
+    "sort": "SELECT a FROM {t} ORDER BY a NULLS FIRST LIMIT 1",
+    "concatenation": "SELECT concat_ws('-', cast(a AS STRING), 'x') AS c FROM {t}",
+    "window count": "SELECT u, count(a) OVER () AS c FROM {t}",
+}
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("query", NULLABLE_QUERIES)
+def test_view_reads_a_column_that_has_nulls_now(spark, tmp_path, fmt, kind, query):
+    table = Table(spark, tmp_path, fmt, "a INT NOT NULL, u INT")
+    try:
+        table.insert("(1, 10)")
+        sql = NULLABLE_QUERIES[query].format(t=table.name)
+        view = table.create_view(kind, sql)
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create("a INT, u INT")
+        table.insert("(NULL, 20), (2, 30)")
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    finally:
+        table.drop()
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_reports_the_nullability_of_its_columns(spark, tmp_path, kind):
+    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT")
+    try:
+        view = table.create_view(kind, f"SELECT a, u FROM {table.name}")
+        expected = [("a", False), ("u", True)]
+        assert [(x.name, x.nullable) for x in spark.table(table.name).schema] == expected
+        assert [(x.name, x.nullable) for x in spark.table(view).schema] == expected
+        name = view.removeprefix("global_temp.")
+        database = "global_temp" if name != view else None
+        columns = spark.catalog.listColumns(name, database)
+        assert [(x.name, x.nullable) for x in columns] == expected
+    finally:
+        table.drop()
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tmp_path, kind):
     table = Table(spark, tmp_path, "delta", "id INT, extra INT")

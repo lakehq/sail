@@ -191,6 +191,8 @@ pub(super) struct PlanResolverState {
     /// What the table sources of the scans resolved so far read, by the address of the
     /// source, for the sources that a temporary view obtains again at each read.
     table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
+    /// Whether the query that is resolved is the definition of a temporary view.
+    creating_temporary_view: bool,
 }
 
 /// Returns the address of a table source, which identifies the source while it is alive.
@@ -236,6 +238,7 @@ impl PlanResolverState {
             catalog_table_lookups: HashMap::new(),
             session_catalog_table_lookups: HashMap::new(),
             table_origins: HashMap::new(),
+            creating_temporary_view: false,
         }
     }
 
@@ -589,6 +592,15 @@ impl PlanResolverState {
     ) {
         self.session_catalog_table_lookups
             .insert((table.catalog_id(), name), lookup);
+    }
+
+    /// Returns whether the query that is resolved is the definition of a temporary view.
+    pub fn creating_temporary_view(&self) -> bool {
+        self.creating_temporary_view
+    }
+
+    pub fn set_creating_temporary_view(&mut self, value: bool) {
+        self.creating_temporary_view = value;
     }
 
     /// Records what the source of a scan reads. The first record of a source remains.

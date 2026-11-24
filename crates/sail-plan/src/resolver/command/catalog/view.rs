@@ -118,7 +118,12 @@ impl PlanResolver<'_> {
                 }),
             _ => None,
         };
-        let input = self.resolve_query_plan(*input, state).await?;
+        // The tables that the view reads again at each read can have nulls later in columns
+        // that have none now, so the definition is resolved as if all their columns had nulls.
+        state.set_creating_temporary_view(true);
+        let input = self.resolve_query_plan(*input, state).await;
+        state.set_creating_temporary_view(false);
+        let input = input?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
         // that the references to a volatile CTE read one evaluation for each read of the view.
         let input = inline_deterministic_references(input)?;

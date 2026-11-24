@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use datafusion::datasource::source_as_provider;
+use datafusion::logical_expr::Expr;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use sail_catalog::provider::DropTableOptions;
 use sail_common_datafusion::catalog::TableKind;
 use sail_plan::shared_cte::visit_scans;
@@ -603,7 +605,7 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
         }
     }
     // A column that the views read can have nulls now. The views were created when it had
-    // none, and the plans that they store can depend on it.
+    // none, and their definitions were resolved as if it had nulls.
     let fixture = Fixture::try_new(&[]).await?;
     let not_null = || TestColumn {
         nullable: false,
@@ -617,9 +619,9 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
         .replace_table(&["t"], vec![column("k"), column("v")])
         .await?;
     for view in &views {
-        let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
-        let error = resolution.error.ok_or("missing error")?;
-        assert!(error.contains("- `v` is nullable now"), "{error}");
+        let sql = format!("SELECT * FROM {view}");
+        fixture.resolve(&sql).await?.expect(1, 1, &sql);
+        fixture.execute(&sql).await?;
     }
     // A column that the views read has no nulls now, which they can read.
     let fixture = Fixture::try_new(&[]).await?;
@@ -632,6 +634,54 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
         fixture.resolve(&sql).await?.expect(1, 1, &sql);
         fixture.execute(&sql).await?;
     }
+    Ok(())
+}
+
+/// Returns the arguments of the `count` aggregates of the plan.
+fn count_arguments(plan: &LogicalPlan) -> datafusion_common::Result<Vec<Expr>> {
+    let mut arguments = vec![];
+    plan.apply(|plan| {
+        plan.apply_expressions(|expr| {
+            expr.apply(|expr| {
+                if let Expr::AggregateFunction(function) = expr
+                    && function.func.name() == "count"
+                {
+                    arguments.extend(function.params.args.iter().cloned());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    })?;
+    Ok(arguments)
+}
+
+#[tokio::test]
+async fn test_temporary_view_counts_a_column_without_nulls_as_a_column() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    let not_null = TestColumn {
+        nullable: false,
+        ..column("v")
+    };
+    fixture
+        .replace_table(&["t"], vec![column("k"), not_null])
+        .await?;
+    // A query counts the rows, since the column has no nulls now.
+    let sql = "SELECT count(v) AS n FROM t";
+    let arguments = count_arguments(&fixture.plan(sql).await?)?;
+    assert!(
+        matches!(arguments.as_slice(), [Expr::Literal(..)]),
+        "{arguments:?}"
+    );
+    // A view counts the values of the column, which can have nulls when it is read.
+    fixture
+        .execute(&format!("CREATE TEMPORARY VIEW counted AS {sql}"))
+        .await?;
+    let stored = fixture.stored_view_plan(&["counted"]).await?;
+    let arguments = count_arguments(&stored)?;
+    assert!(
+        matches!(arguments.as_slice(), [Expr::Column(_)]),
+        "{arguments:?}"
+    );
     Ok(())
 }
 

@@ -118,13 +118,17 @@ impl ViewTableReference {
     /// the stored plan reads each column of the source by its position, and every column
     /// of the scan is read whole without it.
     fn store(
-        mut scan: TableScan,
+        scan: TableScan,
         origin: &Arc<TableOrigin>,
         required: Option<&HashMap<usize, ColumnUse>>,
     ) -> PlanResult<TableScan> {
-        let schema = scan.source.schema();
+        let source = match scan.source.downcast_ref::<ViewDefinitionSource>() {
+            Some(source) => &source.inner,
+            None => &scan.source,
+        };
+        let schema = source.schema();
         // A source with duplicate column names is read under other names.
-        let table_schema = source_as_provider(&scan.source)
+        let table_schema = source_as_provider(source)
             .ok()
             .and_then(|provider| {
                 provider
@@ -143,25 +147,27 @@ impl ViewTableReference {
                 None => Some(ColumnUse::Whole),
             };
         }
-        scan.source = Arc::new(Self {
+        let reference = Arc::new(Self {
             schema,
             table: table_schema,
             columns,
             required: uses,
             origin: Arc::clone(origin),
         });
-        scan.projection = None;
-        Ok(scan)
+        // The stored scan has the nullability of the table when the view was created.
+        Ok(TableScanBuilder::new(scan.table_name, reference)
+            .with_filters(scan.filters)
+            .with_fetch(scan.fetch)
+            .build()?)
     }
 
     /// Returns the position in the table of each column that the scan read when the view
     /// was created, or how the columns that the stored plan reads changed. The table can
     /// have new columns and another column order. Each column that the stored plan reads
-    /// keeps its type and its nullability, also for the fields of nested types, as Spark
-    /// requires of every column of a temporary view that stores a plan
-    /// (`V2ReferenceUtils.validateLoadedTableInTempView` and
-    /// `SchemaUtils.validateSchemaCompatibility`), except that a nullable column can have
-    /// no nulls now. A struct that the stored plan reads only through some of its fields
+    /// keeps its type, also for the fields of nested types, as Spark requires of every
+    /// column of a temporary view that stores a plan (`V2ReferenceUtils.validateLoadedTableInTempView`
+    /// and `SchemaUtils.validateSchemaCompatibility`). Its nullability can change, since
+    /// the definition was resolved as if the column had nulls. A struct that the stored plan reads only through some of its fields
     /// keeps those fields. A column that only tells rows apart can change or be removed,
     /// and so can a column that the stored plan does not read, which has no position then.
     fn match_columns(
@@ -175,17 +181,6 @@ impl ViewTableReference {
         let mut positions = Vec::with_capacity(matches.len());
         for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
             let path = vec![field.name().clone()];
-            // The stored plan reads a nullable column, which can read a column without nulls.
-            let tightened;
-            let field = match found {
-                FieldMatch::Found(position)
-                    if field.is_nullable() && !table.field(position).is_nullable() =>
-                {
-                    tightened = field.as_ref().clone().with_nullable(false);
-                    &tightened
-                }
-                _ => field.as_ref(),
-            };
             let position = match (used, found) {
                 (Some(ColumnUse::Identity), FieldMatch::Found(position)) => Some(position),
                 (Some(ColumnUse::Identity), FieldMatch::Missing) => None,
@@ -491,8 +486,8 @@ fn field_changes(
         FieldMatch::Found(position) => {
             let other = &current[position];
             column_changes(
-                (field.data_type(), field.is_nullable()),
-                (other.data_type(), other.is_nullable()),
+                field.data_type(),
+                other.data_type(),
                 path,
                 case_sensitive,
                 type_name,
@@ -547,28 +542,19 @@ fn describe_field(
     )
 }
 
-/// Returns the change of the nullability of a column or of a nested field.
-fn nullability_change(stored: bool, current: bool, path: &[String]) -> Option<String> {
-    match (stored, current) {
-        (true, false) => Some(format!("{} is no longer nullable", quote_path(path))),
-        (false, true) => Some(format!("{} is nullable now", quote_path(path))),
-        _ => None,
-    }
-}
-
-/// Adds the changes of a column or of a nested field from the type and the nullability
-/// that a view was created with, to those of the table now. The metadata of fields and the
-/// names of the fields that Spark does not name (the elements of lists and the entries
-/// of maps) are not compared.
+/// Adds the changes of a column or of a nested field from the type that a view was created
+/// with, to that of the table now. The nullability of fields, their metadata, and the
+/// names of the fields that Spark does not name (the elements of lists and the entries of
+/// maps) are not compared. The definition of the view was resolved as if every field had
+/// nulls (see [`ViewDefinitionSource`]).
 fn column_changes(
-    (stored, stored_nullable): (&DataType, bool),
-    (current, current_nullable): (&DataType, bool),
+    stored: &DataType,
+    current: &DataType,
     path: &[String],
     case_sensitive: bool,
     type_name: &dyn Fn(&DataType) -> String,
     changes: &mut Vec<String>,
 ) {
-    changes.extend(nullability_change(stored_nullable, current_nullable, path));
     let child = |name: &str| {
         let mut path = path.to_vec();
         path.push(name.to_string());
@@ -577,8 +563,8 @@ fn column_changes(
     let nested = |stored: &Field, current: &Field, name: &str, changes: &mut Vec<String>| {
         let path = child(name);
         column_changes(
-            (stored.data_type(), stored.is_nullable()),
-            (current.data_type(), current.is_nullable()),
+            stored.data_type(),
+            current.data_type(),
             &path,
             case_sensitive,
             type_name,
@@ -633,14 +619,7 @@ fn column_changes(
             }
         }
         (DataType::Dictionary(x, stored), DataType::Dictionary(y, current)) if x == y => {
-            column_changes(
-                (stored, false),
-                (current, false),
-                path,
-                case_sensitive,
-                type_name,
-                changes,
-            )
+            column_changes(stored, current, path, case_sensitive, type_name, changes)
         }
         (DataType::RunEndEncoded(x, stored), DataType::RunEndEncoded(y, current))
             if x.data_type() == y.data_type() =>
@@ -718,7 +697,9 @@ impl PlanResolver<'_> {
                     None => Transformed::no(LogicalPlan::TableScan(scan)),
                 })
             },
-            false,
+            // The stored scans have the nullability of the tables, which the plan above
+            // them was resolved without.
+            true,
         )?;
         Ok(plan)
     }
@@ -903,6 +884,11 @@ impl PlanResolver<'_> {
         let projection = (projection.len() != table_schema.fields().len()
             || projection.iter().enumerate().any(|(i, &x)| i != x))
         .then_some(projection);
+        let source = if state.creating_temporary_view() {
+            view_definition_source(source)
+        } else {
+            source
+        };
         // A view that is created over this view reads the table again as well.
         state.record_table_origin(&source, Arc::clone(&reference.origin));
         let bound = TableScanBuilder::new(scan.table_name.clone(), source)
@@ -1408,11 +1394,6 @@ fn used_field_changes(
             DataType::Struct(stored_fields),
             DataType::Struct(current_fields),
         ) => {
-            changes.extend(nullability_change(
-                stored.is_nullable(),
-                current.is_nullable(),
-                path,
-            ));
             logical_type_changes(stored, current, path, type_name, changes);
             let matches = match_fields(stored_fields, current_fields, case_sensitive);
             for (field, found) in stored_fields.iter().zip(matches) {
@@ -1450,8 +1431,8 @@ fn used_field_changes(
         }
         _ => {
             column_changes(
-                (stored.data_type(), stored.is_nullable()),
-                (current.data_type(), current.is_nullable()),
+                stored.data_type(),
+                current.data_type(),
                 path,
                 case_sensitive,
                 type_name,
@@ -1507,6 +1488,82 @@ fn rebuild_struct(
     Ok(when(expr.is_null(), null).otherwise(named_struct().call(args))?)
 }
 
+/// The source of a scan of a table that a temporary view reads again at each read, while
+/// the definition of the view is resolved. All its fields can have nulls, at every level,
+/// so that no decision of the definition depends on a column without nulls, which it may
+/// have when the view is read. It is never executed, since the stored plan has a
+/// [`ViewTableReference`] in its place.
+struct ViewDefinitionSource {
+    inner: Arc<dyn TableSource>,
+    schema: SchemaRef,
+}
+
+impl std::fmt::Debug for ViewDefinitionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewDefinitionSource")
+            .field("schema", &self.schema)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TableSource for ViewDefinitionSource {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+pub(in crate::resolver) fn view_definition_source(
+    source: Arc<dyn TableSource>,
+) -> Arc<dyn TableSource> {
+    let schema = source.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| nullable_field(field))
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    Arc::new(ViewDefinitionSource {
+        inner: source,
+        schema,
+    })
+}
+
+/// Returns the field with nulls allowed at every level, except for the keys of maps.
+fn nullable_field(field: &Field) -> Field {
+    let nullable = |field: &Arc<Field>| Arc::new(nullable_field(field));
+    let data_type = match field.data_type() {
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(nullable).collect()),
+        DataType::List(element) => DataType::List(nullable(element)),
+        DataType::LargeList(element) => DataType::LargeList(nullable(element)),
+        DataType::ListView(element) => DataType::ListView(nullable(element)),
+        DataType::LargeListView(element) => DataType::LargeListView(nullable(element)),
+        DataType::FixedSizeList(element, n) => DataType::FixedSizeList(nullable(element), *n),
+        DataType::Map(entries, sorted) => match entries.data_type() {
+            DataType::Struct(fields) if fields.len() == 2 => {
+                let fields = vec![Arc::clone(&fields[0]), nullable(&fields[1])];
+                let entries = entries
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Struct(fields.into()));
+                DataType::Map(Arc::new(entries), *sorted)
+            }
+            _ => field.data_type().clone(),
+        },
+        DataType::RunEndEncoded(run_ends, values) => {
+            DataType::RunEndEncoded(Arc::clone(run_ends), nullable(values))
+        }
+        DataType::Union(fields, mode) => DataType::Union(
+            fields
+                .iter()
+                .map(|(id, field)| (id, nullable(field)))
+                .collect(),
+            *mode,
+        ),
+        data_type => data_type.clone(),
+    };
+    field.clone().with_data_type(data_type).with_nullable(true)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1525,6 +1582,7 @@ mod tests {
 
     use super::{
         ColumnUse, TableOrigin, ViewTableReference, required_columns, user_metadata_differs,
+        view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
     use crate::resolver::state::{PlanResolverState, table_source_address};
@@ -1680,11 +1738,10 @@ mod tests {
     }
 
     #[test]
-    fn test_nullability_changes_of_each_type_are_column_changes() {
+    fn test_nullability_changes_of_each_type_are_not_column_changes() {
         for data_type in data_types() {
             let nullable = Schema::new(vec![field("c", data_type.clone())]);
             let required = Schema::new(vec![Field::new("c", data_type.clone(), false)]);
-            // A nullable column can read a column without nulls.
             assert_eq!(
                 match_columns(&nullable, &required, true),
                 Ok(vec![0]),
@@ -1692,10 +1749,67 @@ mod tests {
             );
             assert_eq!(
                 match_columns(&required, &nullable, true),
-                Err(vec!["`c` is nullable now".to_string()]),
+                Ok(vec![0]),
                 "{data_type}"
             );
         }
+    }
+
+    /// Asserts that the field and its nested fields have nulls, except for map keys.
+    fn assert_nullable(field: &Field) {
+        assert!(field.is_nullable(), "{field}");
+        match field.data_type() {
+            DataType::Struct(fields) => fields.iter().for_each(|x| assert_nullable(x)),
+            DataType::List(x)
+            | DataType::LargeList(x)
+            | DataType::ListView(x)
+            | DataType::LargeListView(x)
+            | DataType::FixedSizeList(x, _) => assert_nullable(x),
+            DataType::Map(entries, _) => {
+                let fields = match entries.data_type() {
+                    DataType::Struct(fields) => fields.clone(),
+                    _ => Fields::empty(),
+                };
+                assert_eq!(fields.len(), 2, "{entries}");
+                assert!(!fields[0].is_nullable(), "{entries}");
+                assert_nullable(&fields[1]);
+            }
+            DataType::RunEndEncoded(_, values) => assert_nullable(values),
+            DataType::Union(fields, _) => fields.iter().for_each(|(_, x)| assert_nullable(x)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_view_definition_sources_have_nulls_at_every_level() -> TestResult {
+        fn required(data_type: DataType) -> DataType {
+            let required = |field: &Arc<Field>| {
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(required(field.data_type().clone()))
+                        .with_nullable(false),
+                )
+            };
+            match data_type {
+                DataType::Struct(fields) => DataType::Struct(fields.iter().map(required).collect()),
+                DataType::List(x) => DataType::List(required(&x)),
+                DataType::FixedSizeList(x, n) => DataType::FixedSizeList(required(&x), n),
+                other => other,
+            }
+        }
+        let fields = data_types()
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| Field::new(format!("c{i}"), required(x), false))
+            .collect::<Vec<_>>();
+        let table = MemTable::try_new(Arc::new(Schema::new(fields)), vec![vec![]])?;
+        let source = view_definition_source(provider_as_source(Arc::new(table)));
+        for field in source.schema().fields() {
+            assert_nullable(field);
+        }
+        Ok(())
     }
 
     #[test]
@@ -2042,7 +2156,7 @@ mod tests {
                     Field::new("a", DataType::Int32, false),
                     field("b", DataType::Utf8),
                 ]),
-                vec!["`c`.`a` is no longer nullable"],
+                vec![],
             ),
             (DataType::Int32, vec!["`c` type has changed from"]),
         ];
@@ -2065,16 +2179,13 @@ mod tests {
                 }
             }
         }
-        // The elements of a list and the values of a map.
+        // The nullability of the elements of a list and of the values of a map.
         let stored = Schema::new(vec![field("c", list(field("item", DataType::Int32)))]);
         let current = Schema::new(vec![field(
             "c",
             list(Field::new("item", DataType::Int32, false)),
         )]);
-        assert_eq!(
-            match_columns(&stored, &current, true),
-            Err(vec!["`c`.`element` is no longer nullable".to_string()])
-        );
+        assert_eq!(match_columns(&stored, &current, true), Ok(vec![0]));
         let value = |nullable| {
             Schema::new(vec![field(
                 "c",
@@ -2086,7 +2197,7 @@ mod tests {
         };
         assert_eq!(
             match_columns(&value(false), &value(true), true),
-            Err(vec!["`c`.`value` is nullable now".to_string()])
+            Ok(vec![0])
         );
     }
 
