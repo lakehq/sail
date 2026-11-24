@@ -52,7 +52,10 @@ use crate::schema::{
     schema_has_identity_columns,
 };
 pub use crate::snapshot::DeltaSnapshot;
-use crate::snapshot::{CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig};
+use crate::snapshot::{
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+    catalog_managed_commit_version,
+};
 use crate::spec::{
     ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation,
     DeltaResult, SaveMode, StructType, contains_timestampntz_arrow, contains_variant_arrow,
@@ -725,6 +728,21 @@ where
             page.commits.iter().map(|commit| commit.version),
         )?;
         commits.extend(page.commits);
+    }
+
+    // The version in the file name of a commit is the version that the commit was written
+    // for, so a commit that the catalog returns for another version is not read.
+    if let Some(commit) = commits
+        .iter()
+        .find(|commit| catalog_managed_commit_version(&commit.file_name) != Some(commit.version))
+    {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "The catalog returned the commit file `{}` for version {} of the Delta table, \
+                 which is not the name of a commit file of that version",
+                commit.file_name, commit.version
+            )),
+        )));
     }
 
     // The catalog returns the ratified commits that are not published yet, and the log replay
@@ -2510,6 +2528,30 @@ mod catalog_managed_tests {
                 None => assert!(error.contains("version 1"), "{error}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_rejects_commit_file_of_another_version() {
+        // The catalog returns the staged commit of version 1 as the commit of version 2. The
+        // actions of version 1 are not read as the actions of version 2.
+        let files = vec![
+            (published_commit(1), EMPTY_COMMIT),
+            (staged_commit(1, "a"), EMPTY_COMMIT),
+        ];
+        let mut response = ratified(2, &[(2, "a")]);
+        response.commits[0].file_name = staged_commit(1, "a")
+            .trim_start_matches("_staged_commits/")
+            .to_string();
+        let (_, result) = read_unity_managed_table_with_log(
+            CATALOG_MANAGED_PROTOCOL,
+            files,
+            true,
+            Some(response),
+        )
+        .await;
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("for version 2"), "{error}");
+        assert!(error.contains("00000000000000000001.a.json"), "{error}");
     }
 
     #[tokio::test]
