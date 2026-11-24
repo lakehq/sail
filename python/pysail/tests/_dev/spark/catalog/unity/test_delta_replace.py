@@ -217,6 +217,22 @@ def test_replace_external_delta_table(
     with pytest.raises(Exception, match="different table location"):
         spark.sql(f"CREATE OR REPLACE TABLE {table} (id INT) USING delta LOCATION '{location}_other'")
 
+    # The catalog cannot change the columns of an external table, so the statements
+    # that change them are rejected, and the table stays as it is.
+    spark.sql(f"INSERT INTO {table} VALUES (4, 'four')")
+    other = spark.createDataFrame([("a", 1.5)], schema="key STRING, value DOUBLE")
+    with pytest.raises(Exception, match="cannot change the columns"):
+        spark.sql(f"CREATE OR REPLACE TABLE {table} (key STRING, value DOUBLE) USING delta LOCATION '{location}'")
+    with pytest.raises(Exception, match="cannot change the columns"):
+        spark.sql(f"REPLACE TABLE {table} (id INT, name STRING) USING delta PARTITIONED BY (name)")
+    with pytest.raises(Exception, match="cannot change the columns"):
+        other.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(table)
+    with pytest.raises(Exception, match=r"(?i)schema|not found"):
+        other.writeTo(table).using("delta").createOrReplace()
+    assert _latest_commit(path)[0] == metadata_version + 1
+    assert _rows(spark, table, "id") == [(4, "four")]
+    assert _columns(unity_rest_url, table) == [("id", "INT"), ("name", "STRING")]
+
     replaced = _unity_table_info(unity_rest_url, table)
     assert replaced["table_id"] == created["table_id"]
     assert replaced["table_type"] == "EXTERNAL"

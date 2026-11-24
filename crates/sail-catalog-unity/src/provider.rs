@@ -196,6 +196,66 @@ pub struct UnityCatalogOptions {
     pub user_agent: Option<String>,
 }
 
+/// Rejects the replacement of a Delta table whose commits the catalog does not ratify with
+/// other columns or another partitioning.
+///
+/// The commit that replaces such a table does not go through the catalog, and the Unity
+/// Catalog API cannot change the columns of a table, so the catalog would keep the columns
+/// that the table no longer has. A write changes them only when it overwrites the schema.
+fn ensure_replace_keeps_columns(
+    status: &TableStatus,
+    options: &CreateTableOptions,
+) -> CatalogResult<()> {
+    let TableKind::Table {
+        columns,
+        partition_by,
+        ..
+    } = &status.kind
+    else {
+        return Ok(());
+    };
+    let overwrites_schema = options.properties.iter().any(|(key, value)| {
+        ["option.overwriteschema", "option.overwrite_schema"]
+            .contains(&key.to_ascii_lowercase().as_str())
+            && value.eq_ignore_ascii_case("true")
+    });
+    if options.columns.is_empty() || (options.is_write_precondition && !overwrites_schema) {
+        return Ok(());
+    }
+    // The types are compared as the catalog has them.
+    let column_type = |data_type: &DataType| {
+        data_type_to_unity_type(data_type, false)
+            .map(|x| x.type_text)
+            .unwrap_or_else(|_| data_type.to_string())
+    };
+    let same_columns = columns.len() == options.columns.len()
+        && columns.iter().zip(&options.columns).all(|(existing, new)| {
+            existing.name.eq_ignore_ascii_case(&new.name)
+                && column_type(&existing.data_type) == column_type(&new.data_type)
+        });
+    let same_partitioning = partition_by.len() == options.partition_by.len()
+        && partition_by
+            .iter()
+            .zip(&options.partition_by)
+            .all(|(existing, new)| existing.column.eq_ignore_ascii_case(&new.column));
+    if same_columns && same_partitioning {
+        return Ok(());
+    }
+    Err(CatalogError::NotSupported(format!(
+        "Unity Catalog cannot change the columns or the partitioning of table {} with \
+         REPLACE, since it does not manage the commits of the table. Drop the table and \
+         create it with the new columns instead.",
+        quote_names_if_needed(
+            &status
+                .database
+                .iter()
+                .map(String::as_str)
+                .chain([status.name.as_str()])
+                .collect::<Vec<_>>()
+        )
+    )))
+}
+
 impl UnityCatalogProvider {
     pub fn new(name: String, options: UnityCatalogOptions) -> CatalogResult<Self> {
         let http_client = reqwest::Client::builder()
@@ -732,7 +792,7 @@ impl UnityCatalogProvider {
         &self,
         status: &TableStatus,
         request: LakehouseCreateRequest,
-    ) -> LakehouseCreatePlan {
+    ) -> CatalogResult<LakehouseCreatePlan> {
         let LakehouseCreateRequest {
             catalog_table,
             options,
@@ -746,6 +806,9 @@ impl UnityCatalogProvider {
             &self.lakehouse_capabilities(),
         );
         let catalog_managed = table.execution.commit == CommitAuthority::DeltaRatifiedCommit;
+        if !catalog_managed {
+            ensure_replace_keeps_columns(status, &options)?;
+        }
         let materialization = if options.is_write_precondition {
             // The writer commits the replacement together with the data.
             LakehouseCreateMaterialization::None
@@ -760,12 +823,12 @@ impl UnityCatalogProvider {
                 context: None,
             }
         };
-        LakehouseCreatePlan {
+        Ok(LakehouseCreatePlan {
             table,
             materialization,
             staged: None,
             replaces_in_place: true,
-        }
+        })
     }
 
     /// Returns full name of an object for the REST API (`catalog.schema.table`).
@@ -1704,7 +1767,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .get_table_to_replace(database, table, &request.options, existing)
             .await?
         {
-            let mut plan = self.plan_delta_table_replace(&status, request);
+            let mut plan = self.plan_delta_table_replace(&status, request)?;
             // A replacement that is not committed by a write reads and commits the table
             // with what the catalog tells about the table here. A write tells it with
             // the table that it resolved.
@@ -6655,6 +6718,47 @@ mod tests {
             matches!(&result, Err(CatalogError::NotSupported(message)) if message.contains("different table location")),
             "{result:?}"
         );
+
+        // The catalog cannot change the columns of the table, which it has none of here,
+        // so the statements that change them are rejected: the statement without a query,
+        // and the write that overwrites the schema.
+        let with_columns = |is_write_precondition, properties: Vec<(&str, &str)>| {
+            let mut options = external(DELTA_TABLE_URI, is_write_precondition);
+            options.columns = vec![sail_catalog::provider::CreateTableColumnOptions {
+                metadata: Default::default(),
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }];
+            options.properties.extend(
+                properties
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string())),
+            );
+            lakehouse_create_request(options)
+        };
+        for (request, rejected) in [
+            (with_columns(false, vec![]), true),
+            (
+                with_columns(true, vec![("option.overwriteSchema", "true")]),
+                true,
+            ),
+            (with_columns(true, vec![]), false),
+        ] {
+            let result = provider
+                .plan_lakehouse_create(&database, "events", request)
+                .await;
+            assert_eq!(
+                matches!(&result, Err(CatalogError::NotSupported(message)) if message.contains("cannot change the columns")),
+                rejected,
+                "{result:?}"
+            );
+            assert_eq!(result.is_ok(), !rejected, "{result:?}");
+        }
         assert!(
             received_targets(&server)
                 .await
