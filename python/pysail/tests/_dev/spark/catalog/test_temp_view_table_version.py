@@ -244,6 +244,15 @@ COLUMN_CHANGES = {
     ),
     "read column made not null": ("a INT", "(1)", "SELECT * FROM {t}", "a INT NOT NULL", "(5)", [(5,)]),
     "read column retyped to a string": ("a INT", "(1)", "SELECT * FROM {t}", "a STRING", "('x')", None),
+    # The type name is computed when the view is created, and the view still reads the column.
+    "type name of a retyped column": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT a, typeof(b) AS tb FROM {t}",
+        "a INT, b STRING",
+        "(5, 'x')",
+        None,
+    ),
     "read column dropped": (
         "a INT, b INT, x INT",
         "(1, 10, 100)",
@@ -464,6 +473,7 @@ MATRIX_CASES = {
     "unread struct field retyped",
     "distinct row column retyped",
     "column dropped on one side",
+    "type name of a retyped column",
 }
 
 
@@ -668,6 +678,23 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
         )
         write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
         assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
+    finally:
+        table.drop()
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("query", ["SELECT a, b FROM {t}", "SELECT a, typeof(b) AS tb FROM {t}"])
+def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tmp_path, kind, query):
+    table = Table(spark, tmp_path, "delta", "a INT, b INT")
+    try:
+        table.insert("(1, 10)")
+        inner = table.create_view("sv", query.format(t=table.name))
+        outer = table.create_view(kind if kind != "sv" else "svc", f"SELECT a FROM {inner}")
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create("a INT, b STRING")
+        table.insert("(5, 'x')")
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {inner}")
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {outer}")
     finally:
         table.drop()
 

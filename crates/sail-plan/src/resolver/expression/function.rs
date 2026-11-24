@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
+
 use arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
@@ -119,6 +122,14 @@ impl PlanResolver<'_> {
         };
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
+        // A function can be resolved to an expression without some columns of its arguments,
+        // such as `typeof(a)` to a literal. The definition of a temporary view still reads
+        // them, since they can change when the view is read.
+        let mut argument_columns = if state.creating_temporary_view() {
+            expression_columns(&arguments)?
+        } else {
+            HashSet::new()
+        };
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -194,6 +205,12 @@ impl PlanResolver<'_> {
                                     }
                                     None => vec![],
                                 };
+                                if state.creating_temporary_view() {
+                                    let sort = order_by.iter().map(|x| &x.expr);
+                                    argument_columns.extend(expression_columns(
+                                        filter.as_deref().into_iter().chain(sort),
+                                    )?);
+                                }
                                 // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
                                 // expand the wildcard to visible column references here in the resolver where we have
                                 // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
@@ -251,6 +268,14 @@ impl PlanResolver<'_> {
         let func = coerce_comparison_predicate(func, schema, &self.config)?;
         let func = coerce_ansi_float_widening(func, schema, &self.config)?;
         let func = coerce_conditional_values(func, schema)?;
+        if !argument_columns.is_empty() {
+            let columns = expression_columns([&func])?;
+            state.record_folded_columns(
+                argument_columns
+                    .into_iter()
+                    .filter(|x| !columns.contains(x)),
+            );
+        }
 
         // DataFusion lambda variables carry no type until resolved against the schema.
         // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
@@ -601,4 +626,20 @@ fn extract_metadata_from_udf(
             .collect()),
         _ => Ok(vec![]),
     }
+}
+
+/// Returns the names of the columns that the expressions refer to, also as outer references.
+fn expression_columns<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> PlanResult<HashSet<String>> {
+    let mut columns = HashSet::new();
+    for expr in exprs {
+        expr.apply(|expr| {
+            if let Expr::Column(column) | Expr::OuterReferenceColumn(_, column) = expr {
+                columns.insert(column.name.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(columns)
 }

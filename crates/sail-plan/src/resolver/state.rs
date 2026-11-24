@@ -14,7 +14,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{
-    CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
+    ColumnUse, CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
 };
 use crate::shared_cte::CteDefinition;
 
@@ -193,6 +193,14 @@ pub(super) struct PlanResolverState {
     table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
     /// Whether the query that is resolved is the definition of a temporary view.
     creating_temporary_view: bool,
+    /// The columns that the definition of a temporary view reads although its plan does not
+    /// refer to them: the columns of the arguments of a function that its expression no
+    /// longer refers to, such as the argument of `typeof`.
+    folded_columns: HashSet<String>,
+    /// How the temporary views that the definition of a temporary view reads read the
+    /// columns of their tables: the address of the source, the position of the column in
+    /// the source, and the use.
+    view_reads: Vec<(usize, usize, ColumnUse)>,
 }
 
 /// Returns the address of a table source, which identifies the source while it is alive.
@@ -239,6 +247,8 @@ impl PlanResolverState {
             session_catalog_table_lookups: HashMap::new(),
             table_origins: HashMap::new(),
             creating_temporary_view: false,
+            folded_columns: HashSet::new(),
+            view_reads: vec![],
         }
     }
 
@@ -601,6 +611,26 @@ impl PlanResolverState {
 
     pub fn set_creating_temporary_view(&mut self, value: bool) {
         self.creating_temporary_view = value;
+    }
+
+    /// Records columns that the definition of a temporary view reads although its plan
+    /// does not refer to them.
+    pub fn record_folded_columns(&mut self, columns: impl IntoIterator<Item = String>) {
+        self.folded_columns.extend(columns);
+    }
+
+    pub fn folded_columns(&self) -> &HashSet<String> {
+        &self.folded_columns
+    }
+
+    /// Records how a view that the definition of a temporary view reads reads a column
+    /// of a source.
+    pub fn record_view_read(&mut self, address: usize, position: usize, used: ColumnUse) {
+        self.view_reads.push((address, position, used));
+    }
+
+    pub fn view_reads(&self) -> &[(usize, usize, ColumnUse)] {
+        &self.view_reads
     }
 
     /// Records what the source of a scan reads. The first record of a source remains.

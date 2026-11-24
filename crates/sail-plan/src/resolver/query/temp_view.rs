@@ -885,7 +885,14 @@ impl PlanResolver<'_> {
             || projection.iter().enumerate().any(|(i, &x)| i != x))
         .then_some(projection);
         let source = if state.creating_temporary_view() {
-            view_definition_source(source)
+            let source = view_definition_source(source);
+            let address = table_source_address(&source);
+            for (&i, position) in reference.columns.iter().zip(&positions) {
+                if let (Some(used), Some(position)) = (&reference.required[i], position) {
+                    state.record_view_read(address, *position, used.clone());
+                }
+            }
+            source
         } else {
             source
         };
@@ -1016,7 +1023,7 @@ fn view_name(view: &TableStatus) -> String {
 
 /// How a stored plan reads a column.
 #[derive(Debug, Clone, PartialEq)]
-enum ColumnUse {
+pub(in crate::resolver) enum ColumnUse {
     /// The plan reads the value of the column.
     Whole,
     /// The plan reads the values of some fields of a struct.
@@ -1225,6 +1232,13 @@ fn scan_lineage(
                 };
                 outputs.insert(field.name().clone(), lineage);
             }
+            // The outputs of the projections below are read too when a function of this
+            // projection no longer refers to them (see `PlanResolverState::folded_columns`).
+            if matches!(projection.input.as_ref(), LogicalPlan::Projection(_)) {
+                for (name, lineage) in inputs {
+                    outputs.entry(name).or_insert(lineage);
+                }
+            }
             Some((address, outputs))
         }
         _ => None,
@@ -1245,8 +1259,15 @@ fn required_columns(
     state: &PlanResolverState,
 ) -> PlanResult<HashMap<usize, HashMap<usize, ColumnUse>>> {
     let mut uses = HashMap::new();
-    for field in plan.schema().fields() {
-        add_use(&mut uses, field.name().clone(), &ColumnUse::Whole);
+    let folded = state.folded_columns().iter();
+    for name in plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|x| x.name())
+        .chain(folded)
+    {
+        add_use(&mut uses, name.clone(), &ColumnUse::Whole);
     }
     let mut derivations: HashMap<String, Vec<Derivation<String>>> = HashMap::new();
     let mut lineages = vec![];
@@ -1354,6 +1375,12 @@ fn required_columns(
                 continue;
             };
             lineage.add_reads(used, columns);
+        }
+    }
+    // A view that the plan reads reads the columns that it read when it was created.
+    for (address, position, used) in state.view_reads() {
+        if let Some(columns) = required.get_mut(address) {
+            add_use(columns, *position, used);
         }
     }
     for address in whole {
@@ -2206,6 +2233,19 @@ mod tests {
             .project(vec![col("y")])?
             .build()?;
         assert_eq!(uses(&plan, &state, address)?, whole(&[1, 2]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_columns_that_functions_fold_away_are_read() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        // `SELECT a, typeof(b) AS tb FROM t`, where `typeof(b)` is a literal.
+        state.record_folded_columns(["t_b".to_string()]);
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![col("t_a"), lit("int").alias("tb")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
         Ok(())
     }
 
