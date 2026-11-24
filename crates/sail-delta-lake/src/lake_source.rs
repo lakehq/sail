@@ -2031,12 +2031,26 @@ fn validate_delta_retention_properties(
     Ok(())
 }
 
+/// Returns the configuration of the metadata of a table that is created with the given
+/// properties of the catalog.
+///
+/// A write option (`option.<key>`) that sets a Delta table property, such as
+/// `delta.appendOnly`, is a property of the table, as it is when the writer creates the
+/// table, and as in Delta Spark. A table property with the same name takes precedence.
+/// The other write options are not part of the table.
 fn delta_create_table_metadata_configuration(
     properties: Vec<(String, String)>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
-    let table_properties = properties
+    let (options, properties): (Vec<_>, Vec<_>) = properties
         .into_iter()
-        .filter(|(key, _)| !key.starts_with("option."))
+        .partition(|(key, _)| key.starts_with("option."));
+    let table_properties = options
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let key = route_table_property_key(&key["option.".len()..])?;
+            Some((key, value))
+        })
+        .chain(properties)
         .collect::<HashMap<_, _>>();
     canonicalize_and_validate_table_properties(&table_properties)
 }
@@ -3506,6 +3520,64 @@ mod tests {
 
     /// A staged table is created with the column mapping of the schema that the data of
     /// the write is written with.
+    /// A write option that sets a Delta table property is a property of the table that
+    /// the write creates, and a table property with the same name takes precedence.
+    #[tokio::test]
+    async fn unity_staged_table_has_the_table_properties_of_the_write_options() -> Result<()> {
+        let (_, actions) = create_unity_managed_table_metadata(
+            vec![
+                ("io.unitycatalog.tableId", "table-id"),
+                ("option.delta.appendOnly", "true"),
+                ("option.delta.logRetentionDuration", "interval 10 days"),
+                ("delta.logRetentionDuration", "interval 20 days"),
+                ("option.mergeSchema", "true"),
+                ("option.path", "memory:///staging/t"),
+            ],
+            None,
+        )
+        .await?;
+        let metadata = find_action(&actions, "metaData")?;
+        let configuration = &metadata["configuration"];
+        assert_eq!(configuration["delta.appendOnly"], "true", "{configuration}");
+        assert_eq!(
+            configuration["delta.logRetentionDuration"], "interval 20 days",
+            "{configuration}"
+        );
+        let Some(keys) = configuration.as_object() else {
+            return plan_err!("expected a configuration: {configuration}");
+        };
+        assert!(
+            !keys.keys().any(|key| key.starts_with("option.")
+                || key.eq_ignore_ascii_case("mergeSchema")
+                || key == "path"),
+            "{configuration}"
+        );
+        let protocol = find_action(&actions, "protocol")?;
+        assert!(
+            protocol["writerFeatures"]
+                .as_array()
+                .is_some_and(|features| features.iter().any(|feature| feature == "appendOnly")),
+            "{protocol}"
+        );
+
+        // The data of the write is written with the column mapping of the write option.
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int64,
+            true,
+        )]));
+        let properties = vec![(
+            "option.delta.columnMapping.mode".to_string(),
+            "name".to_string(),
+        )];
+        assert!(
+            DeltaLakeSource
+                .create_table_schema_for_write(&schema, &properties)?
+                .is_some()
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unity_staged_table_has_the_column_mapping_of_the_write() -> Result<()> {
         let properties = vec![

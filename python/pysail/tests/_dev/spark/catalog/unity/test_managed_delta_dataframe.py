@@ -221,9 +221,34 @@ def test_save_as_table_with_delta_option_does_not_write_mismatched_data(
         if unity_uses_delta_api:
             write.saveAsTable(table_fqn)
             assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
+            properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn}").collect()}
+            assert properties.get("delta.columnMapping.mode") == "name"
         else:
             with pytest.raises(Exception, match="different metadata"):
                 write.saveAsTable(table_fqn)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
+
+
+def test_save_as_table_with_delta_option_sets_the_table_property(spark: SparkSession) -> None:
+    """A write option that names a Delta table property is a property of the table that the
+    write creates, as in Delta Spark."""
+    database = _unique_database("unity_dataframe_delta_property_test")
+    table_fqn = f"{database}.managed_delta_property_t"
+
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        df = spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
+        df.write.format("delta").option("delta.appendOnly", "true").saveAsTable(table_fqn)
+
+        assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
+        properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn}").collect()}
+        assert properties.get("delta.appendOnly") == "true"
+        with pytest.raises(Exception, match="(?i)append.only"):
+            spark.sql(f"DELETE FROM {table_fqn} WHERE id = 1")
+        assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
