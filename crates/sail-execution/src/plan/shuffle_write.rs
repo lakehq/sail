@@ -68,6 +68,25 @@ impl ShufflePartitioning {
         }
     }
 
+    /// The schema of the rows written for input of the given schema, which the
+    /// writer of each channel must use as well.
+    pub(crate) fn payload_schema(&self, input: &SchemaRef) -> SchemaRef {
+        match self {
+            Self::Channel(_) => {
+                let fields = input.fields();
+                let fields = &fields[..fields.len().saturating_sub(1)];
+                Arc::new(Schema::new_with_metadata(
+                    fields.to_vec(),
+                    input.metadata().clone(),
+                ))
+            }
+            Self::Hash(..)
+            | Self::Range(..)
+            | Self::RoundRobinBatch(_)
+            | Self::RoundRobinRow(_) => Arc::clone(input),
+        }
+    }
+
     fn partition_count(&self) -> usize {
         match self {
             Self::Hash(_, partitions) => *partitions,
@@ -379,24 +398,6 @@ impl Router {
         }
         buffer.push_rows(batch, indices, flush)
     }
-
-    /// The schema of the rows that the router writes for the given input schema.
-    fn output_schema(&self, input: &SchemaRef) -> SchemaRef {
-        match self {
-            Self::Channel { .. } => {
-                let fields = input.fields();
-                let fields = &fields[..fields.len().saturating_sub(1)];
-                Arc::new(Schema::new_with_metadata(
-                    fields.to_vec(),
-                    input.metadata().clone(),
-                ))
-            }
-            Self::Batch { .. }
-            | Self::Hash { .. }
-            | Self::Range(_)
-            | Self::RoundRobinRow { .. } => Arc::clone(input),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -523,7 +524,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let buffer = ShuffleBuffer::try_new(
-            &router.output_schema(&stream.schema()),
+            &self.partitioning.payload_schema(&stream.schema()),
             channels,
             batch_size,
             buffer_size,
