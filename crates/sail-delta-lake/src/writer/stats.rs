@@ -176,38 +176,33 @@ fn stats_from_metadata(
         Ok(())
     };
 
-    if let Some(stats_cols) = stats_columns {
-        let idx_to_iterate: Vec<usize> = schema_descriptor
-            .columns()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, col)| {
-                if stats_cols
-                    .iter()
-                    .any(|configured| col.path().parts().starts_with(configured.path()))
-                {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for idx in idx_to_iterate {
-            handle_column(idx)?;
-        }
+    // Statistics are collected for the first `num_indexed_cols` columns, and for the
+    // columns in `stats_columns` wherever they are.
+    let limit = if num_indexed_cols == -1 {
+        schema_descriptor.num_columns()
+    } else if num_indexed_cols >= 0 {
+        min(num_indexed_cols as usize, schema_descriptor.num_columns())
     } else {
-        let limit = if num_indexed_cols == -1 {
-            schema_descriptor.num_columns()
-        } else if num_indexed_cols >= 0 {
-            min(num_indexed_cols as usize, schema_descriptor.num_columns())
-        } else {
-            return Err(DeltaTableError::generic(
-                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
-            ));
-        };
-        for idx in 0..limit {
-            handle_column(idx)?;
-        }
+        return Err(DeltaTableError::generic(
+            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+        ));
+    };
+    let idx_to_iterate: Vec<usize> = schema_descriptor
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, col)| {
+            let selected = index < limit
+                || stats_columns.as_ref().is_some_and(|stats_cols| {
+                    stats_cols
+                        .iter()
+                        .any(|configured| col.path().parts().starts_with(configured.path()))
+                });
+            selected.then_some(index)
+        })
+        .collect();
+    for idx in idx_to_iterate {
+        handle_column(idx)?;
     }
 
     apply_variant_stats_from_footer(

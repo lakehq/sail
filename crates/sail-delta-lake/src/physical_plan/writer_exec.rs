@@ -761,7 +761,23 @@ impl DeltaWriterExec {
                 Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
             let physical_partition_columns = write_context.physical_partition_columns.clone();
             let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
-            let (_, effective_metadata) = Self::effective_protocol_and_metadata(&write_context);
+            let (effective_protocol, effective_metadata) =
+                Self::effective_protocol_and_metadata(&write_context);
+            // The files of a clustered table have statistics for the clustering columns,
+            // whatever the columns that the table collects statistics for.
+            let clustering_columns = match (
+                effective_protocol,
+                write_context.commit_context.base_snapshot.as_ref(),
+            ) {
+                (Some(protocol), Some(snapshot)) => {
+                    crate::transaction::clustering::clustering_columns(
+                        protocol,
+                        &snapshot.domain_metadata,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                }
+                _ => vec![],
+            };
             let table_properties = effective_metadata
                 .map(|metadata| TableProperties::from(metadata.configuration().iter()))
                 .unwrap_or_default();
@@ -791,6 +807,18 @@ impl DeltaWriterExec {
                         })?
                     }
                 }
+            };
+
+            let stats_columns = if clustering_columns.is_empty() {
+                stats_columns
+            } else {
+                Some(
+                    stats_columns
+                        .into_iter()
+                        .flatten()
+                        .chain(clustering_columns)
+                        .collect(),
+                )
             };
 
             let writer_config = WriterConfig::new(

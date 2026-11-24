@@ -2224,14 +2224,19 @@ fn delta_metadata_updates(
 }
 
 /// Adds the updates of the Delta REST API for the domain metadata actions of a Delta commit.
-/// The catalog keeps the row tracking and clustering domains only, and Sail sets the row
-/// tracking domain only.
+/// The catalog keeps the row tracking and clustering domains only.
 fn delta_domain_metadata_updates(
     domain_metadata: &[DeltaDomainMetadataInfo],
     updates: &mut Vec<delta_gen::DeltaTableUpdate>,
 ) -> CatalogResult<()> {
     let mut row_tracking = None;
+    let mut clustering = None;
     let mut removals = vec![];
+    let invalid = |domain: &str, e: serde_json::Error| {
+        CatalogError::InvalidArgument(format!(
+            "Invalid Delta commit payload: configuration of domain {domain}: {e}"
+        ))
+    };
     for DeltaDomainMetadataInfo {
         domain,
         configuration,
@@ -2246,11 +2251,12 @@ fn delta_domain_metadata_updates(
         } else if domain == "delta.rowTracking" {
             row_tracking = Some(
                 serde_json::from_str::<delta_gen::DeltaRowTrackingDomainMetadata>(configuration)
-                    .map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "Invalid Delta commit payload: configuration of domain {domain}: {e}"
-                        ))
-                    })?,
+                    .map_err(|e| invalid(domain, e))?,
+            );
+        } else if domain == "delta.clustering" {
+            clustering = Some(
+                serde_json::from_str::<delta_gen::DeltaClusteringDomainMetadata>(configuration)
+                    .map_err(|e| invalid(domain, e))?,
             );
         } else {
             return Err(CatalogError::NotSupported(format!(
@@ -2258,11 +2264,11 @@ fn delta_domain_metadata_updates(
             )));
         }
     }
-    if let Some(row_tracking) = row_tracking {
+    if row_tracking.is_some() || clustering.is_some() {
         updates.push(delta_gen::DeltaTableUpdate::SetDomainMetadata {
             updates: Box::new(delta_gen::DeltaDomainMetadataUpdates {
-                delta_clustering: None,
-                delta_row_tracking: Some(Box::new(row_tracking)),
+                delta_clustering: clustering.map(Box::new),
+                delta_row_tracking: row_tracking.map(Box::new),
             }),
         });
     }
@@ -2302,6 +2308,7 @@ fn delta_create_table_request(
         metadata,
         in_commit_timestamp,
         row_id_high_water_mark,
+        clustering_columns,
     } = create_commit;
     let schema: serde_json::Value = serde_json::from_str(&metadata.schema_string).map_err(|e| {
         CatalogError::Internal(format!(
@@ -2312,15 +2319,22 @@ fn delta_create_table_request(
         columns: Box::new(delta_schema_to_wire_type(&schema)),
         comment: metadata.description.clone().or(comment),
         // The catalog keeps the row tracking domain of the table, which version 0 has when
-        // it adds data to a table with row tracking.
-        domain_metadata: row_id_high_water_mark.map(|row_id_high_water_mark| {
-            Box::new(delta_gen::DeltaDomainMetadataUpdates {
-                delta_clustering: None,
-                delta_row_tracking: Some(Box::new(delta_gen::DeltaRowTrackingDomainMetadata {
-                    row_id_high_water_mark,
-                })),
-            })
-        }),
+        // it adds data to a table with row tracking, and the clustering domain, which
+        // version 0 of a clustered table has.
+        domain_metadata: (row_id_high_water_mark.is_some() || clustering_columns.is_some()).then(
+            || {
+                Box::new(delta_gen::DeltaDomainMetadataUpdates {
+                    delta_clustering: clustering_columns.clone().map(|clustering_columns| {
+                        Box::new(delta_gen::DeltaClusteringDomainMetadata { clustering_columns })
+                    }),
+                    delta_row_tracking: row_id_high_water_mark.map(|row_id_high_water_mark| {
+                        Box::new(delta_gen::DeltaRowTrackingDomainMetadata {
+                            row_id_high_water_mark,
+                        })
+                    }),
+                })
+            },
+        ),
         last_commit_timestamp_ms: *in_commit_timestamp,
         location,
         name: table.to_string(),
@@ -5528,6 +5542,22 @@ mod tests {
                 "removed": false,
             }],
         });
+        // A replacement of a clustered table leaves the table without clustering columns.
+        let mut replacement = legacy_delta_commit(7);
+        replacement["delta_log"] = serde_json::json!({
+            "domainMetadata": [
+                {
+                    "domain": "delta.rowTracking",
+                    "configuration": r#"{"rowIdHighWaterMark":50}"#,
+                    "removed": false,
+                },
+                {
+                    "domain": "delta.clustering",
+                    "configuration": r#"{"clusteringColumns":[]}"#,
+                    "removed": false,
+                },
+            ],
+        });
         let mut removal = legacy_delta_commit(6);
         // The removal of a domain that the catalog does not keep is not sent,
         // since the catalog refuses it.
@@ -5546,7 +5576,7 @@ mod tests {
             {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
         ]);
         assert_eq!(
-            delta_api_commit_bodies(vec![append, removal]).await,
+            delta_api_commit_bodies(vec![append, removal, replacement]).await,
             vec![
                 serde_json::json!({
                     "requirements": requirements,
@@ -5565,6 +5595,19 @@ mod tests {
                         {
                             "action": "remove-domain-metadata",
                             "domains": ["delta.rowTracking", "delta.clustering"]
+                        }
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(7)},
+                        {
+                            "action": "set-domain-metadata",
+                            "updates": {
+                                "delta.clustering": {"clusteringColumns": []},
+                                "delta.rowTracking": {"rowIdHighWaterMark": 50}
+                            }
                         }
                     ]
                 }),
@@ -6032,6 +6075,7 @@ mod tests {
             },
             in_commit_timestamp: 1700000000123,
             row_id_high_water_mark: None,
+            clustering_columns: None,
         }
     }
 
@@ -6222,6 +6266,20 @@ mod tests {
         assert_eq!(
             body["domain-metadata"],
             serde_json::json!({"delta.rowTracking": {"rowIdHighWaterMark": 41}})
+        );
+
+        // A clustered table has the clustering domain, also without clustering columns.
+        create_commit.clustering_columns = Some(vec![]);
+        let request =
+            delta_create_table_request("events", DELTA_TABLE_URI.to_string(), None, &create_commit)
+                .unwrap();
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            body["domain-metadata"],
+            serde_json::json!({
+                "delta.rowTracking": {"rowIdHighWaterMark": 41},
+                "delta.clustering": {"clusteringColumns": []}
+            })
         );
     }
 

@@ -102,7 +102,7 @@ pub(crate) fn same_configuration_for_create(
     left == right || without_generated_names(left) == without_generated_names(right)
 }
 
-fn effective_protocol_and_metadata<'a>(
+pub(super) fn effective_protocol_and_metadata<'a>(
     actions: &'a [CommitAction],
     read_snapshot: Option<&'a Arc<DeltaSnapshot>>,
 ) -> Option<(&'a Protocol, &'a Metadata)> {

@@ -2319,6 +2319,7 @@ pub(crate) async fn unity_create_commit(
         metadata: delta_metadata_info(metadata),
         in_commit_timestamp,
         row_id_high_water_mark: row_id_high_water_mark(&actions)?,
+        clustering_columns: clustering_columns(&actions)?,
     })
 }
 
@@ -2344,6 +2345,29 @@ pub(crate) fn delta_metadata_info(metadata: &Metadata) -> DeltaMetadataInfo {
             .collect(),
         description: metadata.description().map(str::to_string),
     }
+}
+
+/// The clustering columns that the actions of a commit set.
+fn clustering_columns(actions: &[Action]) -> Result<Option<Vec<Vec<String>>>> {
+    let domains = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::DomainMetadata(domain) => Some((domain.domain.clone(), domain.clone())),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    if !domains.contains_key(crate::transaction::clustering::CLUSTERING_DOMAIN) {
+        return Ok(None);
+    }
+    let protocol = Protocol::new(7, 7, None, Some(vec![TableFeature::Clustering]));
+    let columns = crate::transaction::clustering::clustering_columns(&protocol, &domains)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    Ok(Some(
+        columns
+            .into_iter()
+            .map(|column| column.path().to_vec())
+            .collect(),
+    ))
 }
 
 /// The row ID high-water mark that the actions of a commit set.
@@ -3718,10 +3742,43 @@ mod tests {
         Ok(())
     }
 
+    /// A staged table that the catalog requires the clustering table feature for is a
+    /// clustered table without clustering columns, which the catalog is told.
+    #[tokio::test]
+    async fn unity_staged_table_with_required_clustering() -> Result<()> {
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged"],
+            "writerFeatures": ["catalogManaged", "clustering", "domainMetadata", "inCommitTimestamp"]
+        });
+        let (result, actions) = create_unity_managed_table_metadata(
+            vec![("io.unitycatalog.tableId", "table-id")],
+            Some(required_protocol),
+        )
+        .await?;
+        let protocol = find_action(&actions, "protocol")?;
+        assert!(
+            protocol["writerFeatures"]
+                .as_array()
+                .is_some_and(|features| features.iter().any(|feature| feature == "clustering")),
+            "{protocol}"
+        );
+        let domain = find_action(&actions, "domainMetadata")?;
+        assert_eq!(domain["domain"], "delta.clustering");
+        assert_eq!(domain["configuration"], r#"{"clusteringColumns":[]}"#);
+        let Some(created) = result.created_metadata else {
+            return plan_err!("expected the created version");
+        };
+        assert_eq!(created.clustering_columns, Some(vec![]));
+        assert_eq!(created.row_id_high_water_mark, None);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unity_staged_table_rejects_unsupported_required_features() -> Result<()> {
         for (features, unsupported) in [
-            (vec!["catalogManaged", "clustering"], "clustering"),
+            (vec!["catalogManaged", "icebergCompatV2"], "icebergCompatV2"),
             (vec!["catalogManaged", "futureFeature"], "futureFeature"),
         ] {
             let required_protocol = serde_json::json!({

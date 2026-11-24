@@ -428,6 +428,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::VariantShredding);
     writer_features.insert(TableFeature::VariantShreddingPreview);
     writer_features.insert(TableFeature::VacuumProtocolCheck);
+    // Sail does not cluster data, which a writer is not required to do. The requirements
+    // for writers of clustered tables are in `transaction::clustering`.
+    writer_features.insert(TableFeature::Clustering);
 
     ProtocolChecker::new(reader_features, writer_features)
 });
@@ -704,7 +707,7 @@ mod tests {
             .split(", ")
             .collect::<Vec<_>>();
         features.sort_unstable();
-        assert_eq!(features, ["clustering", "futureFeature", "icebergCompatV2"]);
+        assert_eq!(features, ["futureFeature", "icebergCompatV2"]);
     }
 
     #[test]

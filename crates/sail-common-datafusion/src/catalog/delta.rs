@@ -45,6 +45,10 @@ pub struct DeltaCreatedVersion {
     /// assigns row IDs to the data that it adds.
     #[serde(default)]
     pub row_id_high_water_mark: Option<i64>,
+    /// The paths of the clustering columns of the clustering domain, for a first version
+    /// of a clustered table. A clustered table can have no clustering columns.
+    #[serde(default)]
+    pub clustering_columns: Option<Vec<Vec<String>>>,
 }
 
 /// A domain metadata action of the Delta log.

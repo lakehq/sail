@@ -196,7 +196,7 @@ def test_history_optional_fields(spark, tmp_path):
         spark.sql("DROP TABLE raw_inspection")
 
 
-_UNSUPPORTED_WRITER_FEATURES = ["clustering", "icebergCompatV2", "futureFeature"]
+_UNSUPPORTED_WRITER_FEATURES = ["icebergCompatV2", "futureFeature"]
 
 
 @pytest.fixture

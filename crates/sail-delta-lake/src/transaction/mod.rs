@@ -38,6 +38,7 @@ pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::table::DeltaSnapshot;
 use crate::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 
+pub(crate) mod clustering;
 mod conflict_checker;
 mod protocol;
 pub(crate) mod row_tracking;
@@ -1526,6 +1527,11 @@ impl std::future::IntoFuture for PreparedCommit {
                     version,
                     &this.data.operation,
                 )?;
+                clustering::finalize_clustering(
+                    &mut finalized_actions,
+                    read_snapshot.as_ref(),
+                    &this.data.operation,
+                )?;
                 validate_effective_commit_target(
                     read_snapshot.as_ref(),
                     &finalized_actions,
@@ -1642,6 +1648,11 @@ impl PreparedCommit {
                 &mut finalized_actions,
                 read_snapshot.as_ref(),
                 version,
+                &this.data.operation,
+            )?;
+            clustering::finalize_clustering(
+                &mut finalized_actions,
+                read_snapshot.as_ref(),
                 &this.data.operation,
             )?;
             validate_effective_commit_target(
@@ -5227,6 +5238,241 @@ mod tests {
         let mut configuration = HashMap::new();
         row_tracking::retain_for_replace(&unsupported, &existing, &mut configuration);
         assert!(configuration.is_empty());
+        Ok(())
+    }
+
+    fn clustered_metadata(columns: &[&str], partition_columns: &[&str]) -> Metadata {
+        Metadata::try_new(
+            None,
+            None,
+            StructType::try_new(
+                columns
+                    .iter()
+                    .map(|name| StructField::nullable(*name, DataType::LONG)),
+            )
+            .unwrap(),
+            partition_columns.iter().map(|x| x.to_string()).collect(),
+            0,
+            HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    fn clustered_protocol() -> Protocol {
+        Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![TableFeature::Clustering, TableFeature::DomainMetadata]),
+        )
+    }
+
+    /// Creates a table as an engine that clusters data does, with the clustering columns.
+    async fn create_clustered_table(
+        log_store: &LogStoreRef,
+        clustering_columns: Option<serde_json::Value>,
+    ) -> DeltaResult<FinalizedCommit> {
+        let metadata = clustered_metadata(&["id", "name"], &[]);
+        let protocol = clustered_protocol();
+        let mut actions = vec![
+            CommitAction::Protocol(protocol.clone()),
+            CommitAction::Metadata(metadata.clone()),
+        ];
+        if let Some(clustering_columns) = clustering_columns {
+            actions.push(CommitAction::DomainMetadata(DomainMetadata {
+                domain: "delta.clustering".to_string(),
+                configuration: serde_json::json!({ "clusteringColumns": clustering_columns })
+                    .to_string(),
+                removed: false,
+            }));
+        }
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await
+    }
+
+    fn clustering_domains(actions: &[Action]) -> Vec<serde_json::Value> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::DomainMetadata(domain) if domain.domain == "delta.clustering" => {
+                    assert!(!domain.removed);
+                    Some(serde_json::from_str(&domain.configuration).unwrap())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn replace_operation(metadata: &Metadata) -> DeltaOperation {
+        DeltaOperation::Create {
+            mode: SaveMode::Overwrite,
+            location: "memory:///".to_string(),
+            protocol: Box::new(clustered_protocol()),
+            metadata: Box::new(metadata.clone()),
+        }
+    }
+
+    /// A table with the clustering table feature, which Databricks enables by default,
+    /// can be written. The clustering columns stay as they are.
+    #[tokio::test]
+    async fn clustered_table_commits_keep_the_clustering_columns() -> DeltaResult<()> {
+        let protocol = clustered_protocol();
+        PROTOCOL.can_write_to_protocol(&protocol)?;
+
+        for clustering_columns in [serde_json::json!([["id"]]), serde_json::json!([])] {
+            let log_store = test_log_store(Arc::new(InMemory::new()));
+            let created =
+                create_clustered_table(&log_store, Some(clustering_columns.clone())).await?;
+            let expected = serde_json::json!({ "clusteringColumns": clustering_columns });
+            assert_eq!(
+                clustering_domains(&read_commit_actions(&log_store, 0).await),
+                vec![expected.clone()]
+            );
+
+            // An append adds files that are not clustered, and does not touch the domain.
+            let appended = CommitBuilder::default()
+                .with_actions(vec![CommitAction::Add(row_tracking_add("a", 3))])
+                .build(
+                    created.snapshot.clone(),
+                    log_store.clone(),
+                    append_operation(),
+                )
+                .await?;
+            let actions = read_commit_actions(&log_store, 1).await;
+            assert!(clustering_domains(&actions).is_empty());
+            assert!(actions.iter().all(
+                |action| !matches!(action, Action::Add(add) if add.clustering_provider.is_some())
+            ));
+            let snapshot = appended.snapshot.as_ref().unwrap();
+            let domain = &snapshot.domain_metadata()["delta.clustering"];
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&domain.configuration)?,
+                expected
+            );
+
+            // A change of the schema that keeps the clustering columns is committed.
+            CommitBuilder::default()
+                .with_actions(vec![CommitAction::Metadata(clustered_metadata(
+                    &["id", "name", "more"],
+                    &[],
+                ))])
+                .build(
+                    Some(snapshot.clone()),
+                    log_store.clone(),
+                    append_operation(),
+                )
+                .await?;
+            assert!(clustering_domains(&read_commit_actions(&log_store, 2).await).is_empty());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clustered_table_commits_cannot_remove_clustering_columns_or_partition()
+    -> DeltaResult<()> {
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created = create_clustered_table(&log_store, Some(serde_json::json!([["id"]]))).await?;
+        let snapshot = created.snapshot.as_ref().unwrap();
+        let commit = |metadata: Metadata, operation: DeltaOperation| {
+            CommitBuilder::default()
+                .with_actions(vec![CommitAction::Metadata(metadata)])
+                .build(Some(snapshot.clone()), log_store.clone(), operation)
+        };
+
+        // A commit that is not a replacement of the table keeps the clustering columns.
+        let without_id = clustered_metadata(&["name"], &[]);
+        let Err(error) = commit(without_id.clone(), append_operation()).await else {
+            return Err(DeltaError::generic("expected an error"));
+        };
+        assert!(
+            matches!(&error, DeltaError::Unsupported(message)
+                if message.contains("clustering columns (id)")),
+            "{error:?}"
+        );
+
+        // No commit partitions a clustered table.
+        let partitioned = clustered_metadata(&["id", "name"], &["name"]);
+        for operation in [append_operation(), replace_operation(&partitioned)] {
+            let Err(error) = commit(partitioned.clone(), operation).await else {
+                return Err(DeltaError::generic("expected an error"));
+            };
+            assert!(
+                matches!(&error, DeltaError::Unsupported(message)
+                    if message.contains("cannot be partitioned")),
+                "{error:?}"
+            );
+        }
+
+        // A replacement of the table without a clustering column leaves the table without
+        // clustering columns, and a replacement with the clustering columns keeps them.
+        commit(
+            clustered_metadata(&["id", "other"], &[]),
+            replace_operation(&without_id),
+        )
+        .await?;
+        assert!(clustering_domains(&read_commit_actions(&log_store, 1).await).is_empty());
+        let mut snapshot = snapshot.as_ref().clone();
+        snapshot.update(log_store.as_ref(), Some(1)).await?;
+        let replaced = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Metadata(without_id.clone())])
+            .build(
+                Some(Arc::new(snapshot)),
+                log_store.clone(),
+                replace_operation(&without_id),
+            )
+            .await?;
+        assert_eq!(
+            clustering_domains(&read_commit_actions(&log_store, 2).await),
+            vec![serde_json::json!({"clusteringColumns": []})]
+        );
+        let snapshot = replaced.snapshot.as_ref().unwrap();
+        assert_eq!(
+            snapshot.domain_metadata()["delta.clustering"].configuration,
+            r#"{"clusteringColumns":[]}"#
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_table_that_becomes_clustered_has_the_clustering_domain() -> DeltaResult<()> {
+        // A table that is created with the table feature has no clustering columns.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        create_clustered_table(&log_store, None).await?;
+        assert_eq!(
+            clustering_domains(&read_commit_actions(&log_store, 0).await),
+            vec![serde_json::json!({"clusteringColumns": []})]
+        );
+
+        // The table feature is not enabled on an existing table.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created = create_row_tracking_table(&log_store, &[], vec![]).await?;
+        let protocol = created
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .protocol()
+            .merge_upgrade_requirements(&clustered_protocol());
+        let result = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Protocol(protocol)])
+            .build(created.snapshot.clone(), log_store, append_operation())
+            .await;
+        assert!(
+            matches!(&result, Err(DeltaError::Unsupported(message))
+                if message.contains("Enabling the clustering table feature")),
+            "{:?}",
+            result.err()
+        );
         Ok(())
     }
 }
