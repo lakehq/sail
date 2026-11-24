@@ -25,6 +25,7 @@ use object_store::aws::{
     resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
+use sail_common_datafusion::catalog::S3Endpoint;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -107,7 +108,7 @@ impl CredentialProvider for S3CredentialProvider {
 }
 
 pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
-    get_s3_object_store_with_credentials(url, None, None).await
+    get_s3_object_store_with_credentials(url, None, None, None).await
 }
 
 /// The regions of buckets that are discovered already.
@@ -144,10 +145,13 @@ async fn discover_bucket_region(
 /// Creates the S3 object store that uses the given credentials if any,
 /// or the credentials of the environment otherwise.
 /// The region of the bucket is not discovered if it is among the given regions.
+/// The requests go to the given S3-compatible storage if any, instead of AWS S3
+/// or the storage that the environment configures.
 pub(crate) async fn get_s3_object_store_with_credentials(
     url: &Url,
     credentials: Option<AwsCredentialProvider>,
     regions: Option<&BucketRegions>,
+    endpoint: Option<&S3Endpoint>,
 ) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
@@ -166,6 +170,9 @@ pub(crate) async fn get_s3_object_store_with_credentials(
     }
 
     let mut builder = parse_s3_url(builder, url)?;
+    if let Some(endpoint) = endpoint {
+        return with_s3_endpoint(builder, endpoint).build();
+    }
     let bucket = builder
         .get_config_value(&AmazonS3ConfigKey::Bucket)
         .ok_or_else(|| object_store::Error::Generic {
@@ -195,6 +202,19 @@ pub(crate) async fn get_s3_object_store_with_credentials(
     }
 
     builder.build()
+}
+
+/// Sends the requests to the S3-compatible storage with path-style addressing.
+/// The region of the bucket is not discovered, since the bucket is not in AWS S3.
+fn with_s3_endpoint(builder: AmazonS3Builder, endpoint: &S3Endpoint) -> AmazonS3Builder {
+    // The region of the environment is not for this storage.
+    let region = endpoint.region.as_deref().unwrap_or("us-east-1");
+    builder
+        .with_endpoint(endpoint.url.as_str())
+        .with_allow_http(endpoint.url.starts_with("http://"))
+        .with_virtual_hosted_style_request(false)
+        .with_s3_express(false)
+        .with_region(region)
 }
 
 /// Discover ordinary AWS bucket regions without overriding explicit URL or endpoint settings.
@@ -387,6 +407,90 @@ mod tests {
         )
         .unwrap();
         assert!(!should_resolve_bucket_region(&builder, &url).unwrap());
+    }
+
+    /// The requests for an S3-compatible storage go to its endpoint with path-style
+    /// addressing and are signed with its region and the given credential, whatever
+    /// the environment configures and whatever is known about a bucket of the same name.
+    #[tokio::test]
+    async fn s3_endpoint_requests_use_path_style_and_the_region_of_the_endpoint() {
+        use object_store::path::Path;
+        use object_store::{ObjectStoreExt, StaticCredentialProvider};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let Ok(byte) = stream.read_u8().await else {
+                        break;
+                    };
+                    request.push(byte);
+                }
+                let _ = sender.send(String::from_utf8_lossy(&request).to_string());
+                let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let regions = BucketRegions::default();
+        regions.set("bucket", "eu-central-1");
+        let url = Url::parse("s3://bucket/table").unwrap();
+        for (region, expected) in [(Some("xx-test-1"), "xx-test-1"), (None, "us-east-1")] {
+            let endpoint = S3Endpoint {
+                url: format!("http://{address}"),
+                region: region.map(|x| x.to_string()),
+            };
+            let credentials = Arc::new(StaticCredentialProvider::new(AwsCredential {
+                key_id: "vended-key".to_string(),
+                secret_key: "secret".to_string(),
+                token: None,
+            }));
+            let store = get_s3_object_store_with_credentials(
+                &url,
+                Some(credentials),
+                Some(&regions),
+                Some(&endpoint),
+            )
+            .await
+            .unwrap();
+            let result = store.get(&Path::from("table/part.parquet")).await;
+            assert!(matches!(result, Err(object_store::Error::NotFound { .. })));
+            let request = requests.recv().await.unwrap().to_ascii_lowercase();
+            assert!(
+                request.starts_with("get /bucket/table/part.parquet http/1.1\r\n"),
+                "{request}"
+            );
+            assert!(
+                request.contains(&format!("\r\nhost: {address}\r\n")),
+                "{request}"
+            );
+            assert!(
+                request.contains("credential=vended-key/")
+                    && request.contains(&format!("/{expected}/s3/aws4_request")),
+                "{request}"
+            );
+        }
+        // The settings of the environment for another storage are replaced.
+        let builder = AmazonS3Builder::new()
+            .with_endpoint("http://localhost:9000")
+            .with_region("eu-central-1")
+            .with_virtual_hosted_style_request(true);
+        let endpoint = S3Endpoint {
+            url: "https://minio.example.com".to_string(),
+            region: Some("xx-test-1".to_string()),
+        };
+        let builder = with_s3_endpoint(parse_s3_url(builder, &url).unwrap(), &endpoint);
+        for (key, value) in [
+            (AmazonS3ConfigKey::Endpoint, "https://minio.example.com"),
+            (AmazonS3ConfigKey::Region, "xx-test-1"),
+            (AmazonS3ConfigKey::VirtualHostedStyleRequest, "false"),
+            (AmazonS3ConfigKey::Bucket, "bucket"),
+        ] {
+            assert_eq!(builder.get_config_value(&key).as_deref(), Some(value));
+        }
     }
 
     #[test]

@@ -78,6 +78,7 @@ impl VendedCredential for AwsCredential {
                 access_key_id,
                 secret_access_key,
                 session_token,
+                endpoint: _,
             } => Some(AwsCredential {
                 key_id: access_key_id,
                 secret_key: secret_access_key,
@@ -335,21 +336,31 @@ fn create_vended_store(
     let store = RuntimeAwareObjectStore::try_new(
         || {
             let store: Arc<dyn ObjectStore> = match kind {
-                StorageCredential::S3 { .. } => {
-                    let provider = Arc::new(VendedCredentialProvider::<AwsCredential>::try_new(
-                        access, initial, fetch,
-                    )?);
+                StorageCredential::S3 { .. } | StorageCredential::S3Environment { .. } => {
+                    // The storage is accessed with the credentials of the environment
+                    // if the catalog only names the storage.
+                    let provider = match kind {
+                        StorageCredential::S3 { .. } => Some(Arc::new(VendedCredentialProvider::<
+                            AwsCredential,
+                        >::try_new(
+                            access, initial, fetch
+                        )?)),
+                        _ => None,
+                    };
                     let url = location.clone();
                     let regions = Arc::clone(regions);
+                    let endpoint = kind.s3_endpoint().cloned();
                     Arc::new(LazyObjectStore::new(move || {
                         let url = url.clone();
-                        let provider = Arc::clone(&provider);
+                        let provider = provider.clone();
                         let regions = Arc::clone(&regions);
+                        let endpoint = endpoint.clone();
                         async move {
                             get_s3_object_store_with_credentials(
                                 &url,
-                                Some(provider),
+                                provider.map(|x| x as _),
                                 Some(regions.as_ref()),
+                                endpoint.as_ref(),
                             )
                             .await
                         }
@@ -795,6 +806,10 @@ pub struct VendedObjectStores {
     /// The time until which no credentials are requested for a storage location
     /// and an owner, since they were not issued when they were last requested.
     not_issued: Mutex<HashMap<(String, String), tokio::time::Instant>>,
+    /// The owners for which the catalog issued a credential for another storage than
+    /// the storage of the object stores of the owner, which are replaced when the
+    /// table is next used.
+    storage_changed: Arc<Mutex<HashSet<String>>>,
 }
 
 impl SessionExtension for VendedObjectStores {
@@ -824,6 +839,7 @@ impl VendedObjectStores {
             reported_disabled: AtomicBool::new(false),
             reported_refused: Mutex::new(HashSet::new()),
             not_issued: Mutex::new(HashMap::new()),
+            storage_changed: Arc::default(),
         }
     }
 
@@ -876,6 +892,14 @@ impl VendedObjectStores {
         let Ok(prefix) = Self::prefix(location) else {
             return false;
         };
+        let changed = self
+            .storage_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if changed.contains(owner) {
+            return false;
+        }
+        drop(changed);
         self.stores
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -938,6 +962,11 @@ impl VendedObjectStores {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(owner);
+        let mut changed = self
+            .storage_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        changed.remove(owner);
     }
 
     /// Accesses the storage location with the credentials issued for the owner
@@ -954,6 +983,36 @@ impl VendedObjectStores {
     ) -> DataFusionResult<()> {
         let prefix = Self::prefix(location)?;
         let kind = initial.credential.clone();
+        // An object store keeps sending its requests to the storage that it is created
+        // for, so a credential for another storage (e.g. after the endpoint of the
+        // storage changed in the catalog) is not given to it.
+        let fetch: StorageCredentialFetch = {
+            let (kind, owner) = (kind.clone(), owner.to_string());
+            let changed = Arc::clone(&self.storage_changed);
+            Arc::new(move |access| {
+                let fetched = fetch(access);
+                let (kind, owner, changed) = (kind.clone(), owner.clone(), Arc::clone(&changed));
+                Box::pin(async move {
+                    let credentials = fetched.await?;
+                    if credentials.credential.is_for_storage_of(&kind) {
+                        return Ok(credentials);
+                    }
+                    let mut changed = changed.lock().unwrap_or_else(|e| e.into_inner());
+                    changed.insert(owner);
+                    Err(
+                        "the catalog issued a storage credential for another storage than \
+                         before, which is used when the table is next used"
+                            .to_string(),
+                    )
+                })
+            })
+        };
+        let mut changed = self
+            .storage_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        changed.remove(owner);
+        drop(changed);
         // A credential that the catalog issued for writing is also the first credential
         // for writing, so that the catalog is not asked again before it expires.
         let initial_write = (initial.access == StorageAccess::ReadWrite).then(|| initial.clone());
@@ -1050,6 +1109,7 @@ mod tests {
                 access_key_id: key.to_string(),
                 secret_access_key: "secret-value".to_string(),
                 session_token: Some("token-value".to_string()),
+                endpoint: None,
             },
             expires_at_ms,
             access: StorageAccess::Read,
@@ -1798,5 +1858,90 @@ mod tests {
         // What is remembered expires.
         stores.set_not_issued(&tab, "u", Duration::ZERO);
         assert!(!stores.is_not_issued(&tab, "u"));
+    }
+
+    /// The object stores of a table are for the storage that the catalog names for the
+    /// table, and are not given a credential for another storage.
+    #[tokio::test]
+    async fn vended_object_stores_keep_the_storage_of_the_credential() {
+        use sail_common_datafusion::catalog::S3Endpoint;
+
+        let credentials = |endpoint: Option<&str>| {
+            let mut credentials = s3_credentials("key-value", None);
+            if let StorageCredential::S3 { endpoint: x, .. } = &mut credentials.credential {
+                *x = endpoint.map(|url| S3Endpoint {
+                    url: url.to_string(),
+                    region: None,
+                });
+            }
+            credentials
+        };
+        // The endpoints of the object stores that are created, and the function that
+        // the last object store fetches its credential with.
+        let created = Arc::new(Mutex::new(Vec::new()));
+        let fetch_of_store = Arc::new(Mutex::new(None));
+        let stores = {
+            let (created, fetch_of_store) = (created.clone(), fetch_of_store.clone());
+            VendedObjectStores::with_factory(Arc::new(move |request| {
+                let endpoint = request.kind.s3_endpoint().map(|x| x.url.clone());
+                created
+                    .lock()
+                    .unwrap()
+                    .push((request.location.to_string(), endpoint));
+                *fetch_of_store.lock().unwrap() = Some(request.fetch);
+                Ok(Arc::new(InMemory::new()) as Arc<dyn ObjectStore>)
+            }))
+        };
+        // The storage that the catalog issues credentials for.
+        let issued = Arc::new(Mutex::new(Some("http://a:9000")));
+        let fetch: StorageCredentialFetch = {
+            let issued = issued.clone();
+            Arc::new(move |_| {
+                let credentials = credentials(*issued.lock().unwrap());
+                Box::pin(async move { Ok(credentials) })
+            })
+        };
+        let session = registry();
+        // Two tables in buckets of the same name are in different storages.
+        let a = Url::parse("s3://bucket/a").unwrap();
+        let b = Url::parse("s3://bucket/b").unwrap();
+        let initial = credentials(Some("http://b:9000"));
+        stores
+            .install(&session, &b, "b", initial, fetch.clone())
+            .unwrap();
+        let initial = credentials(Some("http://a:9000"));
+        stores
+            .install(&session, &a, "a", initial, fetch.clone())
+            .unwrap();
+        assert_eq!(
+            *created.lock().unwrap(),
+            [
+                (b.to_string(), Some("http://b:9000".to_string())),
+                (a.to_string(), Some("http://a:9000".to_string())),
+            ]
+        );
+        let fetch_of_a = fetch_of_store.lock().unwrap().clone().unwrap();
+        assert!(fetch_of_a(StorageAccess::Read).await.is_ok());
+        assert!(stores.contains(&a, "a"));
+
+        // The catalog issues a credential for another storage, or for AWS S3. The object
+        // store does not get it, and the table gets other object stores when it is
+        // next used.
+        for (changed, endpoint) in [(Some("http://c:9000"), Some("http://c:9000")), (None, None)] {
+            *issued.lock().unwrap() = changed;
+            let error = fetch_of_a(StorageAccess::Read).await.unwrap_err();
+            assert!(error.contains("another storage"), "{error}");
+            assert!(!error.contains("key-value"), "{error}");
+            assert!(!stores.contains(&a, "a"));
+            assert!(stores.contains(&b, "b"));
+            stores
+                .install(&session, &a, "a", credentials(changed), fetch.clone())
+                .unwrap();
+            assert!(stores.contains(&a, "a"));
+            assert_eq!(
+                created.lock().unwrap().last().unwrap(),
+                &(a.to_string(), endpoint.map(|x| x.to_string()))
+            );
+        }
     }
 }

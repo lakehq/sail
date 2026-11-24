@@ -27,8 +27,9 @@ use sail_common_datafusion::catalog::delta::{
     DeltaDomainMetadataInfo, DeltaMetadataInfo, DeltaProtocolInfo,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, DatabaseStatus, LakehouseOperation, StorageAccess, StorageCredential,
-    TableColumnStatus, TableKind, TableStatus, TableStorageCredentials, identity_partition_fields,
+    CommitAuthority, DatabaseStatus, LakehouseOperation, S3Endpoint, StorageAccess,
+    StorageCredential, TableColumnStatus, TableKind, TableStatus, TableStorageCredentials,
+    identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
@@ -2459,19 +2460,24 @@ fn storage_location_key(location: &str) -> &str {
     location.trim_end_matches('/')
 }
 
-/// The key of a storage credential for an S3-compatible storage endpoint,
-/// which the client does not support. The storage location of a credential with this key
-/// is not accessed, since the client must not use the credential and must not send its
-/// requests to AWS S3.
+/// The keys of a storage credential for an S3-compatible storage: the endpoint of the
+/// storage, and the region that the requests are signed with. The keys are experimental
+/// and are not in the specification of the released servers. A credential with the
+/// endpoint is never used for AWS S3. The credential has the endpoint and the region only
+/// when the client is to use its own keys, and its expiration time is not the time when
+/// the keys expire unless it has a session token.
+///
+/// See: <https://github.com/unitycatalog/unitycatalog/blob/d5b5b0de3d84688332619d561e4daa4d031356b7/api/delta.yaml#L614-L648>
 const S3_ENDPOINT_STORAGE_CREDENTIAL_KEY: &str = "s3.endpoint";
+const S3_REGION_STORAGE_CREDENTIAL_KEY: &str = "client.region";
 
 /// Selects the credential with the longest prefix that covers the storage location
 /// among the credentials issued for the access, preferring a credential issued for
 /// exactly the access. A credential for reading and writing can be used for reading,
 /// and a credential without an operation is assumed to be issued for the access.
 /// Returns nothing if no credential that the client can use covers the location.
-/// Fails if the selected credential is for a storage endpoint that the client does not
-/// support, so that the location is not accessed with other credentials.
+/// Fails if the selected credential is for an S3-compatible storage and is not valid, so
+/// that the location is not accessed with other credentials or in AWS S3.
 fn select_storage_credentials(
     response: delta_gen::DeltaCredentialsResponse,
     location: &str,
@@ -2507,21 +2513,39 @@ fn select_storage_credentials(
             };
             let length = prefix.len();
             let mut config = item.config?;
-            if config
-                .get(S3_ENDPOINT_STORAGE_CREDENTIAL_KEY)
-                .is_some_and(|x| x.is_some())
-            {
-                return Some(((length, exact), None));
-            }
             let mut take = |key: &str| config.remove(key).flatten().filter(|x| !x.is_empty());
-            let credential = if let Some(access_key_id) = take("s3.access-key-id")
-                && let Some(secret_access_key) = take("s3.secret-access-key")
-            {
+            let endpoint = take(S3_ENDPOINT_STORAGE_CREDENTIAL_KEY).map(|url| S3Endpoint {
+                url,
+                region: take(S3_REGION_STORAGE_CREDENTIAL_KEY),
+            });
+            let keys = (take("s3.access-key-id"), take("s3.secret-access-key"));
+            let session_token = take("s3.session-token");
+            if let Some(endpoint) = &endpoint {
+                let valid = reqwest::Url::parse(&endpoint.url)
+                    .is_ok_and(|x| matches!(x.scheme(), "http" | "https") && x.has_host());
+                let complete = match keys {
+                    (Some(_), Some(_)) => true,
+                    (None, None) => session_token.is_none(),
+                    _ => false,
+                };
+                if !valid || !complete {
+                    return Some(((length, exact), None));
+                }
+            }
+            let mut expires_at_ms = item.expiration_time_ms;
+            if endpoint.is_some() && session_token.is_none() {
+                // The time is when to ask again, which is done regularly without it.
+                expires_at_ms = None;
+            }
+            let credential = if let (Some(access_key_id), Some(secret_access_key)) = keys {
                 StorageCredential::S3 {
                     access_key_id,
                     secret_access_key,
-                    session_token: take("s3.session-token"),
+                    session_token,
+                    endpoint,
                 }
+            } else if let Some(endpoint) = endpoint {
+                StorageCredential::S3Environment { endpoint }
             } else if let Some(token) = take("azure.sas-token") {
                 StorageCredential::AzureSas { token }
             } else {
@@ -2533,7 +2557,7 @@ fn select_storage_credentials(
                 (length, exact),
                 Some(TableStorageCredentials {
                     credential,
-                    expires_at_ms: item.expiration_time_ms,
+                    expires_at_ms,
                     access: if granted_write {
                         StorageAccess::ReadWrite
                     } else {
@@ -2546,8 +2570,8 @@ fn select_storage_credentials(
     match selected {
         Some((_, None)) => Err(CatalogError::NotSupported(format!(
             "Unity Catalog issued a storage credential for {location} with the key \
-             {S3_ENDPOINT_STORAGE_CREDENTIAL_KEY} for an S3-compatible storage endpoint, \
-             which is not supported"
+             {S3_ENDPOINT_STORAGE_CREDENTIAL_KEY} for an S3-compatible storage, whose endpoint \
+             is not an HTTP URL or whose keys are incomplete"
         ))),
         Some((_, credentials)) => Ok(credentials),
         // The server issued credentials, but not for the location, so the answer is not
@@ -7638,6 +7662,7 @@ mod tests {
                     access_key_id: "table-key".to_string(),
                     secret_access_key: "table-secret".to_string(),
                     session_token: Some("table-token".to_string()),
+                    endpoint: None,
                 },
                 expires_at_ms: Some(1_800_000_000_000),
                 access: sail_common_datafusion::catalog::StorageAccess::Read,
@@ -7656,6 +7681,7 @@ mod tests {
                     access_key_id: "key".to_string(),
                     secret_access_key: "secret".to_string(),
                     session_token: None,
+                    endpoint: None,
                 },
             ),
             // The region alone does not mark an S3-compatible storage.
@@ -7668,6 +7694,7 @@ mod tests {
                     access_key_id: "key".to_string(),
                     secret_access_key: "secret".to_string(),
                     session_token: Some("token".to_string()),
+                    endpoint: None,
                 },
             ),
             (
@@ -7750,15 +7777,25 @@ mod tests {
                 "{result:?}"
             );
         }
-        // The credential for the location is for an S3-compatible storage endpoint, with
-        // keys or with the keys of the client. The request fails, so that the location is
-        // not accessed with the credentials of the environment, whose requests go to AWS S3.
+        // The credential for the location is for an S3-compatible storage, and its
+        // endpoint is not an HTTP URL, or it has a part of the keys only. The request fails,
+        // so that the location is not accessed with the credentials of the environment,
+        // whose requests go to AWS S3.
         for config in [
             serde_json::json!({
                 "s3.access-key-id": "key", "s3.secret-access-key": "secret",
-                "s3.endpoint": "https://minio.example.com:9000", "client.region": "us-east-1"
+                "s3.endpoint": "minio.example.com:9000"
             }),
-            serde_json::json!({"s3.endpoint": "https://minio.example.com:9000"}),
+            serde_json::json!({"s3.endpoint": "s3://bucket"}),
+            serde_json::json!({
+                "s3.access-key-id": "key", "s3.endpoint": "https://minio.example.com:9000"
+            }),
+            serde_json::json!({
+                "s3.secret-access-key": "secret", "s3.endpoint": "https://minio.example.com:9000"
+            }),
+            serde_json::json!({
+                "s3.session-token": "secret", "s3.endpoint": "https://minio.example.com:9000"
+            }),
         ] {
             let response = serde_json::json!({"storage-credentials": [
                 {"prefix": "s3://bucket", "operation": "READ", "config": {
@@ -7777,6 +7814,88 @@ mod tests {
             let message = error.to_string();
             assert!(message.contains("s3.endpoint"), "{message}");
             assert!(!message.contains("secret"), "{message}");
+        }
+    }
+
+    /// A credential for an S3-compatible storage has the endpoint and the region of the
+    /// storage, with a session, with a key pair, or without keys. Its expiration time is
+    /// kept for a session only, since it is the time to ask again otherwise.
+    #[tokio::test]
+    async fn test_table_storage_credentials_for_s3_compatible_storage() {
+        let endpoint = |url: &str, region: Option<&str>| S3Endpoint {
+            url: url.to_string(),
+            region: region.map(|x| x.to_string()),
+        };
+        let keys = |session_token: Option<&str>, endpoint| StorageCredential::S3 {
+            access_key_id: "key".to_string(),
+            secret_access_key: "secret".to_string(),
+            session_token: session_token.map(|x| x.to_string()),
+            endpoint: Some(endpoint),
+        };
+        for (config, expected, expires_at_ms) in [
+            (
+                serde_json::json!({
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret",
+                    "s3.session-token": "token",
+                    "s3.endpoint": "https://minio.example.com:9000", "client.region": "eu-west-1"
+                }),
+                keys(
+                    Some("token"),
+                    endpoint("https://minio.example.com:9000", Some("eu-west-1")),
+                ),
+                Some(1_800_000_000_000),
+            ),
+            (
+                serde_json::json!({
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret",
+                    "s3.endpoint": "http://10.0.0.1:9000", "client.region": "us-east-1"
+                }),
+                keys(None, endpoint("http://10.0.0.1:9000", Some("us-east-1"))),
+                None,
+            ),
+            (
+                serde_json::json!({
+                    "s3.endpoint": "https://minio.example.com:9000", "client.region": "us-east-1",
+                    "s3.access-key-id": null, "azure.sas-token": null
+                }),
+                StorageCredential::S3Environment {
+                    endpoint: endpoint("https://minio.example.com:9000", Some("us-east-1")),
+                },
+                None,
+            ),
+            (
+                serde_json::json!({"s3.endpoint": "https://minio.example.com:9000"}),
+                StorageCredential::S3Environment {
+                    endpoint: endpoint("https://minio.example.com:9000", None),
+                },
+                None,
+            ),
+        ] {
+            // A credential for AWS S3 that covers the location less is not selected.
+            let response = serde_json::json!({"storage-credentials": [
+                {"prefix": "s3://bucket", "operation": "READ", "config": {
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret"
+                }},
+                {
+                    "prefix": DELTA_TABLE_URI, "operation": "READ",
+                    "expiration-time-ms": 1_800_000_000_000_i64, "config": config
+                },
+            ]});
+            let credentials = table_storage_credentials(
+                "READ",
+                StorageAccess::Read,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(credentials.credential, expected);
+            assert_eq!(credentials.expires_at_ms, expires_at_ms);
+            let debug = format!("{credentials:?}");
+            assert!(
+                !debug.contains("secret") && !debug.contains("token"),
+                "{debug}"
+            );
         }
     }
 
