@@ -480,6 +480,9 @@ struct SessionRoutes {
     routes: HashMap<String, SessionRoute>,
     /// The routes for the workers of the session, until the routes change.
     snapshot: Option<Arc<StorageRoutes>>,
+    /// For a worker, the token of the session whose routes it has. The worker only
+    /// follows the routes that come with this token.
+    token: Option<Arc<[u8]>>,
 }
 
 fn same_token(a: &[u8], b: &[u8]) -> bool {
@@ -1364,7 +1367,11 @@ impl VendedObjectStores {
     /// Accesses the storage locations in the same way as the session of the worker
     /// from now on, with the storage credentials that are fetched from the session
     /// when a location is first read or written, and before they expire.
-    /// Nothing changes if the worker has the routes of this or a later version.
+    ///
+    /// The worker follows the session whose routes it gets first. The routes with
+    /// the token of another session are rejected, so that they cannot stop the worker
+    /// from following its session, and nothing changes if the worker has the routes of
+    /// this or a later version. Rejected routes change nothing.
     pub fn apply_routes(
         &self,
         registry: &dyn ObjectStoreRegistry,
@@ -1373,9 +1380,27 @@ impl VendedObjectStores {
     ) -> DataFusionResult<()> {
         // The lock is held, so that the routes of one version are applied at a time.
         let mut session = self.session();
-        if routes.version <= session.version {
-            return Ok(());
-        }
+        let token = match &session.token {
+            Some(token) if !same_token(token, &routes.token) => {
+                return Err(plan_datafusion_err!(
+                    "the storage routes are not from the session of the worker"
+                ));
+            }
+            Some(_) if routes.version <= session.version => return Ok(()),
+            Some(token) => Arc::clone(token),
+            None => Arc::from(routes.token.as_slice()),
+        };
+        let locations = routes
+            .routes
+            .iter()
+            .map(|route| {
+                let location = Url::parse(&route.location).map_err(|e| {
+                    plan_datafusion_err!("invalid storage location {}: {e}", route.location)
+                })?;
+                let prefix = Self::prefix(&location)?;
+                Ok((location, prefix))
+            })
+            .collect::<DataFusionResult<Vec<_>>>()?;
         let current = |owner: &String, route: &SessionRoute| {
             routes
                 .routes
@@ -1395,15 +1420,10 @@ impl VendedObjectStores {
                 }
             }
         }
-        let token: Arc<[u8]> = Arc::from(routes.token.as_slice());
-        for route in &routes.routes {
+        for (route, (location, prefix)) in routes.routes.iter().zip(locations) {
             if session.routes.contains_key(&route.owner) {
                 continue;
             }
-            let location = Url::parse(&route.location).map_err(|e| {
-                plan_datafusion_err!("invalid storage location {}: {e}", route.location)
-            })?;
-            let prefix = Self::prefix(&location)?;
             let store = self.routing_store(registry, &location, &route.owner)?;
             match &route.not_issued {
                 Some(reason) => store.set_not_issued_route(prefix, &route.owner, reason),
@@ -1483,6 +1503,7 @@ impl VendedObjectStores {
             );
         }
         session.version = routes.version;
+        session.token = Some(token);
         Ok(())
     }
 
@@ -2756,5 +2777,72 @@ mod tests {
             assert!(stores.contains(&other, "c"));
             assert_eq!(stores.session().routes.len(), 2);
         }
+    }
+
+    #[tokio::test]
+    async fn workers_only_follow_the_storage_routes_of_their_session() {
+        let items = Url::parse("memory:///warehouse/items").unwrap();
+        let moved = Url::parse("memory:///warehouse/moved").unwrap();
+        let (catalog, _) = counting_fetch(None);
+        let (session, _) = provider_stores();
+        let session_registry = registry();
+        let install = |location: &Url| {
+            session
+                .install(
+                    &session_registry,
+                    location,
+                    "table",
+                    s3_credentials("k", None),
+                    catalog.clone(),
+                )
+                .unwrap();
+            session.routes().unwrap()
+        };
+        let (worker, _) = provider_stores();
+        let worker_registry = registry();
+        let (fetch, _) = session_fetch(&session);
+        let apply = |routes: &StorageRoutes| worker.apply_routes(&worker_registry, routes, &fetch);
+        let first = install(&items);
+        apply(&first).unwrap();
+
+        // The routes of another session are rejected, whatever their version is.
+        let (other, _) = provider_stores();
+        other
+            .install(
+                &registry(),
+                &moved,
+                "table",
+                s3_credentials("k", None),
+                catalog.clone(),
+            )
+            .unwrap();
+        let mut foreign = other.routes().unwrap().as_ref().clone();
+        for version in [0, 1, 2, u64::MAX] {
+            foreign.version = version;
+            let error = apply(&foreign).unwrap_err().to_string();
+            assert!(error.contains("not from the session"), "{error}");
+            assert!(worker.contains(&items, "table"));
+            assert_eq!(worker.session().version, 1);
+        }
+        // The routes that cannot be applied change nothing.
+        let invalid = StorageRoutes {
+            version: 2,
+            token: first.token.clone(),
+            routes: vec![StorageRoute {
+                location: "warehouse/items".to_string(),
+                owner: "other".to_string(),
+                version: 2,
+                not_issued: None,
+            }],
+        };
+        assert!(apply(&invalid).is_err());
+        assert!(worker.contains(&items, "table"));
+        assert_eq!(worker.session().version, 1);
+
+        // The worker keeps following its session.
+        let second = install(&moved);
+        apply(&second).unwrap();
+        assert!(worker.contains(&moved, "table"));
+        assert_eq!(worker.session().version, 2);
     }
 }
