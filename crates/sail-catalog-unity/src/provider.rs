@@ -2892,6 +2892,54 @@ mod tests {
         );
     }
 
+    /// A request that cannot get its credentials fails with the error of the credentials.
+    #[tokio::test]
+    async fn test_credential_errors_keep_their_kind() {
+        #[derive(Debug)]
+        struct NoCredentials;
+
+        #[async_trait::async_trait]
+        impl CatalogCredentials for NoCredentials {
+            async fn retrieve(&self) -> CatalogResult<Option<String>> {
+                Err(CatalogError::InvalidArgument("no token".to_string()))
+            }
+        }
+
+        let options = UnityCatalogOptions {
+            credentials: Arc::new(NoCredentials),
+            ..empty_options("main")
+        };
+        let provider = UnityCatalogProvider::new("test".to_string(), options).unwrap();
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let errors = [
+            provider.get_database(&database).await.unwrap_err(),
+            provider.list_tables(&database).await.unwrap_err(),
+            provider.get_table(&database, "events").await.unwrap_err(),
+            provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(1, None),
+                )
+                .await
+                .unwrap_err(),
+            provider
+                .commit_delta_table(
+                    &database,
+                    "events",
+                    delta_commit_request(legacy_delta_commit(1)),
+                )
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                matches!(&error, CatalogError::InvalidArgument(message) if message == "no token"),
+                "{error:?}"
+            );
+        }
+    }
+
     fn mock_provider(server: &MockServer, default_catalog: &str) -> UnityCatalogProvider {
         let options = UnityCatalogOptions {
             uri: server.uri(),
