@@ -112,7 +112,7 @@ Unity Catalog rejected the `User-Agent` header that Sail sent. Set the `user_age
 
 ## Storage Credentials
 
-For a Delta table whose commits are managed by the catalog, Sail asks Unity Catalog for temporary storage credentials for the location of the table, and reads and writes the table with these credentials. The credentials are only used in the session that requested them, and Sail requests new credentials before they expire. If the catalog does not issue credentials for a table, Sail accesses the location with the storage credentials of the environment.
+For a managed Delta table, Sail asks Unity Catalog for temporary storage credentials for the location of the table, and reads and writes the table with these credentials. This applies whether or not the commits of the table are managed by the catalog. Sail does not request storage credentials for external tables, or from a server without the Unity Catalog Delta API. The credentials are only used in the session that requested them, and Sail requests new credentials before they expire. If the catalog does not issue credentials for a table, Sail accesses the location with the storage credentials of the environment.
 
 ### Cluster Mode
 
