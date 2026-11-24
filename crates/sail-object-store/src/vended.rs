@@ -476,7 +476,7 @@ struct SessionRoutes {
     /// The number of changes to the routes in the session, or for a worker, the version
     /// of the routes that it has from its session.
     version: u64,
-    /// The routes by owner.
+    /// The routes by owner. A location has the route of one owner.
     routes: HashMap<String, SessionRoute>,
     /// The routes for the workers of the session, until the routes change.
     snapshot: Option<Arc<StorageRoutes>>,
@@ -1056,6 +1056,12 @@ impl VendedObjectStores {
             .map_err(|e| plan_datafusion_err!("invalid storage location {location}: {e}"))
     }
 
+    /// Returns what identifies the path prefix of the storage location among the
+    /// object stores of the session.
+    fn place(location: &Url) -> ((String, String), Option<Path>) {
+        (Self::key(location), Self::prefix(location).ok())
+    }
+
     /// Whether the storage location is accessed with the credentials issued for the owner.
     pub fn contains(&self, location: &Url, owner: &str) -> bool {
         let Ok(prefix) = Self::prefix(location) else {
@@ -1273,13 +1279,20 @@ impl VendedObjectStores {
         self.session.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Remembers the route of the owner for the workers of the session.
+    /// Remembers the route of the owner for the workers of the session, instead of
+    /// the routes of other owners at the same location.
     fn record(&self, owner: &str, route: Option<SessionRoute>) {
         let mut session = self.session();
         let version = session.version + 1;
         let changed = match route {
             Some(route) => {
                 let route = SessionRoute { version, ..route };
+                // The object stores of a location are those of the owner that the
+                // location was last registered for, so the other owners lose the location.
+                let place = Self::place(&route.location);
+                session
+                    .routes
+                    .retain(|_, x| Self::place(&x.location) != place);
                 session.routes.insert(owner.to_string(), route);
                 true
             }
@@ -1310,7 +1323,8 @@ impl VendedObjectStores {
                     not_issued: route.not_issued.clone(),
                 })
                 .collect::<Vec<_>>();
-            routes.sort_by(|a, b| a.owner.cmp(&b.owner));
+            // The routes are in the order in which the session added them.
+            routes.sort_by_key(|route| route.version);
             session.snapshot = Some(Arc::new(StorageRoutes {
                 version: session.version,
                 token: self.token.to_vec(),
@@ -2628,7 +2642,7 @@ mod tests {
             .unwrap();
         let third = session.routes().unwrap();
         assert_eq!((second.version, third.version), (2, 3));
-        assert_eq!(third.routes[0].not_issued.as_deref(), Some("no privilege"));
+        assert_eq!(third.routes[1].not_issued.as_deref(), Some("no privilege"));
         apply(&third);
         assert!(!worker.contains(&items, "table"));
         assert!(worker.contains(&moved, "table"));
@@ -2662,5 +2676,85 @@ mod tests {
         }
         // The credentials are requested when a location is read or written only.
         assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn storage_locations_have_the_routes_of_the_owner_that_got_them_last() {
+        let location = Url::parse("memory:///warehouse/items").unwrap();
+        let same = Url::parse("memory:///warehouse/items/").unwrap();
+        let other = Url::parse("memory:///warehouse/other").unwrap();
+        let (catalog, _) = counting_fetch(None);
+        let (session, _) = provider_stores();
+        let session_registry = registry();
+        let install = |owner: &str, location: &Url| {
+            session
+                .install(
+                    &session_registry,
+                    location,
+                    owner,
+                    s3_credentials("k", None),
+                    catalog.clone(),
+                )
+                .unwrap();
+            session.routes().unwrap()
+        };
+        let owners = |routes: &StorageRoutes| {
+            let owners = routes.routes.iter().map(|x| x.owner.clone());
+            owners.collect::<Vec<_>>()
+        };
+        // A worker that gets the routes of each version, and a worker that only gets
+        // the last routes.
+        let (early, _) = provider_stores();
+        let (late, _) = provider_stores();
+        let (early_registry, late_registry) = (registry(), registry());
+        let (fetch, _) = session_fetch(&session);
+
+        // The same table is used by two names, the second name last.
+        let first = install("b", &location);
+        early.apply_routes(&early_registry, &first, &fetch).unwrap();
+        assert!(early.contains(&location, "b"));
+        let second = install("a", &same);
+        assert_eq!(owners(&second), ["a"]);
+        early
+            .apply_routes(&early_registry, &second, &fetch)
+            .unwrap();
+        late.apply_routes(&late_registry, &second, &fetch).unwrap();
+        for stores in [&session, &early, &late] {
+            assert!(stores.contains(&location, "a"));
+            assert!(!stores.contains(&location, "b"));
+            assert_eq!(stores.session().routes.len(), 1);
+        }
+        // The session has no credentials for the name that lost the location.
+        let request = |owner: &str| StorageCredentialsRequest {
+            token: Arc::from(second.token.as_slice()),
+            owner: owner.to_string(),
+            location: location.to_string(),
+            access: StorageAccess::Read,
+        };
+        assert!(matches!(
+            session.credentials(&request("b")).await,
+            Err(StorageCredentialsError::Unavailable(_))
+        ));
+        let request = StorageCredentialsRequest {
+            location: same.to_string(),
+            ..request("a")
+        };
+        assert!(session.credentials(&request).await.is_ok());
+
+        // The routes are in the order in which the session added them, and the routes
+        // of other locations are kept.
+        install("c", &other);
+        session
+            .install_not_issued(&session_registry, &location, "b", "no privilege")
+            .unwrap();
+        let last = session.routes().unwrap();
+        assert_eq!(owners(&last), ["c", "b"]);
+        early.apply_routes(&early_registry, &last, &fetch).unwrap();
+        late.apply_routes(&late_registry, &last, &fetch).unwrap();
+        for stores in [&session, &early, &late] {
+            assert!(!stores.contains(&location, "a"));
+            assert!(stores.contains(&other, "c"));
+            assert_eq!(stores.session().routes.len(), 2);
+        }
     }
 }
