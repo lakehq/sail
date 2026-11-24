@@ -2928,4 +2928,87 @@ mod tests {
         assert!(matches!(error, object_store::Error::NotFound { .. }));
         assert_eq!(*requests.lock().unwrap(), 3);
     }
+
+    /// The session starts to access a location in another storage, and a worker that
+    /// does not have the route for it yet asks for the credentials of the location.
+    #[tokio::test(start_paused = true)]
+    async fn workers_do_not_use_a_storage_credential_for_another_storage() {
+        use sail_common_datafusion::catalog::S3Endpoint;
+
+        let location = Url::parse("s3://bucket/items").unwrap();
+        let path = Path::from("items/part-0");
+        let credentials = |endpoint: &str| {
+            let mut credentials = s3_credentials("key-value", Some(now_ms() + 60_000));
+            if let StorageCredential::S3 { endpoint: x, .. } = &mut credentials.credential {
+                *x = Some(S3Endpoint {
+                    url: endpoint.to_string(),
+                    region: None,
+                });
+            }
+            credentials
+        };
+        let (session, _) = provider_stores();
+        let session_registry = registry();
+        let install = |endpoint: &'static str| {
+            let catalog: StorageCredentialFetch =
+                Arc::new(move |_| Box::pin(async move { Ok(credentials(endpoint)) }));
+            session
+                .install(
+                    &session_registry,
+                    &location,
+                    "table",
+                    credentials(endpoint),
+                    catalog,
+                )
+                .unwrap();
+            session.routes().unwrap()
+        };
+        // The endpoints of the object stores that the worker creates, and the function
+        // that the last object store fetches its credential with.
+        let created = Arc::new(Mutex::new(Vec::new()));
+        let fetch_of_store = Arc::new(Mutex::new(None));
+        let worker = {
+            let (created, fetch_of_store) = (created.clone(), fetch_of_store.clone());
+            VendedObjectStores::with_factory(Arc::new(move |request| {
+                let endpoint = request.kind.s3_endpoint().map(|x| x.url.clone());
+                created.lock().unwrap().push(endpoint);
+                *fetch_of_store.lock().unwrap() = Some(request.fetch);
+                Ok(Arc::new(InMemory::new()) as Arc<dyn ObjectStore>)
+            }))
+        };
+        let worker_registry = registry();
+        let (fetch, _) = session_fetch(&session);
+        let read = || async {
+            let store = worker_registry.get_store(&location).unwrap();
+            let _ = store.get(&path).await;
+        };
+
+        worker
+            .apply_routes(&worker_registry, &install("http://a:9000"), &fetch)
+            .unwrap();
+        read().await;
+        let fetch_of_a = fetch_of_store.lock().unwrap().clone().unwrap();
+        assert!(fetch_of_a(StorageAccess::Read).await.is_ok());
+
+        // The object store of the worker asks for a new credential before the worker
+        // has the new route, and does not get the credential for the other storage.
+        let routes = install("http://b:9000");
+        age(REFRESH_INTERVAL).await;
+        let error = fetch_of_a(StorageAccess::Read).await.unwrap_err();
+        assert!(error.contains("another storage"), "{error}");
+        assert!(!error.contains("key-value"), "{error}");
+
+        // The worker creates an object store for the other storage with the new route.
+        worker
+            .apply_routes(&worker_registry, &routes, &fetch)
+            .unwrap();
+        read().await;
+        assert_eq!(
+            *created.lock().unwrap(),
+            [
+                Some("http://a:9000".to_string()),
+                Some("http://b:9000".to_string())
+            ]
+        );
+    }
 }
