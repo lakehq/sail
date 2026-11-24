@@ -728,8 +728,7 @@ where
     }
 
     // The catalog returns the ratified commits that are not published yet, and the log replay
-    // reads every other version from the published log. The snapshot falls back to the staged
-    // commit of a version only when the replay of the published log fails.
+    // reads every other version from the published log.
     let by_version = commits
         .into_iter()
         .filter(|commit| commit.version >= 1 && commit.version <= effective_end_version)
@@ -2488,22 +2487,29 @@ mod catalog_managed_tests {
     }
 
     #[tokio::test]
-    async fn catalog_managed_table_reads_staged_commit_dropped_by_catalog() {
-        // A backfilled version is no longer returned by the catalog. Its only staged commit
-        // is used in place of the published commit.
-        let files = vec![
-            (published_commit(1), CORRUPTED_COMMIT),
-            (staged_commit(1, "a"), EMPTY_COMMIT),
-            (staged_commit(2, "b"), EMPTY_COMMIT),
-        ];
-        let (_, result) = read_unity_managed_table_with_log(
-            CATALOG_MANAGED_PROTOCOL,
-            files,
-            true,
-            Some(ratified(2, &[(2, "b")])),
-        )
-        .await;
-        assert_eq!(result.unwrap(), 2);
+    async fn catalog_managed_table_does_not_read_staged_commit_not_returned_by_catalog() {
+        // The catalog does not return version 1, so its staged commit is not known to be
+        // ratified. It is not read in place of a published commit that is unreadable or
+        // missing.
+        for published in [Some(CORRUPTED_COMMIT), None] {
+            let mut files = vec![
+                (staged_commit(1, "a"), EMPTY_COMMIT),
+                (staged_commit(2, "b"), EMPTY_COMMIT),
+            ];
+            files.extend(published.map(|content| (published_commit(1), content)));
+            let (_, result) = read_unity_managed_table_with_log(
+                CATALOG_MANAGED_PROTOCOL,
+                files,
+                true,
+                Some(ratified(2, &[(2, "b")])),
+            )
+            .await;
+            let error = result.unwrap_err().to_string();
+            match published {
+                Some(_) => assert!(error.contains("Invalid JSON in log record"), "{error}"),
+                None => assert!(error.contains("version 1"), "{error}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -2543,53 +2549,6 @@ mod catalog_managed_tests {
             .await;
             assert_eq!(result.unwrap(), 1);
         }
-    }
-
-    #[tokio::test]
-    async fn catalog_managed_table_reads_staged_commit_without_published_commit() {
-        let files = vec![
-            (staged_commit(1, "a"), EMPTY_COMMIT),
-            (staged_commit(2, "b"), EMPTY_COMMIT),
-        ];
-        let (_, result) = read_unity_managed_table_with_log(
-            CATALOG_MANAGED_PROTOCOL,
-            files,
-            true,
-            Some(ratified(2, &[(2, "b")])),
-        )
-        .await;
-        assert_eq!(result.unwrap(), 2);
-    }
-
-    #[tokio::test]
-    async fn catalog_managed_table_with_many_staged_commits_reads_published_commits() {
-        // Every version has a staged commit. The staged commits of the versions 1 to 39 are
-        // unreadable and must not be used, the published commit of version 40 is unreadable,
-        // and the published commit of version 41 is missing.
-        let mut files = Vec::new();
-        for version in 1..=41 {
-            match version {
-                40 => {
-                    files.push((published_commit(version), CORRUPTED_COMMIT));
-                    files.push((staged_commit(version, "a"), EMPTY_COMMIT));
-                }
-                41 => files.push((staged_commit(version, "a"), EMPTY_COMMIT)),
-                _ => {
-                    files.push((published_commit(version), EMPTY_COMMIT));
-                    files.push((staged_commit(version, "a"), CORRUPTED_COMMIT));
-                }
-            }
-        }
-        files.push((staged_commit(42, "a"), EMPTY_COMMIT));
-        let (commit_requests, result) = read_unity_managed_table_with_log(
-            CATALOG_MANAGED_PROTOCOL,
-            files,
-            true,
-            Some(ratified(42, &[(42, "a")])),
-        )
-        .await;
-        assert_eq!(result.unwrap(), 42);
-        assert_eq!(commit_requests, 1);
     }
 
     async fn staged_commit_exists_after_catalog_error(error: fn() -> CatalogError) -> bool {
@@ -3663,138 +3622,6 @@ mod catalog_managed_tests {
         assert!(error.contains("429"), "{error}");
         assert!(error.contains("of version 1"), "{error}");
         assert!(error.contains(&published), "{error}");
-    }
-
-    /// Returns a store with the published version 0 of a catalog-managed table and the files
-    /// of its log, and the log store of the table.
-    async fn observed_log_store(
-        log_files: Vec<(String, &str)>,
-    ) -> (
-        Arc<crate::test_store::ObservedStore>,
-        crate::delta_log::LogStoreRef,
-    ) {
-        use crate::delta_log::{StorageConfig, default_logstore};
-
-        let version_0 = Path::from(format!("_delta_log/{}", published_commit(0)));
-        let source = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
-        let version_0_bytes = source
-            .get(&Path::from(format!("items/{version_0}")))
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        let store = Arc::new(crate::test_store::ObservedStore::default());
-        store.put(&version_0, version_0_bytes.into()).await.unwrap();
-        for (file, content) in log_files {
-            store
-                .put(
-                    &Path::from(format!("_delta_log/{file}")),
-                    content.to_string().into(),
-                )
-                .await
-                .unwrap();
-        }
-        let object_store = store.clone() as Arc<dyn ObjectStore>;
-        let log_store = default_logstore(
-            object_store.clone(),
-            object_store,
-            &Url::parse("memory:///").unwrap(),
-            &StorageConfig,
-        );
-        (store, log_store)
-    }
-
-    /// Loads the snapshot of a catalog-managed table with the catalog commits.
-    async fn load_catalog_managed_snapshot(
-        log_store: &crate::delta_log::LogStoreRef,
-        latest_table_version: i64,
-        commits: &[(i64, &str)],
-        version: Option<i64>,
-    ) -> crate::spec::DeltaResult<i64> {
-        use crate::snapshot::{
-            CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
-        };
-        let config = DeltaSnapshotConfig {
-            require_files: false,
-            catalog_managed_commits: Some(CatalogManagedCommitSet {
-                latest_table_version,
-                commits: commits
-                    .iter()
-                    .map(|(version, id)| CatalogManagedCommitFile {
-                        version: *version,
-                        file_name: format!("{version:020}.{id}.json"),
-                    })
-                    .collect(),
-            }),
-            ..Default::default()
-        };
-        crate::table::DeltaSnapshot::try_new(log_store.as_ref(), config, version, None)
-            .await
-            .map(|snapshot| snapshot.version())
-    }
-
-    fn lists_staged_commits(store: &crate::test_store::ObservedStore) -> usize {
-        store
-            .lists()
-            .iter()
-            .filter(|prefix| prefix.starts_with("_delta_log/_staged_commits"))
-            .count()
-    }
-
-    #[tokio::test]
-    async fn staged_commit_after_the_latest_catalog_version_is_not_read() {
-        // A legacy catalog has the latest version -1 before the first commit through it, so
-        // the staged commit of version 1 is not ratified.
-        let (_, log_store) = observed_log_store(vec![(staged_commit(1, "a"), EMPTY_COMMIT)]).await;
-        let result = load_catalog_managed_snapshot(&log_store, -1, &[], Some(1)).await;
-        assert!(result.is_err(), "{result:?}");
-
-        // Version 1 is ratified and backfilled, and the staged commit of version 2 is not
-        // ratified.
-        let (_, log_store) = observed_log_store(vec![
-            (staged_commit(1, "a"), EMPTY_COMMIT),
-            (staged_commit(2, "b"), EMPTY_COMMIT),
-        ])
-        .await;
-        let result = load_catalog_managed_snapshot(&log_store, 1, &[], Some(2)).await;
-        assert!(result.is_err(), "{result:?}");
-        let result = load_catalog_managed_snapshot(&log_store, 1, &[], None).await;
-        assert_eq!(result.unwrap(), 1);
-    }
-
-    #[tokio::test]
-    async fn staged_commits_are_listed_only_when_a_published_commit_is_missing() {
-        let (store, log_store) = observed_log_store(vec![
-            (published_commit(1), EMPTY_COMMIT),
-            (staged_commit(1, "a"), EMPTY_COMMIT),
-            (staged_commit(2, "b"), EMPTY_COMMIT),
-        ])
-        .await;
-        let result = load_catalog_managed_snapshot(&log_store, 1, &[], None).await;
-        assert_eq!(result.unwrap(), 1);
-        assert_eq!(lists_staged_commits(&store), 0);
-
-        // The published commit of version 2 is missing.
-        let result = load_catalog_managed_snapshot(&log_store, 2, &[], None).await;
-        assert_eq!(result.unwrap(), 2);
-        assert_eq!(lists_staged_commits(&store), 1);
-    }
-
-    #[tokio::test]
-    async fn staged_commit_is_not_read_after_a_storage_error() {
-        let (store, log_store) = observed_log_store(vec![
-            (published_commit(1), EMPTY_COMMIT),
-            (staged_commit(1, "a"), EMPTY_COMMIT),
-        ])
-        .await;
-        store.fail_lookups(Path::from(format!("_delta_log/{}", published_commit(1))));
-        let error = load_catalog_managed_snapshot(&log_store, 1, &[], None)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("503 Service Unavailable"), "{error}");
-        assert_eq!(lists_staged_commits(&store), 0);
     }
 
     /// Alters a Unity managed table that is published at version 1, with the protocol and

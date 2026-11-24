@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! An in-memory object store for tests that records the listings and reads, fails lookups of
+//! An in-memory object store for tests that records the reads, fails lookups of
 //! chosen paths, can list keys out of order, and can let another writer write a path first.
 
 use std::collections::{HashMap, HashSet};
@@ -22,7 +22,6 @@ use object_store::{
 #[derive(Debug, Default)]
 pub(crate) struct ObservedStore {
     inner: InMemory,
-    lists: Mutex<Vec<String>>,
     gets: Mutex<Vec<Path>>,
     failing_lookups: Mutex<HashSet<Path>>,
     reverse_listings: AtomicBool,
@@ -30,12 +29,6 @@ pub(crate) struct ObservedStore {
 }
 
 impl ObservedStore {
-    /// Returns the prefixes of the listings so far.
-    #[expect(clippy::unwrap_used)]
-    pub(crate) fn lists(&self) -> Vec<String> {
-        self.lists.lock().unwrap().clone()
-    }
-
     /// Returns the paths of the reads so far.
     #[expect(clippy::unwrap_used)]
     pub(crate) fn gets(&self) -> Vec<Path> {
@@ -58,12 +51,6 @@ impl ObservedStore {
     #[expect(clippy::unwrap_used)]
     pub(crate) fn write_first(&self, path: Path, bytes: Bytes) {
         self.racing_writes.lock().unwrap().insert(path, bytes);
-    }
-
-    #[expect(clippy::unwrap_used)]
-    fn record_list(&self, prefix: Option<&Path>) {
-        let prefix = prefix.map(|prefix| prefix.to_string()).unwrap_or_default();
-        self.lists.lock().unwrap().push(prefix);
     }
 
     fn ordered(
@@ -137,7 +124,6 @@ impl ObjectStore for ObservedStore {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.record_list(prefix);
         self.ordered(self.inner.list(prefix))
     }
 
@@ -146,12 +132,10 @@ impl ObjectStore for ObservedStore {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.record_list(prefix);
         self.ordered(self.inner.list_with_offset(prefix, offset))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.record_list(prefix);
         self.inner.list_with_delimiter(prefix).await
     }
 
