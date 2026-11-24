@@ -638,6 +638,46 @@ Feature: Unity Catalog managed Delta table operations
     Then Unity Catalog table unity_table_test.managed_delta_delete_t is a managed Delta table
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_t version 2 references staged Delta commit in location
 
+  Scenario: TRUNCATE on managed Delta table is coordinated by Unity Catalog
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_truncate_t (
+        id INT,
+        name STRING
+      )
+      USING delta
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_truncate_t VALUES
+        (1, 'one'),
+        (2, 'two')
+      """
+    Given statement
+      """
+      TRUNCATE TABLE unity_table_test.managed_delta_truncate_t
+      """
+    Given variable location for table unity_table_test.managed_delta_truncate_t
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_truncate_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+    Then Unity Catalog table unity_table_test.managed_delta_truncate_t is a managed Delta table
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_truncate_t version 2 references staged Delta commit in location
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_truncate_t VALUES (3, 'three')
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_truncate_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 3  | three |
+
   Scenario: UPDATE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """
