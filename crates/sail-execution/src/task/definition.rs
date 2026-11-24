@@ -86,6 +86,10 @@ pub enum TaskOutputDistribution {
     RoundRobinRow {
         channels: usize,
     },
+    /// Each row names its channel in its last column, which is not written.
+    Channel {
+        channels: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -474,6 +478,13 @@ impl From<TaskOutputDistribution> for r#gen::TaskOutputDistribution {
                     },
                 )
             }
+            TaskOutputDistribution::Channel { channels } => {
+                r#gen::task_output_distribution::Kind::Channel(
+                    r#gen::TaskOutputChannelDistribution {
+                        channels: channels as u64,
+                    },
+                )
+            }
         };
         r#gen::TaskOutputDistribution { kind: Some(kind) }
     }
@@ -507,6 +518,11 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
             Some(r#gen::task_output_distribution::Kind::RoundRobinRow(
                 r#gen::TaskOutputRoundRobinRowDistribution { channels },
             )) => Ok(TaskOutputDistribution::RoundRobinRow {
+                channels: channels as usize,
+            }),
+            Some(r#gen::task_output_distribution::Kind::Channel(
+                r#gen::TaskOutputChannelDistribution { channels },
+            )) => Ok(TaskOutputDistribution::Channel {
                 channels: channels as usize,
             }),
             None => Err(ExecutionError::InvalidArgument(
@@ -559,6 +575,7 @@ impl TaskOutput {
             TaskOutputDistribution::Range { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinBatch { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
+            TaskOutputDistribution::Channel { channels } => channels,
         }
     }
 
@@ -607,6 +624,9 @@ impl TaskOutput {
             }
             TaskOutputDistribution::RoundRobinRow { channels } => {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
+            }
+            TaskOutputDistribution::Channel { channels } => {
+                Ok(ShufflePartitioning::Channel(*channels))
             }
         }
     }

@@ -324,6 +324,9 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec};
+use sail_physical_plan::range_split::{
+    RangeChannelExec, RangeResampleExec, RangeSampleOptions, RangeSplitPointsExec,
+};
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
@@ -1607,6 +1610,52 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                 usize::try_from(sample_size).map_err(|e| plan_datafusion_err!("{e}"))?,
             )?)),
+            NodeKind::RangeSplitPoints(r#gen::RangeSplitPointsExecNode {
+                sample,
+                resample,
+                options,
+            }) => Ok(Arc::new(RangeSplitPointsExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &sample)?,
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &resample)?,
+                decode_range_sample_options(options)?,
+            )?)),
+            NodeKind::RangeResample(r#gen::RangeResampleExecNode {
+                input,
+                sample,
+                options,
+            }) => Ok(Arc::new(RangeResampleExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &sample)?,
+                decode_range_sample_options(options)?,
+            )?)),
+            NodeKind::RangeChannel(r#gen::RangeChannelExecNode {
+                input,
+                split_points,
+                ordering,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let split_points = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &split_points,
+                )?;
+                let ordering = ordering.ok_or_else(|| {
+                    plan_datafusion_err!("RangeChannelExec is missing its ordering")
+                })?;
+                let ordering = self.try_decode_lex_ordering(
+                    &ordering,
+                    input.schema().as_ref(),
+                    ctx,
+                    proto_converter,
+                )?;
+                Ok(Arc::new(RangeChannelExec::try_new(
+                    input,
+                    split_points,
+                    ordering,
+                )?))
+            }
             NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
                 input,
                 columns,
@@ -3267,6 +3316,50 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::RangePartitionSample(r#gen::RangePartitionSampleExecNode {
                 input,
                 sample_size: sample.sample_size() as u64,
+            })
+        } else if let Some(split_points) = node.downcast_ref::<RangeSplitPointsExec>() {
+            NodeKind::RangeSplitPoints(r#gen::RangeSplitPointsExecNode {
+                sample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    split_points.sample().clone(),
+                )?,
+                resample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    split_points.resample().clone(),
+                )?,
+                options: Some(encode_range_sample_options(split_points.options())),
+            })
+        } else if let Some(resample) = node.downcast_ref::<RangeResampleExec>() {
+            NodeKind::RangeResample(r#gen::RangeResampleExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    resample.input().clone(),
+                )?,
+                sample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    resample.sample().clone(),
+                )?,
+                options: Some(encode_range_sample_options(resample.options())),
+            })
+        } else if let Some(channel) = node.downcast_ref::<RangeChannelExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                channel.input().clone(),
+            )?;
+            let split_points = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                channel.split_points().clone(),
+            )?;
+            NodeKind::RangeChannel(r#gen::RangeChannelExecNode {
+                input,
+                split_points,
+                ordering: Some(self.try_encode_lex_ordering(channel.ordering(), proto_converter)?),
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -6671,6 +6764,45 @@ impl RemoteExecutionCodec {
     }
 }
 
+fn encode_range_sample_options(options: &RangeSampleOptions) -> r#gen::RangeSampleOptions {
+    r#gen::RangeSampleOptions {
+        sort_options: options
+            .sort_options
+            .iter()
+            .map(|x| r#gen::SortOptions {
+                descending: x.descending,
+                nulls_first: x.nulls_first,
+            })
+            .collect(),
+        num_partitions: options.num_partitions as u64,
+        sample_size: options.sample_size,
+        partition_sample_size: options.partition_sample_size as u64,
+    }
+}
+
+fn decode_range_sample_options(
+    options: Option<r#gen::RangeSampleOptions>,
+) -> Result<RangeSampleOptions> {
+    let Some(options) = options else {
+        return plan_err!("range sample options are missing");
+    };
+    Ok(RangeSampleOptions {
+        sort_options: options
+            .sort_options
+            .into_iter()
+            .map(|x| SortOptions {
+                descending: x.descending,
+                nulls_first: x.nulls_first,
+            })
+            .collect(),
+        num_partitions: usize::try_from(options.num_partitions)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+        sample_size: options.sample_size,
+        partition_sample_size: usize::try_from(options.partition_sample_size)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
@@ -10045,6 +10177,65 @@ mod tests {
         assert_eq!(decoded.fraction(), 0.25);
         assert_eq!(decoded.partitions(), &[1, 3]);
         assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_split_points_and_channel_round_trip() -> Result<()> {
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::expressions::Column;
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let sample: Arc<dyn ExecutionPlan> =
+            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 30)?);
+        let sample_options = RangeSampleOptions {
+            sort_options: vec![options],
+            num_partitions: 5,
+            sample_size: 100.0,
+            partition_sample_size: 30,
+        };
+        let resample = Arc::new(RangeResampleExec::try_new(
+            Arc::clone(&input),
+            Arc::clone(&sample),
+            sample_options.clone(),
+        )?);
+        let split_points = Arc::new(RangeSplitPointsExec::try_new(
+            sample,
+            resample,
+            sample_options.clone(),
+        )?);
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("key", 0)),
+            options,
+        )])
+        .ok_or_else(|| plan_datafusion_err!("expected an ordering"))?;
+        let plan = RangeChannelExec::try_new(input, split_points, ordering.clone())?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan.clone()))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RangeChannelExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range channel"))?;
+        assert_eq!(decoded.ordering(), &ordering);
+        assert_eq!(decoded.schema(), plan.schema());
+        let split_points = decoded
+            .split_points()
+            .downcast_ref::<RangeSplitPointsExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range split points"))?;
+        assert_eq!(split_points.options(), &sample_options);
+        let resample = split_points
+            .resample()
+            .downcast_ref::<RangeResampleExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range resample"))?;
+        assert_eq!(resample.options(), &sample_options);
         Ok(())
     }
 

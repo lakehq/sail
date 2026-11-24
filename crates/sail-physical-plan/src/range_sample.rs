@@ -302,32 +302,45 @@ impl ExecutionPlan for RangePartitionResampleExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let schema = self.schema();
-        if !self.partitions.contains(&partition) {
-            let input = self.input.execute(partition, context)?;
-            let output = futures::stream::once(async move {
-                input.try_for_each(|_| futures::future::ready(Ok(()))).await
-            })
-            .try_filter_map(|()| futures::future::ready(Ok(None)));
-            return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)));
-        }
-        let fraction = self.fraction;
-        // The seed only needs to keep the sample the same across runs on the same input.
-        // It differs from the seed of the first sample, so the two samples are independent.
-        let mut rng = StdRng::seed_from_u64(!(partition as u64));
-        let output = self
-            .input
-            .execute(partition, context)?
-            .map(move |batch| {
-                let batch = batch?;
-                let keep = (0..batch.num_rows())
-                    .map(|_| rng.random::<f64>() < fraction)
-                    .collect::<BooleanArray>();
-                compact_record_batch(filter_record_batch(&batch, &keep)?)
-            })
-            .try_filter(|batch| futures::future::ready(batch.num_rows() > 0));
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
+        Ok(resample_partition(
+            self.input.execute(partition, context)?,
+            partition,
+            self.fraction,
+            self.partitions.contains(&partition),
+        ))
     }
+}
+
+/// Samples each row of one input partition with probability `fraction` if `resample`
+/// is set. Otherwise the partition reads its input to the end and emits nothing
+/// (see [`RangePartitionResampleExec`]).
+pub(crate) fn resample_partition(
+    input: SendableRecordBatchStream,
+    partition: usize,
+    fraction: f64,
+    resample: bool,
+) -> SendableRecordBatchStream {
+    let schema = input.schema();
+    if !resample {
+        let output = futures::stream::once(async move {
+            input.try_for_each(|_| futures::future::ready(Ok(()))).await
+        })
+        .try_filter_map(|()| futures::future::ready(Ok(None)));
+        return Box::pin(RecordBatchStreamAdapter::new(schema, output));
+    }
+    // The seed only needs to keep the sample the same across runs on the same input.
+    // It differs from the seed of the first sample, so the two samples are independent.
+    let mut rng = StdRng::seed_from_u64(!(partition as u64));
+    let output = input
+        .map(move |batch| {
+            let batch = batch?;
+            let keep = (0..batch.num_rows())
+                .map(|_| rng.random::<f64>() < fraction)
+                .collect::<BooleanArray>();
+            compact_record_batch(filter_record_batch(&batch, &keep)?)
+        })
+        .try_filter(|batch| futures::future::ready(batch.num_rows() > 0));
+    Box::pin(RecordBatchStreamAdapter::new(schema, output))
 }
 
 /// The rows kept by reservoir sampling.

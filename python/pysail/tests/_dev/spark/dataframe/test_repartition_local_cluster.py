@@ -2,10 +2,12 @@
 
 """`repartitionByRange` on cluster workers.
 
-The split points come from a sample job that runs on the workers, and the range
-partitioning crosses the distributed codec. The expected partitions match JVM Spark,
+The split points come from sample stages of the same job as the shuffle, which run
+on the workers, and the range channels cross the distributed codec. The expected partitions match JVM Spark,
 where the sample covers every row.
 """
+
+from collections import Counter
 
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -72,7 +74,8 @@ def test_range_repartition_explains_the_distributed_plan(local_cluster_spark):
     # Sail prints the distributed plan in the codegen mode.
     plan = local_cluster_spark.range(12).repartitionByRange(3, "id")._explain_string(mode="codegen")  # noqa: SLF001
     assert "Distributed plan error" not in plan, plan
-    assert "split points sampled at execution, channels=3" in plan, plan
+    assert "RangeSplitPointsExec" in plan, plan
+    assert "distribution=Channel(channels=3)" in plan, plan
 
 
 def test_range_repartition_inside_scalar_subquery(local_cluster_spark):
@@ -99,3 +102,16 @@ def test_range_repartition_keeps_each_key_in_one_partition(local_cluster_spark):
     source = local_cluster_spark.range(0, 12, 1, 2).withColumn("key", F.col("id") % 3)
     rows = source.repartitionByRange(10, "key").select("key", F.spark_partition_id().alias("pid")).collect()
     assert {(row.key, row.pid) for row in rows} == {(0, 0), (1, 1), (2, 2)}
+
+
+def test_range_repartition_samples_the_shared_cte_that_the_shuffle_reads(local_cluster_spark):
+    # The sample reads the same evaluation of the CTE as the shuffle, as in Spark.
+    rows = local_cluster_spark.sql(
+        "WITH c AS (SELECT id, rand() AS v FROM range(12)) "
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v "
+        "FROM (SELECT id, v FROM c UNION ALL SELECT id, v FROM c)"
+    ).collect()
+    pairs = Counter((row.id, row.v) for row in rows)
+    assert len(rows) == 24
+    assert sorted(id_ for id_, _ in pairs) == list(range(12))
+    assert set(pairs.values()) == {2}, pairs

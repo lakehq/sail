@@ -27,6 +27,7 @@ use futures::TryStreamExt;
 use tokio::sync::OnceCell;
 
 use crate::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec, RangeSketch};
+use crate::range_split::RangeSampleOptions;
 
 type SharedResult<T> = std::result::Result<T, Arc<DataFusionError>>;
 
@@ -92,16 +93,15 @@ impl RangeSample {
         )?)))
     }
 
-    /// Picks the split points from the sketch, unless they are known.
-    pub fn set(&self, sketch: RangeSketch) -> Result<()> {
-        let split_points = sketch.split_points(&self.sort_options, self.num_partitions)?;
-        // Another copy may have set the same split points first.
-        let _ = self.split_points.set(Ok(split_points));
-        Ok(())
-    }
-
-    fn is_set(&self) -> bool {
-        self.split_points.initialized()
+    /// How a job picks the split points from the sample (see
+    /// [`crate::range_split::RangeSplitPointsExec`]).
+    pub fn options(&self) -> RangeSampleOptions {
+        RangeSampleOptions {
+            sort_options: self.sort_options.clone(),
+            num_partitions: self.num_partitions,
+            sample_size: self.sample_size,
+            partition_sample_size: self.plan.sample_size(),
+        }
     }
 
     fn get(&self) -> Option<Result<&[SplitPoint]>> {
@@ -141,8 +141,8 @@ impl RangeSample {
 /// The node always has `num_partitions` output partitions. When the sample
 /// gives fewer split points, the last partitions are empty.
 ///
-/// For distributed execution, the job runner runs the sample as a separate job
-/// and sets the split points with [`RangeSample::set`] before it plans the stages.
+/// In a job, the sample runs in stages of the same job as the shuffle (see
+/// [`RangeSample::split_points_exec`]).
 /// <https://github.com/apache/spark/blob/v4.1.0/core/src/main/scala/org/apache/spark/Partitioner.scala>
 #[derive(Debug)]
 pub struct RangeRepartitionExec {
@@ -207,21 +207,6 @@ impl RangeRepartitionExec {
 
     pub fn ordering(&self) -> &LexOrdering {
         &self.ordering
-    }
-
-    /// Returns whether the split points are known.
-    pub fn is_sampled(&self) -> bool {
-        self.sample.is_set()
-    }
-
-    /// Returns the range partitioning once the split points are known.
-    pub fn range_partitioning(&self) -> Result<Option<RangePartitioning>> {
-        self.sample
-            .get()
-            .map(|split_points| {
-                RangePartitioning::try_new(self.ordering.clone(), split_points?.to_vec())
-            })
-            .transpose()
     }
 }
 

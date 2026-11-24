@@ -1092,11 +1092,6 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels,
                 }
             }
-            OutputDistribution::UnsampledRange { .. } => {
-                return Err(ExecutionError::InternalError(
-                    "range repartitioning must be sampled before the job runs".to_string(),
-                ));
-            }
             OutputDistribution::RoundRobinBatch { channels } => {
                 TaskOutputDistribution::RoundRobinBatch {
                     channels: *channels,
@@ -1107,6 +1102,9 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
+            OutputDistribution::Channel { channels } => TaskOutputDistribution::Channel {
+                channels: *channels,
+            },
         };
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {

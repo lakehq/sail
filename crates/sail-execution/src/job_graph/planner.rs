@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion::common::{JoinType, Result, internal_err, plan_datafusion_err};
+use datafusion::common::{JoinType, Result, Statistics, internal_err, plan_datafusion_err};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExpr;
@@ -16,6 +17,7 @@ use datafusion::physical_expr_common::physical_expr::is_volatile;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
@@ -28,7 +30,8 @@ use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqu
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
@@ -42,6 +45,8 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_repartition::RangeRepartitionExec;
+use sail_physical_plan::range_sample::RangePartitionSampleExec;
+use sail_physical_plan::range_split::{RangeChannelExec, RangeResampleExec, RangeSplitPointsExec};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
@@ -60,6 +65,7 @@ impl JobGraph {
         plan: Arc<dyn ExecutionPlan>,
         options: JobGraphOptions,
     ) -> ExecutionResult<Self> {
+        let plan = plan_range_samples(plan)?;
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
@@ -80,6 +86,134 @@ impl JobGraph {
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
+    }
+}
+
+/// Makes the sample of each range repartitioning a part of the plan, so that the job
+/// samples the input in stages of its own, as Spark's `RangePartitioner` samples the
+/// input that the shuffle reads.
+///
+/// The repartitioning becomes a [`RangeShuffleExec`] of a [`RangeChannelExec`], whose
+/// second child picks the split points from a copy of the sample. As a child, the
+/// sample is planned like the input: it reads the stages of the shared CTEs and the
+/// scalar subqueries of the input, which are computed once for the sample and the
+/// shuffle.
+///
+/// The first sample is read twice: by the resample, each task of which picks the
+/// imbalanced partitions from the whole first sample, and by the split points. So it
+/// is a shared CTE, which the job computes once.
+fn plan_range_samples(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let Some(range) = plan.downcast_ref::<RangeRepartitionExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        let options = range.sample().options();
+        // Each copy of the range repartitioning runs its own copy of the sample, which
+        // can contain range repartitioning of its own.
+        let sample = plan_range_samples(reset_plan_states(range.sample().plan())?)?;
+        let Some(keys) = sample.downcast_ref::<RangePartitionSampleExec>() else {
+            return internal_err!("expected a range partition sample");
+        };
+        // The resample computes the keys again.
+        let keys = reset_plan_states(Arc::clone(keys.input()))?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "range_sample".to_string(),
+            sample.output_partitioning().clone(),
+        ));
+        let first_sample = || -> Arc<dyn ExecutionPlan> {
+            let schema = sample.schema();
+            let statistics = Statistics::new_unknown(&schema);
+            let scan = SharedCteScanExec::new(Arc::clone(&cte), schema, &statistics, None);
+            Arc::new(CoalescePartitionsExec::new(Arc::new(scan)))
+        };
+        let resample = RangeResampleExec::try_new(keys, first_sample(), options.clone())?;
+        let split_points = RangeSplitPointsExec::try_new(
+            first_sample(),
+            Arc::new(CoalescePartitionsExec::new(Arc::new(resample))),
+            options,
+        )?;
+        let channel = RangeChannelExec::try_new(
+            Arc::clone(range.input()),
+            Arc::new(split_points),
+            range.ordering().clone(),
+        )?;
+        let shared = SharedCteExec::new(Arc::new(channel), vec![(cte, sample)]);
+        Ok(Transformed::yes(Arc::new(RangeShuffleExec {
+            input: Arc::new(shared),
+            properties: Arc::clone(range.properties()),
+        }) as Arc<dyn ExecutionPlan>))
+    })
+    .data()
+}
+
+/// A range repartitioning whose input rows name their channel (see [`RangeChannelExec`]).
+/// Only the job graph planner creates it, and it becomes a shuffle, so it never runs.
+#[derive(Debug)]
+struct RangeShuffleExec {
+    input: Arc<dyn ExecutionPlan>,
+    /// The properties of the range repartitioning, whose rows have no channel.
+    properties: Arc<PlanProperties>,
+}
+
+impl DisplayAs for RangeShuffleExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "RangeShuffleExec: partitions={}",
+            self.properties.output_partitioning().partition_count()
+        )
+    }
+}
+
+impl ExecutionPlan for RangeShuffleExec {
+    fn name(&self) -> &'static str {
+        "RangeShuffleExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [input] = children.as_slice() else {
+            return internal_err!("{} requires exactly one child", self.name());
+        };
+        Ok(Arc::new(Self {
+            input: Arc::clone(input),
+            properties: Arc::clone(&self.properties),
+        }))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        internal_err!("{} runs only as a shuffle of a job", self.name())
     }
 }
 
@@ -576,9 +710,36 @@ fn plan_job_graph_stages(
                 scalar_context,
             )?,
         ]
+    } else if plan.is::<RangeChannelExec>() || plan.is::<RangeResampleExec>() {
+        // Every task reads all of the second child, which is computed once: the split
+        // points of the shuffle, or the first sample of the resample.
+        let (input, read_in_full) = plan.children().two()?;
+        let properties = Arc::clone(read_in_full.properties());
+        let read_in_full = plan_job_graph_stages(
+            Arc::clone(read_in_full),
+            PartitionUsage::Once,
+            graph,
+            DriverStageHandling::CreateStage,
+            scalar_context,
+        )?;
+        vec![
+            plan_job_graph_stages(
+                Arc::clone(input),
+                usage,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_context,
+            )?,
+            PlannedSubtree::without_pending_scalar_subquery_expr(create_shared_input(
+                read_in_full,
+                graph,
+                properties,
+                scalar_context,
+            )?),
+        ]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
-        || plan.is::<RangeRepartitionExec>()
+        || plan.is::<RangeShuffleExec>()
         || plan.is::<CoalescePartitionsExec>()
         || plan.is::<SortPreservingMergeExec>()
         || plan.is::<CoalesceExec>()
@@ -687,26 +848,15 @@ fn plan_job_graph_stages(
             }
         };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
-    } else if let Some(repartition) = subtree.plan.downcast_ref::<RangeRepartitionExec>() {
-        // The job runner samples the input in a separate job and sets the split points
-        // before it plans the stages to run. EXPLAIN plans the stages without sampling.
-        let channels = repartition.num_partitions();
-        let distribution = match repartition.range_partitioning()? {
-            Some(partitioning) => OutputDistribution::Range {
-                partitioning,
-                channels,
-            },
-            None => OutputDistribution::UnsampledRange {
-                ordering: repartition.ordering().clone(),
-                channels,
-            },
-        };
-        let properties = repartition.properties().clone();
+    } else if let Some(shuffle) = subtree.plan.downcast_ref::<RangeShuffleExec>() {
+        // The rows name their channel, which the shuffle drops.
+        let properties = Arc::clone(&shuffle.properties);
+        let channels = properties.output_partitioning().partition_count();
         let child = subtree.only_child()?;
         let plan = push_shuffle(
             child,
             graph,
-            distribution,
+            OutputDistribution::Channel { channels },
             properties,
             consumption,
             scalar_context,
@@ -870,6 +1020,15 @@ fn build_shared_cte_job_graph(
                 let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() else {
                     return Ok(Transformed::no(plan));
                 };
+                // The plan of another shared CTE node, such as the first sample of a range
+                // repartitioning in a job, locates the references to its own CTEs.
+                if !shared
+                    .ctes()
+                    .iter()
+                    .any(|(cte, _)| Arc::ptr_eq(cte, scan.cte()))
+                {
+                    return Ok(Transformed::no(plan));
+                }
                 let Some(&stage) = stages.get(&Arc::as_ptr(scan.cte())) else {
                     return internal_err!("shared CTE {} is not planned", scan.cte().id());
                 };
@@ -2749,8 +2908,16 @@ mod tests {
         assert_eq!(graph.stages()[0].distribution.channels(), 2);
     }
 
-    fn range_repartition(split_points: Option<Vec<i32>>) -> Arc<dyn ExecutionPlan> {
-        use datafusion::arrow::array::{Int32Array, RecordBatch, UInt64Array};
+    fn range_repartition() -> Arc<dyn ExecutionPlan> {
+        range_repartition_of(empty_plan(), empty_plan())
+    }
+
+    /// A range repartitioning into four partitions by `id`, whose sample computes the
+    /// keys from `sample_input`.
+    fn range_repartition_of(
+        input: Arc<dyn ExecutionPlan>,
+        sample_input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
         use datafusion::arrow::compute::SortOptions;
         use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
         use sail_physical_plan::range_sample::RangePartitionSampleExec;
@@ -2758,74 +2925,105 @@ mod tests {
         let schema = schema();
         let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
         let sample = Arc::new(RangeSample::new(
-            Arc::new(RangePartitionSampleExec::try_new(empty_plan(), 10).unwrap()),
+            Arc::new(RangePartitionSampleExec::try_new(sample_input, 10).unwrap()),
             80.0,
             vec![SortOptions::default()],
             4,
         ));
-        let node =
-            RangeRepartitionExec::try_new(empty_plan(), Arc::clone(&sample), ordering).unwrap();
-        let Some(keys) = split_points else {
-            return Arc::new(node);
-        };
-        // One input partition that read and kept the given keys.
-        let rows = keys.len();
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("__partition", DataType::UInt64, false),
-                Field::new("__count", DataType::UInt64, false),
-            ])),
-            vec![
-                Arc::new(Int32Array::from(keys)),
-                Arc::new(UInt64Array::from(vec![0; rows])),
-                Arc::new(UInt64Array::from(vec![rows as u64; rows])),
-            ],
-        )
-        .unwrap();
-        sample.set(sample.sketch(&[batch]).unwrap()).unwrap();
-        Arc::new(node)
+        Arc::new(RangeRepartitionExec::try_new(input, sample, ordering).unwrap())
     }
 
     #[test]
-    fn test_job_graph_keeps_range_repartition_partition_count() {
-        // Two sampled keys give one split point, but the shuffle keeps four channels.
-        let graph = JobGraph::try_new(
-            range_repartition(Some(vec![0, 10])),
-            flight_shuffle_options(),
-        )
-        .unwrap();
+    fn range_repartition_samples_in_stages_of_the_job() {
+        use sail_physical_plan::range_split::CHANNEL_COLUMN;
 
-        assert_eq!(graph.stages().len(), 2);
-        let OutputDistribution::Range { partitioning, .. } = &graph.stages()[0].distribution else {
-            unreachable!("expected range distribution");
-        };
-        assert_eq!(partitioning.partition_count(), 2);
-        assert_eq!(graph.stages()[0].distribution.channels(), 4);
-        assert_eq!(
-            graph.stages()[1]
-                .plan
-                .output_partitioning()
-                .partition_count(),
-            4
-        );
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            let graph = JobGraph::try_new(range_repartition(), options).unwrap();
+            let stage = |name: &str| {
+                let found = graph
+                    .stages()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, stage)| stage.plan.name() == name)
+                    .map(|(i, _)| i)
+                    .collect::<Vec<_>>();
+                assert_eq!(found.len(), 1, "one {name} stage in\n{graph}");
+                found[0]
+            };
+            // The sample, the resample, the split points, and the shuffle that reads them.
+            let (sample, resample, split_points, shuffle) = (
+                stage("RangePartitionSampleExec"),
+                stage("RangeResampleExec"),
+                stage("RangeSplitPointsExec"),
+                stage("RangeChannelExec"),
+            );
+            assert!(sample < resample && resample < split_points && split_points < shuffle);
+            // The first sample is computed once for the resample and the split points.
+            assert_eq!(reader_modes(&graph, sample).len(), 2, "in\n{graph}");
+            // Every task of the shuffle reads all the split points, which are picked once.
+            assert_eq!(
+                graph.stages()[split_points]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                1
+            );
+            assert!(
+                matches!(
+                    reader_modes(&graph, split_points).as_slice(),
+                    [InputMode::Broadcast]
+                ),
+                "the split points are broadcast in\n{graph}"
+            );
+            assert!(matches!(
+                graph.stages()[shuffle].distribution,
+                OutputDistribution::Channel { channels: 4 }
+            ));
+            // The rows after the shuffle do not have the channel.
+            let last = graph.stages().last().unwrap();
+            assert!(
+                last.plan
+                    .schema()
+                    .column_with_name(CHANNEL_COLUMN)
+                    .is_none()
+            );
+            assert_eq!(last.plan.output_partitioning().partition_count(), 4);
+        }
     }
 
     #[test]
-    fn test_job_graph_explains_unsampled_range_repartition() {
-        // EXPLAIN plans the stages before the job runner samples the input.
-        let graph = JobGraph::try_new(range_repartition(None), flight_shuffle_options()).unwrap();
+    fn range_sample_reads_the_stage_of_a_shared_cte() {
+        use datafusion::common::tree_node::TreeNode;
+        use sail_physical_plan::shared_cte::{SharedCteScanExec, share_ctes};
 
-        assert_eq!(graph.stages().len(), 2);
-        assert!(matches!(
-            &graph.stages()[0].distribution,
-            OutputDistribution::UnsampledRange { channels: 4, .. }
-        ));
-        assert!(
-            graph
-                .to_string()
-                .contains("Range([id@0 ASC], split points sampled at execution, channels=4)")
+        let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+        let (cte, scan) = shared_cte(0, &body);
+        let range = range_repartition_of(
+            UnionExec::try_new(vec![scan(), scan()]).unwrap(),
+            UnionExec::try_new(vec![scan(), scan()]).unwrap(),
         );
+        let plan = share_ctes(range, vec![(cte, body)]).unwrap();
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        for stage in graph.stages() {
+            assert!(
+                !stage
+                    .plan
+                    .exists(|x| Ok(x.is::<SharedCteScanExec>()))
+                    .unwrap(),
+                "a stage reads the CTE without its stage in\n{graph}"
+            );
+        }
+        // The CTE is computed once. The shuffle, the first sample, and the resample each
+        // read its stage twice.
+        let ctes = graph
+            .stages()
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.inputs.is_empty() && x.plan.is::<UnionExec>())
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        assert_eq!(ctes.len(), 1, "one CTE stage in\n{graph}");
+        assert_eq!(reader_modes(&graph, ctes[0]).len(), 6);
     }
 
     #[test]
