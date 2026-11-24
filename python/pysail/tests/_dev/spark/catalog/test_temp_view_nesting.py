@@ -35,7 +35,7 @@ def reader(spark, remote):
 
 @pytest.fixture
 def names(spark):
-    """Returns new names of temporary views, which are dropped after the test."""
+    """Returns new names of views, which are dropped after the test."""
     created = []
 
     def new(prefix="v"):
@@ -44,7 +44,7 @@ def names(spark):
 
     yield new
     for name in created:
-        spark.catalog.dropTempView(name)
+        spark.sql(f"DROP VIEW IF EXISTS {name}")
 
 
 @pytest.mark.parametrize("depth", [101, 300])
@@ -129,15 +129,12 @@ def test_view_keeps_the_session_function_that_it_was_created_with(spark, names):
 
 def test_view_keeps_the_persistent_view_that_it_was_created_with(spark, names):
     persistent, view = names("pv"), names()
-    try:
-        spark.sql(f"CREATE VIEW {persistent} AS SELECT 1 AS id")
-        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {persistent}")
-        spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 2 AS id")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-        spark.sql(f"DROP VIEW {persistent}")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-    finally:
-        spark.sql(f"DROP VIEW IF EXISTS {persistent}")
+    spark.sql(f"CREATE VIEW {persistent} AS SELECT 1 AS id")
+    spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {persistent}")
+    spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 2 AS id")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    spark.sql(f"DROP VIEW {persistent}")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
 
 
 def test_global_view_keeps_the_names_of_the_session_that_created_it(spark, reader, tmp_path, names):
