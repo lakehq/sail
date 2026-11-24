@@ -445,10 +445,7 @@ impl UnityCatalogProvider {
         resolved: &LakehouseResolvedTable,
     ) -> CatalogResult<DeltaCatalogState> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let client = self
-            .get_delta_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let client = self.get_delta_client().await?;
         let api = self
             .get_delta_commit_api(&client, &catalog_name, &schema_name, table)
             .await?;
@@ -687,18 +684,14 @@ impl UnityCatalogProvider {
         let staging_location = storage_location_key(&location).to_string();
         let request = delta_create_table_request(table, location, comment, create_commit)?;
         let table_id = request.properties.get(DELTA_UNITY_TABLE_ID_KEY).cloned();
-        let client = self
-            .get_delta_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        let error = match client
+        let client = self.get_delta_client().await?;
+        let result = client
             .create_table(catalog_name.clone(), schema_name.clone(), request)
-            .await
-        {
-            Ok(_) => {
-                self.staging_table_id_cache()?.remove(&staging_location);
-                return self.get_table(database, table).await;
-            }
+            .await;
+        // The staging table is not used after the request, whatever its outcome.
+        self.staging_table_id_cache()?.remove(&staging_location);
+        let error = match result {
+            Ok(_) => return self.get_table(database, table).await,
             // The table is created if the status code indicates success,
             // even if the response body cannot be deserialized.
             Err(e) if e.status().is_some_and(|status| status.is_success()) => {
@@ -1083,10 +1076,7 @@ impl CatalogProvider for UnityCatalogProvider {
             properties,
         } = options;
 
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let mut props: HashMap<String, String> = properties.into_iter().collect();
         if let Some(c) = &comment {
@@ -1133,10 +1123,7 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::full_name(&[&catalog_name, &schema_name]);
@@ -1166,10 +1153,7 @@ impl CatalogProvider for UnityCatalogProvider {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let catalog_name = match prefix {
             None => self.options.default_catalog.to_string(),
@@ -1213,10 +1197,7 @@ impl CatalogProvider for UnityCatalogProvider {
     ) -> CatalogResult<()> {
         let DropDatabaseOptions { if_exists, cascade } = options;
 
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::full_name(&[&catalog_name, &schema_name]);
@@ -1264,10 +1245,7 @@ impl CatalogProvider for UnityCatalogProvider {
             staged,
         } = options;
 
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         if !is_external && mode.ignore_if_exists() {
@@ -1464,10 +1442,7 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::full_name(&[&catalog_name, &schema_name, table]);
@@ -1490,10 +1465,7 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
@@ -1535,10 +1507,7 @@ impl CatalogProvider for UnityCatalogProvider {
             ));
         }
 
-        let client = self
-            .get_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+        let client = self.get_client().await?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::full_name(&[&catalog_name, &schema_name, table]);
@@ -1615,10 +1584,7 @@ impl CatalogProvider for UnityCatalogProvider {
         request: TableStorageCredentialsRequest,
     ) -> CatalogResult<Option<TableStorageCredentials>> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let client = self
-            .get_delta_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let client = self.get_delta_client().await?;
         // The legacy API does not issue credentials with the Delta REST API.
         if self
             .get_delta_commit_api(&client, &catalog_name, &schema_name, table)
@@ -1793,10 +1759,7 @@ impl CatalogProvider for UnityCatalogProvider {
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
             let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-            let delta_client = self
-                .get_delta_client()
-                .await
-                .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+            let delta_client = self.get_delta_client().await?;
             if self
                 .get_delta_commit_api(&delta_client, &catalog_name, &schema_name, table)
                 .await?
@@ -1851,10 +1814,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             };
             if request.options.is_write_precondition {
-                let client = self
-                    .get_client()
-                    .await
-                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                let client = self.get_client().await?;
                 let location = self
                     .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
                     .await?;
@@ -1872,10 +1832,7 @@ impl CatalogProvider for UnityCatalogProvider {
         commit: DeltaCatalogCommit,
     ) -> CatalogResult<DeltaCommitOutcome> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let delta_client = self
-            .get_delta_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let delta_client = self.get_delta_client().await?;
         let (status, error, unpublished_commit_limit, request_failed) = match self
             .get_delta_commit_api(&delta_client, &catalog_name, &schema_name, table)
             .await?
@@ -1897,10 +1854,7 @@ impl CatalogProvider for UnityCatalogProvider {
             }
             DeltaCommitApi::Preview => {
                 let commit = legacy_delta_commit(commit)?;
-                let client = self
-                    .get_client()
-                    .await
-                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                let client = self.get_client().await?;
                 match client.commit(commit).await {
                     Ok(_) => return Ok(DeltaCommitOutcome::Committed),
                     Err(e) => (
@@ -1971,10 +1925,7 @@ impl CatalogProvider for UnityCatalogProvider {
         request: DeltaRatifiedCommitRequest,
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let delta_client = self
-            .get_delta_client()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let delta_client = self.get_delta_client().await?;
         let api = self
             .get_delta_commit_api(&delta_client, &catalog_name, &schema_name, table)
             .await?;
@@ -2042,10 +1993,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     table_id: table_id.clone(),
                     table_uri: table_uri.clone(),
                 };
-                let client = self
-                    .get_client()
-                    .await
-                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                let client = self.get_client().await?;
                 match client.get_commits(legacy_request).await {
                     Ok(response) => {
                         let response = response.inner;
