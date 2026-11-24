@@ -5,10 +5,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conversion::to_string::ToUtf8;
 use sail_function::scalar::datetime::date::Date;
 use sail_function::scalar::datetime::time::Time;
-use sail_function::scalar::datetime::timestamp::Timestamp;
 
+use super::datetime::to_timestamp;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -59,29 +60,30 @@ fn cast_to_time(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let arg = input.arguments.one()?;
-    let data_type = arg
-        .to_field(input.function_context.schema)?
-        .1
-        .data_type()
-        .clone();
+    if input.arguments.len() != 1 {
+        return Err(crate::error::PlanError::invalid(
+            "timestamp requires 1 argument",
+        ));
+    }
+    to_timestamp(input, false)
+}
+
+fn cast_to_string(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let value = input.arguments.one()?;
+    let data_type = value.get_type(input.function_context.schema)?;
     if matches!(
         data_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        DataType::Timestamp(_, _)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Struct(_)
+            | DataType::Map(_, _)
     ) {
-        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(Timestamp::try_new(
-                Some(input.function_context.plan_config.session_timezone.clone()),
-                input.function_context.plan_config.ansi_mode,
-                false,
-            )?)),
-            args: vec![arg],
-        }))
+        let timezone = Arc::clone(&input.function_context.plan_config.session_timezone);
+        Ok(ScalarUDF::from(ToUtf8::new().with_timezone(Some(timezone))).call(vec![value]))
     } else {
-        Ok(expr::Expr::Cast(expr::Cast::new(
-            Box::new(arg),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-        )))
+        Ok(datafusion_expr::cast(value, DataType::Utf8))
     }
 }
 
@@ -99,7 +101,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("float", F::cast(DataType::Float32)),
         ("int", F::cast(DataType::Int32)),
         ("smallint", F::cast(DataType::Int16)),
-        ("string", F::cast(DataType::Utf8)),
+        ("string", F::custom(cast_to_string)),
         ("time", F::custom(cast_to_time)),
         ("timestamp", F::custom(cast_to_timestamp)),
         ("tinyint", F::cast(DataType::Int8)),

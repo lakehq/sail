@@ -178,6 +178,7 @@ impl DeltaSnapshot {
                 log_store,
                 replay_hint,
                 config.catalog_managed_commits.as_ref(),
+                config.require_transactions,
             )
             .await
             {
@@ -201,6 +202,18 @@ impl DeltaSnapshot {
         )
         .await?;
         Self::from_replayed_state(log_store, config, replayed)
+    }
+
+    fn replayed_schema(metadata: &Metadata) -> DeltaResult<(ArrowSchemaRef, TableProperties)> {
+        let properties = TableProperties::from(metadata.configuration().iter());
+        let schema = metadata.parse_schema()?;
+        if matches!(
+            properties.column_mapping_mode,
+            Some(ColumnMappingMode::Name | ColumnMappingMode::Id)
+        ) {
+            crate::schema::mapping::validate_mapped_schema(&schema)?;
+        }
+        Ok((Arc::new(ArrowSchema::try_from(&schema)?), properties))
     }
 
     fn from_replayed_state(
@@ -227,8 +240,7 @@ impl DeltaSnapshot {
         config: DeltaSnapshotConfig,
         replayed: ReplayedTableHeader,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(replayed.metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&replayed.metadata)?;
 
         Ok(Self {
             version: replayed.version,
@@ -260,8 +272,7 @@ impl DeltaSnapshot {
         domain_metadata: Vec<DomainMetadata>,
         commit_timestamps: BTreeMap<i64, i64>,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&metadata)?;
 
         Ok(Self {
             version,
@@ -731,10 +742,20 @@ impl DeltaSnapshot {
     }
 
     pub fn transaction_version(&self, app_id: impl ToString) -> DeltaResult<Option<i64>> {
-        Ok(self
-            .app_txns
-            .get(&app_id.to_string())
-            .map(|txn| txn.version))
+        let Some(txn) = self.app_txns.get(&app_id.to_string()) else {
+            return Ok(None);
+        };
+        if let Some(duration) = self.table_properties().set_transaction_retention_duration {
+            let cutoff = crate::checkpoint::retention_cutoff_timestamp(
+                Utc::now().timestamp_millis(),
+                duration,
+                "delta.setTransactionRetentionDuration",
+            )?;
+            if txn.last_updated.is_none_or(|updated| updated <= cutoff) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(txn.version))
     }
 
     // ── Capability token verification ─────────────────────────────────────────

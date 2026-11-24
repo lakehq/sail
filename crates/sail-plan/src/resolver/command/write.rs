@@ -313,6 +313,7 @@ impl PlanResolver<'_> {
             lakehouse_table: None,
         };
         let mut preconditions = vec![];
+        let mut skip_preconditions_on_empty_exec = false;
         let mut table_replacement = None;
         match target {
             WriteTarget::DataSource => {
@@ -705,6 +706,11 @@ impl PlanResolver<'_> {
                         table_replacement = Some(replacement);
                     }
                     if table_replacement.is_none() {
+                        // A retried Delta overwrite may be a no-op. In that case
+                        // preserve the existing catalog entry as well as the data.
+                        skip_preconditions_on_empty_exec = info.is_some()
+                            && write_format.eq_ignore_ascii_case("delta")
+                            && matches!(mode, WriteMode::Replace { .. });
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),
                             options: create_options,
@@ -755,7 +761,10 @@ impl PlanResolver<'_> {
             .create_writer(&self.ctx.state(), sink_info)
             .await?;
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(
+                BarrierNode::new(preconditions, Arc::new(plan))
+                    .with_skip_preconditions_on_empty_exec(skip_preconditions_on_empty_exec),
+            ),
         }))
     }
 

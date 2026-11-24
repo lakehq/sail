@@ -104,6 +104,35 @@ impl CatalogManager {
             }))
     }
 
+    /// In the delta namespace, an unqualified file name can also be a table name.
+    pub async fn delta_table_path<'a, T: AsRef<str>>(
+        &self,
+        name: &'a [T],
+    ) -> CatalogResult<Option<&'a str>> {
+        let [format, path] = name else {
+            return Ok(None);
+        };
+        if !format.as_ref().eq_ignore_ascii_case("delta") {
+            return Ok(None);
+        }
+        let path = path.as_ref();
+        if std::path::Path::new(path).is_absolute()
+            || path.contains(":/")
+            || path.starts_with("./")
+            || path.starts_with("../")
+        {
+            return Ok(Some(path));
+        }
+        match self
+            .get_database_by_qualifier(std::slice::from_ref(format))
+            .await
+        {
+            Ok(_) => Ok(None),
+            Err(CatalogError::NotFound(_, _)) => Ok(Some(path)),
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn rename_table(
         &self,
         table: &[String],

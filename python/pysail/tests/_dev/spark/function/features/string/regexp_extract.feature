@@ -15,9 +15,9 @@ Feature: regexp_extract() extracts regex capture groups from strings
 
       Examples:
         | case                                                   | args                           | result |
-        | regexp_extract with group index 1 (default)            | '100-200', '(\\d+)-(\\d+)', 1  | 100    |
-        | regexp_extract with group index 2                      | '100-200', '(\\d+)-(\\d+)', 2  | 200    |
-        | regexp_extract with group index 0 returns entire match | 'hello 123 world', '(\\d+)', 0 | 123    |
+        | regexp_extract with group index 1 (default)            | '100-200', '(\\\\d+)-(\\\\d+)', 1  | 100    |
+        | regexp_extract with group index 2                      | '100-200', '(\\\\d+)-(\\\\d+)', 2  | 200    |
+        | regexp_extract with group index 0 returns entire match | 'hello 123 world', '(\\\\d+)', 0 | 123    |
         | regexp_extract defaults to group index 1               | 'abc-def', '([a-z]+)-([a-z]+)' | abc    |
 
   Rule: Multiple groups
@@ -33,9 +33,9 @@ Feature: regexp_extract() extracts regex capture groups from strings
 
       Examples:
         | case                                                                 | value        | pattern                | group | result |
-        | regexp_extract on date-like string group 1                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 1     | 2024   |
-        | regexp_extract on date-like string group 2                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 2     | 01     |
-        | regexp_extract on date-like string group 3                           | '2024-01-15' | '(\\d+)-(\\d+)-(\\d+)' | 3     | 15     |
+        | regexp_extract on date-like string group 1                           | '2024-01-15' | '(\\\\d+)-(\\\\d+)-(\\\\d+)' | 1     | 2024   |
+        | regexp_extract on date-like string group 2                           | '2024-01-15' | '(\\\\d+)-(\\\\d+)-(\\\\d+)' | 2     | 01     |
+        | regexp_extract on date-like string group 3                           | '2024-01-15' | '(\\\\d+)-(\\\\d+)-(\\\\d+)' | 3     | 15     |
         | regexp_extract returns empty string for unmatched optional group     | 'aaaac'      | '(a+)(b)?(c)'          | 2     |        |
         | regexp_extract preserves later groups after unmatched optional group | 'aaaac'      | '(a+)(b)?(c)'          | 3     | c      |
 
@@ -52,9 +52,9 @@ Feature: regexp_extract() extracts regex capture groups from strings
 
       Examples:
         | case                                              | value    | pattern   | result |
-        | regexp_extract returns empty string when no match | 'hello'  | '(\\d+)'  |        |
-        | regexp_extract with anchored pattern at beginning | '123abc' | '^(\\d+)' | 123    |
-        | regexp_extract with anchored pattern at end       | 'abc123' | '(\\d+)$' | 123    |
+        | regexp_extract returns empty string when no match | 'hello'  | '(\\\\d+)'  |        |
+        | regexp_extract with anchored pattern at beginning | '123abc' | '^(\\\\d+)' | 123    |
+        | regexp_extract with anchored pattern at end       | 'abc123' | '(\\\\d+)$' | 123    |
 
   Rule: Pattern from a column
 

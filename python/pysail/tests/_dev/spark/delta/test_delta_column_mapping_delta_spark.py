@@ -400,3 +400,18 @@ def test_sail_nested_mapping_is_readable_and_appendable_by_delta_spark(
         (2, 20, False),
         (3, 30, True),
     ]
+
+
+@pytest.mark.parametrize("upgrader", ["sail", "delta-spark"])
+def test_read_and_append_after_column_mapping_upgrade(delta_jvm_spark, spark, tmp_path, upgrader):
+    path = tmp_path / "upgrade"
+    identifier = f"delta.`{escape_sql_identifier(str(path))}`"
+    spark.range(1).write.format("delta").save(str(path))
+    writer, reader = (spark, delta_jvm_spark) if upgrader == "sail" else (delta_jvm_spark, spark)
+    writer.sql(
+        f"ALTER TABLE {identifier} SET TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+        "'delta.minWriterVersion' = '5', 'delta.columnMapping.mode' = 'name')"
+    ).collect()
+    reader.range(1, 2).write.format("delta").mode("append").save(str(path))
+    for session in (writer, reader):
+        assert session.sql(f"SELECT id FROM {identifier} ORDER BY id").collect() == [(0,), (1,)]
