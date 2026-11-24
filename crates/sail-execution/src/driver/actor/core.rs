@@ -167,11 +167,18 @@ impl Actor for DriverActor {
             DriverMessage::ExecuteJob {
                 plan,
                 context,
+                handoff,
+                group,
                 result,
-            } => self.handle_execute_job(ctx, plan, context, result),
+            } => self.handle_execute_job(ctx, plan, context, handoff, group, result),
             DriverMessage::CleanUpJob { job_id, outcome } => {
                 self.handle_clean_up_job(ctx, job_id, outcome)
             }
+            DriverMessage::HandOffJob { job_id, result } => {
+                let _ = result.send(self.job_scheduler.hand_off_job(job_id));
+                ActorAction::Continue
+            }
+            DriverMessage::ReleaseJob { job_id } => self.handle_release_job(ctx, job_id),
             DriverMessage::UpdateTask {
                 key,
                 status,

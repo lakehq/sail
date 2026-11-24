@@ -24,9 +24,11 @@ pub(crate) struct StreamMemory {
     /// The size in bytes of the items in the queues.
     used: AtomicUsize,
     /// The number of bytes that the queues can hold before the writers wait.
-    ceiling: usize,
+    ceiling: AtomicUsize,
     /// Notifies the writers that wait at the ceiling when the size falls below it.
     released: Notify,
+    /// The memory that also counts every byte counted here.
+    parent: Option<Arc<StreamMemory>>,
 }
 
 impl StreamMemory {
@@ -36,8 +38,53 @@ impl StreamMemory {
     pub(crate) fn new(ceiling: usize) -> Self {
         Self {
             used: AtomicUsize::new(0),
-            ceiling,
+            ceiling: AtomicUsize::new(ceiling),
             released: Notify::new(),
+            parent: None,
+        }
+    }
+
+    /// Creates memory with a ceiling of its own, whose bytes also count for `parent`.
+    pub(crate) fn within(ceiling: usize, parent: Arc<StreamMemory>) -> Self {
+        Self {
+            parent: Some(parent),
+            ..Self::new(ceiling)
+        }
+    }
+
+    /// Removes the ceiling of its own, leaving the ceiling of the parent.
+    pub(crate) fn lift(&self) {
+        if self.ceiling.swap(usize::MAX, Ordering::SeqCst) != usize::MAX {
+            self.released.notify_waiters();
+        }
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.used.load(Ordering::SeqCst) >= self.ceiling()
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_exhausted())
+    }
+
+    fn add(&self, bytes: usize) {
+        self.used.fetch_add(bytes, Ordering::Relaxed);
+        if let Some(parent) = &self.parent {
+            parent.add(bytes);
+        }
+    }
+
+    fn remove(&self, bytes: usize) {
+        // A writer that waits at the ceiling has asked to be notified before it looked
+        // at the size. So either the writer sees the size without these bytes, or it
+        // is notified here.
+        let used = self.used.fetch_sub(bytes, Ordering::SeqCst);
+        let ceiling = self.ceiling();
+        if used >= ceiling && used - bytes < ceiling {
+            self.released.notify_waiters();
+        }
+        if let Some(parent) = &self.parent {
+            parent.remove(bytes);
         }
     }
 
@@ -46,9 +93,8 @@ impl StreamMemory {
         self.used.load(Ordering::Relaxed)
     }
 
-    #[cfg(test)]
     pub(crate) fn ceiling(&self) -> usize {
-        self.ceiling
+        self.ceiling.load(Ordering::SeqCst)
     }
 }
 
@@ -62,7 +108,7 @@ struct Charge {
 
 impl Charge {
     fn new(memory: &Arc<StreamMemory>, bytes: usize) -> Arc<Self> {
-        memory.used.fetch_add(bytes, Ordering::Relaxed);
+        memory.add(bytes);
         Arc::new(Self {
             memory: memory.clone(),
             bytes,
@@ -72,14 +118,7 @@ impl Charge {
 
 impl Drop for Charge {
     fn drop(&mut self) {
-        // A writer that waits at the ceiling has asked to be notified before it looked
-        // at the size. So either the writer sees the size without these bytes, or it
-        // is notified here.
-        let memory = &self.memory;
-        let used = memory.used.fetch_sub(self.bytes, Ordering::SeqCst);
-        if used >= memory.ceiling && used - self.bytes < memory.ceiling {
-            memory.released.notify_waiters();
-        }
+        self.memory.remove(self.bytes);
     }
 }
 
@@ -219,9 +258,7 @@ impl<T> State<T> {
         let Some(limit) = self.limit else {
             return false;
         };
-        self.bytes > 0
-            && self.bytes >= limit.bytes
-            && memory.used.load(Ordering::SeqCst) >= memory.ceiling
+        self.bytes > 0 && self.bytes >= limit.bytes && memory.is_exhausted()
     }
 
     fn is_consistent(&self) -> bool {
@@ -299,10 +336,17 @@ impl<T: Clone> QueueWriter<T> {
             // of other tasks take items. The writer registers for the latter before
             // it finds that it has to wait.
             let memory = self.shared.memory.clone();
+            let parent = memory.parent.clone();
             let mut released = pin!(memory.released.notified());
+            let mut parent_released = parent.as_ref().map(|x| Box::pin(x.released.notified()));
             let admission = poll_fn(|cx| {
                 while released.as_mut().poll(cx).is_ready() {
                     released.set(memory.released.notified());
+                }
+                if let (Some(parent), Some(notified)) = (&parent, &mut parent_released) {
+                    while notified.as_mut().poll(cx).is_ready() {
+                        notified.set(parent.released.notified());
+                    }
                 }
                 match self.admit(&items, &sizes, Some(cx.waker())) {
                     Admission::Full { .. } => Poll::Pending,
@@ -891,6 +935,39 @@ mod tests {
         let (mut other, _others) = task_queues(&[1], None, memory.clone(), value);
         write_now(&mut other, vec![Some(100)]);
         assert!(writer.write(vec![Some(2), None]).now_or_never().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lifted_memory_waits_at_the_ceiling_of_its_parent() -> TestResult {
+        let process = Arc::new(StreamMemory::new(100));
+        let budget = Arc::new(StreamMemory::within(5, process.clone()));
+        let (mut writer, mut readers) = task_queues(&[1], limit(1), budget.clone(), value);
+        write_now(&mut writer, vec![Some(5)]);
+        assert_eq!((budget.used(), process.used()), (5, 5));
+        // The writer waits at its own ceiling until it is lifted.
+        let write = tokio::spawn(async move {
+            let outcome = writer.write(vec![Some(90)]).await;
+            (writer, outcome)
+        });
+        tokio::task::yield_now().await;
+        assert!(!write.is_finished());
+        budget.lift();
+        let (mut writer, outcome) = soon(write).await??;
+        assert_eq!(outcome, QueueWrite::Queued);
+        assert_eq!(process.used(), 95);
+
+        // The writer waits at the ceiling of the process, and continues when another
+        // task releases the memory of the process.
+        let (mut other, mut others) = task_queues(&[1], None, process.clone(), value);
+        write_now(&mut other, vec![Some(10)]);
+        let write = tokio::spawn(async move { writer.write(vec![Some(1)]).await });
+        tokio::task::yield_now().await;
+        assert!(!write.is_finished());
+        assert_eq!(others[0].next().await, Some(10));
+        assert_eq!(soon(write).await??, QueueWrite::Queued);
+        drop(readers.pop());
+        assert_eq!((budget.used(), process.used()), (0, 0));
         Ok(())
     }
 

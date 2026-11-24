@@ -46,6 +46,7 @@ pub enum TaskRunnerMessage {
         channels: usize,
         replicas: usize,
         bounded: bool,
+        handoff_budget: Option<usize>,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     },

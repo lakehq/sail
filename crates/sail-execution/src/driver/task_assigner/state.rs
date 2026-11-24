@@ -212,6 +212,10 @@ impl TaskSlot {
         }
     }
 
+    pub fn tasks(&self) -> impl Iterator<Item = &TaskKey> {
+        self.tasks.iter()
+    }
+
     pub fn remove_task(&mut self, task: &TaskKey) -> bool {
         self.tasks.swap_remove(task)
     }

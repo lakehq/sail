@@ -15,13 +15,17 @@ pub(super) fn worthwhile(
     keys: &[usize],
     restriction: &Restriction,
     downstream_work: f64,
-    options: &super::super::JoinReorderOptions,
+    options: &super::SemiJoinReductionOptions,
 ) -> Result<bool> {
     let target_stats = StatisticsContext::new().compute(target.as_ref(), &StatisticsArgs::new())?;
     let Some(&target_rows) = target_stats.num_rows.get_value() else {
         return Ok(false);
     };
-    if target_rows <= restriction.rows.saturating_mul(4) {
+    // Each reduction scans its source again; a scan above the usual limit must stay small
+    // next to the target.
+    if target_rows <= restriction.rows.saturating_mul(4)
+        || (restriction.scan_above_limit && target_rows < restriction.scan_rows.saturating_mul(4))
+    {
         return Ok(false);
     }
     let source_stats =

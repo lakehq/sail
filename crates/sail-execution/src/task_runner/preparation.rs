@@ -153,11 +153,16 @@ impl TaskPreparation {
                             TaskKeyDisplay(key)
                         );
                     };
-                    return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
-                        streams.reader(key.clone(), input.clone(), placeholder.schema()),
-                        placeholder.properties().clone(),
-                        input.replicated,
-                    ))));
+                    // Another job's output is a hand-off, which waits at its budget until
+                    // it has a reader, so it is opened before the operator first polls it.
+                    return Ok(Transformed::yes(Arc::new(
+                        ShuffleReadExec::new(
+                            streams.reader(key.clone(), input.clone(), placeholder.schema()),
+                            placeholder.properties().clone(),
+                            input.replicated,
+                        )
+                        .with_eager_open(input.job_id.is_some()),
+                    )));
                 }
                 Ok(Transformed::no(node))
             })

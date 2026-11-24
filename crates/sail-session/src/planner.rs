@@ -219,7 +219,7 @@ impl ExtensionQueryPlanner {
     }
 
     /// Plans the shared CTE with the restrictions of its references in the configuration
-    /// options, for the join reorder rule to restrict it to the keys of all the
+    /// options, for the semi join reduction rule to restrict it to the keys of all the
     /// references. Returns the plan if the rule restricted it.
     async fn plan_restricted(
         &self,

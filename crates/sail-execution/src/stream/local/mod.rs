@@ -22,6 +22,8 @@ pub struct LocalStreamManager {
     streams: HashMap<TaskStreamKey, LocalStreamState>,
     /// The stages whose streams have been removed.
     cleaned: HashSet<(JobId, usize)>,
+    /// The memory of the streams of each hand-off stage, which wait at its budget.
+    handoff_memory: HashMap<(JobId, usize), Arc<queue::StreamMemory>>,
 }
 
 pub enum LocalStreamState {

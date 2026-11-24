@@ -306,6 +306,27 @@
   default: "3"
   description: The maximum number of attempts for a task.
 
+- key: cluster.enable_adaptive_join_selection
+  type: boolean
+  default: "false"
+  description: |
+    Whether to choose between broadcast and partitioned hash joins from the actual size of
+    the build side. When enabled, the build side of each partitioned hash join whose size
+    is only estimated runs first as a separate job, and the join is broadcast if the result
+    is below `cluster.adaptive_join_broadcast_threshold`. Build sides that reach the
+    threshold are handed off to the main job instead of being computed again.
+  experimental: true
+
+- key: cluster.adaptive_join_broadcast_threshold
+  type: number
+  default: "10485760"
+  description: |
+    The size in bytes below which a build side measured by adaptive join selection is
+    broadcast. This applies to measured sizes only; joins planned from estimates use
+    DataFusion's hash join single partition threshold. Each worker may hold up to four
+    times this amount per stage for outputs that are handed off to a later job.
+  experimental: true
+
 - key: cluster.rpc_retry_strategy.type
   type: string
   default: "fixed"
@@ -1027,6 +1048,17 @@
   default: "true"
   description: |
     Whether to enable cost-based join reorder in the query optimizer.
+  experimental: true
+
+- key: optimizer.enable_semi_join_reduction
+  type: boolean
+  default: "false"
+  description: |
+    Whether to copy the keys of a selectively filtered table below aggregates and semi joins
+    on the other side of a join, so that rows without a match are removed early.
+    Always enabled with `optimizer.enable_join_reorder`. In cluster mode with
+    `cluster.enable_adaptive_join_selection`, reductions are also planned whatever their
+    estimated size and kept only when their keys turn out small enough to broadcast.
   experimental: true
 
 - key: optimizer.enable_join_swap

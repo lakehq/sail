@@ -81,6 +81,7 @@ impl LocalStreamManager {
             options,
             streams: HashMap::new(),
             cleaned: HashSet::new(),
+            handoff_memory: HashMap::new(),
         }
     }
 
@@ -92,6 +93,7 @@ impl LocalStreamManager {
         channels: usize,
         replicas: usize,
         bounded: bool,
+        handoff_budget: Option<usize>,
         schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let keys = (0..channels)
@@ -137,8 +139,20 @@ impl LocalStreamManager {
             bytes: self.options.shuffle_write_buffer_size,
             stall_timeout,
         });
-        let memory = self.memory.clone();
+        // A hand-off stage also counts against a budget of its own, so that it does not run
+        // far ahead of a decision that may not use it.
+        let memory = match handoff_budget {
+            Some(budget) => self
+                .handoff_memory
+                .entry((key.job_id, key.stage))
+                .or_insert_with(|| Arc::new(StreamMemory::within(budget, self.memory.clone())))
+                .clone(),
+            None => self.memory.clone(),
+        };
         let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory, schema);
+        if streams.iter().any(MemoryStream::is_fully_subscribed) {
+            self.lift_handoff_budget(key.job_id, key.stage);
+        }
         for (key, stream) in keys.into_iter().zip(streams) {
             self.streams
                 .insert(key, LocalStreamState::Created { stream });
@@ -153,7 +167,13 @@ impl LocalStreamManager {
     ) -> ExecutionResult<TaskStreamSource> {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Created { stream } => {
+                    let source = stream.subscribe()?;
+                    if stream.is_fully_subscribed() {
+                        self.lift_handoff_budget(key.job_id, key.stage);
+                    }
+                    Ok(source)
+                }
                 LocalStreamState::Pending { waiters, probes } => {
                     // There is no need to probe the pending stream again, unless all
                     // earlier readers have left. The earlier probes are then ignored.
@@ -253,6 +273,14 @@ impl LocalStreamManager {
         }
     }
 
+    /// Lets a hand-off stage run ahead of its reader like any other stage, once a later
+    /// job reads it.
+    fn lift_handoff_budget(&self, job_id: JobId, stage: usize) {
+        if let Some(memory) = self.handoff_memory.get(&(job_id, stage)) {
+            memory.lift();
+        }
+    }
+
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {
         if let Some(stage) = stage {
             // The readers that have requested a stream before its creation are kept.
@@ -263,9 +291,11 @@ impl LocalStreamManager {
                     || matches!(value, LocalStreamState::Pending { .. })
             });
             self.cleaned.insert((job_id, stage));
+            self.handoff_memory.remove(&(job_id, stage));
         } else {
             self.streams.retain(|key, _| key.job_id != job_id);
             self.cleaned.retain(|(id, _)| *id != job_id);
+            self.handoff_memory.retain(|(id, _), _| *id != job_id);
         }
     }
 
@@ -386,7 +416,7 @@ mod tests {
             ..task_key(0)
         };
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema.clone())?;
         assert!(write_without_waiting(&mut sink)?);
         assert!(matches!(sink.commit().now_or_never(), Some(Ok(()))));
 
@@ -407,13 +437,13 @@ mod tests {
             stage: key.stage + 1,
             ..key.clone()
         };
-        let mut sink = manager.create_stream(&other, 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&other, 1, 1, true, None, schema.clone())?;
         assert!(!write_without_waiting(&mut sink)?);
 
         // The cleanup of the job ends the special case for its stages.
         manager.remove_streams(key.job_id, None);
         assert!(manager.cleaned.is_empty());
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
         Ok(())
     }
@@ -422,9 +452,9 @@ mod tests {
     async fn streams_wait_only_when_bounded() -> TestResult {
         let mut manager = manager()?;
         let schema = Arc::new(Schema::empty());
-        let mut sink = manager.create_stream(&task_key(0), 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, false, None, schema.clone())?;
         assert!(write_without_waiting(&mut sink)?);
-        let mut sink = manager.create_stream(&task_key(1), 1, 1, true, schema)?;
+        let mut sink = manager.create_stream(&task_key(1), 1, 1, true, None, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
         Ok(())
     }
@@ -433,15 +463,57 @@ mod tests {
     async fn streams_wait_only_at_the_memory_limit() -> TestResult {
         let schema = Arc::new(Schema::empty());
         let mut manager = manager_with_memory_limit(0)?;
-        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, None, schema.clone())?;
         assert!(write_without_waiting(&mut sink)?);
         // Each batch counts as one byte.
         let mut manager = manager_with_memory_limit(10)?;
-        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, None, schema.clone())?;
         assert!(write_without_waiting(&mut sink)?);
         let mut manager = manager_with_memory_limit(9)?;
-        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema)?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, None, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handoff_streams_wait_at_their_budget() -> TestResult {
+        let schema = Arc::new(Schema::empty());
+        // The process has memory to spare, but the tasks of a hand-off stage on this worker
+        // share the budget: each batch counts as one byte.
+        let mut manager = manager_with_memory_limit(usize::MAX)?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 2, true, Some(15), schema.clone())?;
+        assert!(write_without_waiting(&mut sink)?);
+        let mut sink = manager.create_stream(&task_key(1), 1, 2, true, Some(15), schema.clone())?;
+        assert!(!write_without_waiting(&mut sink)?);
+        // The budget of a stage ends with its streams.
+        manager.remove_streams(JobId::from(1), Some(0));
+        assert!(manager.handoff_memory.is_empty());
+        let other = TaskKey {
+            stage: 1,
+            ..task_key(0)
+        };
+        let mut sink = manager.create_stream(&other, 1, 2, true, None, schema)?;
+        assert!(write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handoff_budget_is_lifted_once_every_replica_has_a_reader() -> TestResult {
+        let schema = Arc::new(Schema::empty());
+        let mut manager = manager_with_memory_limit(usize::MAX)?;
+        let key = task_key(0);
+        let (lead, _lead) = MemoryStream::pending();
+        let (follower, _follower) = MemoryStream::pending();
+        manager.streams.insert(
+            key.task_stream_key(0),
+            LocalStreamState::Pending {
+                waiters: vec![lead, follower],
+                probes: 1,
+            },
+        );
+        // Ten batches of one byte each, beyond the budget of five.
+        let mut sink = manager.create_stream(&key, 1, 2, true, Some(5), schema)?;
+        assert!(write_without_waiting(&mut sink)?);
         Ok(())
     }
 
@@ -457,7 +529,7 @@ mod tests {
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
         let mut manager = separate_memory(LocalStreamManager::new((&options).into()));
         let key = task_key(0);
-        let mut sink = manager.create_stream(&key, 2, 1, true, Arc::new(Schema::empty()))?;
+        let mut sink = manager.create_stream(&key, 2, 1, true, None, Arc::new(Schema::empty()))?;
         let mut readers = vec![];
         for channel in 0..2 {
             let Some(LocalStreamState::Created { stream }) =
@@ -527,7 +599,7 @@ mod tests {
 
         // The stream exists when the cleanup happens.
         let key = task_key(0);
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema.clone())?;
         manager.remove_streams(key.job_id, Some(key.stage));
         let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
@@ -536,7 +608,7 @@ mod tests {
         let key = task_key(1);
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema.clone())?;
         let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
@@ -544,7 +616,7 @@ mod tests {
         let key = task_key(2);
         let mut reader = fetch_pending(&mut manager, key.task_stream_key(0));
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema)?;
         let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Active);
         sink.commit().await?;
@@ -563,7 +635,7 @@ mod tests {
         let key = task_key(0);
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.fail_stream_if_pending(&key.task_stream_key(0), 1);
-        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, None, schema.clone())?;
         let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
@@ -573,7 +645,11 @@ mod tests {
         manager.fail_stream_if_pending(&key.task_stream_key(0), 1);
         assert!(matches!(reader.next().await, Some(Err(_))));
         assert!(reader.next().await.is_none());
-        assert!(manager.create_stream(&key, 1, 1, true, schema).is_err());
+        assert!(
+            manager
+                .create_stream(&key, 1, 1, true, None, schema)
+                .is_err()
+        );
         Ok(())
     }
 }

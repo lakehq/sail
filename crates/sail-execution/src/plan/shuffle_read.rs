@@ -25,6 +25,8 @@ pub struct ShuffleReadExec {
     properties: Arc<PlanProperties>,
     reader: Arc<dyn TaskStreamReader>,
     replicated: bool,
+    /// Whether each partition is opened when it is executed, not when it is first polled.
+    eager: bool,
     executed: Arc<[AtomicBool]>,
 }
 
@@ -39,8 +41,14 @@ impl ShuffleReadExec {
             properties,
             reader,
             replicated,
+            eager: false,
             executed: (0..partitions).map(|_| AtomicBool::new(false)).collect(),
         }
+    }
+
+    pub fn with_eager_open(mut self, eager: bool) -> Self {
+        self.eager = eager;
+        self
     }
 
     /// Releases the partitions of a replicated input that this task never executed,
@@ -70,7 +78,7 @@ impl ShuffleReadExec {
 struct ShuffleReadOpen {
     reader: Arc<dyn TaskStreamReader>,
     partition: usize,
-    /// The open call, which starts when the input is first polled.
+    /// The open call, which starts when the input is first polled unless it has started.
     open: Option<BoxFuture<'static, Result<TaskStreamSource>>>,
     opened: bool,
 }
@@ -172,10 +180,15 @@ impl ExecutionPlan for ShuffleReadExec {
         if let Some(executed) = self.executed.get(partition) {
             executed.store(true, Ordering::Relaxed);
         }
+        let open = if self.eager {
+            open_now(&self.reader, partition)
+        } else {
+            None
+        };
         let output = futures::stream::once(ShuffleReadOpen {
             reader: self.reader.clone(),
             partition,
-            open: None,
+            open,
             opened: false,
         })
         .map_ok(|source| {
@@ -224,6 +237,20 @@ impl ExecutionPlan for ShuffleReadExec {
             output,
         )))
     }
+}
+
+/// Starts the open call of a partition in the background.
+fn open_now(
+    reader: &Arc<dyn TaskStreamReader>,
+    partition: usize,
+) -> Option<BoxFuture<'static, Result<TaskStreamSource>>> {
+    let handle = Handle::try_current().ok()?;
+    let reader = reader.clone();
+    let open = handle.spawn(async move { reader.open(partition).await });
+    Some(Box::pin(async move {
+        open.await
+            .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?
+    }))
 }
 
 fn spawn_release(reader: Arc<dyn TaskStreamReader>, partition: usize) {
@@ -365,6 +392,33 @@ mod tests {
         })
         .await
         .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))
+    }
+
+    #[tokio::test]
+    async fn eager_input_is_opened_before_it_is_polled() -> Result<()> {
+        let lazy = TestReader::new(true, None);
+        let stream = execute(&lazy)?;
+        tokio::task::yield_now().await;
+        assert_eq!(lazy.counts(), (0, 0, 0));
+        drop(stream);
+
+        let eager = TestReader::new(true, None);
+        let mut stream = exec(&eager, 1, false)
+            .with_eager_open(true)
+            .execute(0, Arc::new(TaskContext::default()))?;
+        wait_until(|| eager.counts() == (1, 1, 0)).await?;
+        assert!(stream.try_next().await?.is_none());
+        assert_eq!(eager.counts(), (1, 1, 1));
+
+        // An eager input that is dropped unread is closed, not released.
+        let dropped = TestReader::new(true, None);
+        let stream = exec(&dropped, 1, false)
+            .with_eager_open(true)
+            .execute(0, Arc::new(TaskContext::default()))?;
+        drop(stream);
+        wait_until(|| dropped.counts() == (1, 1, 1)).await?;
+        assert!(dropped.released().is_empty());
+        Ok(())
     }
 
     #[tokio::test]

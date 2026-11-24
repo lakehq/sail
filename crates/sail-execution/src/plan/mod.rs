@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod handoff;
 mod shuffle_buffer;
 mod shuffle_compact;
 mod shuffle_read;
 mod shuffle_write;
 mod stage_input;
 
+pub(crate) use handoff::HandoffExec;
 pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::{ShufflePartitioning, ShuffleWriteExec};
 pub(crate) use stage_input::StageInputExec;

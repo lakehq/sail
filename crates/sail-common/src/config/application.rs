@@ -231,6 +231,8 @@ pub struct ClusterConfig {
     pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
+    pub enable_adaptive_join_selection: bool,
+    pub adaptive_join_broadcast_threshold: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub shuffle_backend: ShuffleBackend,
 }
@@ -852,6 +854,7 @@ mod system_catalog {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_semi_join_reduction: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
     pub enable_window_topn: bool,

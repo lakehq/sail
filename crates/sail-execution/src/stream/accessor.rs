@@ -127,6 +127,7 @@ impl TaskStreamAccessor {
         channels: usize,
         replicas: usize,
         bounded: bool,
+        handoff_budget: Option<usize>,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
         let (result, rx) = oneshot::channel();
@@ -136,6 +137,7 @@ impl TaskStreamAccessor {
                 channels,
                 replicas,
                 bounded,
+                handoff_budget,
                 schema,
                 result,
             },
@@ -299,7 +301,10 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 })?;
                 try_join_all(keys.iter().map(|key| {
                     self.streams.fetch_driver_stream(
-                        key.task_stream_key(self.key.job_id, self.input.stage),
+                        key.task_stream_key(
+                            self.input.producer_job_id(self.key.job_id),
+                            self.input.stage,
+                        ),
                         self.schema.clone(),
                     )
                 }))
@@ -309,7 +314,11 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 let keys = keys.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))
                 })?;
-                let keys = worker_key_sets(self.key.job_id, self.input.stage, keys);
+                let keys = worker_key_sets(
+                    self.input.producer_job_id(self.key.job_id),
+                    self.input.stage,
+                    keys,
+                );
                 try_join_all(keys.into_iter().map(|(worker_id, keys)| {
                     self.streams
                         .fetch_worker_streams(worker_id, keys, self.schema.clone())
@@ -322,7 +331,10 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 })?;
                 try_join_all(keys.iter().map(|key| {
                     self.streams.fetch_storage_stream(
-                        key.task_stream_key(self.key.job_id, self.input.stage),
+                        key.task_stream_key(
+                            self.input.producer_job_id(self.key.job_id),
+                            self.input.stage,
+                        ),
                         self.schema.clone(),
                     )
                 }))
@@ -335,7 +347,7 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 vec![
                     self.streams
                         .fetch_celeborn_stream(
-                            self.key.job_id,
+                            self.input.producer_job_id(self.key.job_id),
                             self.input.stage,
                             channels.clone(),
                             self.schema.clone(),
@@ -469,13 +481,18 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas, bounded } => {
+            TaskOutputLocator::Pipelined {
+                replicas,
+                bounded,
+                handoff_budget,
+            } => {
                 self.streams
                     .create_local_stream(
                         self.key.clone(),
                         channels,
                         *replicas,
                         *bounded,
+                        *handoff_budget,
                         self.schema.clone(),
                     )
                     .await

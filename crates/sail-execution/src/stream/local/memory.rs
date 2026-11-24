@@ -82,6 +82,11 @@ impl MemoryStream {
         (Box::new(sink), streams)
     }
 
+    /// Whether every replica has a reader.
+    pub(crate) fn is_fully_subscribed(&self) -> bool {
+        self.receivers.is_empty()
+    }
+
     pub(crate) fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
         let receiver = self.receivers.pop().ok_or_else(|| {
             ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
