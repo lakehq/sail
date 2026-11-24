@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.errors import AnalysisException, IllegalArgumentException
+from pyspark.errors import AnalysisException, IllegalArgumentException, PySparkException
 from pyspark.sql import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -126,6 +128,26 @@ def test_range_repartition_samples_only_when_the_query_runs(spark):
     df._explain_string(extended=True)  # noqa: SLF001
     with pytest.raises(Exception, match="range key computed"):
         df.collect()
+
+
+def test_range_repartition_sample_can_be_interrupted(spark):
+    # The sample of so many rows takes minutes. It runs under the operation, so the
+    # operation can be interrupted while it samples.
+    df = spark.range(0, 10**11).repartitionByRange(2, "id")
+    # The query is not waited for if the test fails, since it would run for minutes.
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        result = executor.submit(df.collect)
+        start = time.monotonic()
+        interrupted = []
+        while not interrupted and time.monotonic() - start < 10:
+            time.sleep(0.2)
+            interrupted = spark.interruptAll()
+        assert interrupted, "the operation was not found while it sampled"
+        with pytest.raises(PySparkException):
+            result.result(timeout=20)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def test_range_repartition_samples_input_with_scalar_subquery(spark):
