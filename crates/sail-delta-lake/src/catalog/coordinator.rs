@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -607,18 +607,11 @@ fn commit_lines(commit: &str) -> Vec<&str> {
 /// The ratified commits that this process has published or found published, with the entity
 /// tag of their published commits. A ratified commit is not compared with its published commit
 /// again while the published commit has the same entity tag.
-static PUBLISHED_RATIFIED_COMMITS: LazyLock<Mutex<PublishedRatifiedCommits>> =
-    LazyLock::new(Default::default);
-
-#[derive(Default)]
-struct PublishedRatifiedCommits {
-    e_tags: HashMap<String, String>,
-    /// The keys of `e_tags` in the order that they were remembered.
-    order: VecDeque<String>,
-}
+static PUBLISHED_RATIFIED_COMMITS: LazyLock<moka::sync::Cache<String, String>> =
+    LazyLock::new(|| moka::sync::Cache::new(PUBLISHED_RATIFIED_COMMIT_CAPACITY));
 
 /// The number of published ratified commits that are remembered.
-const PUBLISHED_RATIFIED_COMMIT_CAPACITY: usize = 4096;
+const PUBLISHED_RATIFIED_COMMIT_CAPACITY: u64 = 4096;
 
 fn published_ratified_commit_key(log_store: &LogStoreRef, path: &Path) -> String {
     format!("{}/{path}", log_store.root_uri().trim_end_matches('/'))
@@ -629,34 +622,16 @@ fn is_known_published_ratified_commit(
     path: &Path,
     e_tag: Option<&str>,
 ) -> bool {
-    let Some(e_tag) = e_tag else {
-        return false;
-    };
-    let key = published_ratified_commit_key(log_store, path);
-    PUBLISHED_RATIFIED_COMMITS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .e_tags
-        .get(&key)
-        .is_some_and(|known| known == e_tag)
+    e_tag.is_some_and(|e_tag| {
+        PUBLISHED_RATIFIED_COMMITS
+            .get(&published_ratified_commit_key(log_store, path))
+            .is_some_and(|known| known == e_tag)
+    })
 }
 
 fn remember_published_ratified_commit(log_store: &LogStoreRef, path: &Path, e_tag: Option<String>) {
-    let Some(e_tag) = e_tag else {
-        return;
-    };
-    let key = published_ratified_commit_key(log_store, path);
-    let mut guard = PUBLISHED_RATIFIED_COMMITS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let PublishedRatifiedCommits { e_tags, order } = &mut *guard;
-    if e_tags.insert(key.clone(), e_tag).is_none() {
-        order.push_back(key);
-        while order.len() > PUBLISHED_RATIFIED_COMMIT_CAPACITY {
-            if let Some(oldest) = order.pop_front() {
-                e_tags.remove(&oldest);
-            }
-        }
+    if let Some(e_tag) = e_tag {
+        PUBLISHED_RATIFIED_COMMITS.insert(published_ratified_commit_key(log_store, path), e_tag);
     }
 }
 
