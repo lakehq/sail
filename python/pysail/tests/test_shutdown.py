@@ -32,9 +32,9 @@ def _sail_process(args, ready, **env_vars):
                 process.kill()
 
 
-def _server(protocol, mode, **env_vars):
+def _server(protocol, mode, *, ready=r"Starting the .* server on 127\.0\.0\.1:(\d+)", **env_vars):
     env = {"SAIL_MODE": mode, "RUST_LOG": "sail_cli=info", **env_vars}
-    return _sail_process([protocol, "server", "--port", "0"], r"Starting the .* server on 127\.0\.0\.1:(\d+)", **env)
+    return _sail_process([protocol, "server", "--port", "0"], ready, **env)
 
 
 def _worker():
@@ -112,11 +112,21 @@ def test_sigterm_closes_stalled_flight_connection():
         assert server.wait(timeout=12) == 0
 
 
-@pytest.mark.parametrize("service", ["flight", "worker"])
+@pytest.mark.parametrize("service", ["flight", "driver-gateway", "worker"])
 def test_sigterm_force_closes_connection_after_grace_period(service):
     import grpc
 
-    process = _worker() if service == "worker" else _server("flight", "local")
+    if service == "driver-gateway":
+        process = _server(
+            "flight",
+            "local-cluster",
+            ready=r"driver server is ready on port (\d+)",
+            RUST_LOG="sail_session=info",
+            SAIL_CLUSTER__DRIVER_LISTEN_HOST="127.0.0.1",
+            SAIL_CLUSTER__DRIVER_LISTEN_PORT="0",
+        )
+    else:
+        process = _worker() if service == "worker" else _server("flight", "local")
     with process as (server, address), grpc.insecure_channel(address) as channel:
         # The watch stays open until the transport closes the connection.
         watch = channel.unary_stream("/grpc.health.v1.Health/Watch")(b"", timeout=20, wait_for_ready=True)
