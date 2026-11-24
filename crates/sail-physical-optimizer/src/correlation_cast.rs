@@ -426,7 +426,11 @@ mod tests {
                                     improved += 1;
                                 }
                                 (Err(a), Err(b), None) => {
-                                    assert_eq!(a.to_string(), b.to_string());
+                                    // DataFusion adds field and target labels at each cast.
+                                    assert_eq!(
+                                        a.find_root().to_string(),
+                                        b.find_root().to_string()
+                                    );
                                     overflow += 1;
                                 }
                                 x => {
@@ -443,7 +447,7 @@ mod tests {
             }
         }
         println!(
-            "PASS actual staged helper: property/decline cases={properties}; runtime cases={cases}; exact={same}; valid improvements={improved}; identical overflow errors={overflow}"
+            "PASS actual staged helper: property/decline cases={properties}; runtime cases={cases}; exact={same}; valid improvements={improved}; matching overflow causes={overflow}"
         );
         Ok(())
     }

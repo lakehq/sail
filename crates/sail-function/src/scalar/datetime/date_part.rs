@@ -534,11 +534,12 @@ mod tests {
     }
 
     #[test]
-    fn timestamps_out_of_range_after_an_offset_are_not_converted() -> Result<()> {
+    fn timestamps_out_of_range_use_native_date_part() -> Result<()> {
         let array = timestamps(TimeUnit::Microsecond, "+05:30")?;
         assert!(local_timestamps(&array).is_none());
         let array = timestamps(TimeUnit::Microsecond, "UTC")?;
-        assert!(local_timestamps(&array).is_some());
+        assert!(local_timestamps(&array).is_none());
+        assert!(local_timestamps(&array.slice(0, 7)).is_some());
         Ok(())
     }
 }
