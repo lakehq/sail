@@ -23,8 +23,8 @@ use sail_catalog::provider::{
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableSort, LakehouseExecutionContext, LakehouseOperation,
-    TableColumnStatus, TableKind,
+    CatalogTableBucketBy, CatalogTableSort, CommitAuthority, LakehouseExecutionContext,
+    LakehouseOperation, TableColumnStatus, TableKind,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -720,12 +720,28 @@ impl PlanResolver<'_> {
                         }
                         sink_info.create_table_schema = Some(schema);
                     }
-                    sink_info.lakehouse_table = Some(
-                        create_plan
-                            .table
-                            .execution
-                            .for_operation(LakehouseOperation::Write),
-                    );
+                    // A table that exists is written with what the catalog told about it
+                    // when the statement resolved it.
+                    let resolved_table =
+                        info.as_ref().and_then(|info| info.lakehouse_table.as_ref());
+                    let write_table = create_plan
+                        .table
+                        .execution
+                        .for_operation(LakehouseOperation::Write)
+                        .with_catalog_state_of(resolved_table);
+                    // The commit of the write replaces a table whose commits the catalog
+                    // ratifies, so the catalog has no table to create or to replace
+                    // before the write.
+                    let replaced_by_commit = matches!(mode, WriteMode::Replace { .. })
+                        && resolved_table.is_some()
+                        && write_table.commit == CommitAuthority::DeltaRatifiedCommit
+                        && write_table.table_identity.table_id.is_some()
+                        && create_plan.staged.is_none()
+                        && matches!(
+                            create_plan.materialization,
+                            LakehouseCreateMaterialization::None
+                        );
+                    sink_info.lakehouse_table = Some(write_table);
                     if write_format.eq_ignore_ascii_case("iceberg")
                         && matches!(mode, WriteMode::Replace { .. })
                     {
@@ -762,7 +778,7 @@ impl PlanResolver<'_> {
                                 &create_options,
                                 create_plan.table.execution.clone(),
                             )?));
-                    } else if table_replacement.is_none() {
+                    } else if table_replacement.is_none() && !replaced_by_commit {
                         // A retried Delta overwrite may be a no-op. In that case
                         // preserve the existing catalog entry as well as the data.
                         skip_preconditions_on_empty_exec = info.is_some()

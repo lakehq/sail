@@ -412,6 +412,22 @@ impl LakehouseExecutionContext {
         context.operation = operation;
         context
     }
+
+    /// Returns the context with what the catalog told about the Delta table when it
+    /// resolved the table as the `resolved` context, when the context is of the same
+    /// table of the catalog and does not have it.
+    pub fn with_catalog_state_of(mut self, resolved: Option<&Self>) -> Self {
+        if let Some(resolved) = resolved
+            && self.delta.is_none()
+            && self.table_identity.table_id.is_some()
+            && self.table_identity == resolved.table_identity
+            && self.catalog_provider_id == resolved.catalog_provider_id
+            && self.catalog_table == resolved.catalog_table
+        {
+            self.delta = resolved.delta.clone();
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

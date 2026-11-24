@@ -1694,7 +1694,22 @@ impl CatalogProvider for UnityCatalogProvider {
             .get_table_to_replace(database, table, &request.options)
             .await?
         {
-            return Ok(self.plan_delta_table_replace(&status, request));
+            let mut plan = self.plan_delta_table_replace(&status, request);
+            // A replacement that is not committed by a write reads and commits the table
+            // with what the catalog tells about the table here. A write tells it with
+            // the table that it resolved.
+            if let LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                context: Some(context),
+                ..
+            } = &mut plan.materialization
+            {
+                let state = self
+                    .get_delta_catalog_state(database, table, &plan.table)
+                    .await?;
+                context.delta = Some(state.clone());
+                plan.table.execution.delta = Some(state);
+            }
+            return Ok(plan);
         }
         let mut plan = sail_catalog::lakehouse::plan_lakehouse_create_from_requirement(
             self.get_name(),
