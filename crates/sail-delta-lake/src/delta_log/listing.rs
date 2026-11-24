@@ -5,10 +5,7 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use object_store::path::Path;
-use object_store::{
-    Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
-};
-use url::Url;
+use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
     CheckpointFileKind, DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint,
@@ -187,65 +184,16 @@ pub(crate) fn v2_checkpoint_path_from_hint(hint: &LastCheckpointHint) -> DeltaRe
     Ok(Some(location))
 }
 
-/// Whether the object store of the location lists keys in lexicographic order, which object
-/// stores such as Amazon S3 general purpose buckets, Azure Blob Storage, and Google Cloud
-/// Storage do. The local file system and Amazon S3 directory buckets do not.
-pub(crate) fn lists_keys_in_order(location: &Url) -> bool {
-    match ObjectStoreScheme::parse(location) {
-        Ok((ObjectStoreScheme::AmazonS3, _)) => !is_s3_directory_bucket_location(location),
-        Ok((
-            ObjectStoreScheme::MicrosoftAzure
-            | ObjectStoreScheme::GoogleCloudStorage
-            | ObjectStoreScheme::Memory,
-            _,
-        )) => true,
-        _ => false,
-    }
-}
-
-/// Whether the location is in an Amazon S3 directory bucket (S3 Express One Zone), whose name
-/// ends with `--x-s3`. The bucket is the host of an `s3://` location, the first label of a
-/// virtual-hosted endpoint, or the first path segment of a path-style endpoint.
-fn is_s3_directory_bucket_location(location: &Url) -> bool {
-    const SUFFIX: &str = "--x-s3";
-    let host = location.host_str().unwrap_or_default();
-    let first_segment = location
-        .path_segments()
-        .and_then(|mut segments| segments.next())
-        .unwrap_or_default();
-    host.split('.').next().unwrap_or_default().ends_with(SUFFIX)
-        || host.contains(".s3express-")
-        || first_segment.ends_with(SUFFIX)
-}
-
-#[cfg(test)]
-async fn list_delta_log_entries_from(
+pub(crate) async fn list_delta_log_entries_from(
     store: Arc<dyn ObjectStore>,
     offset_version: i64,
-) -> DeltaResult<Vec<ObjectMeta>> {
-    list_delta_log_entries(store, offset_version, false).await
-}
-
-/// Lists the files of the Delta log directory after the version. When the store lists keys in
-/// order, the listing stops at the first key under `_delta_log/_`, since the keys of the
-/// subdirectories of the log (such as `_staged_commits` and `_sidecars`) and `_last_checkpoint`
-/// sort after the versioned files of the log.
-pub(crate) async fn list_delta_log_entries(
-    store: Arc<dyn ObjectStore>,
-    offset_version: i64,
-    sorted: bool,
 ) -> DeltaResult<Vec<ObjectMeta>> {
     // `delta_log_prefix_path(version)` is a prefix, not a concrete filename, so
     // files for `version` still compare greater than the offset.
     let log_path = delta_log_root_path();
     let offset = delta_log_prefix_path(offset_version);
-    let end = format!("{}/_", log_path.as_ref());
     let entries = match store
         .list_with_offset(Some(&log_path), &offset)
-        .try_take_while(|meta| {
-            let more = !sorted || meta.location.as_ref() < end.as_str();
-            async move { Ok(more) }
-        })
         .try_collect::<Vec<_>>()
         .await
     {
@@ -272,16 +220,15 @@ pub(crate) async fn list_delta_log_entries(
 
 pub(crate) async fn latest_version_from_listing(
     store: Arc<dyn ObjectStore>,
-    sorted: bool,
 ) -> DeltaResult<Option<i64>> {
     let offset_version = read_last_checkpoint_version_from_store(store.clone())
         .await
         .map(|v| v.saturating_sub(1))
         .unwrap_or(0);
-    let entries = list_delta_log_entries(store.clone(), offset_version, sorted).await?;
+    let entries = list_delta_log_entries_from(store.clone(), offset_version).await?;
     let latest_version = latest_version_from_entries(entries);
     if latest_version.is_none() && offset_version > 0 {
-        let entries = list_delta_log_entries(store, 0, sorted).await?;
+        let entries = list_delta_log_entries_from(store, 0).await?;
         return Ok(latest_version_from_entries(entries));
     }
     Ok(latest_version)
@@ -335,9 +282,7 @@ mod tests {
 
         assert_eq!(parse_checkpoint_version_from_location(&sidecar), None);
         assert_eq!(
-            latest_version_from_listing(store.clone(), true)
-                .await
-                .unwrap(),
+            latest_version_from_listing(store.clone()).await.unwrap(),
             Some(7)
         );
         let entries = list_delta_log_entries_from(store, 0).await.unwrap();
@@ -365,10 +310,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            Some(20)
-        );
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(20));
     }
 
     #[tokio::test]
@@ -399,10 +341,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            Some(21)
-        );
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(21));
     }
 
     #[tokio::test]
@@ -430,10 +369,7 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            Some(20)
-        );
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(20));
     }
 
     #[tokio::test]
@@ -461,10 +397,7 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            None
-        );
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -499,10 +432,7 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            Some(10)
-        );
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(10));
     }
 
     #[tokio::test]
@@ -521,59 +451,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sorted_listing_stops_before_the_subdirectories_of_the_log() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        for key in [
-            "_delta_log/00000000000000000000.json",
-            "_delta_log/00000000000000000001.json",
-            "_delta_log/_last_checkpoint",
-            "_delta_log/_staged_commits/00000000000000000002.uuid.json",
-            // A top-level key after the subdirectories shows where the listing stops.
-            "_delta_log/z",
-        ] {
-            store
-                .put(&Path::from(key), b"{}".to_vec().into())
-                .await
-                .unwrap();
-        }
-        let names = |entries: Vec<ObjectMeta>| {
-            entries
-                .into_iter()
-                .map(|meta| meta.location.to_string())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            names(
-                list_delta_log_entries(store.clone(), 0, true)
-                    .await
-                    .unwrap()
-            ),
-            [
-                "_delta_log/00000000000000000000.json",
-                "_delta_log/00000000000000000001.json",
-            ]
-        );
-        assert_eq!(
-            names(
-                list_delta_log_entries(store.clone(), 0, false)
-                    .await
-                    .unwrap()
-            ),
-            [
-                "_delta_log/00000000000000000000.json",
-                "_delta_log/00000000000000000001.json",
-                "_delta_log/_last_checkpoint",
-                "_delta_log/z",
-            ]
-        );
-        assert_eq!(
-            latest_version_from_listing(store, true).await.unwrap(),
-            Some(1)
-        );
-    }
+    async fn listing_reads_every_version_of_a_store_that_lists_keys_out_of_order() {
+        use url::Url;
 
-    #[tokio::test]
-    async fn unsorted_listing_reads_every_key_of_an_unordered_store() {
+        use crate::delta_log::{StorageConfig, default_logstore};
+
+        // An object store does not have to list keys in lexicographic order, and the scheme
+        // of the location does not tell whether it does. The keys of the subdirectories of
+        // the log are listed before the commits here.
         let store = Arc::new(crate::test_store::ObservedStore::default());
         store.list_in_reverse_order();
         for key in [
@@ -581,6 +466,7 @@ mod tests {
             "_delta_log/00000000000000000001.json",
             "_delta_log/00000000000000000002.json",
             "_delta_log/_last_checkpoint",
+            "_delta_log/_sidecars/00000000000000000001.uuid.parquet",
             "_delta_log/_staged_commits/00000000000000000003.uuid.json",
         ] {
             store
@@ -589,10 +475,16 @@ mod tests {
                 .unwrap();
         }
         let store = store as Arc<dyn ObjectStore>;
-        let url = Url::parse("s3://bucket--use1-az4--x-s3/table").unwrap();
-        let sorted = lists_keys_in_order(&url);
-        assert!(!sorted);
-        let mut versions = list_delta_log_entries(store.clone(), 0, sorted)
+        for location in ["memory:///", "s3://bucket/table"] {
+            let log_store = default_logstore(
+                store.clone(),
+                store.clone(),
+                &Url::parse(location).unwrap(),
+                &StorageConfig,
+            );
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+        }
+        let mut versions = list_delta_log_entries_from(store, 0)
             .await
             .unwrap()
             .into_iter()
@@ -600,44 +492,5 @@ mod tests {
             .collect::<Vec<_>>();
         versions.sort();
         assert_eq!(versions, [0, 1, 2]);
-        assert_eq!(
-            latest_version_from_listing(store.clone(), sorted)
-                .await
-                .unwrap(),
-            Some(2)
-        );
-        // The listing that stops at the first key under `_delta_log/_` misses versions of an
-        // unordered store, which is why such a store is not listed as sorted.
-        assert!(
-            list_delta_log_entries(store, 0, true)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn object_stores_that_list_keys_in_order() {
-        for (location, sorted) in [
-            ("s3://bucket/table", true),
-            ("gs://bucket/table", true),
-            ("abfss://container@account.dfs.core.windows.net/table", true),
-            ("memory:///table", true),
-            ("file:///tmp/table", false),
-            ("s3://bucket--use1-az4--x-s3/table", false),
-            ("s3a://bucket--use1-az4--x-s3/table", false),
-            (
-                "https://bucket--use1-az4--x-s3.s3express-use1-az4.us-east-1.amazonaws.com/table",
-                false,
-            ),
-            ("https://s3.us-east-1.amazonaws.com/bucket/table", true),
-            (
-                "https://s3.us-east-1.amazonaws.com/bucket--use1-az4--x-s3/table",
-                false,
-            ),
-        ] {
-            let url = Url::parse(location).unwrap();
-            assert_eq!(lists_keys_in_order(&url), sorted, "{location}");
-        }
     }
 }

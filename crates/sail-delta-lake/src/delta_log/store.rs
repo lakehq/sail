@@ -21,7 +21,7 @@ use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_log::{latest_version_from_listing, lists_keys_in_order};
+use crate::delta_log::latest_version_from_listing;
 use crate::spec::{
     Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError, commit_path,
 };
@@ -249,11 +249,7 @@ impl LogStore for DefaultLogStore {
 
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64> {
         let start = start_version.max(0);
-        let latest = latest_version_from_listing(
-            self.object_store(None),
-            lists_keys_in_order(&self.config().location),
-        )
-        .await?;
+        let latest = latest_version_from_listing(self.object_store(None)).await?;
         match latest {
             Some(version) if version >= start => Ok(version),
             Some(_) | None => Err(DeltaError::MissingVersion),

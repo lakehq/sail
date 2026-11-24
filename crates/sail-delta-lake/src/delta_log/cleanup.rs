@@ -10,7 +10,7 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use uuid::Uuid;
 
 use super::{
-    complete_checkpoint_file_sets, list_delta_log_entries, lists_keys_in_order,
+    complete_checkpoint_file_sets, list_delta_log_entries_from,
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
     parse_commit_version_from_location, parse_compacted_json_versions_from_location,
     read_last_checkpoint_hint_from_store, resolve_version_timestamp, v2_checkpoint_path_from_hint,
@@ -127,7 +127,6 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 ) -> DeltaResult<usize> {
     let latest_version = table_state.version();
     let object_store = log_store.object_store(operation_id);
-    let sorted = lists_keys_in_order(&log_store.config().location);
     let retention = LogRetentionWindow::new(latest_version, cutoff_timestamp);
 
     let Some(retention_checkpoint_version) =
@@ -139,15 +138,13 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 
     // Before deleting any log files, ensure a classic checkpoint exists at the retention
     // boundary version when the table uses V2 (UUID-named) checkpoints.
-    ensure_v2_compat_classic_checkpoint(object_store.clone(), retention_checkpoint_version, sorted)
-        .await?;
+    ensure_v2_compat_classic_checkpoint(object_store.clone(), retention_checkpoint_version).await?;
 
     // Validate every checkpoint that will remain after cleanup and collect its sidecar references
     // before deleting any log file. A damaged retained checkpoint must fail closed while the
     // older JSON history is still available.
     let referenced_sidecars =
-        collect_referenced_sidecars(object_store.clone(), retention_checkpoint_version, sorted)
-            .await?;
+        collect_referenced_sidecars(object_store.clone(), retention_checkpoint_version).await?;
 
     let deleted_logs =
         delete_logs_before_checkpoint_version(object_store.clone(), retention_checkpoint_version)
@@ -167,7 +164,6 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
-    sorted: bool,
 ) -> DeltaResult<()> {
     // Check whether a classic checkpoint already exists at this version.
     let classic_path = checkpoint_path(version);
@@ -191,12 +187,8 @@ async fn ensure_v2_compat_classic_checkpoint(
 
     // Find the UUID-named checkpoint at `version` (if any).
     let mut uuid_checkpoint_meta: Option<object_store::ObjectMeta> = None;
-    for meta in list_delta_log_entries(
-        object_store.clone(),
-        version.saturating_sub(1).max(0),
-        sorted,
-    )
-    .await?
+    for meta in
+        list_delta_log_entries_from(object_store.clone(), version.saturating_sub(1).max(0)).await?
     {
         let filename = meta.location.filename().unwrap_or_default();
         if is_uuid_checkpoint_filename(filename)
@@ -305,19 +297,17 @@ fn expired_log_location(
 ///    AND are older than 24 hours (to avoid racing with concurrent checkpoint writers).
 #[cfg(test)]
 async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaResult<usize> {
-    let referenced_sidecars = collect_referenced_sidecars(object_store.clone(), 0, false).await?;
+    let referenced_sidecars = collect_referenced_sidecars(object_store.clone(), 0).await?;
     delete_orphaned_sidecars(object_store, &referenced_sidecars).await
 }
 
 async fn collect_referenced_sidecars(
     object_store: Arc<dyn ObjectStore>,
     min_checkpoint_version: i64,
-    sorted: bool,
 ) -> DeltaResult<HashSet<String>> {
-    let checkpoint_metas = list_delta_log_entries(
+    let checkpoint_metas = list_delta_log_entries_from(
         object_store.clone(),
         min_checkpoint_version.saturating_sub(1).max(0),
-        sorted,
     )
     .await?;
     let mut referenced_sidecars: HashSet<String> = HashSet::new();

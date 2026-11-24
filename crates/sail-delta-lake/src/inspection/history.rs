@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{InspectionState, timestamp_micros};
 use crate::delta_log::{
-    list_delta_log_entries, lists_keys_in_order, parse_commit_version_from_location,
+    list_delta_log_entries_from, parse_commit_version_from_location,
     version_uses_in_commit_timestamps,
 };
 use crate::snapshot::catalog_managed_commit_path;
@@ -67,8 +67,7 @@ pub(super) async fn batch(
         .map(|limit| end.saturating_sub(limit as i64 - 1).max(0))
         .unwrap_or(0);
     let store = state.log_store.object_store(None);
-    let sorted = lists_keys_in_order(&state.log_store.config().location);
-    let mut commits = list_delta_log_entries(store.clone(), start, sorted)
+    let mut commits = list_delta_log_entries_from(store.clone(), start)
         .await?
         .into_iter()
         .filter_map(|meta| {

@@ -2,9 +2,7 @@
 
 use crate::checkpoint::inspect_checkpoint_main_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
-use crate::delta_log::{
-    list_log_files, lists_keys_in_order, read_last_checkpoint_version_from_store,
-};
+use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
 use crate::spec::{DeltaResult, sidecar_log_path};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
@@ -48,13 +46,8 @@ pub async fn list_log_segment_files(
         .map(|v| v.saturating_sub(1).max(0))
         .unwrap_or(0);
 
-    let (_, checkpoint_meta, commit_metas, compaction_metas) = list_log_files(
-        store.clone(),
-        offset_version,
-        max_version,
-        lists_keys_in_order(&log_store.config().location),
-    )
-    .await?;
+    let (_, checkpoint_meta, commit_metas, compaction_metas) =
+        list_log_files(store.clone(), offset_version, max_version).await?;
 
     let mut checkpoint_files: Vec<String> = Vec::new();
     let mut sidecar_files: Vec<String> = Vec::new();

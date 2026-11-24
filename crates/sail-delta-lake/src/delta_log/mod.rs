@@ -10,7 +10,7 @@ mod timestamps;
 
 pub(crate) use listing::{
     CheckpointFileSet, complete_checkpoint_file_sets, latest_version_from_listing,
-    list_delta_log_entries, lists_keys_in_order, parse_checkpoint_version_from_location,
+    list_delta_log_entries_from, parse_checkpoint_version_from_location,
     parse_checksum_version_from_location, parse_commit_version_from_location,
     parse_compacted_json_versions_from_location, read_last_checkpoint_hint_from_store,
     read_last_checkpoint_version_from_store, v2_checkpoint_path_from_hint,
