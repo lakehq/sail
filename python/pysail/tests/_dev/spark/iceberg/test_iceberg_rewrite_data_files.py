@@ -105,6 +105,8 @@ def _assert_rewrite_commit(path, before, old_files, result, removed_deletes):
     assert result.rewritten_data_files_count == len(removed)
     assert result.added_data_files_count == len(added)
     assert result.rewritten_bytes_count == sum(old_files[name].data_file.file_size_in_bytes for name in removed)
+    if removed_deletes == 0:
+        assert int(snapshot["summary"]["removed-files-size"]) == result.rewritten_bytes_count
     assert result.failed_data_files_count == 0
     assert result.removed_delete_files_count == removed_deletes
     assert int(snapshot["summary"].get("removed-delete-files", 0)) == removed_deletes
@@ -773,3 +775,24 @@ def test_rewrite_equality_deletes_with_nonfinite_nonkey_bounds(spark, sql_catalo
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
         sql_catalog.drop_table(identifier)
+
+
+# [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/test/java/org/apache/iceberg/actions/TestBinPackRewriteFilePlanner.java#L475-L496
+@pytest.mark.parametrize("deleted", [2, 3])
+def test_rewrite_default_delete_ratio(spark, tmp_path, deleted):
+    table = "rewrite_delete_ratio"
+    location = escape_sql_string_literal(str(tmp_path))
+    spark.sql(f"""CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{location}'
+        TBLPROPERTIES ('format-version'='3', 'write.delete.mode'='merge-on-read')""")
+    try:
+        spark.sql(f"INSERT INTO {table} SELECT /*+ COALESCE(1) */ id FROM range(10)")
+        spark.sql(f"DELETE FROM {table} WHERE id < {deleted}")
+        before = _find_latest_metadata(tmp_path)
+        result = spark.sql(f"CALL system.rewrite_data_files('{table}')").first()
+        assert result.rewritten_data_files_count == int(deleted == 3)
+        after = _find_latest_metadata(tmp_path)
+        assert (after["current-snapshot-id"] != before["current-snapshot-id"]) == (deleted == 3)
+        assert spark.table(table).orderBy("id").collect() == [(i,) for i in range(deleted, 10)]
+        assert spark.sql(f"CALL system.rewrite_data_files('{table}')").collect() == [(0, 0, 0, 0, 0)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

@@ -155,3 +155,22 @@ Feature: TIMESTAMP_NTZ casts to TIMESTAMP in the session time zone
       | ntz_id | string_id |
       | 1      | 1         |
       | 2      | 2         |
+
+  Scenario Outline: Casting instants to dates across a subminute offset preserves the full microsecond range
+    Given config spark.sql.session.timeZone = <zone>
+    When query
+      """
+      SELECT unix_date(CAST(timestamp_micros(us) AS DATE)) AS strict_days,
+             unix_date(TRY_CAST(timestamp_micros(us) AS DATE)) AS try_days
+      FROM VALUES (<extreme>), (<boundary>), (CAST(NULL AS BIGINT)) AS t(us)
+      """
+    Then query result
+      | strict_days | try_days |
+      | <days>      | <days>   |
+      | <near>      | <near>   |
+      | NULL        | NULL     |
+
+    Examples:
+      | zone      | extreme                      | boundary      | days       | near |
+      | +05:30:45 | 9223372036854775807L         | -19845000001L | 106751991  | -1   |
+      | -05:30:45 | -9223372036854775807L - 1L   | 19845000000L  | -106751992 | 0    |

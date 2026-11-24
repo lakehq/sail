@@ -161,18 +161,20 @@ enum StructFieldMatching {
   STRUCT_FIELD_MATCHING_NAME = 0;
   STRUCT_FIELD_MATCHING_PHYSICAL_NAME = 1;
   STRUCT_FIELD_MATCHING_FIELD_ID = 2;
+  STRUCT_FIELD_MATCHING_CASE_INSENSITIVE_NAME = 3;
 }
 
-enum SchemaEvolutionTimezoneMode {
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_STRICT = 0;
-  SCHEMA_EVOLUTION_TIMEZONE_MODE_RELAXED = 1;
+enum SchemaEvolutionCastMode {
+  SCHEMA_EVOLUTION_CAST_MODE_STRICT = 0;
+  SCHEMA_EVOLUTION_CAST_MODE_RELAXED_TIMEZONE = 1;
+  SCHEMA_EVOLUTION_CAST_MODE_PARQUET = 2;
 }
 
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
   StructFieldMatching struct_field_matching = 3;
-  SchemaEvolutionTimezoneMode timezone_mode = 4;
+  SchemaEvolutionCastMode cast_mode = 4;
 }
 
 message LambdaExprNode {
@@ -315,6 +317,8 @@ message ExtendedScalarUdf {
     UuidCastUdf uuid_cast = 41;
     SparkIntervalUdf spark_interval = 42;
     SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
+    SparkToJsonUdf spark_to_json = 44;
+    SparkToJsonUdf variant_to_json = 45;
   }
 }
 
@@ -397,6 +401,10 @@ message ExplodeUdf {
 
 message XpathTypedUdf {
   string name = 1;
+}
+
+message SparkToJsonUdf {
+  string session_timezone = 1;
 }
 
 message SparkToXmlUdf {
@@ -826,7 +834,7 @@ message ParquetExecNode {
   optional bytes predicate = 3;
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
-  SchemaEvolutionTimezoneMode timezone_mode = 6;
+  SchemaEvolutionCastMode cast_mode = 6;
   repeated bytes virtual_columns = 7;
 }
 
@@ -930,6 +938,7 @@ message DeltaCommitContext {
   optional DeltaSnapshotContext base_snapshot = 1;
   repeated string identity_columns_to_track = 2;
   optional uint64 identity_writer_partitions = 3;
+  optional string transaction_json = 4;
 }
 
 message DeltaWriteContext {

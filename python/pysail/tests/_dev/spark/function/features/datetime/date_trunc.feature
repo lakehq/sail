@@ -16,9 +16,6 @@ Feature: DATE_TRUNC output type
          |-- result: timestamp (nullable = true)
         """
 
-    # `date_trunc` is declared to return TIMESTAMP regardless of the input type, so a
-    # TIMESTAMP_NTZ argument is converted rather than preserved. Sail returns timestamp_ntz.
-    @sail-bug
     @function(nullability)
     Scenario Outline: date_trunc on timestamp_ntz returns timestamp: <case>
       When query

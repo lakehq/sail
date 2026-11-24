@@ -1391,6 +1391,13 @@ impl std::future::IntoFuture for PreparedCommit {
                             None,
                         )
                         .await?;
+                        // A concurrent creator can win before we have a read snapshot
+                        // against which to run the intervening-commit conflict checks.
+                        if local_actions.iter().any(|action| matches!(
+                            action, CommitAction::Txn(txn) if snapshot.app_txns().contains_key(&txn.app_id)
+                        )) {
+                            return Err(TransactionError::CommitConflict(CommitConflictError::ConcurrentTransaction).into());
+                        }
                         read_snapshot = Some(Arc::new(snapshot));
                     }
 
@@ -2948,6 +2955,36 @@ mod tests {
         paths.sort_unstable();
         assert_eq!(paths, case.expected_paths());
         assert_commit_artifacts_untouched(&store, version).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_app_transactions_conflict_on_create_and_append() {
+        for case in [CommitCase::Create, CommitCase::Append] {
+            let (_, log_store, mut first) = commit_fault_fixture(case).await;
+            first.data.actions.push(CommitAction::Txn(Transaction {
+                app_id: "app".into(),
+                version: 0,
+                last_updated: None,
+            }));
+            let second = CommitBuilder::from(CommitProperties::default())
+                .with_actions(first.data.actions.clone())
+                .build(
+                    first.table_data.clone(),
+                    log_store.clone(),
+                    first.data.operation.clone(),
+                );
+            first.await.unwrap();
+            assert!(matches!(
+                second.await,
+                Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                    CommitConflictError::ConcurrentTransaction
+                )))
+            ));
+            assert_eq!(
+                log_store.get_latest_version(-1).await.unwrap(),
+                case.version()
+            );
+        }
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ use crate::scalar::datetime::convert_tz::{CastZone, parse_cast_zone};
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#timestampAddMonths`
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TimestampAddInterval {
+    null_on_error: bool,
     signature: Signature,
 }
 
@@ -45,14 +46,26 @@ impl Default for TimestampAddInterval {
 impl TimestampAddInterval {
     pub fn new() -> Self {
         Self {
+            null_on_error: false,
             signature: Signature::any(4, Volatility::Immutable),
+        }
+    }
+
+    pub fn try_variant() -> Self {
+        Self {
+            null_on_error: true,
+            ..Self::new()
         }
     }
 }
 
 impl ScalarUDFImpl for TimestampAddInterval {
     fn name(&self) -> &str {
-        "spark_timestamp_add_interval"
+        if self.null_on_error {
+            "spark_try_timestamp_add_interval"
+        } else {
+            "spark_timestamp_add_interval"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -73,7 +86,8 @@ impl ScalarUDFImpl for TimestampAddInterval {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let data_type = self.return_type(&arg_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        let nullable =
+            self.null_on_error || args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
@@ -123,16 +137,12 @@ impl ScalarUDFImpl for TimestampAddInterval {
             .zip(parts)
             .map(|(value, parts)| match (value, parts) {
                 (Some(value), Some((months, days, micros))) => {
-                    let (months, days, micros) = if negate {
-                        (
-                            months.checked_neg().ok_or_else(overflow)?,
-                            days.checked_neg().ok_or_else(overflow)?,
-                            micros.checked_neg().ok_or_else(overflow)?,
-                        )
+                    let result = apply_interval(value, months, days, micros, negate, &zone);
+                    if self.null_on_error {
+                        Ok(result.ok())
                     } else {
-                        (months, days, micros)
-                    };
-                    add_interval(value, months, days, micros, &zone).map(Some)
+                        result.map(Some)
+                    }
                 }
                 _ => Ok(None),
             })
@@ -146,6 +156,27 @@ impl ScalarUDFImpl for TimestampAddInterval {
         } else {
             Ok(ColumnarValue::Array(result))
         }
+    }
+}
+
+fn apply_interval(
+    value: i64,
+    months: i32,
+    days: i32,
+    micros: i64,
+    negate: bool,
+    zone: &Zone,
+) -> Result<i64> {
+    if negate {
+        add_interval(
+            value,
+            months.checked_neg().ok_or_else(overflow)?,
+            days.checked_neg().ok_or_else(overflow)?,
+            micros.checked_neg().ok_or_else(overflow)?,
+            zone,
+        )
+    } else {
+        add_interval(value, months, days, micros, zone)
     }
 }
 

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
@@ -15,10 +14,14 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{
+    SparkZone, arrow_timezone_label, localize_with_fallback,
+};
 use serde_json::Value;
 
+use crate::scalar::datetime::timestamp::TimestampParser;
 use crate::scalar::datetime::utils::format::DateTimeFormat;
+use crate::scalar::datetime::utils::parser::parse_timestamp_string;
 use crate::utils::nested::downcast_arg;
 
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
@@ -41,6 +44,8 @@ pub struct FromJson {
 /// Configuration options for the `from_json` function.
 #[derive(Debug)]
 struct FromJsonOptions {
+    timezone: SparkZone,
+    timestamp_ntz_format: Option<DateTimeFormat>,
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
 }
@@ -52,43 +57,23 @@ impl FromJsonOptions {
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd HH:mm:ss";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
-    fn from_map(map: &MapArray) -> Result<Self> {
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
-            .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
-                    .expect("default timestamp format should be valid")
-            });
-
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
-            .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
-                    .expect("default date format should be valid")
-            });
-
+    fn new(map: Option<&MapArray>, session_timezone: &str) -> Result<Self> {
+        let option = |key| map.and_then(|m| find_key_value(m, key));
+        let format = |key, default: &str| {
+            DateTimeFormat::for_parsing(option(key).as_deref().unwrap_or(default))
+        };
         Ok(Self {
-            timestamp_format,
-            date_format,
+            timezone: SparkZone::parse(option("timeZone").as_deref().unwrap_or(session_timezone))?,
+            timestamp_format: format(
+                Self::TIMESTAMP_FORMAT_OPTION,
+                Self::TIMESTAMP_FORMAT_DEFAULT,
+            )?,
+            timestamp_ntz_format: option("timestampNTZFormat")
+                .as_deref()
+                .map(DateTimeFormat::for_parsing)
+                .transpose()?,
+            date_format: format(Self::DATE_FORMAT_OPTION, Self::DATE_FORMAT_DEFAULT)?,
         })
-    }
-}
-
-impl Default for FromJsonOptions {
-    #[expect(clippy::expect_used)]
-    fn default() -> Self {
-        Self {
-            timestamp_format: DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
-                .expect("default timestamp format should be valid"),
-            date_format: DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
-                .expect("default date format should be valid"),
-        }
     }
 }
 
@@ -213,11 +198,12 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
         s
     };
 
-    let options: FromJsonOptions = if let Some(options) = args.get(2) {
-        FromJsonOptions::from_map(downcast_arg!(options, MapArray))?
+    let map = if let Some(options) = args.get(2) {
+        Some(downcast_arg!(options, MapArray))
     } else {
-        FromJsonOptions::default()
+        None
     };
+    let options = FromJsonOptions::new(map, session_timezone)?;
 
     let schema_data_type = parse_json_schema(schema_str, session_timezone)?;
 
@@ -336,19 +322,19 @@ enum FieldBuilder {
     },
     TimestampMicrosecond {
         builder: TimestampMicrosecondBuilder,
-        tz: Arc<str>,
+        ntz: bool,
     },
     TimestampMillisecond {
         builder: TimestampMillisecondBuilder,
-        tz: Arc<str>,
+        ntz: bool,
     },
     TimestampNanosecond {
         builder: TimestampNanosecondBuilder,
-        tz: Arc<str>,
+        ntz: bool,
     },
     TimestampSecond {
         builder: TimestampSecondBuilder,
-        tz: Arc<str>,
+        ntz: bool,
     },
     // Some data types aren't supported by spark's json implementation
     Unsupported {
@@ -434,27 +420,27 @@ fn create_builder(data_type: &DataType, capacity: usize) -> Result<FieldBuilder>
         ))),
         DataType::Timestamp(time_unit, tz) => {
             // NTZ fields store wall-clock microseconds and never use the session zone.
-            let resolved_tz = tz.clone().unwrap_or_else(|| Arc::from("UTC"));
+            let ntz = tz.is_none();
             match time_unit {
                 TimeUnit::Microsecond => Ok(FieldBuilder::TimestampMicrosecond {
                     builder: TimestampMicrosecondBuilder::with_capacity(capacity)
                         .with_timezone_opt(tz.clone()),
-                    tz: resolved_tz,
+                    ntz,
                 }),
                 TimeUnit::Millisecond => Ok(FieldBuilder::TimestampMillisecond {
                     builder: TimestampMillisecondBuilder::with_capacity(capacity)
                         .with_timezone_opt(tz.clone()),
-                    tz: resolved_tz,
+                    ntz,
                 }),
                 TimeUnit::Nanosecond => Ok(FieldBuilder::TimestampNanosecond {
                     builder: TimestampNanosecondBuilder::with_capacity(capacity)
                         .with_timezone_opt(tz.clone()),
-                    tz: resolved_tz,
+                    ntz,
                 }),
                 TimeUnit::Second => Ok(FieldBuilder::TimestampSecond {
                     builder: TimestampSecondBuilder::with_capacity(capacity)
                         .with_timezone_opt(tz.clone()),
-                    tz: resolved_tz,
+                    ntz,
                 }),
             }
         }
@@ -648,53 +634,34 @@ fn append_to_builder(
                 }
             }
         }
-        FieldBuilder::TimestampMicrosecond { builder, tz } => match value {
+        FieldBuilder::TimestampMicrosecond { builder, ntz } => match value {
             Value::String(string) => {
-                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
-                if let Some(timestamp_microseconds) =
-                    TimestampMicrosecondType::from_datetime(utc_datetime)
-                {
-                    builder.append_value(timestamp_microseconds);
-                } else {
-                    builder.append_null();
-                }
+                let utc_datetime = parse_timestamp(string, *ntz, options)?;
+                builder
+                    .append_option(utc_datetime.and_then(TimestampMicrosecondType::from_datetime));
             }
             _ => builder.append_null(),
         },
-        FieldBuilder::TimestampMillisecond { builder, tz } => match value {
+        FieldBuilder::TimestampMillisecond { builder, ntz } => match value {
             Value::String(string) => {
-                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
-                if let Some(timestamp_milliseconds) =
-                    TimestampMillisecondType::from_datetime(utc_datetime)
-                {
-                    builder.append_value(timestamp_milliseconds);
-                } else {
-                    builder.append_null();
-                }
+                let utc_datetime = parse_timestamp(string, *ntz, options)?;
+                builder
+                    .append_option(utc_datetime.and_then(TimestampMillisecondType::from_datetime));
             }
             _ => builder.append_null(),
         },
-        FieldBuilder::TimestampNanosecond { builder, tz } => match value {
+        FieldBuilder::TimestampNanosecond { builder, ntz } => match value {
             Value::String(string) => {
-                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
-                if let Some(timestamp_nanoseconds) =
-                    TimestampNanosecondType::from_datetime(utc_datetime)
-                {
-                    builder.append_value(timestamp_nanoseconds);
-                } else {
-                    builder.append_null();
-                }
+                let utc_datetime = parse_timestamp(string, *ntz, options)?;
+                builder
+                    .append_option(utc_datetime.and_then(TimestampNanosecondType::from_datetime));
             }
             _ => builder.append_null(),
         },
-        FieldBuilder::TimestampSecond { builder, tz } => match value {
+        FieldBuilder::TimestampSecond { builder, ntz } => match value {
             Value::String(string) => {
-                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
-                if let Some(timestamp_second) = TimestampSecondType::from_datetime(utc_datetime) {
-                    builder.append_value(timestamp_second);
-                } else {
-                    builder.append_null();
-                }
+                let utc_datetime = parse_timestamp(string, *ntz, options)?;
+                builder.append_option(utc_datetime.and_then(TimestampSecondType::from_datetime));
             }
             _ => builder.append_null(),
         },
@@ -943,11 +910,24 @@ fn parse_date32(
     Ok(Date32Type::from_naive_date(parsed.datetime.date()))
 }
 
-fn parse_timestamp(
-    s: &str,
-    timezone: Arc<str>,
-    options: &FromJsonOptions,
-) -> Result<DateTime<Utc>> {
+fn parse_timestamp(s: &str, ntz: bool, options: &FromJsonOptions) -> Result<Option<DateTime<Utc>>> {
+    if ntz {
+        let datetime = if let Some(format) = &options.timestamp_ntz_format {
+            format
+                .parse_datetime_value(s)
+                .ok()
+                .filter(|parsed| parsed.offset.is_none() && parsed.timezone.is_none())
+                .map(|parsed| parsed.datetime.and_utc())
+        } else if parse_timestamp_string(s).is_some_and(|parsed| parsed.timezone.is_none()) {
+            TimestampParser::Ntz
+                .parse_unformatted(s)
+                .ok()
+                .and_then(DateTime::from_timestamp_micros)
+        } else {
+            None
+        };
+        return Ok(datetime);
+    }
     let format = &options.timestamp_format;
     let parsed = format.parse_datetime_value(s)?;
 
@@ -959,19 +939,25 @@ fn parse_timestamp(
             .map(|x| x.to_utc())
             .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
     } else {
-        let tz: Tz = timezone.as_ref().parse().map_err(|e| {
-            DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}"))
-        })?;
-        localize_with_fallback(&tz, &parsed.datetime)?
+        let zone = parsed
+            .timezone
+            .as_deref()
+            .map(SparkZone::parse)
+            .transpose()?;
+        match zone.as_ref().unwrap_or(&options.timezone) {
+            SparkZone::Fixed(zone) => localize_with_fallback(zone, &parsed.datetime)?,
+            SparkZone::Named(zone) => localize_with_fallback(zone, &parsed.datetime)?,
+        }
     };
 
-    Ok(datetime)
+    Ok(Some(datetime))
 }
 
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
 /// like "a INT, b DOUBLE" (interpreted as a STRUCT), or a full type string like
 /// "ARRAY<INT>" or "MAP<STRING, INT>".
 fn parse_json_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
+    let session_timezone = &arrow_timezone_label(session_timezone);
     let schema = schema.trim();
 
     // Try parsing as Spark JSON schema format (e.g., {"type":"struct","fields":[...]}).
@@ -1062,9 +1048,10 @@ fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
         .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
         .and_then(|x| x.as_any().downcast_ref::<StringArray>())
         .and_then(|x| {
-            x.iter()
-                .enumerate()
-                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
+            x.iter().enumerate().find(|(_, x)| {
+                x.as_ref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(search_key))
+            })
         })
         .map(|(i, _)| i)
 }

@@ -211,21 +211,7 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | a quoted key         | SET `spark.sql.session.timeZone`=Asia/Kolkata |
         | a raw string         | SET TIME ZONE r'Asia/Kolkata'               |
         | a semicolon after the unquoted value | SET spark.sql.session.timeZone = Asia/Kolkata; |
-
-    # A backslash in a table cell is an escape of the table, so this statement is in a docstring.
-    Scenario: SET TIME ZONE unescapes a backslash in the zone
-      Given config spark.sql.session.timeZone = UTC
-      Given statement
-        """
-        SET TIME ZONE 'Asia\/Kolkata'
-        """
-      When query
-        """
-        SELECT current_timezone() AS zone
-        """
-      Then query result
-        | zone         |
-        | Asia/Kolkata |
+        | a zone with an escaped slash | SET TIME ZONE 'Asia\\/Kolkata' |
 
     Scenario: SET TIME ZONE returns a non-nullable key and value
       Given config spark.sql.session.timeZone = UTC
