@@ -872,7 +872,7 @@ pub(crate) async fn plan_delta_write(
 
     let table_url = DeltaLakeSource::parse_table_url(ctx, vec![path]).await?;
     let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
-    let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
+    let mut delta_options = DeltaWriteOptions::resolve(ctx, options)?;
     match delta_options
         .partition_overwrite_mode
         .to_ascii_lowercase()
@@ -1005,6 +1005,24 @@ pub(crate) async fn plan_delta_write(
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
     }
 
+    // A statement that replaces an existing Unity managed table (`REPLACE TABLE`, or
+    // `createOrReplace` of a DataFrame) gives the table the definition of the statement in
+    // the commit that overwrites the data, as Delta Spark does: the schema and the
+    // partitioning of the query, and the properties and the comment of the statement.
+    // The statement replaces the table as a whole, so it never overwrites partitions
+    // dynamically.
+    let replaces_table = replace_table_metadata
+        && catalog_managed_write
+        && table_exists
+        && matches!(
+            mode,
+            PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwritePartitions
+        );
+    if replaces_table {
+        mode = PhysicalSinkMode::Overwrite;
+        delta_options.overwrite_schema = true;
+    }
+
     let partition_by = if requested_partition_columns.is_empty() {
         requested_partition_columns
     } else {
@@ -1088,14 +1106,8 @@ pub(crate) async fn plan_delta_write(
     if matches!(mode, PhysicalSinkMode::OverwritePartitions) && partition_columns.is_empty() {
         mode = PhysicalSinkMode::Overwrite;
     }
-    // The replacement of an existing Unity managed table replaces its properties and its
-    // comment with the ones of the statement, in the commit that overwrites the data.
     let replacement = match &table_snapshot {
-        Some(snapshot)
-            if replace_table_metadata
-                && catalog_managed_write
-                && matches!(mode, PhysicalSinkMode::Overwrite) =>
-        {
+        Some(snapshot) if replaces_table => {
             Some(delta_write_replacement(ctx, snapshot, &table_properties)?)
         }
         _ => None,

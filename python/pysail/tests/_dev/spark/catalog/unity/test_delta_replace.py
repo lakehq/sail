@@ -11,6 +11,7 @@ from urllib.parse import unquote
 
 import pyarrow.parquet as pq
 import pytest
+from pyspark.sql.functions import col
 
 from pysail.tests._dev.spark.catalog.unity.conftest import (
     _actions,
@@ -520,3 +521,155 @@ def test_replace_as_select_applies_the_column_mapping_mode(spark: SparkSession, 
             schema = pq.read_schema(location / unquote(add["path"]))
             assert schema.names == list(data_columns.values()), add["path"]
             assert [field.name for field in schema.field(data_columns["point"]).type] == nested_columns
+
+
+def test_replace_as_select_replaces_the_schema_and_the_partitioning(
+    spark: SparkSession, unity_rest_url: str, database: str
+) -> None:
+    table = f"{database}.t"
+
+    def partition_columns() -> list[str]:
+        columns = sorted(_unity_table_info(unity_rest_url, table).get("columns") or [], key=lambda c: c["position"])
+        return [column["name"] for column in columns if column.get("partition_index") is not None]
+
+    spark.sql(
+        f"CREATE TABLE {table} (id BIGINT, p STRING) USING delta PARTITIONED BY (p) "
+        "TBLPROPERTIES ('delta.enableRowTracking' = 'true')"
+    )
+    created = _unity_table_info(unity_rest_url, table)
+    location = _location_to_path(_table_location(spark, table))
+    spark.sql(f"INSERT INTO {table} VALUES (1, 'a'), (2, 'b')")
+    version, _ = _latest_commit(location)
+    commits = _commits(location)
+    table_metadata = [m for _, a in sorted(commits.items()) for m in _actions(a, "metaData")][-1]
+    used = _row_ids([add for actions in commits.values() for add in _actions(actions, "add")])
+    high_water_mark = max(used)
+
+    # An overwrite with saveAsTable keeps the schema of the table, as the Delta V1 writer does.
+    frame = spark.createDataFrame([(7, 1.5)], schema="k INT, v DOUBLE")
+    with pytest.raises(Exception, match=r"(?i)schema|not found"):
+        frame.write.format("delta").mode("overwrite").saveAsTable(table)
+    assert _latest_commit(location)[0] == version
+    assert _rows(spark, table, "id") == [(1, "a"), (2, "b")]
+
+    # The statement gives the table the columns of the query and no partitioning, in
+    # the commit that replaces the data, as Delta Spark does.
+    spark.sql(f"CREATE OR REPLACE TABLE {table} USING delta AS SELECT id, CAST(id + 10 AS INT) AS r FROM range(3)")
+    assert _rows(spark, table, "id") == [(0, 10), (1, 11), (2, 12)]
+    assert spark.table(table).schema.simpleString() == "struct<id:bigint,r:int>"
+    replaced_version, actions = _latest_commit(location)
+    assert replaced_version == version + 1
+    (metadata,) = _actions(actions, "metaData")
+    assert [field["name"] for field in json.loads(metadata["schemaString"])["fields"]] == ["id", "r"]
+    assert metadata["partitionColumns"] == []
+    assert metadata["id"] == table_metadata["id"]
+    assert metadata["configuration"]["io.unitycatalog.tableId"] == created["table_id"]
+    # The table keeps row tracking, and the new rows get row IDs after the ones in use.
+    assert metadata["configuration"]["delta.enableRowTracking"] == "true"
+    assert (
+        metadata["configuration"]["delta.rowTracking.materializedRowIdColumnName"]
+        == table_metadata["configuration"]["delta.rowTracking.materializedRowIdColumnName"]
+    )
+    assert len(_actions(actions, "remove")) == 2  # noqa: PLR2004
+    adds = _actions(actions, "add")
+    assert all(add["partitionValues"] == {} for add in adds)
+    assert min(_row_ids(adds)) == high_water_mark + 1
+    assert _columns(unity_rest_url, table) == [("id", "LONG"), ("r", "INT")]
+    assert partition_columns() == []
+
+    # The type of a column and the partitioning change with the statement.
+    spark.sql(
+        f"REPLACE TABLE {table} USING delta PARTITIONED BY (r) "
+        "AS SELECT CAST(id AS STRING) AS id, 'x' AS s, CAST(id % 2 AS INT) AS r FROM range(4)"
+    )
+    assert _rows(spark, table, "id") == [("0", "x", 0), ("1", "x", 1), ("2", "x", 0), ("3", "x", 1)]
+    _, actions = _latest_commit(location)
+    (metadata,) = _actions(actions, "metaData")
+    assert metadata["partitionColumns"] == ["r"]
+    assert sorted(add["partitionValues"]["r"] for add in _actions(actions, "add")) == ["0", "1"]
+    assert _columns(unity_rest_url, table) == [("id", "STRING"), ("s", "STRING"), ("r", "INT")]
+    assert partition_columns() == ["r"]
+
+    # A query with fewer columns leaves the table with the columns of the query.
+    spark.sql(f"CREATE OR REPLACE TABLE {table} USING delta AS SELECT CAST(5 AS BIGINT) AS id")
+    assert _rows(spark, table, "id") == [(5,)]
+    assert _columns(unity_rest_url, table) == [("id", "LONG")]
+    assert partition_columns() == []
+
+    # The replacement of a DataFrame does the same.
+    frame.writeTo(table).using("delta").createOrReplace()
+    assert _rows(spark, table, "k") == [(7, 1.5)]
+    assert _columns(unity_rest_url, table) == [("k", "INT"), ("v", "DOUBLE")]
+    spark.createDataFrame([("a", 8)], schema="name STRING, part INT").writeTo(table).using("delta").partitionedBy(
+        col("part")
+    ).replace()
+    assert _rows(spark, table, "name") == [("a", 8)]
+    assert _columns(unity_rest_url, table) == [("name", "STRING"), ("part", "INT")]
+    assert partition_columns() == ["part"]
+    assert _latest_commit(location)[0] == version + 5
+
+    replaced = _unity_table_info(unity_rest_url, table)
+    assert replaced["table_id"] == created["table_id"]
+    assert replaced["storage_location"] == created["storage_location"]
+
+    # The replaced table accepts further writes.
+    spark.sql(f"INSERT INTO {table} VALUES ('b', 9)")
+    spark.sql(f"UPDATE {table} SET name = 'c' WHERE part = 8")
+    assert _rows(spark, table, "name") == [("b", 9), ("c", 8)]
+
+
+def test_replace_as_select_with_a_new_schema_assigns_new_column_mapping(spark: SparkSession, database: str) -> None:
+    table = f"{database}.t"
+    spark.sql(
+        f"CREATE TABLE {table} (id INT, point STRUCT<x: INT, y: STRING>, grp STRING) USING delta "
+        "PARTITIONED BY (grp) TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+    )
+    location = _location_to_path(_table_location(spark, table))
+    spark.sql(f"INSERT INTO {table} VALUES (1, named_struct('x', 10, 'y', 'p'), 'a')")
+    commits = _commits(location)
+    metadata = [m for _, a in sorted(commits.items()) for m in _actions(a, "metaData")][-1]
+    created = _column_mapping(json.loads(metadata["schemaString"])["fields"])
+    created_columns = [*created.values(), *created["point"][2].values()]
+    used_ids = {column_id for _, column_id, _ in created_columns}
+    used_names = {physical for physical, _, _ in created_columns}
+
+    # The columns of the query get physical names and column IDs that the table has
+    # not used, also the column that keeps its name.
+    spark.sql(
+        f"CREATE OR REPLACE TABLE {table} USING delta PARTITIONED BY (part) "
+        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name') "
+        "AS SELECT 'k' AS id, named_struct('z', 2.5) AS val, CAST(7 AS INT) AS part"
+    )
+    rows = spark.sql(f"SELECT id, val.z, part FROM {table}").collect()
+    assert [tuple(row) for row in rows] == [("k", 2.5, 7)]
+    _, actions = _latest_commit(location)
+    (metadata,) = _actions(actions, "metaData")
+    mapping = _column_mapping(json.loads(metadata["schemaString"])["fields"])
+    assert list(mapping) == ["id", "val", "part"]
+    columns = [*mapping.values(), *mapping["val"][2].values()]
+    ids = {column_id for _, column_id, _ in columns}
+    names = {physical for physical, _, _ in columns}
+    assert len(ids) == len(columns)
+    assert min(ids) > max(used_ids)
+    assert names.isdisjoint(used_names | set(mapping) | {"z"})
+    assert metadata["configuration"]["delta.columnMapping.mode"] == "name"
+    assert int(metadata["configuration"]["delta.columnMapping.maxColumnId"]) == max(ids)
+    assert metadata["partitionColumns"] == ["part"]
+    (add,) = _actions(actions, "add")
+    assert add["partitionValues"] == {mapping["part"][0]: "7"}
+    schema = pq.read_schema(location / unquote(add["path"]))
+    assert schema.names == [mapping["id"][0], mapping["val"][0]]
+    assert [field.name for field in schema.field(mapping["val"][0]).type] == [mapping["val"][2]["z"][0]]
+
+    # The statement without the property leaves the table without column mapping.
+    spark.sql(f"CREATE OR REPLACE TABLE {table} USING delta AS SELECT CAST(3 AS BIGINT) AS n, 'q' AS id")
+    assert _rows(spark, table, "n") == [(3, "q")]
+    _, actions = _latest_commit(location)
+    (metadata,) = _actions(actions, "metaData")
+    assert not any(key.startswith("delta.columnMapping.") for key in metadata["configuration"])
+    assert metadata["partitionColumns"] == []
+    (add,) = _actions(actions, "add")
+    assert pq.read_schema(location / unquote(add["path"])).names == ["n", "id"]
+
+    spark.sql(f"INSERT INTO {table} VALUES (4, 'r')")
+    assert _rows(spark, table, "n") == [(3, "q"), (4, "r")]
