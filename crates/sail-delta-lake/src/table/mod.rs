@@ -3115,6 +3115,31 @@ mod catalog_managed_tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn catalog_commit_with_unknown_outcome_is_not_reported_as_refused() {
+        // The catalog does not answer the first request, and then throttles the same request,
+        // refuses to authorize it, or is at its limit when the request is sent again. The
+        // catalog may still ratify the first request, so the outcome is not known and the
+        // staged commit is kept.
+        let refusals: [fn() -> CatalogError; 4] = [
+            || CatalogError::RateLimited("429".into()),
+            || CatalogError::Unauthorized("401".into()),
+            || CatalogError::Forbidden("403".into()),
+            || CatalogError::ResourceExhausted("429".into()),
+        ];
+        for refusal in refusals {
+            let steps = std::iter::once(CommitStep::Refuse(state_unknown))
+                .chain((0..3).map(|_| CommitStep::Refuse(refusal)))
+                .collect();
+            let commit = commit_with_script(steps, true).await;
+            let error = commit.result.as_ref().err().unwrap().to_string();
+            assert!(error.contains("commit state unknown"), "{error}");
+            let requests = commit.requests();
+            assert_eq!(commit.staged_commits().await, vec![requests[0].1.clone()]);
+            assert_eq!(commit.latest_table_version(), 0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn catalog_commit_with_unknown_outcome_that_another_writer_won_is_a_conflict() {
         let steps = vec![
             CommitStep::Refuse(state_unknown),
