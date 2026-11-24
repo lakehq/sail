@@ -3,8 +3,6 @@
 # SPDX-FileAttributionText: License: https://github.com/unitycatalog/unitycatalog/blob/2b17f3b5a1d06c0adbf22f4c11ea888c01a36415/LICENSE
 # SPDX-FileAttributionText: Notice: https://github.com/unitycatalog/unitycatalog/blob/2b17f3b5a1d06c0adbf22f4c11ea888c01a36415/NOTICE
 # SPDX-FileCopyrightText: Copyright (2024) Databricks, Inc.
-# SPDX-FileCopyrightText: Portions Copyright (2026) LakeSail, Inc.
-# SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 openapi: 3.1.1
 servers:
