@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 use tokio::runtime::Handle;
 
@@ -13,11 +14,11 @@ use super::{
 };
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
-    TableStorageCredentialsRequest,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest,
 };
 
 pub struct RuntimeAwareCatalogProvider<P: CatalogProvider> {
@@ -266,6 +267,26 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| {
                 CatalogError::External(format!("Failed to execute commit_lakehouse_table: {e}"))
             })?
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        // The catalog may have ratified the commit of a task that did not finish.
+        self.handle
+            .spawn(async move { inner.commit_delta_table(&database, &table, commit).await })
+            .await
+            .unwrap_or_else(|e| {
+                Ok(DeltaCommitOutcome::Unknown(format!(
+                    "Failed to execute commit_delta_table: {e}"
+                )))
+            })
     }
 
     async fn get_delta_ratified_commits(

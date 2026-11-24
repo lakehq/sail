@@ -1616,11 +1616,12 @@ mod catalog_managed_tests {
     use object_store::{ObjectStore, ObjectStoreExt};
     use sail_catalog::error::{CatalogError, CatalogResult};
     use sail_catalog::lakehouse::{
-        DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-        LakehouseCommitOutcome, LakehouseCommitRequest,
+        DeltaCommitOutcome, DeltaRatifiedCommit, DeltaRatifiedCommitRequest,
+        DeltaRatifiedCommitResponse,
     };
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::*;
+    use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
     use sail_common_datafusion::catalog::*;
     use sail_common_datafusion::datasource::OptionLayer;
     use url::Url;
@@ -1668,7 +1669,7 @@ mod catalog_managed_tests {
         store: Arc<InMemory>,
         steps: Mutex<VecDeque<CommitStep>>,
         ratified: Mutex<DeltaRatifiedCommitResponse>,
-        requests: Mutex<Vec<serde_json::Value>>,
+        requests: Mutex<Vec<DeltaCatalogCommit>>,
     }
 
     impl CommitScript {
@@ -1689,10 +1690,10 @@ mod catalog_managed_tests {
             true
         }
 
-        async fn commit(&self, update: &serde_json::Value) -> CatalogResult<()> {
-            self.requests.lock().unwrap().push(update.clone());
-            let version = update["commit_info"]["version"].as_i64().unwrap();
-            let file_name = update["commit_info"]["file_name"].as_str().unwrap();
+        async fn commit(&self, commit: &DeltaCatalogCommit) -> CatalogResult<()> {
+            self.requests.lock().unwrap().push(commit.clone());
+            let version = commit.commit_info.version;
+            let file_name = commit.commit_info.file_name.as_str();
             let step = self.steps.lock().unwrap().pop_front();
             match step {
                 Some(CommitStep::Refuse(error)) => return Err(error()),
@@ -1741,6 +1742,21 @@ mod catalog_managed_tests {
         }
     }
 
+    /// The answer of the catalog to a commit that it answers with the error of a request.
+    fn commit_answer(error: CatalogError) -> CatalogResult<DeltaCommitOutcome> {
+        match error {
+            CatalogError::Conflict(message) => Ok(DeltaCommitOutcome::Conflict(message)),
+            CatalogError::ResourceExhausted(message) => {
+                Ok(DeltaCommitOutcome::BackfillRequired(message))
+            }
+            CatalogError::RateLimited(message) => Ok(DeltaCommitOutcome::Throttled(message)),
+            CatalogError::CommitStateUnknown(error) => {
+                Ok(DeltaCommitOutcome::Unknown(error.to_string()))
+            }
+            error => Err(error),
+        }
+    }
+
     fn unsupported<T>() -> CatalogResult<T> {
         Err(CatalogError::NotSupported(
             "unused test catalog operation".into(),
@@ -1781,21 +1797,19 @@ mod catalog_managed_tests {
                 },
             })
         }
-        async fn commit_lakehouse_table(
+        async fn commit_delta_table(
             &self,
             _: &Namespace,
             _: &str,
-            request: LakehouseCommitRequest,
-        ) -> CatalogResult<LakehouseCommitOutcome> {
-            if let Some(script) = &self.script {
-                script.commit(&request.updates[0]).await?;
-            }
-            match self.commit_error {
-                Some(error) => Err(error()),
-                None => Ok(LakehouseCommitOutcome::Committed {
-                    context: request.context,
-                    payload: None,
-                }),
+            commit: DeltaCatalogCommit,
+        ) -> CatalogResult<DeltaCommitOutcome> {
+            let answer = match &self.script {
+                Some(script) => script.commit(&commit).await,
+                None => Ok(()),
+            };
+            match answer.and(self.commit_error.map_or(Ok(()), |error| Err(error()))) {
+                Ok(()) => Ok(DeltaCommitOutcome::Committed),
+                Err(error) => commit_answer(error),
             }
         }
         async fn get_delta_ratified_commits(
@@ -2773,9 +2787,7 @@ mod catalog_managed_tests {
     #[tokio::test]
     async fn catalog_commit_with_unknown_outcome_keeps_staged_commit() {
         // A server error, a timeout, or a network error may follow a ratified commit.
-        assert!(
-            staged_commit_exists_after_catalog_error(|| CatalogError::External("503".into())).await
-        );
+        assert!(staged_commit_exists_after_catalog_error(state_unknown).await);
     }
     const ADD_ACTION: &str = concat!(
         r#"{"add":{"path":"winner.parquet","partitionValues":{},"size":5,"#,
@@ -2805,10 +2817,9 @@ mod catalog_managed_tests {
         /// Returns the version and the file name of each commit request.
         fn requests(&self) -> Vec<(i64, String)> {
             let requests = self.script().requests.lock().unwrap();
-            let commit = |update: &serde_json::Value| {
-                let info = &update["commit_info"];
-                let file_name = info["file_name"].as_str().unwrap();
-                (info["version"].as_i64().unwrap(), file_name.to_string())
+            let commit = |commit: &DeltaCatalogCommit| {
+                let info = &commit.commit_info;
+                (info.version, info.file_name.clone())
             };
             requests.iter().map(commit).collect()
         }
@@ -3201,7 +3212,7 @@ mod catalog_managed_tests {
         let requests = commit.script().requests.lock().unwrap();
         requests
             .iter()
-            .map(|request| request["latest_backfilled_version"].clone())
+            .map(|request| serde_json::json!(request.latest_backfilled_version))
             .collect()
     }
 

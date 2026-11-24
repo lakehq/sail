@@ -167,6 +167,25 @@ pub enum LakehouseCommitOutcome {
     },
 }
 
+/// What a catalog answers to a staged commit of a catalog-managed Delta table. An error
+/// instead of an outcome means that the catalog did not ratify the commit: the catalog
+/// refused the request, or the request was not sent.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DeltaCommitOutcome {
+    /// The catalog ratified the commit.
+    Committed,
+    /// The version of the commit is taken by another commit.
+    Conflict(String),
+    /// The catalog accepts no commit until the ratified commits of the table are published
+    /// and reported to it.
+    BackfillRequired(String),
+    /// The catalog throttled the request, which can be sent again.
+    Throttled(String),
+    /// The catalog did not tell whether it ratified the commit (a server error, a timeout, or
+    /// a network error).
+    Unknown(String),
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DeltaRatifiedCommitRequest {
     pub context: LakehouseExecutionContext,

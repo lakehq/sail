@@ -8,15 +8,16 @@ use datafusion::arrow::datatypes::SchemaRef;
 use moka::future::Cache;
 use moka::policy::EvictionPolicy;
 use sail_common::config::CatalogCacheConfig;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
-    TableStorageCredentialsRequest,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest,
 };
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -406,6 +407,28 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         })
         .await
         .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let inner = self.inner.clone();
+        let cache = self.table_cache.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        tokio::spawn(async move {
+            let outcome = inner.commit_delta_table(&database, &table, commit).await;
+            // Unknown outcomes may also have changed the authoritative table.
+            if let Some(cache) = cache {
+                cache.invalidate(&database).await;
+            }
+            outcome
+        })
+        .await
+        .unwrap_or_else(|error| Ok(DeltaCommitOutcome::Unknown(error.to_string())))
     }
 
     async fn get_delta_ratified_commits(

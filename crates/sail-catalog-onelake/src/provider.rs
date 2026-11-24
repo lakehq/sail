@@ -6,10 +6,11 @@ use std::sync::Arc;
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -21,6 +22,7 @@ use sail_catalog_iceberg::{
     REST_CATALOG_PROP_WAREHOUSE,
 };
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
 use url::Url;
@@ -338,6 +340,15 @@ impl CatalogProvider for OneLakeCatalogProvider {
         self.inner
             .commit_lakehouse_table(database, table, request)
             .await
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        self.inner.commit_delta_table(database, table, commit).await
     }
 
     async fn get_delta_ratified_commits(

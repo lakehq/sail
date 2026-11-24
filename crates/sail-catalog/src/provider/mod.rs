@@ -10,15 +10,16 @@ use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
-    TableStorageCredentialsRequest, plan_lakehouse_create_from_requirement,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest, plan_lakehouse_create_from_requirement,
     resolve_lakehouse_table_status,
 };
 
@@ -205,6 +206,19 @@ pub trait CatalogProvider: Send + Sync {
         let _ = (database, table, request);
         Err(CatalogError::UnsupportedCapability(
             "lakehouse table commits".to_string(),
+        ))
+    }
+
+    /// Commits a staged commit of a catalog-managed Delta table to the catalog.
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let _ = (database, table, commit);
+        Err(CatalogError::UnsupportedCapability(
+            "Delta table commits".to_string(),
         ))
     }
 

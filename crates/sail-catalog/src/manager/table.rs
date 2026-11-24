@@ -3,16 +3,17 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{TableStatus, TableStorageCredentials};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
-    LakehouseResolvedTable, LakehouseScanPlanningRequest, LakehouseScanPlanningResponse,
-    ResolveLakehouseTableRequest, TableAccessSession, TableStorageCredentialsRequest,
-    resolve_lakehouse_table_status,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest, resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -355,6 +356,15 @@ impl CatalogManager {
         provider
             .commit_lakehouse_table(&database, &table, request)
             .await
+    }
+
+    pub async fn commit_delta_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.commit_delta_table(&database, &table, commit).await
     }
 
     pub async fn get_delta_ratified_commits<T: AsRef<str>>(

@@ -13,8 +13,7 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::lakehouse::{
-    DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCommitOutcome,
-    LakehouseCommitRequest,
+    DeltaCommitOutcome, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -185,44 +184,37 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             actions,
             latest_backfilled_version,
         );
-        let mut update = match delta_catalog_commit_update(&commit) {
-            Ok(update) => update,
-            Err(error) => {
-                delete_staged_commit(log_store, staged).await;
-                return Err(error);
-            }
-        };
         let mut resends = 0;
         let mut outcome_unknown = false;
         let mut published_ratified_commits = false;
         let mut publish_failure = None;
         loop {
-            let outcome = manager
-                .commit_lakehouse_table(
-                    self.catalog_table,
-                    LakehouseCommitRequest {
-                        context: lakehouse_table.clone(),
-                        format: "delta".to_string(),
-                        requirements: vec![],
-                        updates: vec![update.clone()],
-                        payload: None,
-                    },
-                )
-                .await;
-            let Some(error) = commit_outcome_error(outcome) else {
-                return Ok(StagedCommitOutcome::Committed(
-                    commit.latest_backfilled_version,
-                ));
+            let answer = match manager
+                .commit_delta_table(self.catalog_table, commit.clone())
+                .await
+            {
+                Ok(DeltaCommitOutcome::Committed) => {
+                    return Ok(StagedCommitOutcome::Committed(
+                        commit.latest_backfilled_version,
+                    ));
+                }
+                answer => answer,
             };
-            let unknown = matches!(error, CatalogError::CommitStateUnknown(_));
+            let unknown = matches!(answer, Ok(DeltaCommitOutcome::Unknown(_)));
             outcome_unknown |= unknown;
-            if (unknown || matches!(error, CatalogError::RateLimited(_)))
+            if (unknown || matches!(answer, Ok(DeltaCommitOutcome::Throttled(_))))
                 && resends < MAX_COMMIT_RESENDS
             {
                 tokio::time::sleep(COMMIT_RESEND_BACKOFF * (1 << resends)).await;
                 resends += 1;
                 continue;
             }
+            // The catalog refuses the staged commit itself when the version of the commit is
+            // taken, or when the catalog is at its limit of commits that are not published,
+            // which it checks after it looks for the staged commit among the commits that it
+            // has ratified.
+            let conflict = matches!(answer, Ok(DeltaCommitOutcome::Conflict(_)));
+            let backfill_required = matches!(answer, Ok(DeltaCommitOutcome::BackfillRequired(_)));
             if outcome_unknown {
                 // An earlier request may have been ratified whatever the catalog answers now.
                 match self
@@ -245,23 +237,20 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     // ratify the request that it did not answer. Only an answer about the
                     // staged commit itself is followed. Any other answer (e.g. a request that
                     // is throttled or not authorized) tells nothing about the earlier request.
-                    Ok(StagedCommitState::Pending) if refusal_is_of_staged_commit(&error) => {}
+                    Ok(StagedCommitState::Pending) if conflict || backfill_required => {}
                     Ok(StagedCommitState::Pending) => {
-                        return Err(commit_state_unknown_error(staged, error));
+                        return Err(commit_state_unknown_error(staged, refusal(answer)));
                     }
                     Err(e) => {
                         warn!(
                             "Failed to find the staged Delta commit `{}` in the commits of the table: {e}",
                             staged.staged_path
                         );
-                        return Err(commit_state_unknown_error(staged, error));
+                        return Err(commit_state_unknown_error(staged, refusal(answer)));
                     }
                 }
             }
-            if !commit_is_rejected(&error) {
-                return Err(DataFusionError::External(Box::new(error)));
-            }
-            if matches!(error, CatalogError::ResourceExhausted(_)) && !published_ratified_commits {
+            if backfill_required && !published_ratified_commits {
                 // The catalog accepts the commit after the ratified commits of the table are
                 // published and reported, which any writer of the table may do.
                 published_ratified_commits = true;
@@ -277,7 +266,6 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                         // so the refusal shows that no earlier request was ratified.
                         if published.version > commit.latest_backfilled_version {
                             commit.latest_backfilled_version = published.version;
-                            update = delta_catalog_commit_update(&commit)?;
                             continue;
                         }
                     }
@@ -289,22 +277,26 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             }
             // A request that the catalog did not answer may still be ratified, unless the
             // catalog answers the same request with a conflict.
-            if !outcome_unknown || matches!(error, CatalogError::Conflict(_)) {
+            if !outcome_unknown || conflict {
                 delete_staged_commit(log_store, staged).await;
             }
-            return match (error, publish_failure) {
-                (CatalogError::Conflict(message), _) => Ok(StagedCommitOutcome::Conflict(message)),
+            return match (answer, publish_failure) {
+                (Ok(DeltaCommitOutcome::Conflict(message)), _) => {
+                    Ok(StagedCommitOutcome::Conflict(message))
+                }
                 // The catalog is at its limit now, which does not tell whether it ratifies
                 // the request that it did not answer.
-                (error, _) if outcome_unknown => Err(commit_state_unknown_error(staged, error)),
+                (answer, _) if outcome_unknown => {
+                    Err(commit_state_unknown_error(staged, refusal(answer)))
+                }
                 // The commit that blocks the backfill must be repaired before the catalog
                 // accepts another commit.
-                (CatalogError::ResourceExhausted(message), Some(failure)) => {
+                (Ok(DeltaCommitOutcome::BackfillRequired(message)), Some(failure)) => {
                     Err(DataFusionError::External(Box::new(
                         CatalogError::ResourceExhausted(format!("{message}; {failure}")),
                     )))
                 }
-                (error, _) => Err(DataFusionError::External(Box::new(error))),
+                (answer, _) => Err(DataFusionError::External(Box::new(refusal(answer)))),
             };
         }
     }
@@ -561,20 +553,21 @@ struct PublishedCommits {
     failure: Option<String>,
 }
 
-/// Returns the error of a commit that the catalog has not answered with success.
-fn commit_outcome_error(outcome: CatalogResult<LakehouseCommitOutcome>) -> Option<CatalogError> {
-    match outcome {
-        Ok(LakehouseCommitOutcome::Committed { .. } | LakehouseCommitOutcome::Noop { .. }) => None,
-        Ok(LakehouseCommitOutcome::RetryableConflict { message }) => {
-            Some(CatalogError::Conflict(message))
+/// Returns the error of a commit that the catalog did not ratify.
+fn refusal(answer: CatalogResult<DeltaCommitOutcome>) -> CatalogError {
+    match answer {
+        Ok(DeltaCommitOutcome::Committed) => {
+            CatalogError::Internal("the catalog ratified the Delta commit".to_string())
         }
-        Ok(LakehouseCommitOutcome::StateUnknown { message }) => {
-            Some(CatalogError::CommitStateUnknown(message.into()))
+        Ok(DeltaCommitOutcome::Conflict(message)) => CatalogError::Conflict(message),
+        Ok(DeltaCommitOutcome::BackfillRequired(message)) => {
+            CatalogError::ResourceExhausted(message)
         }
-        Ok(LakehouseCommitOutcome::Rejected { message }) => {
-            Some(CatalogError::CommitRejected(message))
+        Ok(DeltaCommitOutcome::Throttled(message)) => CatalogError::RateLimited(message),
+        Ok(DeltaCommitOutcome::Unknown(message)) => {
+            CatalogError::CommitStateUnknown(message.into())
         }
-        Err(error) => Some(error),
+        Err(error) => error,
     }
 }
 
@@ -971,38 +964,6 @@ async fn publish_commit(log_store: &LogStoreRef, path: &Path, version: i64) -> R
     }
 }
 
-/// Whether the catalog has answered that the commit is not ratified. A failure without such
-/// an answer (a server error, a timeout, or a network error) may follow a ratified commit.
-fn commit_is_rejected(error: &CatalogError) -> bool {
-    matches!(
-        error,
-        CatalogError::InvalidArgument(_)
-            | CatalogError::NotFound(_, _)
-            | CatalogError::AlreadyExists(_, _)
-            | CatalogError::Conflict(_)
-            | CatalogError::NotSupported(_)
-            | CatalogError::Unauthorized(_)
-            | CatalogError::Forbidden(_)
-            | CatalogError::AuthExpired(_)
-            | CatalogError::RateLimited(_)
-            | CatalogError::ResourceExhausted(_)
-            | CatalogError::ReadOnly(_)
-            | CatalogError::UnsupportedCapability(_)
-            | CatalogError::StaleMetadata(_)
-            | CatalogError::CommitRejected(_)
-    )
-}
-
-/// Whether the catalog refuses the staged commit itself: the version of the commit is taken,
-/// or the catalog is at its limit of commits that are not published, which it checks after
-/// it looks for the staged commit among the commits that it has ratified.
-fn refusal_is_of_staged_commit(error: &CatalogError) -> bool {
-    matches!(
-        error,
-        CatalogError::Conflict(_) | CatalogError::ResourceExhausted(_)
-    )
-}
-
 /// Deletes a staged commit that is not ratified, so that it is never read as a commit of the
 /// table. A failure to delete does not change the outcome of the commit.
 async fn delete_staged_commit(log_store: &LogStoreRef, staged: &CatalogManagedStagedCommit) {
@@ -1038,10 +999,6 @@ fn delta_catalog_managed_commit(
         latest_backfilled_version,
         delta_log: delta_commit_actions(base, actions, &staged.domain_metadata),
     }
-}
-
-fn delta_catalog_commit_update(commit: &DeltaCatalogCommit) -> Result<serde_json::Value> {
-    serde_json::to_value(commit).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 /// Returns the metadata action, the protocol action, and the domain metadata actions of
@@ -1218,10 +1175,10 @@ mod tests {
         Ok(())
     }
 
-    /// The commit payload carries the table metadata once, in the form of the Delta log,
-    /// even for metadata that has no form in the legacy commit API of Unity Catalog.
+    /// The commit carries the table metadata once, in the form of the Delta log, even for
+    /// metadata that has no form in the legacy commit API of Unity Catalog.
     #[test]
-    fn commit_update_carries_the_delta_log_actions() -> Result<()> {
+    fn commit_carries_the_delta_log_actions() -> Result<()> {
         let external = |e| DataFusionError::External(Box::new(e));
         let metadata = |data_type: DeltaDataType| {
             Metadata::try_new(
@@ -1251,67 +1208,36 @@ mod tests {
         let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
         let base = Some((&base_metadata, &base_protocol));
 
-        let update = delta_catalog_commit_update(&delta_catalog_managed_commit(
-            &table,
-            base,
-            &staged,
-            &[],
-            None,
-        ))?;
+        let commit = delta_catalog_managed_commit(&table, base, &staged, &[], None);
         assert_eq!(
-            update,
-            serde_json::json!({
-                "table_id": "id",
-                "table_uri": "memory:///t",
-                "commit_info": {
-                    "version": 1,
-                    "timestamp": 4,
-                    "file_name": "00000000000000000001.uuid.json",
-                    "file_size": 2,
-                    "file_modification_timestamp": 3,
+            commit,
+            DeltaCatalogCommit {
+                table_id: "id".to_string(),
+                table_uri: "memory:///t".to_string(),
+                commit_info: DeltaCatalogCommitInfo {
+                    version: 1,
+                    timestamp: 4,
+                    file_name: "00000000000000000001.uuid.json".to_string(),
+                    file_size: 2,
+                    file_modification_timestamp: 3,
                 },
-                "delta_log": {},
-            })
+                latest_backfilled_version: None,
+                delta_log: DeltaCommitActions::default(),
+            }
         );
 
         let variant = metadata(DeltaDataType::unshredded_variant()).map_err(external)?;
         let actions = vec![CommitAction::Metadata(variant.clone())];
-        let update = delta_catalog_commit_update(&delta_catalog_managed_commit(
-            &table,
-            base,
-            &staged,
-            &actions,
-            Some(0),
-        ))?;
-        assert_eq!(update["latest_backfilled_version"], serde_json::json!(0));
-        assert_eq!(update.get("metadata"), None);
-        assert_eq!(
-            update["delta_log"]["metaData"]["schemaString"],
-            serde_json::json!(variant.schema_string())
-        );
-        assert_eq!(
-            update["delta_log"]["baseMetaData"]["schemaString"],
-            serde_json::json!(base_metadata.schema_string())
-        );
-        let commit: DeltaCatalogCommit =
-            serde_json::from_value(update).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let commit = delta_catalog_managed_commit(&table, base, &staged, &actions, Some(0));
+        assert_eq!(commit.latest_backfilled_version, Some(0));
         assert_eq!(
             commit.delta_log.metadata,
             Some(delta_metadata_info(&variant))
         );
-        Ok(())
-    }
-
-    #[test]
-    fn definite_commit_rejection_preserves_its_typed_outcome() -> Result<()> {
-        let error = commit_outcome_error(Ok(LakehouseCommitOutcome::Rejected {
-            message: "policy denied".to_string(),
-        }));
-        assert!(
-            matches!(&error, Some(CatalogError::CommitRejected(message)) if message == "policy denied"),
-            "{error:?}"
+        assert_eq!(
+            commit.delta_log.base_metadata,
+            Some(delta_metadata_info(&base_metadata))
         );
-        assert!(error.as_ref().is_some_and(commit_is_rejected));
         Ok(())
     }
 

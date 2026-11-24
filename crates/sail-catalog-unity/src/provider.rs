@@ -8,11 +8,10 @@ use arrow::datatypes::DataType;
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
-    DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
-    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
-    LakehouseResolvedTable, ResolveLakehouseTableRequest, TableStorageCredentialsRequest,
-    resolve_lakehouse_table_status,
+    DeltaCommitOutcome, DeltaRatifiedCommit, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCreateMaterialization,
+    LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    ResolveLakehouseTableRequest, TableStorageCredentialsRequest, resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -1632,39 +1631,12 @@ impl CatalogProvider for UnityCatalogProvider {
         Ok(plan)
     }
 
-    async fn commit_lakehouse_table(
+    async fn commit_delta_table(
         &self,
         database: &Namespace,
         table: &str,
-        request: LakehouseCommitRequest,
-    ) -> CatalogResult<LakehouseCommitOutcome> {
-        let LakehouseCommitRequest {
-            context,
-            format,
-            requirements,
-            updates,
-            payload,
-        } = request;
-        if !format.eq_ignore_ascii_case("delta") {
-            return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit for {format} tables"
-            )));
-        }
-        if !requirements.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Unity Catalog Delta commits do not support generic commit requirements"
-                    .to_string(),
-            ));
-        }
-        let [update] = updates.as_slice() else {
-            return Err(CatalogError::InvalidArgument(
-                "Unity Catalog Delta commit expects exactly one update payload".to_string(),
-            ));
-        };
-        let invalid =
-            |e| CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"));
-        let commit: DeltaCatalogCommit = serde_json::from_value(update.clone()).map_err(invalid)?;
-
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let delta_client = self
             .get_delta_client()
@@ -1680,7 +1652,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     .update_table(catalog_name, schema_name, table.to_string(), request)
                     .await
                 {
-                    Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
+                    Ok(_) => return Ok(DeltaCommitOutcome::Committed),
                     Err(e) => (
                         e.status(),
                         e.to_string(),
@@ -1696,7 +1668,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     .await
                     .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
                 match client.commit(commit).await {
-                    Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
+                    Ok(_) => return Ok(DeltaCommitOutcome::Committed),
                     Err(e) => (
                         e.status(),
                         e.to_string(),
@@ -1712,8 +1684,8 @@ impl CatalogProvider for UnityCatalogProvider {
             // The OSS Unity Catalog server currently returns a plain "200 OK" body
             // for legacy Delta commits even though the OpenAPI spec declares a JSON response.
             // Such responses are considered unknown errors since JSON deserialization fails.
-            Some(s) if s.is_success() => Ok(LakehouseCommitOutcome::Committed { context, payload }),
-            Some(reqwest::StatusCode::CONFLICT) => Err(CatalogError::Conflict(format!(
+            Some(s) if s.is_success() => Ok(DeltaCommitOutcome::Committed),
+            Some(reqwest::StatusCode::CONFLICT) => Ok(DeltaCommitOutcome::Conflict(format!(
                 "Unity Catalog Delta commit conflict: {error}"
             ))),
             // The table or the commit endpoint does not exist, so the commit is not ratified.
@@ -1723,11 +1695,11 @@ impl CatalogProvider for UnityCatalogProvider {
             // The server refuses new commits until the ratified commits of the table are
             // published, which is not the same as a request that the server throttles.
             Some(reqwest::StatusCode::TOO_MANY_REQUESTS) if unpublished_commit_limit => {
-                Err(CatalogError::ResourceExhausted(format!(
+                Ok(DeltaCommitOutcome::BackfillRequired(format!(
                     "Unity Catalog Delta commit refused until ratified commits are published: {error}"
                 )))
             }
-            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Err(CatalogError::RateLimited(
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Ok(DeltaCommitOutcome::Throttled(
                 format!("Unity Catalog Delta commit rate limited: {error}"),
             )),
             // The server refuses the commit.
@@ -1744,12 +1716,13 @@ impl CatalogProvider for UnityCatalogProvider {
             // another status that is not documented for the request (e.g. a gateway that
             // reports a timeout), and when the request fails without a response
             // (a timeout or a network error).
-            Some(_) => Err(CatalogError::CommitStateUnknown(
-                format!("Failed to commit Delta table to Unity Catalog: {error}").into(),
-            )),
-            None if request_failed => Err(CatalogError::CommitStateUnknown(
-                format!("Failed to commit Delta table to Unity Catalog: {error}").into(),
-            )),
+            Some(_) => Ok(DeltaCommitOutcome::Unknown(format!(
+                "Failed to commit Delta table to Unity Catalog: {error}"
+            ))),
+            None if request_failed => Ok(DeltaCommitOutcome::Unknown(format!(
+                "Failed to commit Delta table to Unity Catalog: {error}"
+            ))),
+            // The request was not sent.
             _ => Err(CatalogError::External(format!(
                 "Failed to commit Delta table to Unity Catalog: {error}"
             ))),
@@ -3222,14 +3195,8 @@ mod tests {
         }
     }
 
-    fn delta_commit_request(update: serde_json::Value) -> LakehouseCommitRequest {
-        LakehouseCommitRequest {
-            context: delta_execution_context(),
-            format: "delta".to_string(),
-            requirements: vec![],
-            updates: vec![update],
-            payload: None,
-        }
+    fn delta_commit_request(commit: serde_json::Value) -> DeltaCatalogCommit {
+        serde_json::from_value(commit).unwrap()
     }
 
     fn legacy_delta_commit(version: i64) -> serde_json::Value {
@@ -3950,10 +3917,10 @@ mod tests {
                 "properties": {"properties": {"io.unitycatalog.tableId": DELTA_TABLE_ID}}
             });
             let outcome = provider
-                .commit_lakehouse_table(&database, "events", delta_commit_request(request))
+                .commit_delta_table(&database, "events", delta_commit_request(request))
                 .await
                 .unwrap();
-            assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+            assert!(matches!(outcome, DeltaCommitOutcome::Committed));
 
             assert_eq!(
                 received_targets(&server).await,
@@ -4169,7 +4136,7 @@ mod tests {
                 "{case}"
             );
             let commit = provider
-                .commit_lakehouse_table(
+                .commit_delta_table(
                     &database,
                     "events",
                     delta_commit_request(legacy_delta_commit(3)),
@@ -4279,19 +4246,19 @@ mod tests {
         let provider = mock_provider(&server, "main");
         let database = Namespace::try_from(vec!["default"]).unwrap();
         let outcome = provider
-            .commit_lakehouse_table(
+            .commit_delta_table(
                 &database,
                 "events",
                 delta_commit_request(legacy_delta_commit(5)),
             )
             .await
             .unwrap();
-        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+        assert!(matches!(outcome, DeltaCommitOutcome::Committed));
 
         let mut commit = legacy_delta_commit(6);
         commit["latest_backfilled_version"] = serde_json::json!(5);
         provider
-            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+            .commit_delta_table(&database, "events", delta_commit_request(commit))
             .await
             .unwrap();
 
@@ -4619,10 +4586,10 @@ mod tests {
         let count = commits.len();
         for commit in commits {
             let outcome = provider
-                .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+                .commit_delta_table(&database, "events", delta_commit_request(commit))
                 .await
                 .unwrap();
-            assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+            assert!(matches!(outcome, DeltaCommitOutcome::Committed));
         }
         let mut targets =
             vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string()];
@@ -4838,7 +4805,7 @@ mod tests {
         let provider = mock_provider(&server, "main");
         let database = Namespace::try_from(vec!["default"]).unwrap();
         let error = provider
-            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+            .commit_delta_table(&database, "events", delta_commit_request(commit))
             .await
             .unwrap_err();
         assert!(
@@ -4920,7 +4887,7 @@ mod tests {
             "metaData": delta_log_metadata(&["id"], &[], None, &[]),
         });
         let error = provider
-            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+            .commit_delta_table(&database, "events", delta_commit_request(commit))
             .await
             .unwrap_err();
         assert!(
@@ -5161,22 +5128,19 @@ mod tests {
         let database = Namespace::try_from(vec!["default"]).unwrap();
         let commit = async |version: i64| {
             provider
-                .commit_lakehouse_table(
+                .commit_delta_table(
                     &database,
                     "events",
                     delta_commit_request(legacy_delta_commit(version)),
                 )
                 .await
-                .unwrap_err()
         };
-        let error = commit(5).await;
-        assert!(matches!(error, CatalogError::Conflict(_)), "{error:?}");
+        let outcome = commit(5).await.unwrap();
         assert!(
-            error
-                .to_string()
-                .contains("CommitVersionConflictException message")
+            matches!(&outcome, DeltaCommitOutcome::Conflict(message) if message.contains("CommitVersionConflictException message")),
+            "{outcome:?}"
         );
-        let error = commit(6).await;
+        let error = commit(6).await.unwrap_err();
         assert!(
             matches!(error, CatalogError::InvalidArgument(_)),
             "{error:?}"
@@ -5186,17 +5150,12 @@ mod tests {
                 .to_string()
                 .contains("InvalidParameterValueException message")
         );
-        let error = commit(7).await;
+        let outcome = commit(7).await.unwrap();
         assert!(
-            matches!(error, CatalogError::ResourceExhausted(_)),
-            "{error:?}"
+            matches!(&outcome, DeltaCommitOutcome::BackfillRequired(message) if message.contains("ResourceExhaustedException message")),
+            "{outcome:?}"
         );
-        assert!(
-            error
-                .to_string()
-                .contains("ResourceExhaustedException message")
-        );
-        let error = commit(8).await;
+        let error = commit(8).await.unwrap_err();
         assert!(matches!(error, CatalogError::Forbidden(_)), "{error:?}");
         // The commit may be ratified when the server fails or does not answer,
         // or reports a status that is not documented for the request.
@@ -5207,17 +5166,19 @@ mod tests {
             (15, "408"),
             (16, "418"),
         ] {
-            let error = commit(version).await;
+            let outcome = commit(version).await.unwrap();
             assert!(
-                matches!(error, CatalogError::CommitStateUnknown(_)),
-                "{error:?}"
+                matches!(&outcome, DeltaCommitOutcome::Unknown(text) if text.contains(message)),
+                "{outcome:?}"
             );
-            assert!(error.to_string().contains(message), "{error}");
         }
-        let error = commit(10).await;
-        assert!(matches!(error, CatalogError::RateLimited(_)), "{error:?}");
+        let outcome = commit(10).await.unwrap();
+        assert!(
+            matches!(outcome, DeltaCommitOutcome::Throttled(_)),
+            "{outcome:?}"
+        );
         // The commit is not ratified when the table does not exist.
-        let error = commit(14).await;
+        let error = commit(14).await.unwrap_err();
         assert!(
             matches!(error, CatalogError::CommitRejected(_)),
             "{error:?}"
@@ -5234,17 +5195,17 @@ mod tests {
             .delta_commit_api_cache()
             .unwrap()
             .insert("main".to_string(), DeltaCommitApi::V1);
-        let error = provider
-            .commit_lakehouse_table(
+        let outcome = provider
+            .commit_delta_table(
                 &database,
                 "events",
                 delta_commit_request(legacy_delta_commit(13)),
             )
             .await
-            .unwrap_err();
+            .unwrap();
         assert!(
-            matches!(error, CatalogError::CommitStateUnknown(_)),
-            "{error:?}"
+            matches!(outcome, DeltaCommitOutcome::Unknown(_)),
+            "{outcome:?}"
         );
     }
 
