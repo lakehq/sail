@@ -406,10 +406,26 @@ COLUMN_CHANGES = {
     "distinct row column dropped": (
         "a INT, b INT",
         "(1, 10), (1, 20), (2, 30)",
+        "SELECT a FROM (SELECT DISTINCT a, b FROM {t})",
+        "a INT",
+        "(1), (1), (2)",
+        None,
+    ),
+    "distinct column of all columns dropped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
         "SELECT a FROM (SELECT DISTINCT * FROM {t})",
         "a INT",
         "(1), (1), (2)",
-        [(1,), (2,)],
+        None,
+    ),
+    "grouping column dropped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT count(*) AS n FROM {t} GROUP BY b",
+        "a INT",
+        "(1), (1), (2)",
+        None,
     ),
     "grouping column retyped": (
         "a INT, b INT",

@@ -165,11 +165,13 @@ impl ViewTableReference {
     /// was created, or how the columns that the stored plan reads changed. The table can
     /// have new columns and another column order. Each column that the stored plan reads
     /// keeps its type, also for the fields of nested types, as Spark requires of every
-    /// column of a temporary view that stores a plan (`V2ReferenceUtils.validateLoadedTableInTempView`
-    /// and `SchemaUtils.validateSchemaCompatibility`). Its nullability can change, since
-    /// the definition was resolved as if the column had nulls. A struct that the stored plan reads only through some of its fields
-    /// keeps those fields. A column that only tells rows apart can change or be removed,
-    /// and so can a column that the stored plan does not read, which has no position then.
+    /// column of a temporary view that stores a plan
+    /// (`V2ReferenceUtils.validateLoadedTableInTempView` and
+    /// `SchemaUtils.validateSchemaCompatibility`). Its nullability can change, since the
+    /// definition was resolved as if the column had nulls. A struct that the stored plan
+    /// reads only through some of its fields keeps those fields. A column that only tells
+    /// rows apart can change its type. A column that the stored plan does not read can
+    /// change or be removed, and has no position then.
     fn match_columns(
         &self,
         table: &Schema,
@@ -183,7 +185,6 @@ impl ViewTableReference {
             let path = vec![field.name().clone()];
             let position = match (used, found) {
                 (Some(ColumnUse::Identity), FieldMatch::Found(position)) => Some(position),
-                (Some(ColumnUse::Identity), FieldMatch::Missing) => None,
                 (Some(used @ ColumnUse::Fields(_)), FieldMatch::Found(position)) => {
                     used_field_changes(
                         field,
@@ -1023,8 +1024,7 @@ enum ColumnUse {
     Fields(HashMap<String, ColumnUse>),
     /// The plan only tells rows apart by the column, as a key of `DISTINCT` or `GROUP BY`
     /// whose value is not read. The current values of the column tell the rows apart, of
-    /// whatever type they are now, and a column that the table no longer has tells no
-    /// rows apart.
+    /// whatever type they are now.
     Identity,
 }
 
@@ -2070,7 +2070,7 @@ mod tests {
                 true,
                 &type_name
             ),
-            Ok(vec![Some(0), None])
+            Err(vec!["`b` Int32 has been removed".to_string()])
         );
         Ok(())
     }
