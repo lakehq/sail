@@ -265,20 +265,30 @@ def _create_unity_managed_delta_table(
     staging_location = staging_table["staging_location"]
     _write_seed_delta_log(_location_to_path(staging_location), table_id)
 
-    create_response = requests.post(
-        f"{unity_rest_url}/tables",
-        json={
-            "name": name,
-            "catalog_name": catalog_name,
-            "schema_name": schema_name,
-            "table_type": "MANAGED",
-            "data_source_format": "DELTA",
-            "storage_location": staging_location,
-            "columns": columns,
-        },
-        timeout=10,
-    )
-    create_response.raise_for_status()
+    _create_table_with_table_api(unity_rest_url, table_name, staging_location, columns).raise_for_status()
+
+
+def _create_table_with_table_api(
+    unity_rest_url: str,
+    table_name: str,
+    location: str,
+    columns: list[dict],
+    properties: dict | None = None,
+) -> requests.Response:
+    """Create a managed Delta table at the staging location with the table API."""
+    catalog_name, schema_name, name = _unity_table_parts(table_name)
+    table = {
+        "name": name,
+        "catalog_name": catalog_name,
+        "schema_name": schema_name,
+        "table_type": "MANAGED",
+        "data_source_format": "DELTA",
+        "storage_location": location,
+        "columns": columns,
+    }
+    if properties is not None:
+        table["properties"] = properties
+    return requests.post(f"{unity_rest_url}/tables", json=table, timeout=10)
 
 
 def _create_unity_managed_delta_table_with_delta_api(
@@ -352,20 +362,7 @@ def _create_unity_managed_delta_table_with_delta_api(
     else:
         # The Delta REST API does not create a table without columns, while the table API
         # of the same server does when the table has the table ID as a property.
-        create_response = requests.post(
-            f"{unity_rest_url}/tables",
-            json={
-                "name": name,
-                "catalog_name": catalog_name,
-                "schema_name": schema_name,
-                "table_type": "MANAGED",
-                "data_source_format": "DELTA",
-                "storage_location": staging_location,
-                "columns": [],
-                "properties": properties,
-            },
-            timeout=10,
-        )
+        create_response = _create_table_with_table_api(unity_rest_url, table_name, staging_location, [], properties)
     create_response.raise_for_status()
 
 
