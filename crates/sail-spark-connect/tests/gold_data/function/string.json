@@ -1051,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_base32"
+        "success": "ok"
       }
     },
     {
@@ -1359,7 +1359,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: jaro_winkler_similarity"
+        "success": "ok"
       }
     },
     {
@@ -1381,7 +1381,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: jaro_winkler_similarity"
+        "success": "ok"
       }
     },
     {
@@ -1403,7 +1403,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: jaro_winkler_similarity"
+        "success": "ok"
       }
     },
     {
@@ -3625,7 +3625,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_base32"
+        "success": "ok"
       }
     },
     {
@@ -3647,7 +3647,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_base32"
+        "success": "ok"
       }
     },
     {

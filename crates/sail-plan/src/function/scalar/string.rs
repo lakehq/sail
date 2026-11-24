@@ -19,11 +19,13 @@ use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
 use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::string::base32::{FromBase32, ToBase32};
 use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::concat_ws::ConcatWs;
 use sail_function::scalar::string::encode_decode::{Decode, Encode};
 use sail_function::scalar::string::format_number::FormatNumber;
+use sail_function::scalar::string::jaro_winkler::JaroWinklerSimilarity;
 use sail_function::scalar::string::length::{BitLength, OctetLength};
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::lower::LowerFunc;
@@ -535,9 +537,14 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
         ("format_string", F::udf(FormatStringFunc::new())),
+        ("from_base32", F::udf(FromBase32::new())),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
+        (
+            "jaro_winkler_similarity",
+            F::udf(JaroWinklerSimilarity::new()),
+        ),
         ("lcase", F::custom(lower)),
         ("left", F::binary(expr_fn::left)),
         ("len", F::custom(length)),
@@ -586,6 +593,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
+        ("to_base32", F::udf(ToBase32::new())),
         ("to_binary", F::udf(ToBinary::new())),
         ("to_char", F::custom(to_char)),
         ("to_number", F::udf(ToNumber::new(false))),

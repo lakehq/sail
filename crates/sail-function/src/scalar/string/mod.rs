@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod base32;
 pub mod base64;
 pub mod btrim;
 pub mod concat_ws;
 pub mod encode_decode;
 pub mod format_number;
+pub mod jaro_winkler;
 pub mod length;
 pub mod levenshtein;
 pub mod lower;
