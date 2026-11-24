@@ -4284,11 +4284,8 @@ mod tests {
 
     fn row_tracking_add(path: &str, num_records: i64) -> Add {
         Add {
-            path: path.to_string(),
-            size: 5,
-            data_change: true,
             stats: Some(format!(r#"{{"numRecords":{num_records}}}"#)),
-            ..Default::default()
+            ..commit_test_add(path)
         }
     }
 

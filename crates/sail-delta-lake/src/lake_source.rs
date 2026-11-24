@@ -3135,20 +3135,25 @@ mod tests {
 
     /// Creates the metadata of a Unity Catalog managed table in memory and returns the result
     /// with the actions of version 0.
-    async fn create_unity_managed_table_metadata(
-        properties: Vec<(&str, &str)>,
-        required_protocol: Option<serde_json::Value>,
-    ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
-        let columns = vec![LakeSourceCreateTableColumn {
+    /// A nullable column of 64-bit integers.
+    fn long_column(name: &str) -> LakeSourceCreateTableColumn {
+        LakeSourceCreateTableColumn {
             metadata: Default::default(),
-            name: "id".to_string(),
+            name: name.to_string(),
             data_type: ArrowDataType::Int64,
             nullable: true,
             comment: None,
             default: None,
             generated_always_as: None,
             identity: None,
-        }];
+        }
+    }
+
+    async fn create_unity_managed_table_metadata(
+        properties: Vec<(&str, &str)>,
+        required_protocol: Option<serde_json::Value>,
+    ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
+        let columns = vec![long_column("id")];
         create_unity_managed_table_metadata_with_columns(columns, properties, required_protocol)
             .await
     }
@@ -3346,16 +3351,7 @@ mod tests {
     ) -> Result<LakeSourceCreateTableInfo> {
         Ok(LakeSourceCreateTableInfo {
             path: "memory:///staging/t".to_string(),
-            columns: vec![LakeSourceCreateTableColumn {
-                metadata: Default::default(),
-                name: "id".to_string(),
-                data_type: ArrowDataType::Int64,
-                nullable: true,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
+            columns: vec![long_column("id")],
             comment: None,
             partition_by: vec![],
             properties: properties
@@ -3842,16 +3838,7 @@ mod tests {
         runtime_env.register_object_store(&parse_location_to_url(location)?, store.clone());
         let info = |properties: &[(&str, &str)], replace| LakeSourceCreateTableInfo {
             path: location.to_string(),
-            columns: vec![LakeSourceCreateTableColumn {
-                metadata: Default::default(),
-                name: "id".to_string(),
-                data_type: ArrowDataType::Int64,
-                nullable: true,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
+            columns: vec![long_column("id")],
             comment: None,
             partition_by: vec![],
             properties: properties
@@ -3957,16 +3944,7 @@ mod tests {
         let store = Arc::new(object_store::memory::InMemory::new());
         let runtime_env = Arc::new(RuntimeEnv::default());
         runtime_env.register_object_store(&parse_location_to_url(location)?, store.clone());
-        let column = |name: &str| LakeSourceCreateTableColumn {
-            metadata: Default::default(),
-            name: name.to_string(),
-            data_type: ArrowDataType::Int64,
-            nullable: true,
-            comment: None,
-            default: None,
-            generated_always_as: None,
-            identity: None,
-        };
+        let column = long_column;
         let info = |columns, replace| LakeSourceCreateTableInfo {
             path: location.to_string(),
             columns,
@@ -4082,16 +4060,7 @@ mod tests {
         );
         let info = |replace, lakehouse_table| LakeSourceCreateTableInfo {
             path: location.to_string(),
-            columns: vec![LakeSourceCreateTableColumn {
-                metadata: Default::default(),
-                name: "id".to_string(),
-                data_type: ArrowDataType::Int64,
-                nullable: true,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
+            columns: vec![long_column("id")],
             comment: None,
             partition_by: vec![],
             properties: vec![(

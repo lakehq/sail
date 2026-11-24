@@ -1165,6 +1165,26 @@ mod tests {
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
+    /// The answer of the catalog with the ratified commits, each with its version and its
+    /// commit file as in `log_file`.
+    fn ratified(latest_table_version: i64, commits: &[(i64, &str)]) -> DeltaRatifiedCommitResponse {
+        DeltaRatifiedCommitResponse {
+            latest_table_version,
+            commits: commits
+                .iter()
+                .map(
+                    |(version, file)| sail_catalog::lakehouse::DeltaRatifiedCommit {
+                        version: *version,
+                        timestamp: 1,
+                        file_name: log_file(file).filename().unwrap_or_default().to_string(),
+                        file_size: 1,
+                        file_modification_timestamp: 1,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     fn log_file(name: &str) -> Path {
         let name = name.trim_end_matches('!');
         match name.split_once('.') {
@@ -1283,22 +1303,7 @@ mod tests {
             let url = test_table_url()?;
             let log_store =
                 default_logstore(object_store.clone(), object_store, &url, &StorageConfig);
-            let response = DeltaRatifiedCommitResponse {
-                latest_table_version: case.latest_table_version,
-                commits: case
-                    .commits
-                    .iter()
-                    .map(
-                        |(version, file)| sail_catalog::lakehouse::DeltaRatifiedCommit {
-                            version: *version,
-                            timestamp: 1,
-                            file_name: log_file(file).filename().unwrap_or_default().to_string(),
-                            file_size: 1,
-                            file_modification_timestamp: 1,
-                        },
-                    )
-                    .collect(),
-            };
+            let response = ratified(case.latest_table_version, case.commits);
             let actual = publish_ratified_commits_before(&log_store, &response, case.version).await;
             assert_eq!(actual.version, case.expected, "{}", case.name);
             let mut published = vec![];
@@ -1381,21 +1386,7 @@ mod tests {
         );
         let url = test_table_url()?;
         let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
-        let response = DeltaRatifiedCommitResponse {
-            latest_table_version: 2,
-            commits: [(1, "a"), (2, "b")]
-                .into_iter()
-                .map(
-                    |(version, id)| sail_catalog::lakehouse::DeltaRatifiedCommit {
-                        version,
-                        timestamp: 1,
-                        file_name: format!("{version:020}.{id}.json"),
-                        file_size: 2,
-                        file_modification_timestamp: 1,
-                    },
-                )
-                .collect(),
-        };
+        let response = ratified(2, &[(1, "1.a"), (2, "2.b")]);
         let published = publish_ratified_commits_before(&log_store, &response, 3)
             .await
             .version;
@@ -1409,30 +1400,12 @@ mod tests {
 
     #[test]
     fn the_ratified_commit_path_ignores_a_commit_with_another_version() {
-        let response = |file_name: &str| DeltaRatifiedCommitResponse {
-            latest_table_version: 2,
-            commits: vec![sail_catalog::lakehouse::DeltaRatifiedCommit {
-                version: 2,
-                timestamp: 1,
-                file_name: file_name.to_string(),
-                file_size: 1,
-                file_modification_timestamp: 1,
-            }],
-        };
-        assert_eq!(
-            ratified_commit_path(&response(&format!("{:020}.a.json", 2)), 2),
-            log_file("2.a")
-        );
+        let response = |file: &str| ratified(2, &[(2, file)]);
+        assert_eq!(ratified_commit_path(&response("2.a"), 2), log_file("2.a"));
         // The file name of the commit has version 1, so the catalog returned no commit for
         // version 2, and the published commit of version 2 is the one to compare.
-        assert_eq!(
-            ratified_commit_path(&response(&format!("{:020}.a.json", 1)), 2),
-            commit_path(2)
-        );
-        assert_eq!(
-            ratified_commit_path(&response(&format!("{:020}.a.json", 2)), 3),
-            commit_path(3)
-        );
+        assert_eq!(ratified_commit_path(&response("1.a"), 2), commit_path(2));
+        assert_eq!(ratified_commit_path(&response("2.a"), 3), commit_path(3));
     }
     /// A commit written by Sail, with no line terminator after the last action.
     fn commit_bytes(txn_id: Option<&str>, value: i64) -> String {
@@ -1530,21 +1503,7 @@ mod tests {
         put("2.b", commit_bytes(Some("t2"), 2)).await?;
         put("2", rewritten(&commit_bytes(Some("other"), 2), "\n")).await?;
         put("3.c", commit_bytes(Some("t3"), 3)).await?;
-        let response = DeltaRatifiedCommitResponse {
-            latest_table_version: 3,
-            commits: [(1, "a"), (2, "b"), (3, "c")]
-                .into_iter()
-                .map(
-                    |(version, id)| sail_catalog::lakehouse::DeltaRatifiedCommit {
-                        version,
-                        timestamp: 1,
-                        file_name: format!("{version:020}.{id}.json"),
-                        file_size: 1,
-                        file_modification_timestamp: 1,
-                    },
-                )
-                .collect(),
-        };
+        let response = ratified(3, &[(1, "1.a"), (2, "2.b"), (3, "3.c")]);
         // Version 1 is published by another writer, and the published commit of version 2 is
         // the commit of another transaction, which the failure names.
         let published = publish_ratified_commits_before(&log_store, &response, 4).await;
@@ -1577,16 +1536,7 @@ mod tests {
         put(log_file("0"), commit_bytes(Some("t0"), 0)).await?;
         put(log_file("1.a"), commit_bytes(Some("t1"), 1)).await?;
         publish_commit(&log_store, &log_file("1.a"), 1).await?;
-        let response = DeltaRatifiedCommitResponse {
-            latest_table_version: 1,
-            commits: vec![sail_catalog::lakehouse::DeltaRatifiedCommit {
-                version: 1,
-                timestamp: 1,
-                file_name: format!("{:020}.a.json", 1),
-                file_size: 1,
-                file_modification_timestamp: 1,
-            }],
-        };
+        let response = ratified(1, &[(1, "1.a")]);
         let published = publish_ratified_commits_before(&log_store, &response, 2).await;
         assert_eq!(published.version, Some(1));
         put(commit_path(1), "{not valid delta json\n".to_string()).await?;
