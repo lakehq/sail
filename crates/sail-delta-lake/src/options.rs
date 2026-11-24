@@ -16,7 +16,9 @@ pub mod r#gen {
 pub(crate) mod parsers {
     pub(crate) use sail_data_source::options::parsers::*;
 
-    pub(crate) use super::{parse_delta_log_replay_strategy, parse_user_metadata};
+    pub(crate) use super::{
+        parse_delta_log_replay_strategy, parse_explicit_string, parse_txn_version,
+    };
 }
 
 const USER_METADATA_CONFIG: &str = "spark.databricks.delta.commitInfo.userMetadata";
@@ -51,9 +53,22 @@ pub(crate) fn session_user_metadata(
     }
 }
 
-pub(crate) fn parse_user_metadata(_key: &str, value: &str) -> DataSourceResult<Option<String>> {
+pub(crate) fn parse_explicit_string(_key: &str, value: &str) -> DataSourceResult<Option<String>> {
     // An empty string is an explicit value that overrides the session default.
     Ok(Some(value.to_string()))
+}
+
+pub(crate) fn parse_txn_version(key: &str, value: &str) -> DataSourceResult<Option<i64>> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 0)
+        .map(Some)
+        .ok_or_else(|| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+            cause: Some("must be a non-negative integer".to_string()),
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Default, Serialize, Deserialize)]
@@ -98,6 +113,11 @@ impl ResolveOptions for r#gen::DeltaWriteOptions {
             partial.merge(layer.build_partial_options()?);
         }
         let mut options = partial.finalize()?;
+        match (&options.txn_app_id, options.txn_version) {
+            (Some(_), None) => return Err(DataSourceError::MissingOption { key: "txnVersion" }),
+            (None, Some(_)) => return Err(DataSourceError::MissingOption { key: "txnAppId" }),
+            _ => {}
+        }
         // An explicit value, including an empty string, takes precedence.
         if options.user_metadata.is_none() {
             options.user_metadata = session_user_metadata(ctx.config())?;

@@ -240,8 +240,7 @@ async fn build_overwrite_if_plan(
         None,
         operation_override,
     )?;
-    write_context.commit_context.identity_columns_to_track =
-        ctx.config().identity_columns_to_track.clone();
+    ctx.configure_write_commit(&mut write_context.commit_context);
     let change_data_writer = if crate::change_data_feed::enabled(snapshot_state.metadata())
         && !single_stream_cdf
     {

@@ -726,14 +726,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.root_placement(),
             )?;
             Arc::new(procedure)
-        } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
+        } else if let Some(node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(
                     "{} requires at least one physical input",
                     BarrierExec::static_name()
                 ))
             })?;
-            if preconditions.is_empty() {
+            if preconditions.is_empty()
+                || (node.skip_preconditions_on_empty_exec() && plan.is::<EmptyExec>())
+            {
                 plan.clone()
             } else {
                 Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))

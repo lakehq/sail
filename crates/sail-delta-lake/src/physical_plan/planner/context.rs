@@ -267,6 +267,20 @@ impl<'a> PlannerContext<'a> {
         context
     }
 
+    pub fn configure_write_commit(&self, context: &mut DeltaCommitContext) {
+        context.identity_columns_to_track = self.config.identity_columns_to_track.clone();
+        context.transaction = self
+            .options()
+            .txn_app_id
+            .clone()
+            .zip(self.options().txn_version)
+            .map(|(app_id, version)| crate::spec::Transaction {
+                app_id,
+                version,
+                last_updated: None,
+            });
+    }
+
     pub fn prepare_write_context(
         &self,
         input_schema: &SchemaRef,
@@ -292,8 +306,7 @@ impl<'a> PlannerContext<'a> {
             self.config.create_actions.as_ref(),
             operation_override,
         )?;
-        context.commit_context.identity_columns_to_track =
-            self.config.identity_columns_to_track.clone();
+        self.configure_write_commit(&mut context.commit_context);
         if let (Some(replacement), Some(snapshot)) =
             (self.config.replacement.as_ref(), self.table_snapshot())
         {

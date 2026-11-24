@@ -77,6 +77,8 @@ impl DeltaSnapshotContext {
 pub struct DeltaCommitContext {
     pub base_snapshot: Option<DeltaSnapshotContext>,
     #[serde(default)]
+    pub transaction: Option<Transaction>,
+    #[serde(default)]
     pub identity_columns_to_track: Vec<String>,
     #[serde(default)]
     pub identity_writer_partitions: Option<usize>,
@@ -88,6 +90,7 @@ impl DeltaCommitContext {
             base_snapshot: Some(DeltaSnapshotContext::from_snapshot(snapshot)),
             identity_columns_to_track: Vec::new(),
             identity_writer_partitions: None,
+            transaction: None,
         }
     }
 

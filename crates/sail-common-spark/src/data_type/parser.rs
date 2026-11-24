@@ -107,7 +107,7 @@ pub(crate) fn year_month_interval_field<'a>()
         .or(just("month").to(YearMonthIntervalField::Month))
 }
 
-pub(crate) fn interval<'a, T>(
+pub(crate) fn interval<'a, T: Clone>(
     field_parser: impl Parser<'a, &'a str, T, ParserExtra<'a>> + Clone,
 ) -> impl Parser<'a, &'a str, (Option<T>, Option<T>), ParserExtra<'a>> {
     let whitespace = text::whitespace().at_least(1);
@@ -121,7 +121,10 @@ pub(crate) fn interval<'a, T>(
                 .ignore_then(field_parser)
                 .or_not(),
         )
-        .map(|(start, end)| (Some(start), end))
+        .map(|(start, end)| {
+            let end = end.unwrap_or_else(|| start.clone());
+            (Some(start), Some(end))
+        })
 }
 
 #[cfg(test)]

@@ -672,7 +672,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 }
             }
 
-            if !has_data {
+            if !has_data && commit_context.transaction.is_none() {
                 return output.empty_batch();
             }
             // A missing count from any removal partition must not become a partial total.
@@ -684,6 +684,10 @@ impl ExecutionPlan for DeltaCommitExec {
             // Prepend initial actions
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
+            if let Some(mut txn) = commit_context.transaction.clone() {
+                txn.last_updated = Some(Utc::now().timestamp_millis());
+                final_actions.push(CommitAction::Txn(txn));
+            }
             if !table_exists {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,

@@ -10,6 +10,11 @@
   filter: invert(1) hue-rotate(210deg);
 }
 
+/* Keep inline math inline despite the Tailwind SVG reset. */
+mjx-container:not([display="true"]) > svg {
+  display: inline-block;
+}
+
 a.footnote-backref {
   @apply no-underline;
   /* change font family to prevent special unicode characters shown as emoji in Chrome */

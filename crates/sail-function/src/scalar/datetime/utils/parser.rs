@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// The parsed pieces of a timestamp string: nine integer segments
-/// (year, month, day, hour, minute, second, microsecond, and two spare zone
+/// (year, month, day, hour, minute, second, fractional second, and two spare zone
 /// segments), an optional timezone string, and whether only a time was given.
 pub(crate) struct ParsedTimestamp {
     pub(crate) segments: [i64; 9],
@@ -23,6 +23,10 @@ fn is_whitespace_or_iso_control(value: u8) -> bool {
 
 /// Splits a Spark timestamp string into numeric and timezone components.
 pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
+    parse_timestamp_components(value, 6)
+}
+
+fn parse_timestamp_components(value: &str, fraction_precision: usize) -> Option<ParsedTimestamp> {
     let bytes = value.as_bytes();
     let mut segments: [i64; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
     let mut segment = 0usize;
@@ -58,7 +62,7 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
             if segment == 6 {
                 fractional_digits += 1;
             }
-            if segment != 6 || current_digits < 6 {
+            if segment != 6 || current_digits < fraction_precision {
                 current_value = current_value.checked_mul(10)?.checked_add(parsed)?;
             }
             current_digits += 1;
@@ -152,7 +156,7 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
     }
     segments[segment] = current_value;
 
-    while fractional_digits < 6 {
+    while fractional_digits < fraction_precision {
         segments[6] *= 10;
         fractional_digits += 1;
     }
@@ -163,6 +167,28 @@ pub(crate) fn parse_timestamp_string(value: &str) -> Option<ParsedTimestamp> {
         timezone,
         just_time,
     })
+}
+
+/// Parses a Spark TIME cast as nanoseconds since midnight.
+pub fn parse_time_nanoseconds(value: &str) -> Option<i64> {
+    let value = value.trim_end_matches(' ');
+    let (clock, pm) = match value.split_at_checked(value.len().saturating_sub(2)) {
+        Some((clock, suffix)) if suffix.eq_ignore_ascii_case("AM") => (clock, Some(false)),
+        Some((clock, suffix)) if suffix.eq_ignore_ascii_case("PM") => (clock, Some(true)),
+        _ => (value, None),
+    };
+    let parsed = parse_timestamp_components(clock, 9)?;
+    let [_, _, _, hour, minute, second, nanos, _, _] = parsed.segments;
+    if !parsed.just_time || parsed.timezone.is_some() || minute >= 60 || second >= 60 {
+        return None;
+    }
+    let hour = match pm {
+        Some(pm) if (1..=12).contains(&hour) => hour % 12 + if pm { 12 } else { 0 },
+        None if hour < 24 => hour,
+        _ => return None,
+    };
+    let seconds = (hour * 60 + minute) * 60 + second;
+    Some(seconds * 1_000_000_000 + nanos)
 }
 
 #[cfg(test)]

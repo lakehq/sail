@@ -50,7 +50,6 @@ pub(crate) enum ResolvedLogSegment {
         checkpoint: Option<CheckpointFileSet>,
         commit_files: Vec<(i64, ObjectMeta)>,
         compaction_files: Vec<((i64, i64), ObjectMeta)>,
-        target_version: i64,
     },
     FullReplay {
         checkpoint: Option<CheckpointFileSet>,
@@ -306,7 +305,6 @@ impl<'a> LogSegmentResolver<'a> {
             checkpoint,
             commit_files,
             compaction_files,
-            target_version: version,
         })
     }
 

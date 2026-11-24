@@ -23,6 +23,7 @@ pub mod logical_rewriter;
 pub mod metadata;
 pub mod metadata_aggregate;
 pub mod min_max;
+pub mod parquet_schema;
 pub mod rename;
 pub mod scan;
 pub mod schema;

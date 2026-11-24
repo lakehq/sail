@@ -382,6 +382,38 @@
         - replaceWhere
       parser: crate::options::parsers::parse_optional_string
 
+- key: txn_app_id
+  description: |
+    Application identifier for an idempotent write. Requires txnVersion.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - txnAppId
+      parser: crate::options::parsers::parse_explicit_string
+
+- key: txn_version
+  description: |
+    Non-negative application transaction version. Requires txnAppId.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_i64
+  supported: true
+  rust_type: "Option<i64>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - txnVersion
+      parser: crate::options::parsers::parse_txn_version
+
 - key: user_metadata
   description: |
     User-defined string stored in the `commitInfo.userMetadata` field of the
@@ -399,7 +431,7 @@
       keys:
         - user_metadata
         - userMetadata
-      parser: crate::options::parsers::parse_user_metadata
+      parser: crate::options::parsers::parse_explicit_string
 
 - key: optimize_write
   description: |

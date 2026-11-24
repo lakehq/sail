@@ -424,6 +424,7 @@ impl DeltaSnapshot {
                 log_store,
                 replay_hint,
                 config.catalog_managed_commits.as_ref(),
+                config.require_transactions,
             )
             .await
             {
@@ -970,10 +971,20 @@ impl DeltaSnapshot {
     }
 
     pub fn transaction_version(&self, app_id: impl ToString) -> DeltaResult<Option<i64>> {
-        Ok(self
-            .app_txns
-            .get(&app_id.to_string())
-            .map(|txn| txn.version))
+        let Some(txn) = self.app_txns.get(&app_id.to_string()) else {
+            return Ok(None);
+        };
+        if let Some(duration) = self.table_properties().set_transaction_retention_duration {
+            let cutoff = crate::checkpoint::retention_cutoff_timestamp(
+                Utc::now().timestamp_millis(),
+                duration,
+                "delta.setTransactionRetentionDuration",
+            )?;
+            if txn.last_updated.is_none_or(|updated| updated <= cutoff) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(txn.version))
     }
 
     // ── Capability token verification ─────────────────────────────────────────
