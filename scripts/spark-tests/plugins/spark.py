@@ -19,6 +19,7 @@ from pysail.testing._dev.spark.utils.parity import (
     assert_math_function_frames_equal,
     normalize_datetime_dtypes,
     normalize_pandas_data_frame,
+    normalize_pandas_nulls,
 )
 
 
@@ -183,6 +184,8 @@ def patch_pandas_test_utils():
         right = normalize_pandas_data_frame(right)
         left = normalize_datetime_dtypes(left)
         right = normalize_datetime_dtypes(right)
+        left = normalize_pandas_nulls(left)
+        right = normalize_pandas_nulls(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [

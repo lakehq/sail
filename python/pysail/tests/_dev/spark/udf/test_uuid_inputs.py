@@ -58,7 +58,7 @@ def test_uuid_iterator_inputs_are_binary(spark, storage, entry):
         result = frame.mapInPandas(inspect, "id int, value binary")
     else:
 
-        @F.pandas_udf("binary", F.PandasUDFType.SCALAR_ITER)
+        @F.pandas_udf("binary")
         def inspect(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
             for batch in batches:
                 yield batch.map(_binary_value)

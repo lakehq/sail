@@ -896,6 +896,7 @@ pub enum AlterTableOperation {
         action: SnapshotReferenceCreateAction,
         kind: SnapshotReferenceKind,
         if_not_exists: Option<(If, Not, Exists)>,
+        #[parser(function = |_, o| NumberLiteral::parser((), o).not().ignore_then(Ident::parser((), o)))]
         name: Ident,
         version: Option<(
             As,
@@ -915,6 +916,7 @@ pub enum AlterTableOperation {
         drop: Drop,
         kind: SnapshotReferenceKind,
         if_exists: Option<(If, Exists)>,
+        #[parser(function = |_, o| NumberLiteral::parser((), o).not().ignore_then(Ident::parser((), o)))]
         name: Ident,
     },
     SetIdentifierFields {
