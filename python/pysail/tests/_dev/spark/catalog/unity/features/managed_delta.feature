@@ -710,6 +710,23 @@ Feature: Unity Catalog managed Delta table operations
       | id | name |
       | 1  | one  |
 
+  Scenario: Managed Delta table without catalogManaged reports a missing published commit
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_gap_t exists with id and name columns without catalogManaged
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_gap_t
+    Given variable location for table unity_table_test.managed_delta_filesystem_gap_t
+    Given rows are appended one commit at a time to the Delta table path in location
+      | id | name |
+      | 1  | one  |
+      | 2  | two  |
+    Given published Delta commit for version 1 in location is removed
+    Given Delta checksum for version 1 in location is removed
+    Given Delta checksum for version 2 in location is removed
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_filesystem_gap_t ORDER BY id
+      """
+    Then query error Missing commit file
+
   Scenario: Metadata ALTER on managed Delta table without catalogManaged commits to the Delta log
     Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_alter_t exists with id and name columns without catalogManaged
     Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_alter_t

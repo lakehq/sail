@@ -16,8 +16,8 @@ pub(crate) use listing::{
     read_last_checkpoint_version_from_store, v2_checkpoint_path_from_hint,
 };
 pub(crate) use replay::{
-    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
-    protocol_satisfies_up_to,
+    ProtocolSearch, latest_replayable_version, load_replayed_table_header,
+    load_replayed_table_state, search_protocol_up_to,
 };
 pub(crate) use segment::{
     LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_log_files,

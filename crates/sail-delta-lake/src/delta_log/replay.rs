@@ -261,20 +261,36 @@ pub(crate) async fn load_replayed_table_header(
     }
 }
 
-/// Returns whether the table protocol satisfies `predicate` at some version up to `version`.
+/// The result of [`search_protocol_up_to`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProtocolSearch {
+    /// The protocol satisfies the predicate at some version up to the searched version.
+    Found,
+    /// The protocol does not satisfy the predicate at any version up to the searched version.
+    NotFound,
+    /// The published log is missing the commit at this version, and the protocol does not
+    /// satisfy the predicate at any version before it.
+    MissingCommit(i64),
+}
+
+/// Searches for a table protocol that satisfies `predicate` at some version up to `version`.
 ///
 /// The search starts from a checksum or the latest checkpoint, and then reads the published log
 /// files after it in version order, decoding only their protocol action. It stops at the first
-/// protocol that satisfies `predicate`, so the files after it are not read. A missing published
-/// commit also stops the search and counts as satisfying `predicate`.
-pub(crate) async fn protocol_satisfies_up_to(
+/// protocol that satisfies `predicate`, so the files after it are not read. It also stops at the
+/// first missing published commit, and leaves it to the caller to decide what the gap means.
+pub(crate) async fn search_protocol_up_to(
     version: i64,
     log_store: &dyn LogStore,
     predicate: impl Fn(&Protocol) -> bool,
-) -> DeltaResult<bool> {
+) -> DeltaResult<ProtocolSearch> {
     let store = log_store.object_store(None);
     if let Some(header) = try_read_checksum_header(store.clone(), version).await {
-        return Ok(predicate(&header.protocol));
+        return Ok(if predicate(&header.protocol) {
+            ProtocolSearch::Found
+        } else {
+            ProtocolSearch::NotFound
+        });
     }
 
     let list_offset = read_last_checkpoint_version_from_store(store.clone())
@@ -293,7 +309,7 @@ pub(crate) async fn protocol_satisfies_up_to(
             .as_ref()
             .is_some_and(&predicate)
         {
-            return Ok(true);
+            return Ok(ProtocolSearch::Found);
         }
     }
     // A newer checksum lets the search skip the commits before it. Checksums are listed newest
@@ -305,7 +321,7 @@ pub(crate) async fn protocol_satisfies_up_to(
         && let Some(header) = try_read_checksum_header(store.clone(), *checksum_version).await
     {
         if predicate(&header.protocol) {
-            return Ok(true);
+            return Ok(ProtocolSearch::Found);
         }
         next_version = checksum_version.saturating_add(1);
     }
@@ -325,20 +341,18 @@ pub(crate) async fn protocol_satisfies_up_to(
         ) {
             (Some((end, meta)), _) => (*end, *meta),
             (None, Some(meta)) => (next_version, *meta),
-            // A published commit can only be missing for a catalog-managed table, whose catalog
-            // ratified a staged commit that is not published yet.
-            (None, None) => return Ok(true),
+            (None, None) => return Ok(ProtocolSearch::MissingCommit(next_version)),
         };
         let bytes = store.get(&meta.location).await?.bytes().await?;
         if get_protocol_action(end, &bytes)?
             .as_ref()
             .is_some_and(&predicate)
         {
-            return Ok(true);
+            return Ok(ProtocolSearch::Found);
         }
         next_version = end.saturating_add(1);
     }
-    Ok(false)
+    Ok(ProtocolSearch::NotFound)
 }
 
 pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {

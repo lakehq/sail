@@ -15,8 +15,8 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
@@ -42,9 +42,9 @@ pub use features::{
 
 use crate::checkpoint::read_checkpoint_protocol;
 use crate::delta_log::{
-    LogStoreRef, StorageConfig, complete_checkpoint_file_sets, default_logstore,
-    get_protocol_action, list_delta_log_entries_from, protocol_satisfies_up_to,
-    resolve_version_timestamp,
+    LogStoreRef, ProtocolSearch, StorageConfig, complete_checkpoint_file_sets, default_logstore,
+    get_protocol_action, list_delta_log_entries_from, resolve_version_timestamp,
+    search_protocol_up_to,
 };
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
@@ -56,7 +56,7 @@ use crate::schema::{
 pub use crate::snapshot::DeltaSnapshot;
 use crate::snapshot::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
-    catalog_managed_commit_file_name,
+    catalog_managed_commit_file_name, catalog_managed_commit_path,
 };
 use crate::spec::{
     ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation,
@@ -729,7 +729,17 @@ where
 {
     let is_catalog_managed = match log_store.get_latest_version(-1).await {
         Ok(latest_version) => {
-            delta_log_is_catalog_managed(&log_store, latest_version, version_as_of).await?
+            match search_catalog_managed_protocol(&log_store, latest_version, version_as_of).await?
+            {
+                ProtocolSearch::Found => true,
+                ProtocolSearch::NotFound => false,
+                // Otherwise the log is incomplete, and loading it from `_delta_log` reports the
+                // missing commit.
+                ProtocolSearch::MissingCommit(version) => {
+                    catalog_ratified_upgrade(ctx, lakehouse_table, table_url, &log_store, version)
+                        .await?
+                }
+            }
         }
         // Unity Catalog registers a managed table before any Delta commit exists,
         // so the first access creates version 0 from the catalog metadata.
@@ -761,20 +771,23 @@ where
     ))
 }
 
-/// Returns whether an existing Delta log uses catalog-managed commits.
+/// Searches an existing Delta log for the `catalogManaged` feature.
 ///
 /// The protocol is first read from the earliest state that the log retains, so that published
 /// commits that a catalog-managed table must ignore are never replayed. A table that did not
 /// start catalog-managed can be upgraded later, so the log is then searched for the upgrade up to
 /// the version being read: `version_as_of`, or the latest published version. The search stops at
 /// the upgrade, because the catalog decides the commits after it, and reads only protocol actions.
-async fn delta_log_is_catalog_managed(
+/// It also stops at a missing published commit, which only the catalog can explain.
+async fn search_catalog_managed_protocol(
     log_store: &LogStoreRef,
     latest_version: i64,
     version_as_of: Option<i64>,
-) -> Result<bool> {
+) -> Result<ProtocolSearch> {
     let earliest_version = match earliest_retained_protocol(log_store).await? {
-        Some((_, protocol)) if protocol_is_catalog_managed(&protocol) => return Ok(true),
+        Some((_, protocol)) if protocol_is_catalog_managed(&protocol) => {
+            return Ok(ProtocolSearch::Found);
+        }
         Some((version, _)) => Some(version),
         None => None,
     };
@@ -784,9 +797,53 @@ async fn delta_log_is_catalog_managed(
         .min(latest_version)
         .max(earliest_version.unwrap_or(0));
     if earliest_version == Some(version) {
-        return Ok(false);
+        return Ok(ProtocolSearch::NotFound);
     }
-    Ok(protocol_satisfies_up_to(version, log_store.as_ref(), protocol_is_catalog_managed).await?)
+    Ok(search_protocol_up_to(version, log_store.as_ref(), protocol_is_catalog_managed).await?)
+}
+
+/// Returns whether the catalog ratified `version` as a commit that enables catalog-managed
+/// commits.
+///
+/// A table without catalog-managed commits publishes every commit as it is written, so a
+/// published commit can only be missing when it is the upgrade to catalog-managed commits, staged
+/// and ratified by the catalog but not published yet.
+async fn catalog_ratified_upgrade<C>(
+    ctx: &C,
+    lakehouse_table: &LakehouseExecutionContext,
+    table_url: &Url,
+    log_store: &LogStoreRef,
+    version: i64,
+) -> Result<bool>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse_table.catalog_table());
+    let response = coordinator
+        .get_ratified_commits(
+            lakehouse_table,
+            table_url.to_string(),
+            version,
+            Some(version),
+        )
+        .await?;
+    let Some(commit) = response
+        .commits
+        .into_iter()
+        .find(|commit| commit.version == version)
+    else {
+        return Ok(false);
+    };
+    let bytes = log_store
+        .object_store(None)
+        .get(&catalog_managed_commit_path(&commit.file_name))
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .bytes()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    Ok(get_protocol_action(version, &bytes)?
+        .is_some_and(|protocol| protocol_is_catalog_managed(&protocol)))
 }
 
 /// Returns the earliest version that the Delta log retains, with its protocol: version 0, or
@@ -1109,11 +1166,12 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        delta_log_is_catalog_managed, effective_catalog_commit_end_version,
-        next_catalog_commit_start_version, refresh_catalog_delta_schema,
+        effective_catalog_commit_end_version, next_catalog_commit_start_version,
+        refresh_catalog_delta_schema, search_catalog_managed_protocol,
     };
     use crate::catalog_managed::protocol_with_catalog_managed;
     use crate::checkpoint::create_checkpoint_for;
+    use crate::delta_log::ProtocolSearch::{self, Found, MissingCommit, NotFound};
     use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::schema::attach_column_mapping_metadata;
     use crate::spec::{
@@ -1490,17 +1548,17 @@ mod tests {
         Ok(log_store)
     }
 
-    async fn is_catalog_managed(
+    async fn search(
         log_store: &LogStoreRef,
         latest_version: i64,
         version_as_of: Option<i64>,
-    ) -> DeltaResult<bool> {
-        delta_log_is_catalog_managed(log_store, latest_version, version_as_of)
+    ) -> DeltaResult<ProtocolSearch> {
+        search_catalog_managed_protocol(log_store, latest_version, version_as_of)
             .await
             .map_err(crate::spec::DeltaError::generic_err)
     }
 
-    fn is_invalid_json_error(result: &DeltaResult<bool>) -> bool {
+    fn is_invalid_json_error(result: &DeltaResult<ProtocolSearch>) -> bool {
         matches!(result, Err(error) if error.to_string().contains("Invalid JSON"))
     }
 
@@ -1509,7 +1567,7 @@ mod tests {
         let protocol = protocol_with_catalog_managed(&Protocol::new(1, 2, None, None));
         let log_store = log_after_cleanup_with_corrupt_tail(protocol).await?;
 
-        assert!(is_catalog_managed(&log_store, 3, None).await?);
+        assert_eq!(search(&log_store, 3, None).await?, Found);
         Ok(())
     }
 
@@ -1520,11 +1578,11 @@ mod tests {
             log_after_cleanup_with_corrupt_tail(Protocol::new(1, 2, None, None)).await?;
 
         // The published log is authoritative for a table that is not catalog-managed.
-        let result = is_catalog_managed(&log_store, 3, None).await;
+        let result = search(&log_store, 3, None).await;
         assert!(is_invalid_json_error(&result), "{result:?}");
         // Time travel reads the checkpoint, also for a version that log cleanup removed.
-        assert!(!is_catalog_managed(&log_store, 3, Some(2)).await?);
-        assert!(!is_catalog_managed(&log_store, 3, Some(1)).await?);
+        assert_eq!(search(&log_store, 3, Some(2)).await?, NotFound);
+        assert_eq!(search(&log_store, 3, Some(1)).await?, NotFound);
         Ok(())
     }
 
@@ -1533,8 +1591,8 @@ mod tests {
     -> DeltaResult<()> {
         let (_, log_store) = log_with_corrupt_tail(Protocol::new(1, 2, None, None), 2).await?;
 
-        assert!(!is_catalog_managed(&log_store, 3, Some(2)).await?);
-        let result = is_catalog_managed(&log_store, 3, None).await;
+        assert_eq!(search(&log_store, 3, Some(2)).await?, NotFound);
+        let result = search(&log_store, 3, None).await;
         assert!(is_invalid_json_error(&result), "{result:?}");
         Ok(())
     }
@@ -1558,13 +1616,13 @@ mod tests {
             )
             .await?;
 
-        assert!(is_catalog_managed(&log_store, 3, None).await?);
-        assert!(!is_catalog_managed(&log_store, 3, Some(0)).await?);
-        assert!(!is_catalog_managed(&log_store, 3, Some(1)).await?);
-        assert!(is_catalog_managed(&log_store, 3, Some(2)).await?);
-        assert!(is_catalog_managed(&log_store, 3, Some(3)).await?);
+        assert_eq!(search(&log_store, 3, None).await?, Found);
+        assert_eq!(search(&log_store, 3, Some(0)).await?, NotFound);
+        assert_eq!(search(&log_store, 3, Some(1)).await?, NotFound);
+        assert_eq!(search(&log_store, 3, Some(2)).await?, Found);
+        assert_eq!(search(&log_store, 3, Some(3)).await?, Found);
         // Versions after the latest published one exist only in the catalog.
-        assert!(is_catalog_managed(&log_store, 3, Some(5)).await?);
+        assert_eq!(search(&log_store, 3, Some(5)).await?, Found);
         Ok(())
     }
 
@@ -1581,23 +1639,24 @@ mod tests {
         // The catalog ratified version 3, which is not published yet.
         put_add_commit(&store, 4).await?;
 
-        assert!(is_catalog_managed(&log_store, 4, None).await?);
-        assert!(!is_catalog_managed(&log_store, 4, Some(1)).await?);
+        assert_eq!(search(&log_store, 4, None).await?, Found);
+        assert_eq!(search(&log_store, 4, Some(1)).await?, NotFound);
         Ok(())
     }
 
     #[tokio::test]
-    async fn detection_treats_a_missing_published_commit_as_catalog_managed() -> DeltaResult<()> {
-        let (store, log_store) = log_with_corrupt_tail(Protocol::new(1, 2, None, None), 0).await?;
-        // Version 1, for example the commit that enables catalog-managed commits, is ratified
-        // by the catalog but not published yet.
+    async fn detection_reports_a_missing_published_commit_for_the_catalog_to_explain()
+    -> DeltaResult<()> {
+        let (store, log_store) = log_with_corrupt_tail(Protocol::new(1, 2, None, None), 2).await?;
+        // Version 2 is missing: either an upgrade to catalog-managed commits that the catalog
+        // ratified but has not published yet, or a log that lost a commit.
         store
-            .delete(&Path::from(format!("_delta_log/{:020}.json", 1)))
+            .delete(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await?;
-        put_add_commit(&store, 2).await?;
 
-        assert!(is_catalog_managed(&log_store, 2, None).await?);
-        assert!(!is_catalog_managed(&log_store, 2, Some(0)).await?);
+        assert_eq!(search(&log_store, 3, None).await?, MissingCommit(2));
+        assert_eq!(search(&log_store, 3, Some(2)).await?, MissingCommit(2));
+        assert_eq!(search(&log_store, 3, Some(1)).await?, NotFound);
         Ok(())
     }
 }
