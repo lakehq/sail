@@ -361,7 +361,9 @@ impl<C: VendedCredential> CredentialProvider for VendedCredentialProvider<C> {
 /// The storage credentials issued for an owner in a session.
 ///
 /// The object stores of the session and the workers of the session get the credentials
-/// from here, so that the catalog is asked once for all of them.
+/// from here, so that the catalog is asked once for all of them. A worker has the
+/// credentials that it fetched from the session here, so that the session is asked once
+/// for the object stores of the worker.
 struct SessionCredentials {
     read: VendedCredentialProvider<StorageCredential>,
     write: VendedCredentialProvider<StorageCredential>,
@@ -1443,29 +1445,48 @@ impl VendedObjectStores {
                             })
                         })
                     };
+                    // The credentials are fetched from the session in the same way as
+                    // the session fetches them from the catalog: one request at a time
+                    // that fails when it takes too long, and no request right after
+                    // a failed one.
+                    let credentials = Arc::new(SessionCredentials {
+                        read: VendedCredentialProvider::try_new(
+                            StorageAccess::Read,
+                            None,
+                            Arc::clone(&fetch),
+                        )?,
+                        write: VendedCredentialProvider::try_new(
+                            StorageAccess::ReadWrite,
+                            None,
+                            fetch,
+                        )?,
+                    });
                     // An object store is created when the location is first read or
                     // written, for the storage that the first credential is for.
                     let lazy = |access| -> Arc<dyn ObjectStore> {
                         let factory = Arc::clone(&self.factory);
                         let location = location.clone();
-                        let fetch = Arc::clone(&fetch);
+                        let credentials = Arc::clone(&credentials);
                         Arc::new(LazyObjectStore::new(move || {
                             let factory = Arc::clone(&factory);
                             let location = location.clone();
-                            let fetch = Arc::clone(&fetch);
+                            let credentials = Arc::clone(&credentials);
                             async move {
-                                let initial = fetch(access).await.map_err(credential_error)?;
+                                let initial =
+                                    credentials.get(access).await.map_err(credential_error)?;
                                 let kind = initial.credential.clone();
-                                // The object store is not given a credential for another
-                                // storage, which the session uses for a new route.
+                                // The session can start to access the location in another
+                                // storage before the worker gets the route for it. The
+                                // object store is not given a credential for that storage.
                                 let fetch: StorageCredentialFetch = {
                                     let kind = kind.clone();
                                     Arc::new(move |access| {
-                                        let (fetched, kind) = (fetch(access), kind.clone());
+                                        let credentials = Arc::clone(&credentials);
+                                        let kind = kind.clone();
                                         Box::pin(async move {
-                                            let credentials = fetched.await?;
-                                            if credentials.credential.is_for_storage_of(&kind) {
-                                                Ok(credentials)
+                                            let fetched = credentials.get(access).await?;
+                                            if fetched.credential.is_for_storage_of(&kind) {
+                                                Ok(fetched)
                                             } else {
                                                 Err("the storage credential is for another \
                                                      storage than before"
@@ -2844,5 +2865,67 @@ mod tests {
         apply(&second).unwrap();
         assert!(worker.contains(&moved, "table"));
         assert_eq!(worker.session().version, 2);
+    }
+
+    /// The driver does not answer the request of a worker for storage credentials.
+    #[tokio::test(start_paused = true)]
+    async fn workers_do_not_wait_for_a_session_that_does_not_answer() {
+        let location = Url::parse("memory:///warehouse/items").unwrap();
+        let path = Path::from("warehouse/items/part-0");
+        let (catalog, _) = counting_fetch(None);
+        let (session, _) = provider_stores();
+        session
+            .install(
+                &registry(),
+                &location,
+                "table",
+                s3_credentials("k", None),
+                catalog,
+            )
+            .unwrap();
+        let (answers, requests) = (Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(0)));
+        let fetch: SessionStorageCredentialFetch = {
+            let (session, answers, requests) = (session.clone(), answers.clone(), requests.clone());
+            Arc::new(move |request| {
+                *requests.lock().unwrap() += 1;
+                if !answers.load(Ordering::Relaxed) {
+                    return Box::pin(futures::future::pending());
+                }
+                let session = Arc::clone(&session);
+                Box::pin(async move {
+                    let credentials = session.credentials(&request).await;
+                    credentials.map_err(|e| format!("{e:?}"))
+                })
+            })
+        };
+        let (worker, _) = provider_stores();
+        let worker_registry = registry();
+        worker
+            .apply_routes(&worker_registry, &session.routes().unwrap(), &fetch)
+            .unwrap();
+        let store = worker_registry.get_store(&location).unwrap();
+
+        // The tasks that read the location together fail once one request times out,
+        // and the tasks right after the failure do not wait for the session again.
+        let started = tokio::time::Instant::now();
+        let results = futures::future::join_all((0..4).map(|_| store.get(&path))).await;
+        assert_eq!(started.elapsed(), FETCH_TIMEOUT);
+        let late = store.get(&path).await;
+        for result in results.into_iter().chain([late]) {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("not issued within"), "{error}");
+        }
+        assert_eq!(started.elapsed(), FETCH_TIMEOUT);
+        assert_eq!(*requests.lock().unwrap(), 1);
+
+        // The session is asked again later, and the location is read once it answers.
+        age(FAILURE_BACKOFF).await;
+        assert!(store.get(&path).await.is_err());
+        assert_eq!(*requests.lock().unwrap(), 2);
+        answers.store(true, Ordering::Relaxed);
+        age(FAILURE_BACKOFF).await;
+        let error = store.get(&path).await.unwrap_err();
+        assert!(matches!(error, object_store::Error::NotFound { .. }));
+        assert_eq!(*requests.lock().unwrap(), 3);
     }
 }
