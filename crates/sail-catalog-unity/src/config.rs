@@ -119,6 +119,14 @@ pub enum UnityCatalogConfigKey {
     /// Supported keys:
     /// - `unity_allow_http_url`
     AllowHttpUrl,
+
+    /// The value of the `User-Agent` header of the requests to the catalog
+    /// and of the requests for an access token
+    ///
+    /// Supported keys:
+    /// - `unity_user_agent`
+    /// - `user_agent`
+    UserAgent,
 }
 
 impl FromStr for UnityCatalogConfigKey {
@@ -178,6 +186,9 @@ impl FromStr for UnityCatalogConfigKey {
             | "unity_allow_http_url"
             | "uc_allow_http_url"
             | "databricks_allow_http_url" => Ok(UnityCatalogConfigKey::AllowHttpUrl),
+            "user_agent" | "unity_user_agent" | "uc_user_agent" | "databricks_user_agent" => {
+                Ok(UnityCatalogConfigKey::UserAgent)
+            }
             _ => Err(CatalogError::InvalidArgument(format!(
                 "Unknown UnityCatalogConfigKey: {s}",
             ))),
@@ -200,6 +211,7 @@ impl AsRef<str> for UnityCatalogConfigKey {
             UnityCatalogConfigKey::MsiResourceId => "unity_msi_resource_id",
             UnityCatalogConfigKey::ObjectId => "unity_object_id",
             UnityCatalogConfigKey::UseAzureCli => "unity_use_azure_cli",
+            UnityCatalogConfigKey::UserAgent => "unity_user_agent",
             UnityCatalogConfigKey::Token => "databricks_token",
             UnityCatalogConfigKey::WorkspaceUrl => "unity_workspace_url",
         }
@@ -220,6 +232,26 @@ pub struct UnityCatalogConfig {
     pub federated_token_file: Option<String>,
     pub use_azure_cli: bool,
     pub allow_http_url: bool,
+    /// The value of the `User-Agent` header, or `None` for the default of Sail.
+    pub user_agent: Option<String>,
+}
+
+/// Returns the `User-Agent` header for a configured value.
+///
+/// The value is a list of products as in RFC 9110, such as `MyEngine/1.2 MyConnector/0.4`.
+/// It is sent as it is, so only an empty value and a value that cannot be a header value
+/// are refused.
+pub(crate) fn user_agent_header(value: &str) -> CatalogResult<reqwest::header::HeaderValue> {
+    if value.trim().is_empty() {
+        return Err(CatalogError::InvalidArgument(
+            "The Unity Catalog option `user_agent` must not be empty".to_string(),
+        ));
+    }
+    reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+        CatalogError::InvalidArgument(format!(
+            "The Unity Catalog option `user_agent` is not a valid header value: {e}"
+        ))
+    })
 }
 
 fn str_is_truthy(value: &str) -> bool {
@@ -272,6 +304,7 @@ impl UnityCatalogConfig {
             federated_token_file: None,
             use_azure_cli: false,
             allow_http_url: false,
+            user_agent: None,
         };
 
         if let Some(token) = token {
@@ -354,6 +387,10 @@ impl UnityCatalogConfig {
             UnityCatalogConfigKey::UseAzureCli => {
                 self.use_azure_cli = str_is_truthy(&value);
             }
+            UnityCatalogConfigKey::UserAgent => {
+                user_agent_header(&value)?;
+                self.user_agent = Some(value);
+            }
         }
         Ok(())
     }
@@ -370,6 +407,7 @@ impl UnityCatalogConfig {
         {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(ClientSecretOAuthProvider::new(
                     client_id,
                     client_secret.expose_secret(),
@@ -382,6 +420,7 @@ impl UnityCatalogConfig {
         if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(WorkspaceOAuthProvider::new(
                     client_id,
                     client_secret.expose_secret(),
@@ -397,6 +436,7 @@ impl UnityCatalogConfig {
         ) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(WorkloadIdentityOAuthProvider::new(
                     client_id,
                     federated_token_file,
@@ -409,6 +449,7 @@ impl UnityCatalogConfig {
         if self.use_azure_cli {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(AzureCliCredential::new()),
             ));
         }
@@ -416,6 +457,7 @@ impl UnityCatalogConfig {
         if self.msi_endpoint.is_some() || self.msi_resource_id.is_some() {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(ImdsManagedIdentityOAuthProvider::new(
                     self.client_id.clone(),
                     self.object_id.clone(),

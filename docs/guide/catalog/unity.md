@@ -18,6 +18,8 @@ Unity Catalog can be configured using the following options.
 - `default_catalog` (optional): The default catalog name. The default is `unity`.
 - `token` (optional): The authentication token for the Unity Catalog API. The default is an empty value, which disables authentication. See [Unity Catalog Authentication and Authorization](https://docs.unitycatalog.io/server/auth/) for more information.
 
+- `user_agent` (optional): The value of the `User-Agent` header that Sail sends with every request to the Unity Catalog API, and with the requests for an access token. The value is a list of products separated by spaces, each written as `<name>/<version>`, such as `MyPlatform/1.2 MyConnector/0.4`. The default is `Sail/<version>`. Set this option if the server requires clients to identify the calling application in a particular way.
+
 See [Common Options](./index.md#common-options) for caching configuration.
 
 ## Environment Variables
@@ -81,6 +83,10 @@ The following table lists the supported configuration keys and their correspondi
 - `DATABRICKS_ALLOW_HTTP_URL`, `UNITY_ALLOW_HTTP_URL`, `UC_ALLOW_HTTP_URL`
 
   Whether to allow HTTP URL.
+
+- `DATABRICKS_USER_AGENT`, `UNITY_USER_AGENT`, `UC_USER_AGENT`
+
+  The value of the `User-Agent` header. See the `user_agent` option.
 
 ## Example
 

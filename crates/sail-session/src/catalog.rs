@@ -127,11 +127,15 @@ pub fn create_catalog_manager(
                     uri,
                     default_catalog,
                     token,
+                    user_agent,
                     cache,
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
-                            let config = UnityCatalogConfig::new(uri.clone(), token, None)?;
+                            let options = user_agent.as_ref().map(|user_agent| {
+                                HashMap::from([("user_agent".to_string(), user_agent.clone())])
+                            });
+                            let config = UnityCatalogConfig::new(uri.clone(), token, options)?;
                             let credentials = config
                                 .get_credential_provider()
                                 .map(|credentials| {
@@ -147,6 +151,7 @@ pub fn create_catalog_manager(
                                     default_catalog,
                                     uri: config.uri,
                                     credentials,
+                                    user_agent: config.user_agent,
                                 },
                             )
                         },

@@ -170,6 +170,7 @@ pub struct UnityCatalogProvider {
     name: String,
     options: UnityCatalogOptions,
     http_client: reqwest::Client,
+    user_agent: reqwest::header::HeaderValue,
     /// The API that each catalog has for Delta tables, once the server has told.
     delta_commit_apis: Mutex<HashMap<String, DeltaCommitApi>>,
     /// The IDs of the staging tables that are not registered as tables yet,
@@ -182,6 +183,9 @@ pub struct UnityCatalogOptions {
     pub default_catalog: String,
     pub uri: String,
     pub credentials: Arc<dyn CatalogCredentials>,
+    /// The value of the `User-Agent` header of the requests to the catalog,
+    /// or `None` for `Sail/<version>`.
+    pub user_agent: Option<String>,
 }
 
 impl UnityCatalogProvider {
@@ -191,10 +195,15 @@ impl UnityCatalogProvider {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to create HTTP client: {e}")))?;
+        let user_agent = match &options.user_agent {
+            Some(user_agent) => crate::config::user_agent_header(user_agent)?,
+            None => reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
+        };
         Ok(Self {
             name,
             options,
             http_client,
+            user_agent,
             delta_commit_apis: Mutex::new(HashMap::new()),
             staging_table_ids: Mutex::new(HashMap::new()),
         })
@@ -233,10 +242,7 @@ impl UnityCatalogProvider {
             headers.insert(reqwest::header::AUTHORIZATION, header);
         }
 
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
-        );
+        headers.insert(reqwest::header::USER_AGENT, self.user_agent.clone());
 
         Ok(headers)
     }
@@ -2648,6 +2654,7 @@ mod tests {
             default_catalog: default_catalog.into(),
             uri: config.uri,
             credentials,
+            user_agent: config.user_agent,
         }
     }
 
@@ -2656,6 +2663,7 @@ mod tests {
             default_catalog: default_catalog.into(),
             uri: DEFAULT_URI.to_string(),
             credentials: Arc::new(EmptyCatalogCredentials),
+            user_agent: None,
         }
     }
 
@@ -2813,6 +2821,116 @@ mod tests {
                 format!("{} {target}", request.method)
             })
             .collect()
+    }
+
+    /// Sends a request for an access token, a request of the Unity Catalog API, and a
+    /// request of the Delta REST API, and returns the `User-Agent` header of each request.
+    async fn received_user_agents(user_agent: Option<&str>) -> Vec<(String, Option<String>)> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oidc/v1/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "workspace-token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+        let schema = serde_json::json!({"catalog_name": "main", "name": "default"});
+        Mock::given(method("GET"))
+            .and(path_regex("^/api/2.1/unity-catalog/schemas/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&schema))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/2.1/unity-catalog/delta/v1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let mut options = HashMap::from([
+            ("client_id".to_string(), "client".to_string()),
+            ("client_secret".to_string(), "secret".to_string()),
+        ]);
+        if let Some(user_agent) = user_agent {
+            options.insert("user_agent".to_string(), user_agent.to_string());
+        }
+        let uri = format!("{}/api/2.1/unity-catalog", server.uri());
+        let config = UnityCatalogConfig::new(Some(uri), &None, Some(options)).unwrap();
+        let provider =
+            UnityCatalogProvider::new("test".to_string(), options_from_config("main", config))
+                .unwrap();
+        let database = Namespace::try_from(vec!["main", "default"]).unwrap();
+        provider.get_database(&database).await.unwrap();
+        let client = provider.get_delta_client().await.unwrap();
+        provider
+            .get_delta_commit_api(&client, "main", "default", "t")
+            .await
+            .unwrap();
+
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                let user_agent = request
+                    .headers
+                    .get(reqwest::header::USER_AGENT)
+                    .map(|value| value.to_str().unwrap().to_string());
+                let path = percent_encoding::percent_decode_str(request.url.path())
+                    .decode_utf8()
+                    .unwrap()
+                    .to_string();
+                (path, user_agent)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_user_agent_option_is_sent_with_every_request() {
+        let configured = "ExampleEngine/1.2 ExampleConnector/0.3";
+        let requests = received_user_agents(Some(configured)).await;
+        let paths: Vec<_> = requests.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/oidc/v1/token",
+                "/api/2.1/unity-catalog/schemas/main.default",
+                "/api/2.1/unity-catalog/delta/v1/config",
+            ]
+        );
+        for (path, user_agent) in &requests {
+            assert_eq!(user_agent.as_deref(), Some(configured), "{path}");
+        }
+
+        // Without the option, the requests to the catalog name Sail.
+        let requests = received_user_agents(None).await;
+        assert_eq!(requests.len(), 3);
+        for (path, user_agent) in &requests[1..] {
+            assert_eq!(user_agent.as_deref(), Some(SAIL_USER_AGENT), "{path}");
+        }
+
+        // A value that cannot be sent is refused when the catalog is configured.
+        for invalid in ["", "  ", "Example\nEngine"] {
+            let options = HashMap::from([("user_agent".to_string(), invalid.to_string())]);
+            let result = UnityCatalogConfig::new(None, &None, Some(options));
+            assert!(
+                matches!(result, Err(CatalogError::InvalidArgument(_))),
+                "{invalid:?}"
+            );
+            let options = UnityCatalogOptions {
+                user_agent: Some(invalid.to_string()),
+                ..empty_options("main")
+            };
+            assert!(
+                matches!(
+                    UnityCatalogProvider::new("test".to_string(), options),
+                    Err(CatalogError::InvalidArgument(_))
+                ),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[tokio::test]

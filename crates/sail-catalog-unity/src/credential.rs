@@ -54,8 +54,9 @@ pub enum CredentialProvider {
     /// static bearer token
     BearerToken(String),
 
-    /// a credential to fetch expiring auth tokens
-    TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+    /// a credential to fetch expiring auth tokens, and the configured value of the
+    /// `User-Agent` header of the requests for the tokens
+    TokenCredential(TokenCache<String>, Option<String>, Box<dyn TokenCredential>),
 }
 
 // The trait requires `Debug`, and a static token is usable exactly as it is printed, so it does
@@ -65,7 +66,7 @@ impl Debug for CredentialProvider {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BearerToken(_) => f.debug_tuple("BearerToken").field(&"[REDACTED]").finish(),
-            Self::TokenCredential(cache, credential) => f
+            Self::TokenCredential(cache, _, credential) => f
                 .debug_tuple("TokenCredential")
                 .field(cache)
                 .field(credential)
@@ -79,14 +80,16 @@ impl CatalogCredentials for CredentialProvider {
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
-            CredentialProvider::TokenCredential(cache, cred) => {
-                let oauth_client = Client::builder()
+            CredentialProvider::TokenCredential(cache, user_agent, cred) => {
+                let mut builder = Client::builder()
                     .connect_timeout(CONNECT_TIMEOUT)
-                    .timeout(REQUEST_TIMEOUT)
-                    .build()
-                    .map_err(|e| {
-                        CatalogError::External(format!("Failed to build OAuth client: {e}"))
-                    })?;
+                    .timeout(REQUEST_TIMEOUT);
+                if let Some(user_agent) = user_agent {
+                    builder = builder.user_agent(crate::config::user_agent_header(user_agent)?);
+                }
+                let oauth_client = builder.build().map_err(|e| {
+                    CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                })?;
                 let token = cache
                     .get_or_insert_with(|| cred.fetch_token(&oauth_client))
                     .await?;
@@ -629,7 +632,7 @@ mod tests {
         assert_eq!(token, "s3cr3t-token");
 
         let credentials =
-            CredentialProvider::TokenCredential(cache, Box::new(AzureCliCredential::new()));
+            CredentialProvider::TokenCredential(cache, None, Box::new(AzureCliCredential::new()));
         let output = format!("{credentials:?}");
         assert!(
             !output.contains("s3cr3t-token"),

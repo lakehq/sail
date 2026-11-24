@@ -33,6 +33,7 @@ impl PyUnityCatalogProvider {
                         default_catalog,
                         uri,
                         credentials: Arc::new(EmptyCatalogCredentials),
+                        user_agent: None,
                     },
                 )
             },
