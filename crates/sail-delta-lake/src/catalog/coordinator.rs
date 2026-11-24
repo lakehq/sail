@@ -488,7 +488,7 @@ fn refusal(answer: CatalogResult<DeltaCommitOutcome>) -> CatalogError {
     }
 }
 
-fn commit_conflict_error(message: &str) -> DataFusionError {
+pub(crate) fn commit_conflict_error(message: &str) -> DataFusionError {
     DataFusionError::Execution(format!("Delta catalog commit conflict: {message}"))
 }
 

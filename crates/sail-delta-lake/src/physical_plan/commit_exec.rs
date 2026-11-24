@@ -31,7 +31,9 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
+use crate::catalog::coordinator::{
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, commit_conflict_error,
+};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
@@ -323,6 +325,18 @@ impl DeltaCommitExec {
         require_files: bool,
         use_catalog_managed_replay: bool,
     ) -> Result<Arc<crate::table::DeltaSnapshot>> {
+        if use_catalog_managed_replay
+            && let Some(latest) = stale_catalog_state_version(lakehouse_table, version)
+        {
+            // The write was prepared from a version of the table that is after the one
+            // that the catalog told when it resolved the table for the commit, so another
+            // writer has committed to the table since then.
+            return Err(commit_conflict_error(&format!(
+                "the write was prepared from version {} of the table, but the latest version \
+                 of the table was {latest} when the catalog resolved the table",
+                version.unwrap_or_default()
+            )));
+        }
         let table = open_catalog_table(
             context.as_ref(),
             lakehouse_table.filter(|_| use_catalog_managed_replay),
@@ -1411,6 +1425,21 @@ fn with_only_column_mapping_field_metadata(mut schema: serde_json::Value) -> ser
     schema
 }
 
+/// Returns the latest version of the table that the catalog told when it resolved the table,
+/// when the version that a write was prepared from is after it.
+fn stale_catalog_state_version(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+    version: Option<i64>,
+) -> Option<i64> {
+    let latest = lakehouse_table?
+        .delta
+        .as_ref()?
+        .commits
+        .as_ref()?
+        .latest_table_version;
+    (latest >= 0 && version? > latest).then_some(latest)
+}
+
 #[cfg(test)]
 mod identity_tests {
     use super::*;
@@ -1786,5 +1815,65 @@ mod create_bootstrap_tests {
             assert!(error.to_string().contains("different metadata"), "{error}");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stale_catalog_state_tests {
+    use sail_common_datafusion::catalog::delta::{
+        DeltaCatalogManaged, DeltaCatalogState, DeltaRatifiedCommits,
+    };
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, LakehouseAuthority,
+        LakehouseFormat, LakehouseOperation, MetadataPointerAuthority, ScanAuthority,
+        TableLifecycle,
+    };
+
+    use super::*;
+
+    fn context(latest_table_version: Option<i64>) -> LakehouseExecutionContext {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".to_string()),
+            vec!["unity".to_string(), "s".to_string(), "t".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("id".to_string()),
+                table_uri: Some("file:///tmp/t".to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
+                commit: CommitAuthority::DeltaRatifiedCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        context.delta = Some(DeltaCatalogState {
+            catalog_managed: DeltaCatalogManaged::Yes,
+            commits: latest_table_version.map(|latest_table_version| DeltaRatifiedCommits {
+                latest_table_version,
+                commits: vec![],
+            }),
+            registered_before_log: false,
+        });
+        context
+    }
+
+    #[test]
+    fn a_version_after_the_resolved_latest_version_is_stale() {
+        let resolved = context(Some(2));
+        assert_eq!(
+            stale_catalog_state_version(Some(&resolved), Some(3)),
+            Some(2)
+        );
+        assert_eq!(stale_catalog_state_version(Some(&resolved), Some(2)), None);
+        assert_eq!(stale_catalog_state_version(Some(&resolved), Some(1)), None);
+        assert_eq!(stale_catalog_state_version(Some(&resolved), None), None);
+        // The commits are requested from the catalog when they are not carried.
+        assert_eq!(
+            stale_catalog_state_version(Some(&context(None)), Some(3)),
+            None
+        );
+        assert_eq!(stale_catalog_state_version(None, Some(3)), None);
     }
 }

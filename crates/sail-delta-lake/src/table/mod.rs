@@ -708,6 +708,37 @@ where
     })
 }
 
+/// Returns the context of a catalog-managed table with the ratified commits that the catalog
+/// has now, for a table that the catalog resolved with its ratified commits.
+///
+/// A write that is not a blind append fails when another writer commits after the snapshot
+/// that the write is planned from. Such a write is planned from the commits that the catalog
+/// has when the write is planned, which costs one request, and not from the ones that the
+/// catalog returned when the statement resolved the table.
+pub(crate) async fn refresh_catalog_managed_commits<C>(
+    ctx: &C,
+    mut lakehouse_table: LakehouseExecutionContext,
+) -> Result<LakehouseExecutionContext>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    let carried = catalog_managed_commit_context(Some(&lakehouse_table))
+        .and_then(|context| context.delta.as_ref())
+        .is_some_and(|state| {
+            state.catalog_managed == DeltaCatalogManaged::Yes && state.commits.is_some()
+        });
+    if !carried {
+        return Ok(lakehouse_table);
+    }
+    let commits = DeltaCatalogCommitCoordinator::new(ctx, &lakehouse_table)
+        .get_ratified_commits(1, None)
+        .await?;
+    if let Some(state) = lakehouse_table.delta.as_mut() {
+        state.commits = Some(commits);
+    }
+    Ok(lakehouse_table)
+}
+
 /// Opens a table and loads its snapshot of the version, or its latest snapshot. This is the
 /// only way that a snapshot of a table of a catalog is loaded.
 ///

@@ -890,6 +890,25 @@ pub(crate) async fn plan_delta_write(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
         .filter(|context| {
+    // A write that replaces data is not a blind append, so it is planned from the commits
+    // that the catalog has now.
+    let lakehouse_table = match lakehouse_table {
+        Some(context)
+            if matches!(
+                mode,
+                PhysicalSinkMode::Overwrite
+                    | PhysicalSinkMode::OverwriteIf { .. }
+                    | PhysicalSinkMode::OverwritePartitions
+            ) && context.table_identity.table_id.is_some()
+                && !matches!(
+                    context.operation,
+                    LakehouseOperation::Create | LakehouseOperation::Register
+                ) =>
+        {
+            Some(crate::table::refresh_catalog_managed_commits(&ctx, context).await?)
+        }
+        context => context,
+    };
             context.table_identity.table_id.is_some()
                 && !matches!(
                     context.operation,
