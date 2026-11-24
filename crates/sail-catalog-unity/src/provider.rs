@@ -263,10 +263,8 @@ impl UnityCatalogProvider {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to create HTTP client: {e}")))?;
-        let user_agent = match &options.user_agent {
-            Some(user_agent) => crate::config::user_agent_header(user_agent)?,
-            None => reqwest::header::HeaderValue::from_static(crate::config::UNITY_USER_AGENT),
-        };
+        let user_agent =
+            crate::config::user_agent_header_or_default(options.user_agent.as_deref())?;
         Ok(Self {
             name,
             options,

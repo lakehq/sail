@@ -277,6 +277,17 @@ pub(crate) fn bad_request_message(message: String) -> String {
     )
 }
 
+/// Returns the `User-Agent` header of the requests to Unity Catalog, which is the
+/// configured value, or [`UNITY_USER_AGENT`] without one.
+pub(crate) fn user_agent_header_or_default(
+    value: Option<&str>,
+) -> CatalogResult<reqwest::header::HeaderValue> {
+    match value {
+        Some(value) => user_agent_header(value),
+        None => Ok(reqwest::header::HeaderValue::from_static(UNITY_USER_AGENT)),
+    }
+}
+
 /// Returns the `User-Agent` header for a configured value.
 ///
 /// The value is a list of products as in RFC 9110, such as `MyEngine/1.2 MyConnector/0.4`.

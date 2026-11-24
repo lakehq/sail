@@ -82,12 +82,8 @@ impl CatalogCredentials for CredentialProvider {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
             CredentialProvider::TokenCredential(cache, user_agent, cred) => {
-                let user_agent = match user_agent {
-                    Some(user_agent) => crate::config::user_agent_header(user_agent)?,
-                    None => {
-                        reqwest::header::HeaderValue::from_static(crate::config::UNITY_USER_AGENT)
-                    }
-                };
+                let user_agent =
+                    crate::config::user_agent_header_or_default(user_agent.as_deref())?;
                 let builder = Client::builder()
                     .connect_timeout(CONNECT_TIMEOUT)
                     .timeout(REQUEST_TIMEOUT)
