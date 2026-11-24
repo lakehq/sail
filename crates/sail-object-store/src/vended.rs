@@ -1296,8 +1296,6 @@ mod tests {
 
     #[test]
     fn not_issued_errors_keep_the_kind_and_are_the_innermost_error() {
-        use std::error::Error as _;
-
         let reason: Arc<str> = Arc::from("the catalog refused: no access");
         let source = std::io::Error::other(std::io::Error::other("invalid token"));
         let error = NotIssuedObjectStore::explain(

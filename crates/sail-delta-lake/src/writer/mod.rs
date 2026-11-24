@@ -900,13 +900,14 @@ mod tests {
             writer.write(&batch).await?;
             let adds = writer.close().await?;
             assert_eq!(adds.len(), 1);
-            let stats: serde_json::Value = serde_json::from_str(adds[0].stats.as_ref().unwrap())
-                .map_err(DeltaTableError::generic_err)?;
+            let stats: serde_json::Value =
+                serde_json::from_str(adds[0].stats.as_deref().unwrap_or_default())
+                    .map_err(DeltaTableError::generic_err)?;
             for key in ["minValues", "maxValues", "nullCount"] {
                 let mut columns = stats[key]
                     .as_object()
-                    .unwrap()
-                    .keys()
+                    .into_iter()
+                    .flat_map(|columns| columns.keys())
                     .map(String::as_str)
                     .collect::<Vec<_>>();
                 columns.sort_unstable();
