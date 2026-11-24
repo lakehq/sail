@@ -173,186 +173,27 @@ pub fn remove_table_storage_credentials<C: SessionExtensionAccessor>(ctx: &C, ta
 mod tests {
     use std::sync::Mutex;
 
-    use async_trait::async_trait;
     use datafusion::execution::context::SessionConfig;
     use datafusion::prelude::SessionContext;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
-    use sail_common_datafusion::catalog::delta::DELTA_UNITY_TABLE_ID_KEY;
     use sail_common_datafusion::catalog::{
-        CatalogProviderId, CatalogTableIdentity, DatabaseStatus, LakehouseAuthority,
-        LakehouseExecutionContext, LakehouseOperation, LakehouseStatusHints,
-        MetadataPointerAuthority, ScanAuthority, StorageCredential, TableKind, TableLifecycle,
-        TableStatus,
+        CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseExecutionContext,
+        LakehouseOperation, LakehouseStatusHints, MetadataPointerAuthority, ScanAuthority,
+        TableLifecycle,
     };
     use sail_object_store::VendedStoreFactory;
 
     use super::*;
-    use crate::lakehouse::{LakehouseCapability, ResolveLakehouseTableRequest};
-    use crate::manager::CatalogManagerOptions;
-    use crate::provider::{
-        AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-        CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    };
+    use crate::lakehouse::ResolveLakehouseTableRequest;
+    use crate::testing::{ManagedDeltaCatalog, issued_storage_credentials, single_catalog_manager};
 
     const LOCATION: &str = "memory:///warehouse/items";
 
-    /// A catalog that only returns a catalog-managed Delta table and issues storage
-    /// credentials for it.
-    struct VendingProvider {
-        response: fn() -> CatalogResult<Option<TableStorageCredentials>>,
-        requests: Mutex<Vec<(String, TableStorageCredentialsRequest)>>,
-    }
-
-    #[async_trait]
-    impl CatalogProvider for VendingProvider {
-        fn get_name(&self) -> &str {
-            "unity"
-        }
-
-        fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
-            vec![LakehouseCapability::DeltaRatifiedCommits]
-        }
-
-        async fn get_table_storage_credentials(
-            &self,
-            database: &Namespace,
-            table: &str,
-            request: TableStorageCredentialsRequest,
-        ) -> CatalogResult<Option<TableStorageCredentials>> {
-            let name = format!(
-                "{}.{table}",
-                Vec::<String>::from(database.clone()).join(".")
-            );
-            self.requests.lock().unwrap().push((name, request));
-            (self.response)()
-        }
-
-        async fn create_database(
-            &self,
-            _database: &Namespace,
-            _options: CreateDatabaseOptions,
-        ) -> CatalogResult<DatabaseStatus> {
-            unreachable!()
-        }
-
-        async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-            Ok(DatabaseStatus {
-                catalog: "unity".to_string(),
-                database: database.clone().into(),
-                comment: None,
-                location: None,
-                properties: vec![],
-            })
-        }
-
-        async fn list_databases(
-            &self,
-            _prefix: Option<&Namespace>,
-        ) -> CatalogResult<Vec<DatabaseStatus>> {
-            unreachable!()
-        }
-
-        async fn drop_database(
-            &self,
-            _database: &Namespace,
-            _options: DropDatabaseOptions,
-        ) -> CatalogResult<()> {
-            unreachable!()
-        }
-
-        async fn create_table(
-            &self,
-            _database: &Namespace,
-            _table: &str,
-            _options: CreateTableOptions,
-        ) -> CatalogResult<TableStatus> {
-            unreachable!()
-        }
-
-        async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-            Ok(TableStatus {
-                catalog: Some("unity".to_string()),
-                database: database.clone().into(),
-                name: table.to_string(),
-                kind: TableKind::Table {
-                    columns: vec![],
-                    comment: None,
-                    constraints: vec![],
-                    location: Some(LOCATION.to_string()),
-                    format: "delta".to_string(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    properties: vec![(DELTA_UNITY_TABLE_ID_KEY.to_string(), "id".to_string())],
-                    is_external: false,
-                },
-            })
-        }
-
-        async fn list_tables(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-            unreachable!()
-        }
-
-        async fn drop_table(
-            &self,
-            _database: &Namespace,
-            _table: &str,
-            _options: DropTableOptions,
-        ) -> CatalogResult<()> {
-            unreachable!()
-        }
-
-        async fn alter_table(
-            &self,
-            _database: &Namespace,
-            _table: &str,
-            _options: AlterTableOptions,
-        ) -> CatalogResult<()> {
-            unreachable!()
-        }
-
-        async fn create_view(
-            &self,
-            _database: &Namespace,
-            _view: &str,
-            _options: CreateViewOptions,
-        ) -> CatalogResult<TableStatus> {
-            unreachable!()
-        }
-
-        async fn get_view(&self, _database: &Namespace, _view: &str) -> CatalogResult<TableStatus> {
-            unreachable!()
-        }
-
-        async fn list_views(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-            unreachable!()
-        }
-
-        async fn drop_view(
-            &self,
-            _database: &Namespace,
-            _view: &str,
-            _options: DropViewOptions,
-        ) -> CatalogResult<()> {
-            unreachable!()
-        }
-    }
-
-    fn issued() -> CatalogResult<Option<TableStorageCredentials>> {
-        Ok(Some(TableStorageCredentials {
-            credential: StorageCredential::GcsOauth {
-                token: "secret-token".to_string(),
-            },
-            expires_at_ms: None,
-            access: sail_common_datafusion::catalog::StorageAccess::Read,
-        }))
-    }
-
     struct TestSession {
         ctx: SessionContext,
-        provider: Arc<VendingProvider>,
+        provider: Arc<ManagedDeltaCatalog>,
         /// The store that is used with the credentials issued by the catalog.
         vended: Arc<InMemory>,
         fetch: Arc<Mutex<Option<StorageCredentialFetch>>>,
@@ -363,21 +204,8 @@ mod tests {
             response: fn() -> CatalogResult<Option<TableStorageCredentials>>,
             stores: bool,
         ) -> Self {
-            let provider = Arc::new(VendingProvider {
-                response,
-                requests: Mutex::new(Vec::new()),
-            });
-            let manager = CatalogManager::try_new(CatalogManagerOptions {
-                catalogs: std::iter::once((
-                    "unity".to_string(),
-                    provider.clone() as Arc<dyn CatalogProvider>,
-                ))
-                .collect(),
-                default_catalog: "unity".to_string(),
-                default_database: vec!["default".to_string()],
-                global_temporary_database: vec!["global_temp".to_string()],
-            })
-            .unwrap();
+            let provider = Arc::new(ManagedDeltaCatalog::with_credentials(LOCATION, response));
+            let manager = single_catalog_manager(provider.clone()).unwrap();
             let vended = Arc::new(InMemory::new());
             let fetch = Arc::new(Mutex::new(None));
             let factory: VendedStoreFactory = {
@@ -457,7 +285,7 @@ mod tests {
         }
 
         fn requests(&self) -> Vec<StorageAccess> {
-            let requests = self.provider.requests.lock().unwrap();
+            let requests = self.provider.credential_requests.lock().unwrap();
             for (name, request) in requests.iter() {
                 assert_eq!(name, "default.items");
                 assert_eq!(request.location, LOCATION);
@@ -468,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_are_installed_once_for_catalog_managed_delta_tables() {
-        let session = TestSession::new(issued, true);
+        let session = TestSession::new(issued_storage_credentials, true);
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -483,14 +311,16 @@ mod tests {
         // The credentials are fetched from the catalog again for the requested access.
         let fetch = session.fetch.lock().unwrap().clone().unwrap();
         let fetched = fetch(StorageAccess::ReadWrite).await;
-        let expected = issued().unwrap().map(|x| TableStorageCredentials {
-            access: StorageAccess::ReadWrite,
-            ..x
-        });
+        let expected = issued_storage_credentials()
+            .unwrap()
+            .map(|x| TableStorageCredentials {
+                access: StorageAccess::ReadWrite,
+                ..x
+            });
         assert_eq!(fetched.ok(), expected);
         // The credential for reading that the session has is not fetched again.
         let fetched = fetch(StorageAccess::Read).await;
-        assert_eq!(fetched.ok(), issued().unwrap());
+        assert_eq!(fetched.ok(), issued_storage_credentials().unwrap());
         assert_eq!(
             session.requests(),
             vec![StorageAccess::Read, StorageAccess::ReadWrite]
@@ -500,10 +330,10 @@ mod tests {
     #[tokio::test]
     async fn storage_credentials_are_not_requested_for_other_tables_and_sessions() {
         // The commits of the table are not coordinated by the catalog.
-        let session = TestSession::new(issued, true);
+        let session = TestSession::new(issued_storage_credentials, true);
         session.install(CommitAuthority::Filesystem).await.unwrap();
         // The session does not use storage credentials issued by catalogs.
-        let plain = TestSession::new(issued, false);
+        let plain = TestSession::new(issued_storage_credentials, false);
         plain
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -652,7 +482,7 @@ mod tests {
         let session = TestSession::new(
             || {
                 if REFUSED.replace(true) {
-                    issued()
+                    issued_storage_credentials()
                 } else {
                     Err(CatalogError::CredentialUnavailable(ANSWER.to_string()))
                 }
@@ -730,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_are_fetched_for_the_table_resolved_at_installation() {
-        let session = TestSession::new(issued, true);
+        let session = TestSession::new(issued_storage_credentials, true);
         session
             .install_as(&["items"], CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -759,7 +589,7 @@ mod tests {
 
     #[tokio::test]
     async fn storage_credentials_are_removed_with_the_table() {
-        let session = TestSession::new(issued, true);
+        let session = TestSession::new(issued_storage_credentials, true);
         session
             .install(CommitAuthority::DeltaRatifiedCommit)
             .await
@@ -782,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn storage_credentials_are_installed_when_the_catalog_resolves_the_table() {
         let table = ["items".to_string()];
-        let resolve = TestSession::new(issued, true);
+        let resolve = TestSession::new(issued_storage_credentials, true);
         let manager = resolve.ctx.extension::<CatalogManager>().unwrap();
         let request = ResolveLakehouseTableRequest {
             catalog_table: table.to_vec(),
@@ -795,7 +625,7 @@ mod tests {
             .await
             .unwrap();
 
-        let resolve_status = TestSession::new(issued, true);
+        let resolve_status = TestSession::new(issued_storage_credentials, true);
         let manager = resolve_status.ctx.extension::<CatalogManager>().unwrap();
         let status = manager.get_table(&table).await.unwrap();
         manager
