@@ -677,7 +677,8 @@ mod tests {
 
     #[test]
     fn global_checker_names_unsupported_writer_features() {
-        // The features of a table that Databricks creates, with a feature that is not known.
+        // The features of a catalog-managed table with clustering and row tracking, with a
+        // feature that is not known.
         let protocol: Protocol = serde_json::from_value(serde_json::json!({
             "minReaderVersion": 3,
             "minWriterVersion": 7,

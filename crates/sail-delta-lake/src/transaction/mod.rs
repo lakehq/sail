@@ -5310,8 +5310,8 @@ mod tests {
         }
     }
 
-    /// A table with the clustering table feature, which Databricks enables by default,
-    /// can be written. The clustering columns stay as they are.
+    /// A table with the clustering table feature can be written. The clustering columns
+    /// stay as they are.
     #[tokio::test]
     async fn clustered_table_commits_keep_the_clustering_columns() -> DeltaResult<()> {
         let protocol = clustered_protocol();
