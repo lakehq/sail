@@ -108,14 +108,22 @@ impl<'a> LogSegmentResolver<'a> {
             .iter()
             .filter(|commit| commit.version >= start_version && commit.version <= end_version)
         {
-            let path = catalog_managed_commit_path(&commit.file_name);
-            let mut meta = store.head(&path).await.map_err(|e| {
-                DeltaError::generic(format!(
-                    "Catalog-managed Delta commit file `{path}` for version {} is not readable: {e}",
-                    commit.version
-                ))
-            })?;
-            meta.location = path;
+            // The catalog returns the size and the modification time of the file, so the file
+            // is not looked up. A file that is missing fails the read of the commit.
+            let meta = match commit.object_meta() {
+                Some(meta) => meta,
+                None => {
+                    let path = catalog_managed_commit_path(&commit.file_name);
+                    let mut meta = store.head(&path).await.map_err(|e| {
+                        DeltaError::generic(format!(
+                            "Catalog-managed Delta commit file `{path}` for version {} is not readable: {e}",
+                            commit.version
+                        ))
+                    })?;
+                    meta.location = path;
+                    meta
+                }
+            };
             files.push((commit.version, meta));
         }
         files.sort_by_key(|(version, _)| *version);
@@ -1047,6 +1055,77 @@ mod tests {
         let err = validate_commit_contiguity_with_compactions(&commit_files, &compactions, 0, 3)
             .unwrap_err();
         assert!(err.to_string().contains("Missing commit file"));
+    }
+
+    #[tokio::test]
+    async fn catalog_commit_files_are_not_looked_up_when_the_catalog_returns_their_size() {
+        use url::Url;
+
+        use crate::delta_log::{StorageConfig, default_logstore};
+        use crate::snapshot::CatalogManagedCommitFile;
+
+        let store = Arc::new(crate::test_store::ObservedStore::default());
+        let staged = Path::from("_delta_log/_staged_commits/00000000000000000001.uuid.json");
+        for path in [&commit_path(0), &staged] {
+            store.put(path, b"{}".to_vec().into()).await.unwrap();
+        }
+        let object_store = store.clone() as Arc<dyn ObjectStore>;
+        let log_store = default_logstore(
+            object_store.clone(),
+            object_store,
+            &Url::parse("memory:///").unwrap(),
+            &StorageConfig,
+        );
+        let commits = |file_size, file_name: &str| CatalogManagedCommitSet {
+            latest_table_version: 1,
+            commits: vec![CatalogManagedCommitFile {
+                version: 1,
+                file_name: file_name.to_string(),
+                file_size,
+                file_modification_timestamp: 1_700_000_000_000,
+            }],
+        };
+        let resolve = |commits: CatalogManagedCommitSet| {
+            let log_store = log_store.clone();
+            async move {
+                let resolver = LogSegmentResolver::new(log_store.as_ref(), 1, None, Some(&commits));
+                match resolver.resolve_for_full_state().await? {
+                    ResolvedLogSegment::FullReplay { commit_files, .. } => Ok(commit_files),
+                    segment => Err(DeltaError::generic(format!("{segment:?}"))),
+                }
+            }
+        };
+
+        // The metadata of the file is what the catalog returns.
+        let files = resolve(commits(123, "00000000000000000001.uuid.json"))
+            .await
+            .unwrap();
+        let (version, meta) = &files[1];
+        assert_eq!(*version, 1);
+        assert_eq!(meta.location, staged);
+        assert_eq!(meta.size, 123);
+        assert_eq!(meta.last_modified.timestamp_millis(), 1_700_000_000_000);
+        assert!(store.heads().is_empty(), "{:?}", store.heads());
+
+        // A file that is missing is not found before it is read.
+        let files = resolve(commits(123, "00000000000000000001.missing.json"))
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(store.heads().is_empty(), "{:?}", store.heads());
+
+        // The file is looked up when the catalog does not return its size.
+        let files = resolve(commits(0, "00000000000000000001.uuid.json"))
+            .await
+            .unwrap();
+        assert_eq!(files[1].1.location, staged);
+        assert_eq!(files[1].1.size, 2);
+        assert_eq!(store.heads(), vec![staged.clone()]);
+        let error = resolve(commits(0, "00000000000000000001.missing.json"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("for version 1 is not readable"), "{error}");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! An in-memory object store for tests that records the reads, fails lookups of
+//! An in-memory object store for tests that records the reads and the lookups, fails lookups of
 //! chosen paths, can list keys out of order, and can let another writer write a path first.
 
 use std::collections::{HashMap, HashSet};
@@ -23,6 +23,7 @@ use object_store::{
 pub(crate) struct ObservedStore {
     inner: InMemory,
     gets: Mutex<Vec<Path>>,
+    heads: Mutex<Vec<Path>>,
     failing_lookups: Mutex<HashSet<Path>>,
     reverse_listings: AtomicBool,
     racing_writes: Mutex<HashMap<Path, Bytes>>,
@@ -33,6 +34,12 @@ impl ObservedStore {
     #[expect(clippy::unwrap_used)]
     pub(crate) fn gets(&self) -> Vec<Path> {
         self.gets.lock().unwrap().clone()
+    }
+
+    /// Returns the paths of the lookups so far.
+    #[expect(clippy::unwrap_used)]
+    pub(crate) fn heads(&self) -> Vec<Path> {
+        self.heads.lock().unwrap().clone()
     }
 
     /// Makes the listings return keys in reverse lexicographic order, as an object store
@@ -104,7 +111,9 @@ impl ObjectStore for ObservedStore {
 
     #[expect(clippy::unwrap_used)]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if !options.head {
+        if options.head {
+            self.heads.lock().unwrap().push(location.clone());
+        } else {
             self.gets.lock().unwrap().push(location.clone());
         }
         if self.failing_lookups.lock().unwrap().contains(location) {

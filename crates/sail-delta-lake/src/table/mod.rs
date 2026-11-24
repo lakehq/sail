@@ -756,6 +756,8 @@ where
                 CatalogManagedCommitFile {
                     version: commit.version,
                     file_name: commit.file_name,
+                    file_size: commit.file_size,
+                    file_modification_timestamp: commit.file_modification_timestamp,
                 },
             )
         })
@@ -2555,6 +2557,25 @@ mod catalog_managed_tests {
     }
 
     #[tokio::test]
+    async fn catalog_managed_table_read_fails_when_catalog_commit_file_is_missing() {
+        // The catalog returns the commit of version 1, and its file does not exist. The
+        // published commit of the version is not read in its place.
+        let files = vec![(published_commit(1), EMPTY_COMMIT)];
+        let (_, result) = read_unity_managed_table_with_log(
+            CATALOG_MANAGED_PROTOCOL,
+            files,
+            true,
+            Some(ratified(1, &[(1, "a")])),
+        )
+        .await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("_delta_log/_staged_commits/00000000000000000001.a.json"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn catalog_managed_table_rejects_version_neither_published_nor_ratified() {
         let files = vec![
             (published_commit(1), EMPTY_COMMIT),
@@ -2969,6 +2990,8 @@ mod catalog_managed_tests {
                     commits: vec![CatalogManagedCommitFile {
                         version: 1,
                         file_name: OTHER_WRITER_COMMIT.to_string(),
+                        file_size: 0,
+                        file_modification_timestamp: 0,
                     }],
                 }),
                 ..Default::default()
@@ -3293,6 +3316,8 @@ mod catalog_managed_tests {
                     .map(|commit| CatalogManagedCommitFile {
                         version: commit.version,
                         file_name: commit.file_name.clone(),
+                        file_size: commit.file_size,
+                        file_modification_timestamp: commit.file_modification_timestamp,
                     })
                     .collect(),
             }),
