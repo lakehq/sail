@@ -12,6 +12,7 @@ import requests
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+import docker
 from pysail.testing._dev.containers.unity_defaults import (
     DEFAULT_CATALOG,
     UNITY_CATALOG_SERVERS,
@@ -21,6 +22,29 @@ from pysail.testing._dev.containers.unity_defaults import (
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
+
+
+# How long the Docker daemon may stay silent while it pulls an image. Two attempts and
+# the startup of the server fit in the timeout of a test.
+_IMAGE_PULL_TIMEOUT_SECONDS = 60
+
+
+def _pull_image(image: str) -> None:
+    """Pull the image if it is not present, with a bounded wait and one more attempt."""
+    client = docker.from_env(timeout=_IMAGE_PULL_TIMEOUT_SECONDS)
+    try:
+        try:
+            client.images.get(image)
+        except docker.errors.ImageNotFound:
+            pass
+        else:
+            return
+        try:
+            client.images.pull(image)
+        except (docker.errors.DockerException, requests.RequestException):
+            client.images.pull(image)
+    finally:
+        client.close()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -65,6 +89,9 @@ def unity_container(
             ).with_startup_timeout(120)
         )
     )
+    # A pull that hangs fails here, before the timeout of the test. The failure is the
+    # failure of every test of the server, and the server is not started again for them.
+    _pull_image(unity_server.image)
     with container:
         yield container
 
