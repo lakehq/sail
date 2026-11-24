@@ -204,6 +204,57 @@ mod tests {
         assert_eq!(StorageRoutes::from(message), routes);
     }
 
+    #[tokio::test]
+    async fn task_requests_have_no_storage_credentials() {
+        use std::sync::Arc;
+
+        use object_store::ObjectStore;
+        use object_store::memory::InMemory;
+        use prost::Message;
+        use sail_common::runtime::RuntimeHandle;
+        use sail_object_store::{
+            DynamicObjectStoreRegistry, StorageCredentialFetch, VendedObjectStores,
+            VendedStoreFactory,
+        };
+
+        let credentials = || TableStorageCredentials {
+            credential: StorageCredential::S3 {
+                access_key_id: "key-value".to_string(),
+                secret_access_key: "secret-value".to_string(),
+                session_token: Some("token-value".to_string()),
+                endpoint: None,
+            },
+            expires_at_ms: None,
+            access: StorageAccess::ReadWrite,
+        };
+        let factory: VendedStoreFactory =
+            Arc::new(|_| Ok(Arc::new(InMemory::new()) as Arc<dyn ObjectStore>));
+        let stores = VendedObjectStores::with_factory(factory);
+        let handle = tokio::runtime::Handle::current();
+        let registry = DynamicObjectStoreRegistry::new(RuntimeHandle::new(handle.clone(), handle));
+        let fetch: StorageCredentialFetch =
+            Arc::new(move |_| Box::pin(async move { Ok(credentials()) }));
+        let location = url::Url::parse("memory:///warehouse/items").unwrap();
+        stores
+            .install(&registry, &location, "table", credentials(), fetch)
+            .unwrap();
+        let routes = stores.routes().unwrap();
+        let request = worker::RunTaskBatchRequest {
+            job_id: 1,
+            stage: 0,
+            tasks: vec![],
+            definition: vec![],
+            peers: vec![],
+            storage_routes: Some(routes.as_ref().into()),
+        };
+        let bytes = request.encode_to_vec();
+        let text = format!("{} {request:?}", String::from_utf8_lossy(&bytes));
+        assert!(text.contains("memory:///warehouse/items"), "{text}");
+        for secret in ["key-value", "secret-value", "token-value"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+    }
+
     #[test]
     fn storage_credentials_are_sent_for_each_storage() {
         for credential in [
