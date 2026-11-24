@@ -2,8 +2,11 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, SortExpr};
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
@@ -108,8 +111,18 @@ impl PlanResolver<'_> {
             let sorts = sorts
                 .into_iter()
                 .map(|sort| {
-                    // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
                     let data_type = sort.expr.get_type(input.schema())?;
+                    // Spark rejects a key it cannot order before it reads any row.
+                    if !is_orderable(&data_type) {
+                        let service = self.ctx.extension::<PlanService>()?;
+                        let data_type = service
+                            .plan_formatter()
+                            .data_type_to_simple_string(&data_type)?;
+                        return Err(PlanError::AnalysisError(format!(
+                            "[DATATYPE_MISMATCH.INVALID_ORDERING_TYPE] The `sortorder` does not support ordering on type \"{data_type}\"."
+                        )));
+                    }
+                    // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
                     let expr = normalize_range_floats(sort.expr.clone(), &data_type);
                     Ok(sort.with_expr(expr))
                 })
@@ -129,5 +142,20 @@ impl PlanResolver<'_> {
             )),
         });
         Self::restore_missing_input_output(plan, output_schema)
+    }
+}
+
+/// Whether Spark can order values of the type, as in `RowOrdering.isOrderable`.
+fn is_orderable(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Map(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => false,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => is_orderable(field.data_type()),
+        DataType::Struct(fields) => fields.iter().all(|field| is_orderable(field.data_type())),
+        DataType::Dictionary(_, value) => is_orderable(value),
+        _ => true,
     }
 }

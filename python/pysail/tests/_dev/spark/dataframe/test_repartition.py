@@ -9,6 +9,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException, IllegalArgumentException
 from pyspark.sql import Row
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
 
@@ -195,6 +196,47 @@ def test_repartition_by_range_hint_rejects_invalid_parameters(spark, parameters)
 def test_repartition_rejects_mixed_sort_order_and_hash_expressions(spark):
     with pytest.raises(IllegalArgumentException, match="are of type `SortOrder`, which means `RangePartitioning`"):
         spark.range(12).repartition(3, F.col("id").asc(), F.col("id") + 1).collect()
+
+
+@pytest.mark.parametrize("rows", [0, 24], ids=["empty", "rows"])
+@pytest.mark.parametrize("num_partitions", [1, 3])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "map(id, id)",
+        "array(map(id, id))",
+        "named_struct('m', map(id, id))",
+        "array(named_struct('m', map(id, id)))",
+        "make_interval(0, 0, 0, 0, 0, 0, id)",
+    ],
+    ids=["map", "array-of-map", "struct-of-map", "array-of-struct-of-map", "calendar-interval"],
+)
+def test_range_repartition_rejects_an_unorderable_key(spark, key, num_partitions, rows):
+    # Spark checks the key type during analysis, so the input and the count do not matter.
+    source = spark.range(rows).selectExpr(f"{key} AS k")
+    with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.INVALID_ORDERING_TYPE"):
+        source.repartitionByRange(num_partitions, "k").collect()
+
+
+SAIL_CANNOT_COMPARE_NESTED_SAMPLES = pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="the range sample compares keys as scalar values, which cannot compare a struct with an array",
+    strict=True,
+)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "array(id)",
+        pytest.param("named_struct('a', id, 'b', array(id))", marks=SAIL_CANNOT_COMPARE_NESTED_SAMPLES),
+        pytest.param("array(named_struct('a', id))", marks=SAIL_CANNOT_COMPARE_NESTED_SAMPLES),
+    ],
+    ids=["array", "struct-of-array", "array-of-struct"],
+)
+def test_range_repartition_accepts_an_orderable_nested_key(spark, key):
+    result = spark.range(12).selectExpr("id", f"{key} AS k").repartitionByRange(3, "k")
+    assert sorted(row.id for row in result.collect()) == list(range(12))
 
 
 @pytest.mark.parametrize("input_partitions", [1, 5])
