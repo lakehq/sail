@@ -2306,6 +2306,7 @@ fn delta_domain_metadata_updates(
 
 /// Whether the catalog derives the table property from the protocol, the domain metadata,
 /// or the commits of the Delta table, so that it is never set or removed by a commit.
+/// The server refuses a commit that sets or removes one of these properties.
 fn is_delta_derived_property(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.starts_with("delta.feature.")
@@ -2313,7 +2314,7 @@ fn is_delta_derived_property(key: &str) -> bool {
             key.as_str(),
             "delta.minreaderversion"
                 | "delta.minwriterversion"
-                | "delta.clusteringcolumns"
+                | "clusteringcolumns"
                 | "delta.rowtracking.rowidhighwatermark"
                 | "delta.lastupdateversion"
                 | "delta.lastcommittimestamp"
@@ -4564,10 +4565,12 @@ mod tests {
                 ("team", "x"),
                 ("stale", "1"),
                 ("delta.feature.catalogManaged", "supported"),
+                ("delta.rowTracking.rowIdHighWaterMark", "3"),
             ],
         );
         // ALTER TABLE SET TBLPROPERTIES and ALTER TABLE UNSET TBLPROPERTIES. The properties
-        // that the catalog derives from the protocol are not sent.
+        // that the catalog derives from the protocol, the domain metadata, and the commits
+        // are not sent, since the server refuses them.
         let mut properties = legacy_delta_commit(5);
         properties["delta_log"] = serde_json::json!({
             "metaData": delta_log_metadata(
@@ -4580,6 +4583,7 @@ mod tests {
                     ("added", "2"),
                     ("delta.minWriterVersion", "7"),
                     ("delta.lastUpdateVersion", "4"),
+                    ("clusteringColumns", r#"[["id"]]"#),
                 ],
             ),
             "baseMetaData": base,
