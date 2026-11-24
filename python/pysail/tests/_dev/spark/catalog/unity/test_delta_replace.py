@@ -586,7 +586,7 @@ def test_replace_as_select_replaces_the_schema_and_the_partitioning(
         metadata["configuration"]["delta.rowTracking.materializedRowIdColumnName"]
         == table_metadata["configuration"]["delta.rowTracking.materializedRowIdColumnName"]
     )
-    assert len(_actions(actions, "remove")) == 2  # noqa: PLR2004
+    assert len(_actions(actions, "remove")) == 2
     adds = _actions(actions, "add")
     assert all(add["partitionValues"] == {} for add in adds)
     assert min(_row_ids(adds)) == high_water_mark + 1
