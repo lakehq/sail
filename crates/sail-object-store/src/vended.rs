@@ -1341,6 +1341,13 @@ impl VendedObjectStores {
 
     /// Returns the storage credentials issued for the owner in the session, for a
     /// worker of the session that accesses the storage location of the owner.
+    ///
+    /// A worker gets the credentials for reading or for writing every location that
+    /// the session accesses with such credentials, like the object stores of the session,
+    /// which fetch the credentials for writing when a location is first written. The
+    /// session does not know which tables its statements write: a statement resolves its
+    /// tables for reading, and the plan that writes a table is created later. The catalog
+    /// decides whether it issues credentials for writing to the user of the session.
     pub async fn credentials(
         &self,
         request: &StorageCredentialsRequest,
