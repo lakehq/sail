@@ -255,6 +255,171 @@ mod tests {
         }
     }
 
+    /// A session accesses a table location with storage credentials. A task that reads
+    /// the location runs on a worker of the session, which has the location with the
+    /// task batch and gets the storage credentials from the driver server.
+    #[tokio::test]
+    async fn workers_read_with_the_storage_credentials_of_the_session()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::{Arc, Mutex};
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::datasource::listing::PartitionedFile;
+        use datafusion::datasource::object_store::ObjectStoreUrl;
+        use datafusion::datasource::physical_plan::{FileScanConfigBuilder, JsonSource};
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::execution::SessionStateBuilder;
+        use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+        use datafusion::physical_plan::common::collect;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+        use object_store::{ObjectStore, ObjectStoreExt};
+        use sail_common::actor::ActorSystem;
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::session::job::JobRunner;
+        use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
+        use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
+        use sail_object_store::{
+            DynamicObjectStoreRegistry, StorageCredentialFetch, VendedObjectStores,
+            VendedStoreFactory,
+        };
+
+        use crate::driver::job_scheduler::event_reporter;
+        use crate::driver::{
+            DriverComponents, DriverGateway, DriverGatewayOptions, DriverHandle, DriverOptions,
+            DriverRegistryAccessor,
+        };
+        use crate::id::DriverId;
+        use crate::job_runner::ClusterJobRunner;
+        use crate::worker_manager::LocalWorkerManager;
+
+        struct OneDriver(DriverHandle);
+
+        #[tonic::async_trait]
+        impl DriverRegistryAccessor for OneDriver {
+            async fn get(&self, _driver_id: DriverId) -> ExecutionResult<DriverHandle> {
+                Ok(self.0.clone())
+            }
+        }
+
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        // A session whose object stores for storage credentials are in memory. The key
+        // of the credential that each object store starts with is recorded.
+        let session = |vended: Arc<InMemory>, keys: Arc<Mutex<Vec<String>>>| {
+            let factory: VendedStoreFactory = Arc::new(move |request| {
+                if let Some(StorageCredential::S3 { access_key_id, .. }) =
+                    request.initial.map(|x| x.credential)
+                {
+                    keys.lock().unwrap().push(access_key_id);
+                }
+                Ok(Arc::clone(&vended) as Arc<dyn ObjectStore>)
+            });
+            let stores = Arc::new(VendedObjectStores::with_factory(factory));
+            let registry = Arc::new(DynamicObjectStoreRegistry::new(runtime.clone()));
+            let env = RuntimeEnvBuilder::new()
+                .with_object_store_registry(registry)
+                .build_arc()?;
+            let state = SessionStateBuilder::new()
+                .with_config(
+                    SessionConfig::new()
+                        .with_extension(Arc::clone(&stores))
+                        .with_extension(Arc::new(RepartitionBufferConfig::new(1 << 20)))
+                        .with_extension(Arc::new(ShuffleWriteConfig::new(1 << 20))),
+                )
+                .with_runtime_env(env)
+                .build();
+            Ok::<_, Box<dyn std::error::Error>>((SessionContext::new_with_state(state), stores))
+        };
+        let credentials = TableStorageCredentials {
+            credential: StorageCredential::S3 {
+                access_key_id: "session-key".to_string(),
+                secret_access_key: "secret-value".to_string(),
+                session_token: None,
+                endpoint: None,
+            },
+            expires_at_ms: None,
+            access: StorageAccess::Read,
+        };
+
+        // The file is only in the storage that is accessed with storage credentials.
+        let location = url::Url::parse("memory:///warehouse/items")?;
+        let data = "{\"x\": 1}\n{\"x\": 2}\n";
+        let storage = Arc::new(InMemory::new());
+        storage
+            .put(&Path::from("warehouse/items/data.json"), data.into())
+            .await?;
+        let worker_keys = Arc::new(Mutex::new(Vec::new()));
+        let (worker, _) = session(Arc::clone(&storage), Arc::clone(&worker_keys))?;
+        let (driver, stores) = session(storage, Arc::default())?;
+        let fetch: StorageCredentialFetch = {
+            let credentials = credentials.clone();
+            Arc::new(move |_| {
+                let credentials = credentials.clone();
+                Box::pin(async move { Ok(credentials) })
+            })
+        };
+        stores.install(
+            driver.runtime_env().object_store_registry.as_ref(),
+            &location,
+            "table",
+            credentials,
+            fetch,
+        )?;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.worker_initial_count = 1;
+        config.cluster.worker_max_count = 1;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let mut gateway = DriverGateway::try_new(DriverGatewayOptions::new(&config)).await?;
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "storage-credentials".into(),
+            DriverId::from(1),
+            gateway.port(),
+        )?;
+        let mut system = ActorSystem::new();
+        let runner = ClusterJobRunner::new(
+            &mut system,
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, worker)),
+                event_reporter: reporter,
+            },
+        );
+        gateway.start(Arc::new(OneDriver(runner.driver())));
+        runner.driver().activate().await?;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
+        let scan = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("memory://")?,
+            Arc::new(JsonSource::new(schema)),
+        )
+        .with_file(PartitionedFile::new(
+            "warehouse/items/data.json",
+            data.len() as u64,
+        ))
+        .build();
+        let plan = DataSourceExec::from_data_source(scan);
+        let stream = runner.execute(&driver, plan).await?;
+        let batches = tokio::time::timeout(std::time::Duration::from_secs(60), collect(stream));
+        let rows = batches.await??.iter().map(|x| x.num_rows()).sum::<usize>();
+        assert_eq!(rows, 2);
+        // The object store of the worker started with the credential of the session.
+        let keys = worker_keys.lock().unwrap().clone();
+        assert_eq!(keys, ["session-key"]);
+        runner.driver().shutdown_and_wait().await?;
+        gateway.stop().await;
+        Ok(())
+    }
+
     #[test]
     fn storage_credentials_are_sent_for_each_storage() {
         for credential in [

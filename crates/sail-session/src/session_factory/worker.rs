@@ -85,6 +85,21 @@ mod tests {
         Ok(())
     }
 
+    /// The worker server looks for the object stores in the task context of the session.
+    #[tokio::test]
+    async fn worker_has_object_stores_for_storage_credentials()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let session = WorkerSessionFactory::new(Arc::new(AppConfig::load()?), runtime).create(())?;
+        let context = session.task_ctx();
+        let stores = context
+            .session_config()
+            .get_extension::<VendedObjectStores>();
+        assert!(stores.is_some());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn worker_applies_parquet_config() -> Result<(), Box<dyn std::error::Error>> {
         let mut config = AppConfig::load()?;
