@@ -44,7 +44,7 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::range_repartition::RangeRepartitionExec;
+use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
 use sail_physical_plan::range_sample::RangePartitionSampleExec;
 use sail_physical_plan::range_split::{RangeChannelExec, RangeResampleExec, RangeSplitPointsExec};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
@@ -106,49 +106,111 @@ impl JobGraph {
 /// The first sample is read twice: by the resample, each task of which picks the
 /// imbalanced partitions from the whole first sample, and by the split points. So it
 /// is a shared CTE, which the job computes once.
+///
+/// The sample of a range repartitioning computes its input again, so it has copies of
+/// the range repartitionings in the input, which have the same sample. The split points
+/// are a shared CTE too, which every copy reads. The outermost range repartitioning
+/// defines the shared CTEs of all the range repartitionings inside it.
 fn plan_range_samples(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
+    plan.transform_down(|plan| {
         let Some(range) = plan.downcast_ref::<RangeRepartitionExec>() else {
             return Ok(Transformed::no(plan));
         };
-        let options = range.sample().options();
-        // Each copy of the range repartitioning runs its own copy of the sample, which
-        // can contain range repartitioning of its own.
-        let sample = plan_range_samples(reset_plan_states(range.sample().plan())?)?;
-        let Some(keys) = sample.downcast_ref::<RangePartitionSampleExec>() else {
+        let mut producers = RangeProducers::default();
+        let channel = producers.channel(range)?;
+        let shuffle = RangeShuffleExec {
+            input: Arc::new(SharedCteExec::new(channel, producers.ctes)),
+            properties: Arc::clone(range.properties()),
+        };
+        // The range repartitionings inside it are planned already.
+        Ok(Transformed::new(
+            Arc::new(shuffle) as Arc<dyn ExecutionPlan>,
+            true,
+            TreeNodeRecursion::Jump,
+        ))
+    })
+    .data()
+}
+
+/// The samples and split points of the range repartitionings inside an outermost one.
+#[derive(Default)]
+struct RangeProducers {
+    /// The shared CTE of the split points of each sample, by the identity of the sample.
+    split_points: HashMap<*const RangeSample, Arc<dyn ExecutionPlan>>,
+    /// The shared CTEs, each after the shared CTEs that it reads.
+    ctes: Vec<(Arc<SharedCte>, Arc<dyn ExecutionPlan>)>,
+}
+
+impl RangeProducers {
+    /// The input of the shuffle of a range repartitioning, whose rows name their channel.
+    fn channel(&mut self, range: &RangeRepartitionExec) -> Result<Arc<dyn ExecutionPlan>> {
+        let input = self.plan(Arc::clone(range.input()))?;
+        let split_points = self.split_points(range.sample())?;
+        Ok(Arc::new(RangeChannelExec::try_new(
+            input,
+            split_points,
+            range.ordering().clone(),
+        )?))
+    }
+
+    /// Replaces each range repartitioning in the plan by a shuffle.
+    fn plan(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_down(|plan| {
+            let Some(range) = plan.downcast_ref::<RangeRepartitionExec>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let shuffle = RangeShuffleExec {
+                input: self.channel(range)?,
+                properties: Arc::clone(range.properties()),
+            };
+            Ok(Transformed::new(
+                Arc::new(shuffle) as Arc<dyn ExecutionPlan>,
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        })
+        .data()
+    }
+
+    /// A reference to the split points of the sample, which are planned once.
+    fn split_points(&mut self, sample: &Arc<RangeSample>) -> Result<Arc<dyn ExecutionPlan>> {
+        let key = Arc::as_ptr(sample);
+        if let Some(scan) = self.split_points.get(&key) {
+            return Ok(Arc::clone(scan));
+        }
+        let options = sample.options();
+        let first_sample = self.plan(reset_plan_states(sample.plan())?)?;
+        let Some(keys) = first_sample.downcast_ref::<RangePartitionSampleExec>() else {
             return internal_err!("expected a range partition sample");
         };
         // The resample computes the keys again.
         let keys = reset_plan_states(Arc::clone(keys.input()))?;
-        let cte = Arc::new(SharedCte::new(
-            0,
-            "range_sample".to_string(),
-            sample.output_partitioning().clone(),
-        ));
-        let first_sample = || -> Arc<dyn ExecutionPlan> {
-            let schema = sample.schema();
-            let statistics = Statistics::new_unknown(&schema);
-            let scan = SharedCteScanExec::new(Arc::clone(&cte), schema, &statistics, None);
-            Arc::new(CoalescePartitionsExec::new(Arc::new(scan)))
-        };
+        let first_sample = self.share("range_sample", first_sample);
+        let first_sample = || Arc::new(CoalescePartitionsExec::new(Arc::clone(&first_sample)));
         let resample = RangeResampleExec::try_new(keys, first_sample(), options.clone())?;
         let split_points = RangeSplitPointsExec::try_new(
             first_sample(),
             Arc::new(CoalescePartitionsExec::new(Arc::new(resample))),
             options,
         )?;
-        let channel = RangeChannelExec::try_new(
-            Arc::clone(range.input()),
-            Arc::new(split_points),
-            range.ordering().clone(),
-        )?;
-        let shared = SharedCteExec::new(Arc::new(channel), vec![(cte, sample)]);
-        Ok(Transformed::yes(Arc::new(RangeShuffleExec {
-            input: Arc::new(shared),
-            properties: Arc::clone(range.properties()),
-        }) as Arc<dyn ExecutionPlan>))
-    })
-    .data()
+        let scan = self.share("range_split_points", Arc::new(split_points));
+        self.split_points.insert(key, Arc::clone(&scan));
+        Ok(scan)
+    }
+
+    /// Makes the plan a shared CTE, and returns a reference to it.
+    fn share(&mut self, name: &str, plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let cte = Arc::new(SharedCte::new(
+            self.ctes.len(),
+            name.to_string(),
+            plan.output_partitioning().clone(),
+        ));
+        let schema = plan.schema();
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = SharedCteScanExec::new(Arc::clone(&cte), schema, &statistics, None);
+        self.ctes.push((cte, plan));
+        Arc::new(scan)
+    }
 }
 
 /// A range repartitioning whose input rows name their channel (see [`RangeChannelExec`]).
@@ -718,17 +780,17 @@ fn plan_job_graph_stages(
         // Every task reads all of the second child, which is computed once: the split
         // points of the shuffle, or the first sample of the resample.
         let (input, read_in_full) = plan.children().two()?;
-        let properties = Arc::clone(read_in_full.properties());
-        let read_in_full = plan_job_graph_stages(
-            Arc::clone(read_in_full),
-            PartitionUsage::Once,
-            graph,
-            DriverStageHandling::CreateStage,
-            scalar_context,
-        )?;
         let read_in_full = if plan.is::<RangeChannelExec>() {
-            create_split_points_input(read_in_full, graph, properties, scalar_context)?
+            create_split_points_input(read_in_full)?
         } else {
+            let properties = Arc::clone(read_in_full.properties());
+            let read_in_full = plan_job_graph_stages(
+                Arc::clone(read_in_full),
+                PartitionUsage::Once,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_context,
+            )?;
             create_shared_input(read_in_full, graph, properties, scalar_context)?
         };
         vec![
@@ -1065,6 +1127,10 @@ fn build_shared_cte_job_graph(
             scalar_context,
         )?;
         let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
+        if plan.is::<RangeSplitPointsExec>() {
+            stages.insert(Arc::as_ptr(cte), push_split_points_stage(plan, graph)?);
+            continue;
+        }
         let distribution = match graph.options.shuffle_backend {
             // The shuffle service serves each partition of the CTE as a channel, which
             // keeps the partitioning of the CTE.
@@ -1289,24 +1355,38 @@ fn create_shared_input(
     )
 }
 
-/// The split points of a range shuffle are picked on the driver, as in Spark, so that the
-/// driver can read their number before it runs the stages that read the shuffle (see
-/// [`RangeShuffle`]). Every task of the shuffle reads all of them.
-fn create_split_points_input(
-    plan: PlannedSubtree,
+/// The split points of a sample are picked on the driver, as in Spark, so that the
+/// driver can read their number before it runs the stages that read the shuffles (see
+/// [`RangeShuffle`]). They are a shared CTE, which every copy of the range
+/// repartitioning reads.
+fn push_split_points_stage(
+    plan: Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
-    properties: Arc<PlanProperties>,
-    scalar_context: Option<ScalarSubqueryContext<'_>>,
-) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
-    let stage = push_stage(
+) -> ExecutionResult<usize> {
+    push_stage(
         plan,
         graph,
         OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Driver,
         OutputMode::Pipelined,
-    )?;
-    Ok(stage_input_exec(stage, InputMode::Broadcast, properties))
+    )
+}
+
+/// Every task of a range shuffle reads all the split points of its sample.
+fn create_split_points_input(
+    split_points: &Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let Some(reference) = split_points.downcast_ref::<StageInputExec<SharedCteStage>>() else {
+        return Err(ExecutionError::InternalError(
+            "the split points of a range shuffle must be a shared CTE".to_string(),
+        ));
+    };
+    let properties = Arc::clone(split_points.properties());
+    Ok(stage_input_exec(
+        reference.input().stage,
+        InputMode::Broadcast,
+        properties,
+    ))
 }
 
 /// The stage that picks the split points of the range shuffle that the given stage writes.
@@ -3047,6 +3127,46 @@ mod tests {
                     .is_none()
             );
             assert_eq!(last.plan.output_partitioning().partition_count(), 4);
+        }
+    }
+
+    #[test]
+    fn nested_range_repartitions_sample_each_input_once() {
+        use std::collections::HashSet;
+
+        // Each range repartitioning samples the one inside it, so the job has copies of
+        // the inner ones.
+        let inner = range_repartition();
+        let middle = range_repartition_of(Arc::clone(&inner), inner);
+        let outer = range_repartition_of(Arc::clone(&middle), middle);
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let graph = JobGraph::try_new(Arc::clone(&outer), options).unwrap();
+            let count = |name: &str| {
+                graph
+                    .stages()
+                    .iter()
+                    .filter(|stage| stage.plan.name() == name)
+                    .count()
+            };
+            for name in [
+                "RangePartitionSampleExec",
+                "RangeResampleExec",
+                "RangeSplitPointsExec",
+            ] {
+                assert_eq!(count(name), 3, "{name} in\n{graph}");
+            }
+            // Every copy of a range repartitioning reads the split points of its sample.
+            let split_points = graph
+                .range_shuffles()
+                .iter()
+                .map(|shuffle| shuffle.split_points)
+                .collect::<HashSet<_>>();
+            assert_eq!(split_points.len(), 3, "in\n{graph}");
+            assert_eq!(graph.range_shuffles().len(), count("RangeChannelExec"));
         }
     }
 

@@ -98,6 +98,20 @@ def test_nested_range_repartitions_assign_key_ranges(local_cluster_spark):
     assert len(rows) == 36
 
 
+def test_three_nested_range_repartitions_assign_key_ranges(local_cluster_spark):
+    # Each sample has copies of the range repartitionings inside it, which read the
+    # split points of one sample.
+    source = local_cluster_spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    first = source.repartitionByRange(3, "key").withColumn("first_pid", F.spark_partition_id())
+    second = first.repartitionByRange(2, F.col("key").desc()).withColumn("second_pid", F.spark_partition_id())
+    rows = second.repartitionByRange(4, "key").withColumn("pid", F.spark_partition_id()).collect()
+    for row in rows:
+        assert row.first_pid == row.key // 4, row
+        assert row.second_pid == (11 - row.key) // 6, row
+        assert row.pid == row.key // 3, row
+    assert len(rows) == 36
+
+
 def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spark):
     rows = local_cluster_spark.sql(
         "SELECT id, spark_partition_id() AS pid FROM ("
