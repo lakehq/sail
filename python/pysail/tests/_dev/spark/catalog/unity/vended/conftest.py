@@ -248,15 +248,22 @@ def vended_unity_url(
         yield url
 
 
-@pytest.fixture(scope="module")
-def remote(vended_storage: VendedStorage, vended_unity_url: str) -> Generator[str, None, None]:
-    """Start Sail server with Unity catalog and without storage credentials in the environment."""
+@pytest.fixture(scope="module", params=["local", "local-cluster"])
+def remote(
+    request: pytest.FixtureRequest, vended_storage: VendedStorage, vended_unity_url: str
+) -> Generator[str, None, None]:
+    """Start Sail server with Unity catalog and without storage credentials in the environment.
+
+    In cluster mode, the workers have no storage credentials either. They get the credentials
+    that the catalog issued to the session from the driver.
+    """
     catalog = f'[{{name="sail", type="unity", uri="{vended_unity_url}", default_catalog="{DEFAULT_CATALOG}"}}]'
     with pytest.MonkeyPatch.context() as mp:
         for name in _ENVIRONMENT_CREDENTIALS:
             mp.delenv(name, raising=False)
         with spark_connect_server(
             envs={
+                "SAIL_MODE": request.param,
                 "SAIL_CATALOG__LIST": catalog,
                 "UNITY_ALLOW_HTTP_URL": "true",
                 "AWS_ENDPOINT": vended_storage.endpoint,
