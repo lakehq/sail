@@ -237,7 +237,7 @@ def test_save_as_table_with_delta_option_sets_the_table_property(spark: SparkSes
         assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
         properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn}").collect()}
         assert properties.get("delta.appendOnly") == "true"
-        with pytest.raises(Exception, match="(?i)append.only"):
+        with pytest.raises(Exception, match=r"(?i)append.only"):
             spark.sql(f"DELETE FROM {table_fqn} WHERE id = 1")
         assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
     finally:
