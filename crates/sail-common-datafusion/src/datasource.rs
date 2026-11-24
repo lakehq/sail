@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -187,6 +189,7 @@ pub trait MergeCapableSource: Send + Sync {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
+    ReplaceTable(Box<crate::catalog::TableReplacement>),
     ErrorIfExists,
     IgnoreIfExists,
     Append,
@@ -251,6 +254,10 @@ impl SourceInfo {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// Target identities omitted by this write, independent of input field metadata.
+    pub identity_columns_to_track: Vec<String>,
+    /// SQL INSERT has a format-selected result, unlike CTAS and internal writes.
+    pub sql_insert: bool,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -318,6 +325,8 @@ pub struct MergeIntoOptions {
     pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     pub case_sensitive: bool,
+    /// The time zone of the session, in which TIMESTAMP values cast to TIMESTAMP_NTZ.
+    pub session_timezone: Arc<str>,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
@@ -343,6 +352,9 @@ pub struct MergeIntoOptions {
     /// references target schema field IDs and is rewritten to actual column names
     /// by MERGE expansion before being applied as a post-processing projection.
     pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Validated identity metadata from the target snapshot. Names initially reference
+    /// resolved field IDs and are normalized alongside MERGE assignments.
+    pub identity_columns: Vec<(String, crate::catalog::CatalogTableColumnIdentity)>,
     /// Resolved target column defaults used by explicit MERGE inserts.
     pub default_column_exprs: Vec<(String, Expr)>,
     /// Delta CHECK constraint expressions for the target table.
@@ -418,6 +430,7 @@ pub enum DeltaConstraintViolation {
     Check,
     NotNull { column: String },
     Invariant { column: String },
+    ReplaceWhere,
 }
 
 /// Returns the path from options, or `None` if not set.
@@ -451,6 +464,7 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
 /// The kind of row-level DML command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RowLevelCommand {
+    Truncate,
     Delete,
     Update,
     Merge,
@@ -514,8 +528,18 @@ impl DataSourceRegistry {
             .sources
             .read()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let normalized = name.to_lowercase();
+        // Spark's legacy JSON provider names still occur in saved client configurations.
+        let canonical = match normalized.as_str() {
+            "org.apache.spark.sql.json"
+            | "org.apache.spark.sql.json.defaultsource"
+            | "org.apache.spark.sql.execution.datasources.json"
+            | "org.apache.spark.sql.execution.datasources.json.defaultsource"
+            | "org.apache.spark.sql.execution.datasources.json.jsonfileformat" => "json",
+            _ => &normalized,
+        };
         sources
-            .get(&name.to_lowercase())
+            .get(canonical)
             .cloned()
             .ok_or_else(|| missing_data_source_error(name))
     }
@@ -546,6 +570,24 @@ impl DataSourceRegistry {
             .get(&name.to_lowercase())
             .cloned()
             .and_then(|source| source.as_lake_source()))
+    }
+
+    pub fn lake_sources(&self) -> Result<Vec<(String, Arc<dyn LakeSource>)>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let mut lake_sources = sources
+            .iter()
+            .filter_map(|(name, source)| {
+                source
+                    .clone()
+                    .as_lake_source()
+                    .map(|source| (name.clone(), source))
+            })
+            .collect::<Vec<_>>();
+        lake_sources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        Ok(lake_sources)
     }
 }
 

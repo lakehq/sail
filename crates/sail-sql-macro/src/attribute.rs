@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 
 use syn::punctuated::Punctuated;
@@ -90,7 +92,6 @@ impl<'a> AttributeExtractor<'a> {
     /// Extracts a single path from the attribute.
     /// The path is removed from the extractor.
     /// Returns an error if there are multiple paths with the same name.
-    #[expect(unused)]
     pub fn extract_path(&mut self, path: &str) -> syn::Result<Option<()>> {
         let paths = mem::take(&mut self.paths);
         let (mut extracted, remaining) = paths

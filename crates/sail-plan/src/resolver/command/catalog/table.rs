@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, CloneTarget};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
@@ -17,6 +20,89 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn resolve_column_change(
+        &self,
+        change: spec::ColumnChange,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<spec::ColumnChange<DataType>> {
+        match change {
+            spec::ColumnChange::Add {
+                path,
+                data_type,
+                metadata,
+                nullable,
+                comment,
+                default,
+                position,
+            } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: path.last().cloned().unwrap_or_default(),
+                        data_type,
+                        nullable,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    state,
+                )?;
+                Ok(spec::ColumnChange::Add {
+                    path,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    nullable,
+                    comment,
+                    default,
+                    position,
+                })
+            }
+            change => change.try_map_type(|ty| self.resolve_data_type(&ty, state)),
+        }
+    }
+
+    pub(in super::super) async fn resolve_catalog_clone_table(
+        &self,
+        table: spec::ObjectName,
+        source: spec::ObjectName,
+        definition: spec::TableDefinition,
+    ) -> PlanResult<LogicalPlan> {
+        if !definition.columns.is_empty()
+            || definition.comment.is_some()
+            || !definition.constraints.is_empty()
+            || definition.file_format.is_some()
+            || definition.row_format.is_some()
+            || !definition.partition_by.is_empty()
+            || !definition.sort_by.is_empty()
+            || definition.bucket_by.is_some()
+            || !definition.cluster_by.is_empty()
+            || !definition.options.is_empty()
+            || !definition.properties.is_empty()
+        {
+            return Err(PlanError::unsupported(
+                "SHALLOW CLONE supports only LOCATION; schema, properties and layout are inherited from the source",
+            ));
+        }
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let target = if let Some(path) = manager.clone_path(table.parts()).await? {
+            CloneTarget::Path(path.into())
+        } else {
+            let default_location = self.resolve_default_table_location(&table).await?;
+            CloneTarget::Table {
+                name: table.into(),
+                default_location,
+            }
+        };
+        self.resolve_catalog_command(CatalogCommand::CloneTable {
+            target,
+            source: source.into(),
+            location: definition.location,
+            mode: definition.mode,
+            is_external: definition.external,
+        })
+    }
+
     pub(in super::super) async fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,
@@ -140,12 +226,6 @@ impl PlanResolver<'_> {
                 "BUCKET_BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if comment.is_some() {
-            return Err(PlanError::todo(
-                "COMMENT in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !constraints.is_empty() {
             return Err(PlanError::todo(
                 "CONSTRAINTS in CREATE TABLE AS SELECT statement",
@@ -202,6 +282,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_partition_by(partition_by)
             .with_table_properties(properties)
+            .with_table_comment(comment)
             .with_table_is_external(is_external)
             .with_options(write_options);
 
@@ -243,6 +324,8 @@ impl PlanResolver<'_> {
             .get_database_by_qualifier(qualifier)
             .await?
             .location;
+        // FIXME: Avoid reusing a renamed table's directory when recreating its
+        // old name, while preserving the default location naming scheme.
         let (base, suffix) = match &location {
             Some(loc) => (
                 loc.trim_end_matches(object_store::path::DELIMITER),
@@ -338,7 +421,16 @@ impl PlanResolver<'_> {
                     generated_always_as,
                     identity,
                 } = x;
-                let data_type = self.resolve_data_type(&data_type, state)?;
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: name.clone(),
+                        data_type,
+                        nullable,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
+                let data_type = field.data_type().clone();
                 let identity = Self::resolve_table_column_identity(&name, identity)?;
                 if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
                 {
@@ -347,6 +439,11 @@ impl PlanResolver<'_> {
                     )));
                 }
                 Ok(CreateTableColumnOptions {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name,
                     data_type,
                     nullable,
@@ -469,6 +566,83 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::AlterIdentifierFields { names, drop } => {
+                AlterTableOptions::AlterIdentifierFields {
+                    names: names.into_iter().map(|name| name.into()).collect(),
+                    drop,
+                }
+            }
+            spec::AlterTableOperation::AlterPartitionSpec { add, drop } => {
+                AlterTableOptions::AlterPartitionSpec {
+                    add: add
+                        .map(|(field, name)| {
+                            self.resolve_partition_by_expression(field)
+                                .map(|field| (field, name))
+                        })
+                        .transpose()?,
+                    drop: drop
+                        .map(|field| self.resolve_partition_by_expression(field))
+                        .transpose()?,
+                }
+            }
+            spec::AlterTableOperation::SetWriteOrder {
+                order,
+                distribution,
+            } => AlterTableOptions::SetWriteOrder {
+                order: order
+                    .into_iter()
+                    .map(|order| {
+                        let ascending = order.direction != spec::SortDirection::Descending;
+                        let nulls_first = match order.null_ordering {
+                            spec::NullOrdering::NullsFirst => true,
+                            spec::NullOrdering::NullsLast => false,
+                            spec::NullOrdering::Unspecified => ascending,
+                        };
+                        Ok(sail_common_datafusion::catalog::CatalogSortField {
+                            field: self.resolve_partition_by_expression(*order.child)?,
+                            ascending,
+                            nulls_first,
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?,
+                distribution,
+                case_sensitive: self.config.case_sensitive,
+            },
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
+            }
+            spec::AlterTableOperation::AlterSnapshotReference { operation } => {
+                AlterTableOptions::AlterSnapshotReference { operation }
+            }
+            spec::AlterTableOperation::RenameTable { name } => {
+                return self.resolve_catalog_command(CatalogCommand::RenameTable {
+                    table: table.into(),
+                    destination: name.into(),
+                    if_exists,
+                });
+            }
+            spec::AlterTableOperation::ReplaceColumns { columns } => {
+                let columns = columns
+                    .into_iter()
+                    .map(|column| self.resolve_column_change(column, state))
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
+                self.validate_delta_replacement_generated_columns(&table, &schema, state)
+                    .await?;
+                AlterTableOptions::ReplaceColumns {
+                    fields: schema.fields().clone(),
+                    case_sensitive: self.config.case_sensitive,
+                }
+            }
+            spec::AlterTableOperation::AlterColumns { changes } => {
+                AlterTableOptions::AlterColumns {
+                    case_sensitive: self.config.case_sensitive,
+                    changes: changes
+                        .into_iter()
+                        .map(|change| self.resolve_column_change(change, state))
+                        .collect::<PlanResult<Vec<_>>>()?,
+                }
+            }
             spec::AlterTableOperation::SetTableProperties { properties } => {
                 AlterTableOptions::SetTableProperties { properties }
             }
@@ -476,15 +650,36 @@ impl PlanResolver<'_> {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
             }
             spec::AlterTableOperation::AlterColumnType { name, data_type } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: String::new(),
+                        data_type,
+                        nullable: true,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
                 AlterTableOptions::AlterColumnType {
                     name: name.into(),
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    case_sensitive: self.config.case_sensitive,
                 }
             }
             spec::AlterTableOperation::AlterColumnDefault { name, default } => {
                 AlterTableOptions::AlterColumnDefault {
                     name: name.into(),
                     default,
+                }
+            }
+            spec::AlterTableOperation::DropCheckConstraint { name, if_exists } => {
+                AlterTableOptions::DropCheckConstraint {
+                    name: String::from(name).to_lowercase(),
+                    if_exists,
                 }
             }
             spec::AlterTableOperation::AddCheckConstraint { .. } => {

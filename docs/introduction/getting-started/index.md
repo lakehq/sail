@@ -5,6 +5,8 @@ rank: 1
 
 # Getting Started
 
+<RunOnLakeSail />
+
 Sail can serve as a drop-in replacement for the compute engine behind PySpark applications.
 The Spark client session communicates with the Sail server using the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
 
@@ -16,14 +18,14 @@ See the [Installation](/introduction/installation/) page for full installation i
 
 ::: code-group
 
-```bash-vue [Spark 4.2 (Client) ]
+```bash-vue [Spark 4.3 (Client) ]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark-client==4.2.0"
+pip install "pyspark-client==4.3.0"
 ```
 
-```bash-vue [Spark 4.2]
+```bash-vue [Spark 4.3]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==4.2.0"
+pip install "pyspark[connect]==4.3.0"
 ```
 
 ```bash-vue [Spark 3.5]
@@ -45,7 +47,8 @@ pip install "pyspark[connect]==3.5.9"
 
 - Since Sail 0.2, the `sail` command-line interface (CLI) became the new way to interact with Sail.
 - Since Sail 0.3, you can no longer run `pip install pysail[spark]` to install PySail along with PySpark (the `spark` "extra"). You must explicitly install PySpark and choose the version you want to use.
-  :::
+
+:::
 
 ## Using the Sail PySpark Shell
 
@@ -141,6 +144,8 @@ The `pyspark` shell is not available if PySpark is installed via `pyspark-client
 <script setup>
 import { useData } from "vitepress";
 import { computed } from "vue";
+
+import RunOnLakeSail from "@theme/components/RunOnLakeSail.vue";
 
 const { site } = useData();
 

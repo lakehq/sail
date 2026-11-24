@@ -1,14 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod barrier;
 pub mod catalog_command;
 pub mod coalesce;
 pub mod data_source;
+pub mod identity_generate;
+pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
 pub mod range;
 pub mod remote_checkpoint;
 pub mod repartition;
+pub mod scalar_subquery;
 pub mod schema_pivot;
+pub mod seeded_random;
+pub mod shared_cte;
 pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;
@@ -16,3 +23,4 @@ pub mod streaming;
 pub mod storage_access;
 
 pub mod catalog_write;
+pub mod tail;

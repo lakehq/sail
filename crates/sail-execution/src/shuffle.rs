@@ -1,13 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::ipc::CompressionType;
+use datafusion::arrow::ipc::writer::IpcWriteOptions;
 use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
 use sail_celeborn::endpoint::{EndpointResolver, StaticEndpointResolver};
 use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
-    Flight,
+    Flight {
+        compression: ShuffleCompression,
+        connection_count: NonZeroUsize,
+        initial_stream_window_size: Option<u32>,
+        initial_connection_window_size: Option<u32>,
+    },
     Storage {
         path: Option<String>,
         max_file_size: usize,
@@ -32,7 +43,12 @@ pub struct ShuffleEndpointOverride {
 impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
     fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
-            sail_common::config::ShuffleBackend::Flight => Self::Flight,
+            sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
+                compression: flight.compression.clone().into(),
+                connection_count: flight.connection_count,
+                initial_stream_window_size: flight.initial_stream_window_size,
+                initial_connection_window_size: flight.initial_connection_window_size,
+            },
             sail_common::config::ShuffleBackend::Storage(storage) => Self::Storage {
                 path: storage.path.clone(),
                 max_file_size: storage.max_file_size,
@@ -69,6 +85,44 @@ pub fn celeborn_application_id(session_id: &str) -> String {
 }
 
 impl ShuffleBackendKind {
+    pub fn flight_compression(&self) -> ShuffleCompression {
+        match self {
+            Self::Flight { compression, .. } => *compression,
+            Self::Storage { .. } | Self::Celeborn { .. } => ShuffleCompression::None,
+        }
+    }
+
+    pub fn flight_connection_count(&self) -> NonZeroUsize {
+        match self {
+            Self::Flight {
+                connection_count, ..
+            } => *connection_count,
+            Self::Storage { .. } | Self::Celeborn { .. } => NonZeroUsize::MIN,
+        }
+    }
+
+    pub fn flight_initial_stream_window_size(&self) -> Option<u32> {
+        match self {
+            Self::Flight {
+                initial_stream_window_size,
+                ..
+            } => *initial_stream_window_size,
+            Self::Storage { .. } | Self::Celeborn { .. } => None,
+        }
+    }
+
+    pub fn flight_initial_connection_window_size(&self) -> Option<u32> {
+        match self {
+            Self::Flight {
+                initial_connection_window_size,
+                ..
+            } => *initial_connection_window_size,
+            // The task streams of these backends that are read over Flight have no
+            // setting of their own, so they get the default of the Flight backend.
+            Self::Storage { .. } | Self::Celeborn { .. } => Some(crate::rpc::MAX_WINDOW_SIZE),
+        }
+    }
+
     pub fn celeborn_master_endpoints_string(&self) -> String {
         let Self::Celeborn {
             master_endpoints, ..
@@ -136,11 +190,77 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
     }
 }
 
+impl ShuffleCompression {
+    pub fn ipc_write_options(self) -> Result<IpcWriteOptions, ArrowError> {
+        IpcWriteOptions::default().try_with_compression(match self {
+            Self::None => None,
+            Self::Lz4 => Some(CompressionType::LZ4_FRAME),
+            Self::Zstd => Some(CompressionType::ZSTD),
+        })
+    }
+}
+
+impl std::fmt::Display for ShuffleCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Lz4 => "lz4",
+            Self::Zstd => "zstd",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride,
+        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleCompression,
+        ShuffleEndpointOverride,
     };
+
+    #[test]
+    fn test_flight_initial_connection_window_size() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = sail_common::config::AppConfig::load()?;
+        let backend = ShuffleBackendKind::from(&config.cluster.shuffle_backend);
+        assert_eq!(
+            backend.flight_initial_connection_window_size(),
+            Some(2147483647)
+        );
+        let sail_common::config::ShuffleBackend::Flight(flight) =
+            &mut config.cluster.shuffle_backend
+        else {
+            return Err("the default shuffle backend must be Flight".into());
+        };
+        flight.initial_connection_window_size = Some(64 * 1024 * 1024);
+        let backend = ShuffleBackendKind::from(&config.cluster.shuffle_backend);
+        assert_eq!(
+            backend.flight_initial_connection_window_size(),
+            Some(64 * 1024 * 1024)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_flight_initial_connection_window_size_of_other_backends() {
+        let storage = ShuffleBackendKind::Storage {
+            path: None,
+            max_file_size: 1024,
+            compression: ShuffleCompression::None,
+        };
+        let celeborn = ShuffleBackendKind::Celeborn {
+            master_endpoints: vec!["master:12097".to_string()],
+            compression: CompressionCodec::Lz4,
+            heartbeat_interval_secs: 10,
+            endpoint_overrides: vec![],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: PartitionSplitMode::Soft,
+        };
+        for backend in [storage, celeborn] {
+            assert_eq!(
+                backend.flight_initial_connection_window_size(),
+                Some(2147483647)
+            );
+        }
+    }
 
     #[test]
     fn test_celeborn_endpoint_overrides_string() {
@@ -182,7 +302,13 @@ mod tests {
     #[test]
     fn test_non_celeborn_endpoint_overrides_string_is_empty() {
         assert_eq!(
-            ShuffleBackendKind::Flight.celeborn_endpoint_overrides_string(),
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            }
+            .celeborn_endpoint_overrides_string(),
             "[]"
         );
     }
@@ -190,7 +316,13 @@ mod tests {
     #[test]
     fn test_non_celeborn_master_endpoints_string_is_empty() {
         assert_eq!(
-            ShuffleBackendKind::Flight.celeborn_master_endpoints_string(),
+            ShuffleBackendKind::Flight {
+                compression: super::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            }
+            .celeborn_master_endpoints_string(),
             "[]"
         );
     }

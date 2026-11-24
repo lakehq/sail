@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, DFSchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
-    Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col, lit,
+    EmptyRelation, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col,
+    lit,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -17,6 +20,7 @@ use sail_common_datafusion::datasource::{
     DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::check_constraints::{
@@ -41,6 +45,78 @@ struct DeltaCheckConstraint {
 }
 
 impl PlanResolver<'_> {
+    pub(super) async fn validate_delta_replacement_generated_columns(
+        &self,
+        table: &spec::ObjectName,
+        requested: &Schema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<()> {
+        if !self.alter_table_target_is_delta(table, false).await? {
+            return Ok(());
+        }
+        let Some(info) = self.resolve_table_info(table).await? else {
+            return Ok(());
+        };
+        let generated = requested
+            .fields()
+            .iter()
+            .filter_map(|field| {
+                info.columns
+                    .iter()
+                    .find(|column| column.name.eq_ignore_ascii_case(field.name()))
+                    .and_then(|column| column.generated_always_as.as_deref())
+                    .map(|expression| (field, expression))
+            })
+            .collect::<Vec<_>>();
+        if generated.is_empty() {
+            return Ok(());
+        }
+        let input = Schema::new(
+            requested
+                .fields()
+                .iter()
+                .filter(|field| {
+                    !generated
+                        .iter()
+                        .any(|(generated, _)| generated.name() == field.name())
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let names = state.register_fields(input.fields());
+        let input = Arc::new(DFSchema::try_from(rename_schema(&input, &names)?)?);
+        let mut expressions = Vec::with_capacity(generated.len());
+        for (field, expression) in &generated {
+            let expression = self
+                .resolve_expression(parse_delta_generation_expr(expression)?, &input, state)
+                .await?;
+            expressions.push(expression.alias(field.name()));
+        }
+        let projection = LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: input,
+        }))
+        .project(expressions)?
+        .build()?;
+        let session = self.ctx.state();
+        let analyzed = session.analyzer().execute_and_check(
+            projection,
+            session.config_options().as_ref(),
+            |_, _| {},
+        )?;
+        for ((field, _), actual) in generated.iter().zip(analyzed.schema().fields()) {
+            if !same_generated_column_type(field.data_type(), actual.data_type()) {
+                return Err(PlanError::invalid(format!(
+                    "[DELTA_GENERATED_COLUMNS_EXPR_TYPE_MISMATCH] Generated column '{}' has type {}, but its expression has type {}",
+                    field.name(),
+                    field.data_type(),
+                    actual.data_type(),
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) async fn resolve_delta_alter_table_or_catalog(
         &self,
         table: spec::ObjectName,
@@ -98,7 +174,7 @@ impl PlanResolver<'_> {
         &self,
         input: LogicalPlan,
         format: &str,
-        info: &SinkInfo,
+        info: &mut SinkInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         if !is_delta_format(format) {
@@ -150,6 +226,11 @@ impl PlanResolver<'_> {
             .map(|field| {
                 let features = ColumnFeatures::from_field(field);
                 TableColumnStatus {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name().clone(),
                     data_type: field.data_type().clone(),
                     nullable: field.is_nullable(),
@@ -179,7 +260,8 @@ impl PlanResolver<'_> {
             return Ok(input);
         }
 
-        let info = TableInfo {
+        let table_info = TableInfo {
+            default_values: Default::default(),
             lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
@@ -189,8 +271,14 @@ impl PlanResolver<'_> {
             bucket_by: None,
             properties: metadata.properties,
         };
+        info.identity_columns_to_track
+            .extend(Self::omitted_identity_columns(
+                &input,
+                &WriteColumnMatch::ByName,
+                &table_info,
+            )?);
         let input = self
-            .rewrite_write_input(input, WriteColumnMatch::ByName, &info, state)
+            .rewrite_write_input(input, WriteColumnMatch::ByName, &table_info, state)
             .await?;
         self.apply_delta_check_constraints(input, constraints, state)
             .await
@@ -580,6 +668,34 @@ impl PlanResolver<'_> {
                 Ok(None)
             }
         }
+    }
+}
+
+fn same_generated_column_type(expected: &DataType, actual: &DataType) -> bool {
+    match (expected, actual) {
+        (DataType::Struct(left), DataType::Struct(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.name() == right.name()
+                        && same_generated_column_type(left.data_type(), right.data_type())
+                })
+        }
+        (
+            DataType::List(left) | DataType::LargeList(left),
+            DataType::List(right) | DataType::LargeList(right),
+        )
+        | (DataType::Map(left, _), DataType::Map(right, _)) => {
+            same_generated_column_type(left.data_type(), right.data_type())
+        }
+        (
+            DataType::Timestamp(left_unit, left_zone),
+            DataType::Timestamp(right_unit, right_zone),
+        ) => left_unit == right_unit && left_zone.is_some() == right_zone.is_some(),
+        (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+        ) => true,
+        _ => expected == actual,
     }
 }
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -10,24 +12,24 @@ use datafusion::logical_expr::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
-use crate::theta_sketch::{
+use crate::utils::theta_sketch::{
     DEFAULT_LG_NOM_ENTRIES, compact_update_sketch_bytes, empty_compact_sketch_bytes,
     intersect_sketch_bytes, new_update_sketch, normalize_sketch_bytes, union_sketches,
     update_sketch_from_array, validate_lg_nom_entries,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaSketchAggFunction {
+pub struct ThetaSketchAgg {
     signature: Signature,
 }
 
-impl Default for ThetaSketchAggFunction {
+impl Default for ThetaSketchAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaSketchAggFunction {
+impl ThetaSketchAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -38,7 +40,7 @@ impl ThetaSketchAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaSketchAggFunction {
+impl AggregateUDFImpl for ThetaSketchAgg {
     fn name(&self) -> &str {
         "theta_sketch_agg"
     }
@@ -54,7 +56,7 @@ impl AggregateUDFImpl for ThetaSketchAggFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let lg_nom_entries = resolve_lg_nom_entries(&acc_args, 1, "theta_sketch_agg")?;
-        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)))
+        Ok(Box::new(ThetaSketchAggAccumulator::new(lg_nom_entries)?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -70,17 +72,17 @@ impl AggregateUDFImpl for ThetaSketchAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaUnionAggFunction {
+pub struct ThetaUnionAgg {
     signature: Signature,
 }
 
-impl Default for ThetaUnionAggFunction {
+impl Default for ThetaUnionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaUnionAggFunction {
+impl ThetaUnionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -91,7 +93,7 @@ impl ThetaUnionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaUnionAggFunction {
+impl AggregateUDFImpl for ThetaUnionAgg {
     fn name(&self) -> &str {
         "theta_union_agg"
     }
@@ -123,17 +125,17 @@ impl AggregateUDFImpl for ThetaUnionAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaIntersectionAggFunction {
+pub struct ThetaIntersectionAgg {
     signature: Signature,
 }
 
-impl Default for ThetaIntersectionAggFunction {
+impl Default for ThetaIntersectionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaIntersectionAggFunction {
+impl ThetaIntersectionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Immutable),
@@ -141,7 +143,7 @@ impl ThetaIntersectionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaIntersectionAggFunction {
+impl AggregateUDFImpl for ThetaIntersectionAgg {
     fn name(&self) -> &str {
         "theta_intersection_agg"
     }
@@ -179,12 +181,12 @@ struct ThetaSketchAggAccumulator {
 }
 
 impl ThetaSketchAggAccumulator {
-    fn new(lg_nom_entries: u8) -> Self {
-        Self {
-            sketch: new_update_sketch(lg_nom_entries),
+    fn new(lg_nom_entries: u8) -> Result<Self> {
+        Ok(Self {
+            sketch: new_update_sketch(lg_nom_entries)?,
             merged: None,
             lg_nom_entries,
-        }
+        })
     }
 
     fn evaluate_bytes(&self) -> Result<Vec<u8>> {

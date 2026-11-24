@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use pyo3::prelude::*;
 
 pub(crate) mod server;

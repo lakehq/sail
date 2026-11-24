@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_common::spec::data_type_to_null_literal;
 use sail_sql_analyzer::literal::numeric::parse_decimal_string;
@@ -116,11 +118,15 @@ impl TryFrom<Literal> for spec::Literal {
                     nanoseconds: x.microseconds * 1_000,
                 }),
             },
-            LiteralType::YearMonthInterval(x) => {
-                spec::Literal::IntervalYearMonth { months: Some(x) }
-            }
-            LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
+            LiteralType::YearMonthInterval(x) => spec::Literal::IntervalYearMonth {
+                months: Some(x),
+                start_field: Some(spec::IntervalFieldType::Year),
+                end_field: Some(spec::IntervalFieldType::Month),
+            },
+            LiteralType::DayTimeInterval(x) => spec::Literal::IntervalDayTimeMicrosecond {
                 microseconds: Some(x),
+                start_field: Some(spec::IntervalFieldType::Day),
+                end_field: Some(spec::IntervalFieldType::Second),
             },
             #[expect(deprecated)]
             LiteralType::Array(Array {
@@ -213,6 +219,9 @@ impl TryFrom<Literal> for spec::Literal {
             }
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"));
+            }
+            LiteralType::TimestampNtzNanos(_) | LiteralType::TimestampLtzNanos(_) => {
+                return Err(SparkError::unsupported("nanosecond timestamp literal"));
             }
             LiteralType::Time(Time { nano, precision }) => {
                 // Spark TIME literals carry nanoseconds since midnight.

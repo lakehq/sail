@@ -1,19 +1,8 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/spark/blob/98bc0212c94705434471627068f41e374ccab143/sql/connect/common/src/main/protobuf/spark/connect/expressions.proto
+// SPDX-FileAttributionText: Notice: https://github.com/apache/spark/blob/98bc0212c94705434471627068f41e374ccab143/NOTICE
+// SPDX-FileAttributionText: Source release: Apache Spark v4.3.0
 
 syntax = 'proto3';
 
@@ -205,6 +194,11 @@ message Expression {
 
       SpecializedArray specialized_array = 25;
       Time time = 26;
+
+      // Nanosecond-capable timestamp literals (precision 7..9). NTZ and LTZ are distinct
+      // arms so the literal kind is self-describing.
+      TimestampNTZNanos timestamp_ntz_nanos = 29;
+      TimestampLTZNanos timestamp_ltz_nanos = 30;
     }
 
     // Reserved for Geometry and Geography.
@@ -288,6 +282,29 @@ message Expression {
       int64 nano = 1;
       // The precision of this time, if omitted, uses the default value of MICROS_PRECISION.
       optional int32 precision = 2;
+    }
+
+    // A TIMESTAMP_NTZ literal with nanosecond-capable precision. The physical value is carried
+    // as microseconds since the UNIX epoch plus the extra nanoseconds within that microsecond,
+    // because a single int64 of nanoseconds cannot span the supported year range.
+    message TimestampNTZNanos {
+      // Microseconds since the UNIX epoch (without timezone information).
+      int64 epoch_micros = 1;
+      // Additional nanoseconds within epoch_micros, in [0, 999].
+      int32 nanos_within_micro = 2;
+      // Number of fractional-second digits (7, 8, or 9). If omitted, defaults to 9 (nanoseconds).
+      optional int32 precision = 3;
+    }
+
+    // A TIMESTAMP_LTZ literal with nanosecond-capable precision. See TimestampNTZNanos for the
+    // rationale behind the two-component physical value.
+    message TimestampLTZNanos {
+      // Microseconds since the UNIX epoch.
+      int64 epoch_micros = 1;
+      // Additional nanoseconds within epoch_micros, in [0, 999].
+      int32 nanos_within_micro = 2;
+      // Number of fractional-second digits (7, 8, or 9). If omitted, defaults to 9 (nanoseconds).
+      optional int32 precision = 3;
     }
   }
 

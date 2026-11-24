@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -173,8 +175,7 @@ impl FromStr for CompressionCodec {
             "none" => Ok(Self::None),
             "lz4" => Ok(Self::Lz4),
             value => value
-                .strip_prefix("zstd(")
-                .and_then(|value| value.strip_suffix(')'))
+                .strip_circumfix("zstd(", ')')
                 .ok_or_else(|| {
                     CelebornError::InvalidArgument(format!(
                         "invalid Celeborn compression codec: {value}"

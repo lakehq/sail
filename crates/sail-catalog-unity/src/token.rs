@@ -1,36 +1,35 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/client/token.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-// [CREDIT]: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/client/token.rs
-
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::time::Instant;
 
 use tokio::sync::Mutex;
 
 /// A temporary authentication token with an associated expiry
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TemporaryToken<T> {
     /// The temporary credential
     pub token: T,
     /// The instant at which this credential is no longer valid
     /// None means the credential does not expire
     pub expiry: Option<Instant>,
+}
+
+// The token is usable exactly as it is printed, so it is kept out of the debug output of the
+// cache and of the credential providers that hold it.
+impl<T> Debug for TemporaryToken<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemporaryToken")
+            .field("token", &"[REDACTED]")
+            .field("expiry", &self.expiry)
+            .finish()
+    }
 }
 
 /// Provides [`TokenCache::get_or_insert_with`] which can be used to cache a

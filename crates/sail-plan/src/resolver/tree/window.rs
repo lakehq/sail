@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
@@ -11,7 +13,8 @@ use datafusion_expr::expr::{WindowFunction, WindowFunctionDefinition};
 use datafusion_expr::{
     Expr, Extension, LogicalPlan, SortExpr, WindowFrame, WindowFrameUnits, ident,
 };
-use sail_function::window::SparkFirstLastValue;
+use sail_function::window::FirstLastValue;
+use sail_logical_optimizer::is_order_irrelevant_aggregate;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::RequiredSortNode;
 
@@ -37,16 +40,12 @@ impl WindowRewriter<'_> {
     fn requires_input_order(function: &WindowFunction, schema: &DFSchemaRef) -> PlanResult<bool> {
         let function_requires_order = match &function.fun {
             WindowFunctionDefinition::AggregateUDF(udaf) => {
-                !PlanResolver::is_order_irrelevant_udaf(
-                    udaf.as_ref(),
-                    &function.params.args,
-                    schema,
-                )?
+                !is_order_irrelevant_aggregate(udaf.as_ref(), &function.params.args, schema)?
             }
             WindowFunctionDefinition::WindowUDF(udwf) => {
                 udwf.inner().downcast_ref::<NthValue>().is_some_and(|nth| {
                     matches!(nth.kind(), NthValueKind::First | NthValueKind::Last)
-                }) || udwf.inner().is::<SparkFirstLastValue>()
+                }) || udwf.inner().is::<FirstLastValue>()
             }
         };
         let frame_requires_order =
@@ -69,8 +68,8 @@ impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
         }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -93,7 +92,7 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     if found && global {
                         let mut ordering =
                             PlanResolver::input_sort_ordering(&self.plan).unwrap_or_default();
-                        let column = self.state.register_hidden_field_name("");
+                        let column = self.state.next_field_id();
                         self.plan = LogicalPlan::Extension(Extension {
                             node: Arc::new(MonotonicIdNode::try_new(
                                 Arc::new(self.plan.clone()),

@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
-use crate::proto::RemoteExecutionCodec;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerComponents, TaskRunnerMessage};
 
 impl Actor for TaskRunnerActor {
@@ -20,7 +21,7 @@ impl Actor for TaskRunnerActor {
         Self {
             session_id,
             signals: Default::default(),
-            codec: Box::new(RemoteExecutionCodec),
+            tasks: Default::default(),
             extensions,
             placement,
         }
@@ -32,12 +33,20 @@ impl Actor for TaskRunnerActor {
         message: Self::Message,
     ) -> ActorAction {
         match message {
-            TaskRunnerMessage::RunTask {
-                key,
+            TaskRunnerMessage::RunTaskBatch {
+                job_id,
+                stage,
+                tasks,
                 definition,
                 context,
                 peers,
-            } => self.handle_run_task(ctx, key, definition, context, peers),
+                result,
+            } => {
+                let output = self
+                    .handle_run_task_batch(ctx, job_id, stage, tasks, definition, context, peers);
+                let _ = result.send(output);
+                ActorAction::Continue
+            }
             TaskRunnerMessage::StopTask { key } => self.handle_stop_task(key),
             TaskRunnerMessage::ReportTaskStatus {
                 key,
@@ -45,15 +54,17 @@ impl Actor for TaskRunnerActor {
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
-            TaskRunnerMessage::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(key)
+            TaskRunnerMessage::ProbePendingLocalStream { key, probe } => {
+                self.handle_probe_pending_local_stream(key, probe)
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                channels,
                 replicas,
+                bounded,
                 schema,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => self.handle_create_local_stream(key, channels, replicas, bounded, schema, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -72,14 +83,14 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_fetch_driver_stream(ctx, key, schema, result),
-            TaskRunnerMessage::FetchWorkerStream {
+            TaskRunnerMessage::FetchWorkerStreams {
                 worker_id,
-                key,
+                keys,
                 schema,
                 result,
-            } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            TaskRunnerMessage::FetchLocalStream { key, result } => {
-                self.handle_fetch_local_stream(ctx, key, result)
+            } => self.handle_fetch_worker_streams(ctx, worker_id, keys, schema, result),
+            TaskRunnerMessage::FetchLocalStreams { keys, result } => {
+                self.handle_fetch_local_streams(ctx, keys, result)
             }
             TaskRunnerMessage::FetchStorageStream {
                 key,
@@ -105,6 +116,7 @@ impl Actor for TaskRunnerActor {
             TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage } => {
                 self.handle_clean_up_celeborn_streams(ctx, job_id, stage)
             }
+            TaskRunnerMessage::CloseJob { job_id } => self.handle_close_job(job_id),
             TaskRunnerMessage::Shutdown => self.handle_shutdown(),
         }
     }

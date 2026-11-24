@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
@@ -16,10 +20,19 @@ use datafusion_common::{DataFusionError, Result};
 use futures::stream::{self, TryStreamExt};
 use url::Url;
 
+use crate::datasource::predicate::Predicate;
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
-use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, Snapshot};
+use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, PartitionSpec, Snapshot};
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ManifestPruning {
+    pub(crate) predicate: Predicate,
+    pub(crate) specs: Vec<PartitionSpec>,
+    pub(crate) floating_field_ids: Option<Vec<i32>>,
+    pub(crate) limit: Option<usize>,
+}
 
 /// Column names for the metadata batch produced by `IcebergManifestScanExec`.
 pub const COL_FILE_PATH: &str = "file_path";
@@ -28,6 +41,8 @@ pub const COL_RECORD_COUNT: &str = "record_count";
 pub const COL_FILE_SIZE_IN_BYTES: &str = "file_size_in_bytes";
 pub const COL_PARTITION_SPEC_ID: &str = "partition_spec_id";
 pub const COL_CONTENT_TYPE: &str = "content_type";
+pub const COL_NAN_FREE: &str = "nan_free";
+pub const COL_ADDED_SNAPSHOT_ID: &str = "added_snapshot_id";
 
 /// Returns the Arrow schema used by the manifest scan metadata batch.
 pub fn manifest_scan_schema() -> SchemaRef {
@@ -38,6 +53,8 @@ pub fn manifest_scan_schema() -> SchemaRef {
         Field::new(COL_FILE_SIZE_IN_BYTES, DataType::UInt64, false),
         Field::new(COL_PARTITION_SPEC_ID, DataType::Int32, false),
         Field::new(COL_CONTENT_TYPE, DataType::Utf8, false),
+        Field::new(COL_NAN_FREE, DataType::Boolean, false),
+        Field::new(COL_ADDED_SNAPSHOT_ID, DataType::Int64, true),
     ]))
 }
 
@@ -47,22 +64,24 @@ pub fn manifest_scan_schema() -> SchemaRef {
 pub struct IcebergManifestScanExec {
     table_url: String,
     snapshot: Snapshot,
+    pruning: ManifestPruning,
     output_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
 
 impl IcebergManifestScanExec {
-    pub fn new(table_url: String, snapshot: Snapshot) -> Self {
+    pub fn new(table_url: String, snapshot: Snapshot, pruning: ManifestPruning) -> Self {
         let output_schema = manifest_scan_schema();
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema.clone()),
             datafusion::physical_plan::Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Self {
             table_url,
             snapshot,
+            pruning,
             output_schema,
             cache,
         }
@@ -70,6 +89,10 @@ impl IcebergManifestScanExec {
 
     pub fn table_url(&self) -> &str {
         &self.table_url
+    }
+
+    pub fn pruning(&self) -> &ManifestPruning {
+        &self.pruning
     }
 
     pub fn snapshot(&self) -> &Snapshot {
@@ -153,6 +176,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
         let table_url = self.table_url.clone();
         let snapshot = self.snapshot.clone();
         let schema = self.output_schema.clone();
+        let pruning = self.pruning.clone();
 
         // Phase 1: Load the manifest list (a single lightweight metadata file).
         let init = async move {
@@ -177,22 +201,36 @@ impl ExecutionPlan for IcebergManifestScanExec {
                 .entries()
                 .iter()
                 .filter(|m| m.content == ManifestContentType::Data)
+                .filter(|manifest| {
+                    let spec = pruning
+                        .specs
+                        .iter()
+                        .find(|spec| spec.spec_id() == manifest.partition_spec_id);
+                    spec.zip(manifest.partitions.as_ref())
+                        .is_none_or(|(spec, summaries)| {
+                            pruning.predicate.manifest(spec, summaries).may_match()
+                        })
+                })
                 .cloned()
                 .collect();
 
-            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema))
+            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema, pruning))
         };
 
         // Phase 2: Stream one RecordBatch per manifest file to cap peak memory usage
         // and improve time-to-first-row for large tables.
         let stream = stream::once(init)
-            .map_ok(|(store_ctx, manifests, schema)| {
+            .map_ok(|(store_ctx, manifests, schema, pruning)| {
                 stream::try_unfold(
-                    (store_ctx, manifests, 0usize, schema),
-                    |(store_ctx, manifests, mut idx, schema)| async move {
+                    (store_ctx, manifests, 0usize, schema, pruning),
+                    |(store_ctx, manifests, mut idx, schema, mut pruning)| async move {
                         while idx < manifests.len() {
+                            if pruning.limit == Some(0) {
+                                return Ok(None);
+                            }
                             let manifest_path = manifests[idx].manifest_path.clone();
                             let partition_spec_id = manifests[idx].partition_spec_id;
+                            let manifest_snapshot_id = manifests[idx].added_snapshot_id;
                             idx += 1;
 
                             let manifest =
@@ -204,8 +242,13 @@ impl ExecutionPlan for IcebergManifestScanExec {
                             let mut file_sizes = Vec::new();
                             let mut partition_spec_ids = Vec::new();
                             let mut content_types = Vec::new();
+                            let mut nan_free = Vec::new();
+                            let mut added_snapshot_ids = Vec::new();
 
                             for entry_ref in manifest.entries() {
+                                if pruning.limit == Some(0) {
+                                    break;
+                                }
                                 let entry = entry_ref.as_ref();
                                 if !matches!(
                                     entry.status,
@@ -215,12 +258,31 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                 }
 
                                 let df = &entry.data_file;
+                                let spec = pruning
+                                    .specs
+                                    .iter()
+                                    .find(|spec| spec.spec_id() == partition_spec_id);
+                                if !pruning.predicate.file(df, spec).may_match() {
+                                    continue;
+                                }
+                                if let Some(remaining) = &mut pruning.limit {
+                                    *remaining = remaining.saturating_sub(
+                                        usize::try_from(df.record_count()).unwrap_or(usize::MAX),
+                                    );
+                                }
                                 file_paths.push(df.file_path().to_string());
                                 file_formats.push(df.file_format().as_action_str().to_string());
                                 record_counts.push(df.record_count());
                                 file_sizes.push(df.file_size_in_bytes());
                                 partition_spec_ids.push(partition_spec_id);
                                 content_types.push(df.content_type().as_action_str().to_string());
+                                nan_free.push(pruning.floating_field_ids.as_ref().is_some_and(
+                                    |ids| {
+                                        ids.iter().all(|id| df.nan_value_counts.get(id) == Some(&0))
+                                    },
+                                ));
+                                added_snapshot_ids
+                                    .push(entry.snapshot_id.unwrap_or(manifest_snapshot_id));
                             }
 
                             if file_paths.is_empty() {
@@ -236,9 +298,11 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                     Arc::new(UInt64Array::from(file_sizes)),
                                     Arc::new(Int32Array::from(partition_spec_ids)),
                                     Arc::new(StringArray::from(content_types)),
+                                    Arc::new(BooleanArray::from(nan_free)),
+                                    Arc::new(Int64Array::from(added_snapshot_ids)),
                                 ],
                             )?;
-                            return Ok(Some((batch, (store_ctx, manifests, idx, schema))));
+                            return Ok(Some((batch, (store_ctx, manifests, idx, schema, pruning))));
                         }
                         Ok(None)
                     },
@@ -260,12 +324,14 @@ mod tests {
     #[test]
     fn manifest_scan_schema_has_expected_columns() {
         let schema = manifest_scan_schema();
-        assert_eq!(schema.fields().len(), 6);
+        assert_eq!(schema.fields().len(), 8);
         assert!(schema.field_with_name(COL_FILE_PATH).is_ok());
         assert!(schema.field_with_name(COL_FILE_FORMAT).is_ok());
         assert!(schema.field_with_name(COL_RECORD_COUNT).is_ok());
         assert!(schema.field_with_name(COL_FILE_SIZE_IN_BYTES).is_ok());
         assert!(schema.field_with_name(COL_PARTITION_SPEC_ID).is_ok());
         assert!(schema.field_with_name(COL_CONTENT_TYPE).is_ok());
+        assert!(schema.field_with_name(COL_NAN_FREE).is_ok());
+        assert!(schema.field_with_name(COL_ADDED_SNAPSHOT_ID).is_ok());
     }
 }

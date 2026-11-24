@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 use std::fmt;
@@ -16,8 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::Int64Array;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -28,13 +17,14 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -42,7 +32,7 @@ use url::Url;
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
-use crate::physical_plan::action_schema::ExecCommitMeta;
+use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
@@ -50,7 +40,7 @@ use crate::schema::{
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
-    StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    StructField, StructType, TableFeature, commit_path,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -64,18 +54,48 @@ const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
 const METRIC_LOG_FILES_CLEANED: &str = "log_files_cleaned";
 
-fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
-    let row_count = i64::try_from(row_count)
-        .map_err(|e| DataFusionError::Execution(format!("Delta commit row count overflow: {e}")))?;
-    let array = Arc::new(Int64Array::from(vec![row_count]));
-    RecordBatch::try_new(schema, vec![array])
-        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+fn commit_output_batch(
+    output: CommandOutput,
+    row_count: u64,
+    operation: &DeltaOperation,
+    metrics: &OperationMetrics,
+) -> Result<RecordBatch> {
+    let count = |value: u64| {
+        i64::try_from(value).map_err(|error| {
+            DataFusionError::Execution(format!("Delta command row count overflow: {error}"))
+        })
+    };
+    let values = match output {
+        CommandOutput::Empty => vec![],
+        CommandOutput::Count => vec![count(row_count)?],
+        CommandOutput::AffectedRows => vec![match operation {
+            DeltaOperation::Update { .. } => count(metrics.num_updated_rows.unwrap_or_default())?,
+            DeltaOperation::Delete { .. } => match metrics.num_deleted_rows {
+                Some(rows) => count(rows)?,
+                None if metrics.num_removed_files.unwrap_or_default() > 0 => -1,
+                None => 0,
+            },
+            _ => return internal_err!("affected-row result requires a Delta UPDATE or DELETE"),
+        }],
+        CommandOutput::MergeRows => {
+            let updated = count(metrics.num_target_rows_updated.unwrap_or_default())?;
+            let deleted = count(metrics.num_target_rows_deleted.unwrap_or_default())?;
+            let inserted = count(metrics.num_target_rows_inserted.unwrap_or_default())?;
+            let affected = updated
+                .checked_add(deleted)
+                .and_then(|n| n.checked_add(inserted))
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Delta affected row count overflow".into())
+                })?;
+            vec![affected, updated, deleted, inserted]
+        }
+    };
+    output.batch(&values)
 }
 
 #[derive(Debug, Clone)]
 struct IdentityColumnCommitInfo {
     name: String,
-    stats_name: String,
     start: i64,
     step: i64,
     high_water_mark: Option<i64>,
@@ -96,6 +116,7 @@ pub struct DeltaCommitExec {
     commit_context: DeltaCommitContext,
     lakehouse_table: Option<LakehouseExecutionContext>,
     metrics: ExecutionPlanMetricsSet,
+    output: CommandOutput,
     cache: Arc<PlanProperties>,
 }
 
@@ -109,15 +130,37 @@ impl DeltaCommitExec {
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
-        commit_context: DeltaCommitContext,
+        mut commit_context: DeltaCommitContext,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "count",
-            DataType::Int64,
-            true,
-        )]));
-        let cache = Self::compute_properties(schema);
+        fn writer_partitions(plan: &Arc<dyn ExecutionPlan>, counts: &mut Vec<usize>) {
+            if let Some(writer) = plan.downcast_ref::<crate::physical_plan::DeltaWriterExec>() {
+                if !writer.options().change_data
+                    && !writer
+                        .write_context()
+                        .commit_context
+                        .identity_columns_to_track
+                        .is_empty()
+                {
+                    counts.push(writer.properties().output_partitioning().partition_count());
+                }
+                return;
+            }
+            for child in plan.children() {
+                writer_partitions(child, counts);
+            }
+        }
+        let mut counts = Vec::new();
+        writer_partitions(&input, &mut counts);
+        if !commit_context.identity_columns_to_track.is_empty() {
+            match counts.as_slice() {
+                [count] => commit_context.identity_writer_partitions = Some(*count),
+                [] => {} // A serialized driver stage has only its action-stream input.
+                _ => commit_context.identity_writer_partitions = Some(0), // Reject multiple domains.
+            }
+        }
+        let output = CommandOutput::Count;
+        let cache = Self::compute_properties(output.schema());
         Self {
             input,
             table_url,
@@ -129,8 +172,19 @@ impl DeltaCommitExec {
             commit_context,
             lakehouse_table,
             metrics: ExecutionPlanMetricsSet::new(),
+            output,
             cache,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self.cache = Self::compute_properties(output.schema());
+        self
+    }
+
+    pub fn output(&self) -> CommandOutput {
+        self.output
     }
 
     fn compute_properties(schema: SchemaRef) -> Arc<PlanProperties> {
@@ -444,7 +498,7 @@ impl DeltaCommitExec {
             .await
     }
 
-    async fn publish_staged_commit(
+    pub(crate) async fn publish_staged_commit(
         log_store: &LogStoreRef,
         staged: &CatalogManagedStagedCommit,
     ) -> Result<()> {
@@ -473,7 +527,7 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn latest_published_backfilled_version(
+    pub(crate) async fn latest_published_backfilled_version(
         log_store: &LogStoreRef,
         end_version: i64,
     ) -> Result<Option<i64>> {
@@ -544,17 +598,20 @@ impl ExecutionPlan for DeltaCommitExec {
             return internal_err!("DeltaCommitExec requires exactly one child");
         }
 
-        Ok(Arc::new(Self::new(
-            children[0].clone(),
-            self.table_url.clone(),
-            self.partition_columns.clone(),
-            self.table_exists,
-            self.sink_schema.clone(),
-            self.sink_mode.clone(),
-            self.user_metadata.clone(),
-            self.commit_context.clone(),
-            self.lakehouse_table.clone(),
-        )))
+        Ok(Arc::new(
+            Self::new(
+                children[0].clone(),
+                self.table_url.clone(),
+                self.partition_columns.clone(),
+                self.table_exists,
+                self.sink_schema.clone(),
+                self.sink_mode.clone(),
+                self.user_metadata.clone(),
+                self.commit_context.clone(),
+                self.lakehouse_table.clone(),
+            )
+            .with_output(self.output),
+        ))
     }
 
     fn execute(
@@ -589,7 +646,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let commit_context = self.commit_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
         let catalog_table = self.catalog_table().map(<[String]>::to_vec);
-        let schema = self.schema();
+        let output = self.output;
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
@@ -603,12 +660,14 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut initial_actions: Vec<CommitAction> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
             let mut operation_metrics = OperationMetrics::default();
+            let mut identity_evidence = Vec::new();
+            let mut unknown_touched_rows = false;
             let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Arrow-native action rows + optional CommitMeta row only.
+                // A batch may coalesce action rows from multiple writer partitions.
                 if batch.column_by_name(COL_ACTION).is_some() {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
@@ -629,17 +688,23 @@ impl ExecutionPlan for DeltaCommitExec {
                             _ => actions.push(ca),
                         }
                     }
-                    if let Some(ExecCommitMeta {
+                    for ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
-                    }) = decoded_meta
+                        identity_high_water_marks,
+                    } in decoded_meta
                     {
-                        total_rows = total_rows.saturating_add(row_count);
+                        total_rows = total_rows.checked_add(row_count).ok_or_else(|| {
+                            DataFusionError::Execution("Delta commit row count overflow".into())
+                        })?;
+                        unknown_touched_rows |= metrics.num_removed_files.unwrap_or_default() > 0
+                            && metrics.num_touched_rows.is_none();
                         if operation.is_none() {
                             operation = op;
                         }
                         operation_metrics.merge(metrics);
+                        identity_evidence.extend(identity_high_water_marks);
                     }
                     has_data = has_data || batch.num_rows() > 0;
                 } else {
@@ -650,15 +715,29 @@ impl ExecutionPlan for DeltaCommitExec {
                 }
             }
 
-            if !has_data {
-                return commit_count_batch(schema, 0);
+            if !has_data && commit_context.transaction.is_none() {
+                return output.empty_batch();
+            }
+            // A missing count from any removal partition must not become a partial total.
+            // Exact scan/DV operation counts remain authoritative when available.
+            if unknown_touched_rows {
+                operation_metrics.num_touched_rows = None;
             }
 
             // Prepend initial actions
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
+            if let Some(mut txn) = commit_context.transaction.clone() {
+                txn.last_updated = Some(Utc::now().timestamp_millis());
+                final_actions.push(CommitAction::Txn(txn));
+            }
             if !table_exists {
-                final_actions = apply_identity_high_water_marks(final_actions, None)?;
+                final_actions = apply_identity_high_water_marks(
+                    final_actions,
+                    None,
+                    &commit_context,
+                    &identity_evidence,
+                )?;
             }
             let kinds: Vec<&'static str> = final_actions
                 .iter()
@@ -677,7 +756,7 @@ impl ExecutionPlan for DeltaCommitExec {
             );
 
             if !has_commit_payload_actions(&final_actions) {
-                return commit_count_batch(schema, 0);
+                return output.empty_batch();
             }
 
             let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
@@ -787,7 +866,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 && Self::existing_create_bootstrap_commit_matches(&log_store, &final_actions)
                     .await?
             {
-                return commit_count_batch(schema, 0);
+                return output.empty_batch();
             }
 
             let reference = if table_exists {
@@ -836,10 +915,76 @@ impl ExecutionPlan for DeltaCommitExec {
                 None
             };
 
+            if matches!(sink_mode, PhysicalSinkMode::OverwritePartitions)
+                && let Some(snapshot) = &reference
+            {
+                let partition_schema = final_actions
+                    .iter()
+                    .rev()
+                    .find_map(|action| match action {
+                        CommitAction::Metadata(metadata) => Some(metadata.parse_schema_arrow()),
+                        _ => None,
+                    })
+                    .transpose()
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
+                    .unwrap_or_else(|| snapshot.schema().clone());
+                let partition_fields = snapshot
+                    .physical_partition_columns()
+                    .into_iter()
+                    .map(|column| {
+                        let field = partition_schema.field_with_name(&column.logical_name)?;
+                        Ok((column.physical_name, field.data_type().clone()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
+                    partition_fields
+                        .iter()
+                        .map(|(name, data_type)| {
+                            crate::conversion::parse_optional_partition_value(
+                                add.partition_values
+                                    .get(name)
+                                    .and_then(|value| value.as_deref()),
+                                data_type,
+                            )
+                            // ScalarValue compares float bits, while Spark equates signed zeros.
+                            .map(|value| match value {
+                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
+                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
+                                value => value,
+                            })
+                            .map_err(|error| DataFusionError::External(Box::new(error)))
+                        })
+                        .collect()
+                };
+                let partitions = final_actions
+                    .iter()
+                    .filter_map(|action| match action {
+                        CommitAction::Add(add) => Some(partition_key(add)),
+                        _ => None,
+                    })
+                    .collect::<Result<std::collections::HashSet<_>>>()?;
+                let removed = snapshot.adds().iter().try_fold(
+                    Vec::new(),
+                    |mut removed, add| -> Result<_> {
+                        if partitions.contains(&partition_key(add)?) {
+                            removed.push(add.clone());
+                        }
+                        Ok(removed)
+                    },
+                )?;
+                final_actions.extend(
+                    crate::datasource::actions::adds_to_remove_actions(removed)
+                        .into_iter()
+                        .map(CommitAction::Remove),
+                );
+            }
+
             if table_exists {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,
                     reference.as_deref().map(|snapshot| snapshot.metadata()),
+                    &commit_context,
+                    &identity_evidence,
                 )?;
             }
 
@@ -854,6 +999,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let use_catalog_managed_commit =
                 catalog_managed_table.is_some() && commit_uses_catalog_managed_protocol;
 
+            let result;
             let finalized_commit = if let Some(table) = catalog_managed_table
                 .as_ref()
                 .filter(|_| use_catalog_managed_commit)
@@ -937,6 +1083,8 @@ impl ExecutionPlan for DeltaCommitExec {
                     })
                 {
                     operation_metrics.finalize_for(&operation);
+                    result =
+                        commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
                     CommitBuilder::from(
                         CommitProperties::default()
                             .with_operation_metrics(operation_metrics)
@@ -948,6 +1096,8 @@ impl ExecutionPlan for DeltaCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                 } else {
                     operation_metrics.finalize_for(&operation);
+                    result =
+                        commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
                     let latest_catalog_version = Self::latest_catalog_managed_table_version(
                         &context,
                         catalog_table,
@@ -955,10 +1105,12 @@ impl ExecutionPlan for DeltaCommitExec {
                         table,
                     )
                     .await?;
-                    let reference = if crate::transaction::CommitData::is_blind_append(
-                        &final_actions,
-                        &operation,
-                    ) {
+                    // Refreshing would discard the snapshot on which the app version was checked.
+                    let reference = if commit_context.transaction.is_none()
+                        && crate::transaction::CommitData::is_blind_append(
+                            &final_actions,
+                            &operation,
+                        ) {
                         Self::refresh_catalog_managed_reference(
                             &context,
                             lakehouse_context,
@@ -1014,6 +1166,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 }
             } else {
                 operation_metrics.finalize_for(&operation);
+                result = commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
                 let pre_commit = CommitBuilder::from(
                     CommitProperties::default()
                         .with_operation_metrics(operation_metrics)
@@ -1044,10 +1197,8 @@ impl ExecutionPlan for DeltaCommitExec {
                 .global_counter(METRIC_LOG_FILES_CLEANED)
                 .add(cleaned);
 
-            // Expose row count through execution metrics as well.
-            output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
-
-            commit_count_batch(schema, total_rows)
+            output_rows.add(result.num_rows());
+            Ok(result)
         };
 
         let stream = stream::once(future);
@@ -1061,7 +1212,12 @@ impl ExecutionPlan for DeltaCommitExec {
 fn apply_identity_high_water_marks(
     mut actions: Vec<CommitAction>,
     reference_metadata: Option<&Metadata>,
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
 ) -> Result<Vec<CommitAction>> {
+    if context.identity_columns_to_track.is_empty() {
+        return Ok(actions);
+    }
     let metadata_index = actions
         .iter()
         .rposition(|action| matches!(action, CommitAction::Metadata(_)));
@@ -1072,7 +1228,7 @@ fn apply_identity_high_water_marks(
         })
         .or_else(|| reference_metadata.cloned())
     else {
-        return Ok(actions);
+        return internal_err!("tracked identity commit is missing table metadata");
     };
 
     let schema = base_metadata
@@ -1080,10 +1236,10 @@ fn apply_identity_high_water_marks(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let identity_columns = collect_identity_columns_for_commit(&schema)?;
     if identity_columns.is_empty() {
-        return Ok(actions);
+        return internal_err!("tracked identity commit has no identity definitions");
     }
 
-    let candidates = collect_identity_high_water_mark_candidates(&actions, &identity_columns)?;
+    let candidates = collect_identity_writer_candidates(context, evidence, &identity_columns)?;
     if candidates.is_empty() {
         return Ok(actions);
     }
@@ -1136,8 +1292,6 @@ fn collect_identity_columns_for_commit(
             let _allow_explicit =
                 metadata_bool(field, &ColumnMetadataKey::IdentityAllowExplicitInsert)?;
             let high_water_mark = metadata_i64(field, &ColumnMetadataKey::IdentityHighWaterMark);
-            let stats_name = metadata_string(field, &ColumnMetadataKey::ColumnMappingPhysicalName)
-                .unwrap_or_else(|| field.name.clone());
             Some(if step == 0 {
                 Err(DataFusionError::Plan(format!(
                     "identity column `{}` has invalid step 0",
@@ -1146,7 +1300,6 @@ fn collect_identity_columns_for_commit(
             } else {
                 Ok(IdentityColumnCommitInfo {
                     name: field.name.clone(),
-                    stats_name,
                     start,
                     step,
                     high_water_mark,
@@ -1156,41 +1309,55 @@ fn collect_identity_columns_for_commit(
         .collect()
 }
 
-fn collect_identity_high_water_mark_candidates(
-    actions: &[CommitAction],
-    identity_columns: &[IdentityColumnCommitInfo],
+fn collect_identity_writer_candidates(
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
+    identities: &[IdentityColumnCommitInfo],
 ) -> Result<HashMap<String, i64>> {
-    let mut candidates: HashMap<String, i64> = HashMap::new();
-    for action in actions {
-        let CommitAction::Add(add) = action else {
-            continue;
-        };
-        let Some(stats_json) = add.stats.as_deref() else {
-            continue;
-        };
-        let stats = Stats::from_json_str(stats_json).map_err(|e| {
-            DataFusionError::Plan(format!("failed to parse Delta AddFile stats: {e}"))
-        })?;
-        for identity in identity_columns {
-            let stat = if identity.step > 0 {
-                stats.max_value(&identity.stats_name)
-            } else {
-                stats.min_value(&identity.stats_name)
-            };
-            let Some(value) = stat.and_then(stat_value_i64) else {
-                continue;
-            };
-            candidates
-                .entry(identity.name.clone())
-                .and_modify(|current| {
-                    if identity.step > 0 {
-                        *current = (*current).max(value);
-                    } else {
-                        *current = (*current).min(value);
-                    }
-                })
-                .or_insert(value);
+    let expected = context.identity_writer_partitions.ok_or_else(|| {
+        DataFusionError::Execution("missing identity writer partition count".into())
+    })?;
+    if expected == 0 {
+        return internal_err!("identity writes require exactly one reporting writer domain");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = HashMap::<String, i64>::new();
+    for partition in evidence {
+        if partition.partition >= expected || !seen.insert(partition.partition) {
+            return internal_err!("invalid or duplicate identity writer completion");
         }
+        if partition.candidates.len() != context.identity_columns_to_track.len() {
+            return internal_err!("incomplete identity writer evidence");
+        }
+        for name in &context.identity_columns_to_track {
+            let value = partition.candidates.get(name).ok_or_else(|| {
+                DataFusionError::Execution(format!("missing identity evidence for `{name}`"))
+            })?;
+            let identity = identities
+                .iter()
+                .find(|identity| &identity.name == name)
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("unknown tracked identity `{name}`"))
+                })?;
+            if let Some(value) = value {
+                candidates
+                    .entry(name.clone())
+                    .and_modify(|current| {
+                        *current = if identity.step > 0 {
+                            (*current).max(*value)
+                        } else {
+                            (*current).min(*value)
+                        };
+                    })
+                    .or_insert(*value);
+            }
+        }
+    }
+    if seen.len() != expected {
+        return internal_err!(
+            "missing identity writer completion: expected {expected}, got {}",
+            seen.len()
+        );
     }
     Ok(candidates)
 }
@@ -1270,10 +1437,12 @@ fn round_identity_high_water_mark(start: i64, step: i64, value: i64) -> Result<i
             "identity high water mark `{value}` cannot be compared with start `{start}` without overflowing BIGINT"
         ))
     })?;
-    if value_offset % step == 0 {
+    let overflow =
+        || DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string());
+    if value_offset.checked_rem(step).ok_or_else(overflow)? == 0 {
         return Ok(value);
     }
-    let quotient = value_offset / step;
+    let quotient = value_offset.checked_div(step).ok_or_else(overflow)?;
     let same_direction = (value_offset > 0 && step > 0) || (value_offset < 0 && step < 0);
     let step_multiple = if same_direction {
         quotient.checked_add(1).ok_or_else(|| {
@@ -1306,18 +1475,97 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
     }
 }
 
-fn metadata_string(field: &StructField, key: &ColumnMetadataKey) -> Option<String> {
-    match field.metadata.get(key.as_ref())? {
-        MetadataValue::String(value) => Some(value.clone()),
-        _ => None,
-    }
-}
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
 
-fn stat_value_i64(value: &StatValue) -> Option<i64> {
-    match value {
-        StatValue::Number(value) => value.as_i64(),
-        StatValue::String(value) => value.parse().ok(),
-        _ => None,
+    fn identity(step: i64) -> IdentityColumnCommitInfo {
+        IdentityColumnCommitInfo {
+            name: "id".to_string(),
+            start: 0,
+            step,
+            high_water_mark: None,
+        }
+    }
+
+    fn evidence(partition: usize, value: Option<i64>) -> IdentityHighWaterMarks {
+        IdentityHighWaterMarks {
+            partition,
+            candidates: HashMap::from([("id".into(), value)]),
+        }
+    }
+
+    #[test]
+    fn writer_evidence_is_directional_exact_and_complete() -> Result<()> {
+        let context = DeltaCommitContext {
+            identity_columns_to_track: vec!["id".into()],
+            identity_writer_partitions: Some(3),
+            ..Default::default()
+        };
+        for (step, expected) in [(3, i64::MAX), (-3, i64::MIN)] {
+            let evidence = [
+                evidence(0, Some(i64::MIN)),
+                evidence(1, None),
+                evidence(2, Some(i64::MAX)),
+            ];
+            assert_eq!(
+                collect_identity_writer_candidates(&context, &evidence, &[identity(step)])?["id"],
+                expected
+            );
+        }
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[evidence(0, None), evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )?
+            .is_empty()
+        );
+        for incomplete in [
+            vec![],
+            vec![evidence(0, None)],
+            vec![evidence(0, None), evidence(0, None), evidence(2, None)],
+            vec![evidence(0, None), evidence(1, None), evidence(3, None)],
+        ] {
+            assert!(
+                collect_identity_writer_candidates(&context, &incomplete, &[identity(1)]).is_err()
+            );
+        }
+        let mut missing_column = evidence(0, None);
+        missing_column.candidates.clear();
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[missing_column, evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watermark_rounding_is_directional_and_checked() {
+        for (start, step, value, expected) in [
+            (10, 3, 42, 43),
+            (0, -3, -4, -6),
+            (0, -3, 4, 3),
+            (i64::MAX, 1, i64::MAX, i64::MAX),
+            (i64::MIN, -1, i64::MIN, i64::MIN),
+        ] {
+            assert_eq!(
+                round_identity_high_water_mark(start, step, value).ok(),
+                Some(expected)
+            );
+        }
+        for (start, step, value) in [
+            (0, -1, i64::MIN),
+            (0, 0, 1),
+            (i64::MIN, 1, i64::MAX),
+            (0, 2, i64::MAX),
+        ] {
+            assert!(round_identity_high_water_mark(start, step, value).is_err());
+        }
     }
 }
 
@@ -1332,5 +1580,108 @@ impl DisplayAs for DeltaCommitExec {
                 write!(f, "table_path={}", self.table_url)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod result_tests {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion_common::internal_datafusion_err;
+
+    use super::*;
+
+    fn values(batch: RecordBatch) -> Result<Vec<i64>> {
+        batch
+            .columns()
+            .iter()
+            .map(|column| {
+                let column = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| internal_datafusion_err!("expected Int64 result column"))?;
+                Ok(column.value(0))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn affected_rows_use_finalized_metrics_not_written_rows() -> Result<()> {
+        let mut metrics = OperationMetrics {
+            num_updated_rows: Some(2),
+            num_copied_rows: Some(8),
+            num_output_rows: Some(10),
+            ..Default::default()
+        };
+        let update = DeltaOperation::Update { predicate: None };
+        metrics.finalize_for(&update);
+        assert_eq!(
+            values(commit_output_batch(
+                CommandOutput::AffectedRows,
+                10,
+                &update,
+                &metrics
+            )?)?,
+            vec![2]
+        );
+        let delete = DeltaOperation::Delete { predicate: None };
+        let mut metrics = OperationMetrics {
+            num_removed_files: Some(1),
+            num_output_rows: Some(0),
+            ..Default::default()
+        };
+        metrics.finalize_for(&delete);
+        assert_eq!(
+            values(commit_output_batch(
+                CommandOutput::AffectedRows,
+                0,
+                &delete,
+                &metrics
+            )?)?,
+            vec![-1]
+        );
+        metrics.num_deleted_rows = Some(0);
+        assert_eq!(
+            values(commit_output_batch(
+                CommandOutput::AffectedRows,
+                0,
+                &delete,
+                &metrics
+            )?)?,
+            vec![0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_result_order_and_sum_exclude_copies() -> Result<()> {
+        let metrics = OperationMetrics {
+            num_target_rows_updated: Some(2),
+            num_target_rows_deleted: Some(3),
+            num_target_rows_inserted: Some(4),
+            num_target_rows_copied: Some(100),
+            ..Default::default()
+        };
+        let operation = DeltaOperation::Merge {
+            predicate: None,
+            merge_predicate: None,
+            matched_predicates: vec![],
+            not_matched_predicates: vec![],
+            not_matched_by_source_predicates: vec![],
+        };
+        assert_eq!(
+            values(commit_output_batch(
+                CommandOutput::MergeRows,
+                106,
+                &operation,
+                &metrics
+            )?)?,
+            vec![9, 2, 3, 4]
+        );
+        let overflow = OperationMetrics {
+            num_target_rows_updated: Some(i64::MAX as u64),
+            ..metrics
+        };
+        assert!(commit_output_batch(CommandOutput::MergeRows, 0, &operation, &overflow).is_err());
+        Ok(())
     }
 }

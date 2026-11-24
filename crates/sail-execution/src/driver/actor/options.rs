@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
@@ -13,6 +15,7 @@ use crate::worker_manager::WorkerManager;
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
+    pub batch_size: usize,
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
@@ -28,6 +31,9 @@ pub struct DriverOptions {
     pub worker_launch_retry_strategy: RetryStrategy,
     pub task_launch_timeout: Duration,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout: Duration,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
@@ -55,6 +61,7 @@ impl DriverOptions {
         }
         Ok(Self {
             enable_tls: config.cluster.enable_tls,
+            batch_size: config.execution.batch_size,
             session_id,
             driver_id,
             driver_server_port,
@@ -75,6 +82,11 @@ impl DriverOptions {
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
+            task_stream_memory_limit: config.cluster.task_stream_memory_limit,
+            shuffle_write_buffer_size: config.cluster.shuffle_write_buffer_size,
+            task_stream_stall_timeout: Duration::from_secs(
+                config.cluster.task_stream_stall_timeout_secs,
+            ),
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
             ),

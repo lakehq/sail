@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
@@ -123,6 +126,41 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: StageTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .stage_table_replacement(&database, &table, options)
+                    .await
+            })
+            .await
+            .map_err(|error| CatalogError::External(error.to_string()))?
+    }
+
+    async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: crate::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move {
+                inner
+                    .publish_table_replacement(replacement, publication)
+                    .await
+            })
+            .await
+            .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
+    }
+
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
@@ -134,24 +172,20 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.lakehouse_capabilities()
     }
 
-    async fn resolve_lakehouse_table(
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let inner = self.inner.clone();
         let database = database.clone();
         let table = table.to_string();
         self.handle
-            .spawn(async move {
-                inner
-                    .resolve_lakehouse_table(&database, &table, request)
-                    .await
-            })
+            .spawn(async move { inner.get_lakehouse_table(&database, &table, request).await })
             .await
             .map_err(|e| {
-                CatalogError::External(format!("Failed to execute resolve_lakehouse_table: {e}"))
+                CatalogError::External(format!("Failed to execute get_lakehouse_table: {e}"))
             })?
     }
 
@@ -252,6 +286,28 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<super::CatalogFilePartition>>> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let partition_values = partition_values.to_vec();
+        self.handle
+            .spawn(async move {
+                inner
+                    .list_file_partitions(&database, &table, &partition_values)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute list_file_partitions: {e}"))
+            })?
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let inner = self.inner.clone();
         let database = database.clone();
@@ -286,6 +342,32 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_table: {e}")))?
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        self.inner.validate_alter_table(options)
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let destination_database = destination_database.clone();
+        let destination_table = destination_table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .rename_table(&database, &table, &destination_database, &destination_table)
+                    .await
+            })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute rename_table: {e}")))?
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -299,6 +381,49 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.alter_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
+    }
+
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .alter_table_with_schema(&database, &table, options, schema)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute alter_table_with_schema: {e}"))
+            })?
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .alter_table_atomically(&database, &table, options)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute alter_table_atomically: {e}"))
+            })?
     }
 
     async fn create_view(

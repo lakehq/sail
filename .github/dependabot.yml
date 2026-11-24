@@ -17,6 +17,7 @@ updates:
         update-types:
           - "major"
     ignore:
+      - dependency-name: "rustfs-mimalloc-sys"
       - dependency-name: "datafusion"
       - dependency-name: "datafusion-*"
       - dependency-name: "arrow"
@@ -45,5 +46,7 @@ updates:
 
     ignore:
       - dependency-name: "@types/node"
+      - dependency-name: "typescript"
+      - dependency-name: "vitepress"
       - dependency-name: "vite"
         update-types: ["version-update:semver-major"]

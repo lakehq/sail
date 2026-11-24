@@ -10,13 +10,18 @@
   filter: invert(1) hue-rotate(210deg);
 }
 
+/* Keep inline math inline despite the Tailwind SVG reset. */
+mjx-container:not([display="true"]) > svg {
+  display: inline-block;
+}
+
 a.footnote-backref {
   @apply no-underline;
   /* change font family to prevent special unicode characters shown as emoji in Chrome */
   @apply font-mono;
 }
 
-kbd {
+.vp-doc kbd {
   @apply inline-block rounded border px-2 py-1 align-middle font-mono text-sm;
   @apply bg-zinc-200 dark:bg-zinc-700;
   @apply text-zinc-800 dark:text-zinc-100;

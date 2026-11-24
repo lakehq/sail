@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -11,14 +13,9 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
+use sail_function::scalar::variant::cast_to_variant::CastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
-use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
-use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
-use sail_python_udf::udf::pyspark_udf::PySparkUDF;
-use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -370,6 +367,20 @@ impl WinFunctionBuilder {
     }
 }
 
+/// Normalizes `-0.0` to `0.0` in the floating-point values of an argument that is deduplicated,
+/// as in `collect_set` and DISTINCT `collect_list`/`array_agg`, so that `-0.0` and `0.0` are one
+/// value and the result holds `0.0`. Spark normalizes the elements of `collect_set` and the
+/// arguments of DISTINCT aggregates before comparing them.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L236-L255>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L632-L645>
+pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![argument])
+    } else {
+        argument
+    }
+}
+
 pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),
@@ -487,31 +498,6 @@ pub(crate) fn theta_args_with_default_lg(
     }
 }
 
-pub fn expr_contains_python_udf(body: &expr::Expr) -> PlanResult<bool> {
-    Ok(body.exists(|expression| {
-        Ok(match expression {
-            expr::Expr::ScalarFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkUDF>()
-                    || f.is::<PySparkUnresolvedUDF>()
-                    || f.is::<PySparkCoGroupMapUDF>()
-            }
-            expr::Expr::AggregateFunction(function) => {
-                let f = function.func.inner();
-                f.is::<PySparkGroupAggregateUDF>()
-                    || f.is::<PySparkGroupMapUDF>()
-                    || f.is::<PySparkBatchCollectorUDF>()
-            }
-            expr::Expr::WindowFunction(window) => matches!(
-                &window.fun,
-                WindowFunctionDefinition::AggregateUDF(udf)
-                    if udf.inner().is::<PySparkGroupAggregateUDF>()
-            ),
-            _ => false,
-        })
-    })?)
-}
-
 // TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
 //  Python or Variant scalar calls, so a foldable NULL can eliminate them.
 pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
@@ -519,7 +505,7 @@ pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool
         Ok(matches!(
             expression,
             expr::Expr::ScalarFunction(function)
-                if function.func.inner().is::<SparkCastToVariant>()
+                if function.func.inner().is::<CastToVariant>()
         ))
     })?)
 }

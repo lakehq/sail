@@ -18,7 +18,7 @@ use sail_object_store::access::storage_task_context;
 #[derive(Debug)]
 pub struct StorageAccessExec {
     input: Arc<dyn ExecutionPlan>,
-    spec: StorageAccessSpec,
+    spec: Option<StorageAccessSpec>,
     runtime: Arc<RuntimeEnv>,
 }
 
@@ -30,7 +30,16 @@ impl StorageAccessExec {
     ) -> Self {
         Self {
             input,
-            spec,
+            spec: Some(spec),
+            runtime,
+        }
+    }
+
+    /// A write's independent input keeps the query runtime, including its own nested table scopes.
+    pub fn query_input(input: Arc<dyn ExecutionPlan>, runtime: Arc<RuntimeEnv>) -> Self {
+        Self {
+            input,
+            spec: None,
             runtime,
         }
     }
@@ -38,8 +47,8 @@ impl StorageAccessExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-    pub fn spec(&self) -> &StorageAccessSpec {
-        &self.spec
+    pub fn spec(&self) -> Option<&StorageAccessSpec> {
+        self.spec.as_ref()
     }
 
     pub fn runtime(&self) -> &Arc<RuntimeEnv> {
@@ -47,7 +56,11 @@ impl StorageAccessExec {
     }
 
     fn bind_input(&self, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(Self::new(input, self.spec.clone(), self.runtime.clone()))
+        Arc::new(Self {
+            input,
+            spec: self.spec.clone(),
+            runtime: self.runtime.clone(),
+        })
     }
 }
 

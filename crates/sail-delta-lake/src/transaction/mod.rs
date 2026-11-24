@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -24,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use datafusion::prelude::SessionConfig;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
@@ -39,6 +27,7 @@ use crate::delta_log::{
     CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
     resolve_version_timestamp,
 };
+use crate::options::session_user_metadata;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
@@ -344,6 +333,10 @@ impl OperationMetrics {
         use crate::spec::DeltaOperation;
 
         match operation {
+            DeltaOperation::Truncate {} => {
+                self.num_deleted_rows = self.num_touched_rows.take();
+                self.scan_time_ms = None;
+            }
             DeltaOperation::Delete { .. } => {
                 if self.num_copied_rows.is_none() {
                     self.num_copied_rows = self.num_output_rows;
@@ -426,7 +419,11 @@ impl OperationMetrics {
                             + self.num_target_rows_deleted.unwrap_or_default(),
                     );
                 }
-                self.num_target_change_files_added.get_or_insert(0);
+                self.num_target_change_files_added
+                    .get_or_insert(self.num_added_change_files.take().unwrap_or_default());
+                self.num_target_change_file_bytes = self
+                    .num_target_change_file_bytes
+                    .or(self.change_file_bytes.take());
                 self.num_target_deletion_vectors_added.get_or_insert(0);
                 self.num_target_deletion_vectors_updated.get_or_insert(0);
                 if self.num_target_deletion_vectors_removed.is_none() {
@@ -445,17 +442,23 @@ impl OperationMetrics {
             // restoredFilesSize / removedFilesSize / numOfFilesAfterRestore /
             // tableSizeAfterRestore. Requires the restore exec to aggregate these
             // counts from the snapshot diff it produces.
-            DeltaOperation::Restore { .. }
+            DeltaOperation::Clone { .. }
+            | DeltaOperation::Restore { .. }
             | DeltaOperation::Write { .. }
+            | DeltaOperation::DynamicPartitionOverwrite { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
             | DeltaOperation::AddConstraint { .. }
+            | DeltaOperation::DropConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
-            | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
-                                                       //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
-                                                       //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
-                                                       //     numDeletedFiles, numVacuumedDirectories
+            | DeltaOperation::AddColumns { .. }
+            | DeltaOperation::DropColumns { .. }
+            | DeltaOperation::RenameColumn { .. }
+            | DeltaOperation::ReplaceColumns { .. }
+            | DeltaOperation::AlterColumn { .. }
+            | DeltaOperation::Optimize { .. }
+            | DeltaOperation::VacuumStart { .. }
+            | DeltaOperation::VacuumEnd {} => {}
         }
     }
 }
@@ -960,14 +963,24 @@ fn validate_effective_commit_target(
     }
     validate_deletion_vector_add_stats(&actions_as_actions)?;
 
-    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
-    // write support is implemented, reject all writes to tables with CDF enabled, regardless of
-    // whether the protocol support is legacy (writer v4-6) or explicit (writer v7+ feature).
-    // Previously this guard only rejected v7+ tables, relying on `can_write_to_protocol` to reject
-    // legacy tables via implied-feature expansion. Now that legacy versions no longer expand
-    // implied features (matching delta-spark), this guard must cover legacy tables too.
     if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
-        return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
+        if !protocol_supports_legacy_change_data_feed(&protocol)
+            && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
+        {
+            return Err(
+                TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into(),
+            );
+        }
+        crate::change_data_feed::validate_schema(&metadata.parse_schema_arrow()?)
+            .map_err(|error| DeltaError::generic(error.to_string()))?;
+    }
+    if actions_as_actions
+        .iter()
+        .any(|action| matches!(action, Action::Cdc(cdc) if cdc.data_change))
+    {
+        return Err(DeltaError::generic(
+            "CDC actions must have dataChange=false",
+        ));
     }
 
     if table_property_enabled(&metadata, "delta.enableDeletionVectors")
@@ -1047,6 +1060,11 @@ impl Default for CommitProperties {
 }
 
 impl CommitProperties {
+    /// Captures current session metadata for this commit and its retries.
+    pub(crate) fn from_session_config(config: &SessionConfig) -> datafusion_common::Result<Self> {
+        Ok(Self::default().with_user_metadata(session_user_metadata(config)?))
+    }
+
     /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
     /// under the `operationMetrics` key.
     pub(crate) fn with_operation_metrics(
@@ -1334,7 +1352,11 @@ impl std::future::IntoFuture for PreparedCommit {
                     _ => None,
                 })
                 .unwrap_or(false);
-            let effective_max_retries = if creation_intent || current_is_blind_append {
+            // OPTIMIZE can reuse completed rewrites after checking intervening commits.
+            let effective_max_retries = if creation_intent
+                || current_is_blind_append
+                || matches!(this.data.operation, DeltaOperation::Optimize { .. })
+            {
                 this.max_retries
             } else {
                 0
@@ -1353,6 +1375,14 @@ impl std::future::IntoFuture for PreparedCommit {
                 };
 
                 if let Some(latest_version) = latest_version {
+                    if creation_intent
+                        && matches!(this.data.operation, DeltaOperation::Clone { .. })
+                    {
+                        return Err(TransactionError::CommitConflict(
+                            CommitConflictError::MetadataChanged,
+                        )
+                        .into());
+                    }
                     if read_snapshot.is_none() {
                         let snapshot = DeltaSnapshot::try_new(
                             this.log_store.as_ref(),
@@ -1361,6 +1391,13 @@ impl std::future::IntoFuture for PreparedCommit {
                             None,
                         )
                         .await?;
+                        // A concurrent creator can win before we have a read snapshot
+                        // against which to run the intervening-commit conflict checks.
+                        if local_actions.iter().any(|action| matches!(
+                            action, CommitAction::Txn(txn) if snapshot.app_txns().contains_key(&txn.app_id)
+                        )) {
+                            return Err(TransactionError::CommitConflict(CommitConflictError::ConcurrentTransaction).into());
+                        }
                         read_snapshot = Some(Arc::new(snapshot));
                     }
 
@@ -1520,6 +1557,14 @@ impl std::future::IntoFuture for PreparedCommit {
                         continue;
                     }
                     Err(err) => {
+                        if matches!(this.data.operation, DeltaOperation::Clone { .. }) {
+                            return Err(DeltaError::External(Box::new(
+                                sail_common_datafusion::error::CommitStateUnknownError::with_source(
+                                    "SHALLOW CLONE publication failed; inspect the destination log before retrying",
+                                    err,
+                                ),
+                            )));
+                        }
                         this.log_store
                             .abort_commit_entry(version, commit_or_bytes, this.operation_id)
                             .await?;
@@ -2280,10 +2325,21 @@ impl std::future::IntoFuture for PostCommit {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
-    use object_store::ObjectStore;
+    use datafusion_common::DataFusionError;
+    use futures::stream::{self, BoxStream};
+    use futures::{StreamExt, TryStreamExt};
     use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::prefix::PrefixStore;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutPayload, PutResult,
+    };
+    use sail_common_datafusion::error::{
+        CommitStateUnknownError, CommonErrorCause, PythonErrorCause, PythonErrorCauseExtractor,
+    };
     use url::Url;
 
     use super::*;
@@ -2291,8 +2347,8 @@ mod tests {
     use crate::schema::protocol_for_create;
     use crate::spec::{
         Action, Add, CommitAction, CommitInfo, DataType, DeletionVectorDescriptor, DeltaError,
-        DomainMetadata, Metadata, Protocol, Remove, SaveMode, StorageType, StructField, StructType,
-        TableFeature, VersionChecksum, checksum_path,
+        DomainMetadata, LastCheckpointHint, Metadata, Protocol, Remove, SaveMode, StorageType,
+        StructField, StructType, TableFeature, VersionChecksum, checksum_path, commit_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
@@ -2302,6 +2358,764 @@ mod tests {
             &Url::parse("memory:///").unwrap(),
             &StorageConfig,
         )
+    }
+
+    #[derive(Debug)]
+    enum CommitPutFault {
+        Landed,
+        Collision(Bytes),
+        Denied,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CommitReadFault {
+        Denied,
+        NotFound,
+        Body,
+    }
+
+    impl CommitReadFault {
+        fn error(self, path: &Path) -> ObjectStoreError {
+            let source = Box::new(std::io::Error::other("injected commit read failure"));
+            match self {
+                Self::Denied => ObjectStoreError::PermissionDenied {
+                    path: path.to_string(),
+                    source,
+                },
+                Self::NotFound => ObjectStoreError::NotFound {
+                    path: path.to_string(),
+                    source,
+                },
+                Self::Body => ObjectStoreError::Generic {
+                    store: "commit-body",
+                    source,
+                },
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct CommitFaultStore {
+        inner: Arc<dyn ObjectStore>,
+        target: Path,
+        fault: Mutex<Option<(CommitPutFault, Option<CommitReadFault>)>>,
+        read_fault: Mutex<Option<CommitReadFault>>,
+        puts: Mutex<Vec<(Path, Bytes)>>,
+        gets: Mutex<Vec<Path>>,
+        deletes: Arc<Mutex<Vec<Path>>>,
+    }
+
+    impl CommitFaultStore {
+        fn new(inner: Arc<dyn ObjectStore>, version: i64) -> Self {
+            Self {
+                inner,
+                target: commit_path(version),
+                fault: Mutex::new(None),
+                read_fault: Mutex::new(None),
+                puts: Mutex::new(Vec::new()),
+                gets: Mutex::new(Vec::new()),
+                deletes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn arm(&self, put: CommitPutFault, read: Option<CommitReadFault>) {
+            *self.fault.lock().unwrap() = Some((put, read));
+        }
+
+        fn commit_attempts(&self) -> Vec<Path> {
+            self.puts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| {
+                    crate::delta_log::parse_commit_version_from_location(path).is_some()
+                })
+                .map(|(path, _)| path.clone())
+                .collect()
+        }
+
+        fn attempted_bytes(&self) -> Bytes {
+            self.puts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(path, _)| path == &self.target)
+                .unwrap()
+                .1
+                .clone()
+        }
+    }
+
+    impl std::fmt::Display for CommitFaultStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CommitFaultStore")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for CommitFaultStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.puts
+                .lock()
+                .unwrap()
+                .push((location.clone(), payload.clone().into()));
+            let fault = if location == &self.target {
+                assert_eq!(opts.mode, PutMode::Create);
+                self.fault.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some((fault, read_fault)) = fault {
+                let landed = match fault {
+                    CommitPutFault::Landed => payload.clone(),
+                    CommitPutFault::Collision(bytes) => bytes.into(),
+                    CommitPutFault::Denied => {
+                        return Err(ObjectStoreError::PermissionDenied {
+                            path: location.to_string(),
+                            source: Box::new(std::io::Error::other("injected commit put failure")),
+                        });
+                    }
+                };
+                self.inner.put_opts(location, landed, opts.clone()).await?;
+                *self.read_fault.lock().unwrap() = read_fault;
+                // Model the conditional retry after a landed PUT's response was lost.
+            }
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.gets.lock().unwrap().push(location.clone());
+            let fault = (location == &self.target)
+                .then(|| *self.read_fault.lock().unwrap())
+                .flatten();
+            match fault {
+                Some(fault @ (CommitReadFault::Denied | CommitReadFault::NotFound)) => {
+                    Err(fault.error(location))
+                }
+                Some(CommitReadFault::Body) => {
+                    let result = self.inner.get_opts(location, options).await?;
+                    let error = CommitReadFault::Body.error(location);
+                    Ok(GetResult {
+                        meta: result.meta.clone(),
+                        range: result.range.clone(),
+                        attributes: result.attributes.clone(),
+                        // Even a complete matching first chunk must not hide a stream error.
+                        payload: GetResultPayload::Stream(
+                            result
+                                .into_stream()
+                                .chain(stream::once(async { Err(error) }))
+                                .boxed(),
+                        ),
+                    })
+                }
+                None => self.inner.get_opts(location, options).await,
+            }
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            let deletes = self.deletes.clone();
+            self.inner.delete_stream(
+                locations
+                    .map_ok(move |path| {
+                        deletes.lock().unwrap().push(path.clone());
+                        path
+                    })
+                    .boxed(),
+            )
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    struct NoPythonError;
+
+    impl PythonErrorCauseExtractor for NoPythonError {
+        fn extract(_: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
+            None
+        }
+    }
+
+    #[expect(clippy::panic)]
+    fn assert_unknown_commit(error: TransactionError, fault: CommitReadFault, version: i64) {
+        let TransactionError::LogStoreError { msg, source } = &error else {
+            panic!("expected ambiguous outcome, got {error:?}");
+        };
+        assert!(msg.contains("commit outcome unknown; commit may have succeeded"));
+        assert!(msg.contains(&format!("version {version}")));
+        assert!(msg.contains(commit_path(version).as_ref()));
+        let marker = source.downcast_ref::<CommitStateUnknownError>().unwrap();
+        let original = std::error::Error::source(marker)
+            .unwrap()
+            .downcast_ref::<ObjectStoreError>()
+            .unwrap();
+        match (fault, original) {
+            (CommitReadFault::Denied, ObjectStoreError::PermissionDenied { path, .. })
+            | (CommitReadFault::NotFound, ObjectStoreError::NotFound { path, .. }) => {
+                assert_eq!(path, commit_path(version).as_ref());
+            }
+            (CommitReadFault::Body, ObjectStoreError::Generic { store, .. }) => {
+                assert_eq!(*store, "commit-body");
+            }
+            _ => panic!("original error was not preserved: {original:?}"),
+        }
+        assert_eq!(
+            std::error::Error::source(original).unwrap().to_string(),
+            "injected commit read failure"
+        );
+        let expected = format!("commit state unknown: {msg}: {original}");
+        let error = DataFusionError::from(DeltaError::from(error));
+        assert!(matches!(&error, DataFusionError::External(_)));
+        let cause = CommonErrorCause::new::<NoPythonError>(&error);
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == &expected)
+        );
+        assert!(!cause.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn log_store_commit_compares_exact_bytes() {
+        let attempted = Bytes::from_static(b"{\"commitInfo\":{}}\n");
+        // A true collision must contain different bytes.
+        for existing in [
+            None,
+            Some(attempted.clone()),
+            Some(Bytes::from_static(b"{\"commitInfo\":{\"timestamp\":1}}\n")),
+            Some(Bytes::from_static(b"{ \"commitInfo\": {} }\n")),
+        ] {
+            let root = Arc::new(InMemory::new());
+            let prefixed = Arc::new(PrefixStore::new(root.clone(), "table"));
+            let store = Arc::new(CommitFaultStore::new(prefixed.clone(), 7));
+            let log_store = default_logstore(
+                store.clone(),
+                root.clone(),
+                &Url::parse("memory:///table").unwrap(),
+                &StorageConfig,
+            );
+            if let Some(bytes) = &existing {
+                prefixed
+                    .put(&commit_path(7), bytes.clone().into())
+                    .await
+                    .unwrap();
+            }
+            let result = log_store
+                .write_commit_entry(
+                    7,
+                    CommitOrBytes::LogBytes(attempted.clone()),
+                    Uuid::new_v4(),
+                )
+                .await;
+            if existing.as_ref().is_some_and(|bytes| bytes != &attempted) {
+                assert!(matches!(
+                    result,
+                    Err(TransactionError::VersionAlreadyExists(7))
+                ));
+                log_store
+                    .write_commit_entry(
+                        8,
+                        CommitOrBytes::LogBytes(attempted.clone()),
+                        Uuid::new_v4(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(
+                *store.gets.lock().unwrap(),
+                if existing.is_some() {
+                    vec![commit_path(7)]
+                } else {
+                    vec![]
+                }
+            );
+            let persisted = root
+                .get(&Path::from("table/_delta_log/00000000000000000007.json"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            assert_eq!(persisted, existing.unwrap_or_else(|| attempted.clone()));
+            assert!(store.deletes.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn log_store_landed_commit_is_success() {
+        let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+        let log_store = test_log_store(store.clone());
+        store.arm(CommitPutFault::Landed, None);
+        let bytes = Bytes::from_static(b"{\"commitInfo\":{}}\n");
+        log_store
+            .write_commit_entry(7, CommitOrBytes::LogBytes(bytes.clone()), Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .inner
+                .get(&commit_path(7))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(store.commit_attempts(), vec![commit_path(7)]);
+        assert_eq!(*store.gets.lock().unwrap(), vec![commit_path(7)]);
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn log_store_commit_read_failures_are_unknown() {
+        for fault in [
+            CommitReadFault::Denied,
+            CommitReadFault::NotFound,
+            CommitReadFault::Body,
+        ] {
+            let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+            store.arm(CommitPutFault::Landed, Some(fault));
+            let error = test_log_store(store.clone())
+                .write_commit_entry(
+                    7,
+                    CommitOrBytes::LogBytes(Bytes::from_static(b"{}\n")),
+                    Uuid::new_v4(),
+                )
+                .await
+                .unwrap_err();
+            assert_unknown_commit(error, fault, 7);
+            assert_eq!(store.commit_attempts(), vec![commit_path(7)]);
+            assert_eq!(*store.gets.lock().unwrap(), vec![commit_path(7)]);
+            assert!(store.deletes.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn log_store_other_put_errors_are_unchanged() {
+        let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+        store.arm(CommitPutFault::Denied, None);
+        let error = test_log_store(store.clone())
+            .write_commit_entry(7, CommitOrBytes::LogBytes(Bytes::new()), Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            TransactionError::ObjectStore {
+                source: ObjectStoreError::PermissionDenied { .. }
+            }
+        ));
+        assert!(store.gets.lock().unwrap().is_empty());
+        assert!(
+            store
+                .inner
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CommitCase {
+        Create,
+        Append,
+        Overwrite,
+        Remove,
+    }
+
+    impl CommitCase {
+        fn version(self) -> i64 {
+            if matches!(self, Self::Create) { 0 } else { 1 }
+        }
+
+        fn expected_paths(self) -> Vec<&'static str> {
+            match self {
+                Self::Create => vec!["base.parquet"],
+                Self::Append => vec!["base.parquet", "new.parquet"],
+                Self::Overwrite => vec!["new.parquet"],
+                Self::Remove => vec![],
+            }
+        }
+    }
+
+    fn commit_test_add(path: &str) -> Add {
+        Add {
+            path: path.to_string(),
+            size: 5,
+            data_change: true,
+            stats: Some(r#"{"numRecords":1}"#.to_string()),
+            ..Default::default()
+        }
+    }
+
+    async fn commit_fault_fixture(
+        case: CommitCase,
+    ) -> (Arc<CommitFaultStore>, LogStoreRef, PreCommit) {
+        let inner = Arc::new(InMemory::new());
+        // These sentinels verify that failure handling never deletes a data object.
+        for path in ["base.parquet", "new.parquet", "winner.parquet"] {
+            inner
+                .put(&Path::from(path), Bytes::from_static(b"data!").into())
+                .await
+                .unwrap();
+        }
+        let store = Arc::new(CommitFaultStore::new(inner, case.version()));
+        let log_store = test_log_store(store.clone());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([("delta.checkpointInterval", "1")]);
+        let create = CommitBuilder::from(CommitProperties::default())
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(commit_test_add("base.parquet")),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            );
+        if matches!(case, CommitCase::Create) {
+            return (store, log_store, create);
+        }
+        let snapshot = create.await.unwrap().snapshot;
+        let remove = CommitAction::Remove(Remove {
+            path: "base.parquet".to_string(),
+            deletion_timestamp: Some(Utc::now().timestamp_millis()),
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(HashMap::new()),
+            size: Some(5),
+            ..Default::default()
+        });
+        let (actions, operation) = match case {
+            CommitCase::Append => (
+                vec![CommitAction::Add(commit_test_add("new.parquet"))],
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            ),
+            CommitCase::Overwrite => (
+                vec![remove, CommitAction::Add(commit_test_add("new.parquet"))],
+                DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: None,
+                    predicate: None,
+                },
+            ),
+            CommitCase::Remove => (vec![remove], DeltaOperation::Delete { predicate: None }),
+            CommitCase::Create => unreachable!(),
+        };
+        let commit = CommitBuilder::from(CommitProperties::default())
+            .with_actions(actions)
+            .build(snapshot, log_store.clone(), operation);
+        (store, log_store, commit)
+    }
+
+    async fn assert_commit_artifacts_untouched(store: &CommitFaultStore, version: i64) {
+        let mut versions = store
+            .inner
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|entry| {
+                crate::delta_log::parse_commit_version_from_location(&entry.location)
+            })
+            .collect::<Vec<_>>();
+        versions.sort_unstable();
+        assert_eq!(versions, (0..=version).collect::<Vec<_>>());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        for path in ["base.parquet", "new.parquet", "winner.parquet"] {
+            assert_eq!(
+                store
+                    .inner
+                    .get(&Path::from(path))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap(),
+                "data!"
+            );
+        }
+    }
+
+    async fn assert_landed_commit(case: CommitCase) {
+        let (store, log_store, commit) = commit_fault_fixture(case).await;
+        let expected_file_actions = commit
+            .data
+            .actions
+            .iter()
+            .filter(|action| matches!(action, CommitAction::Add(_) | CommitAction::Remove(_)))
+            .cloned()
+            .map(Action::from)
+            .collect::<Vec<_>>();
+        store.arm(CommitPutFault::Landed, None);
+        let result = commit.await.unwrap();
+        let version = case.version();
+        assert_eq!(result.snapshot.unwrap().version(), version);
+        assert_eq!(result.metrics.num_retries, 0);
+        assert_eq!(
+            store.commit_attempts(),
+            (0..=version).map(commit_path).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            log_store.read_commit_entry(version).await.unwrap().unwrap(),
+            store.attempted_bytes()
+        );
+        let actions = read_commit_actions(&log_store, version).await;
+        let files = actions
+            .into_iter()
+            .filter(|action| matches!(action, Action::Add(_) | Action::Remove(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(files, expected_file_actions);
+        let checksum = read_version_checksum(&log_store, version).await;
+        assert_eq!(checksum.num_files, case.expected_paths().len() as i64);
+        assert_eq!(checksum.table_size_bytes, checksum.num_files * 5);
+        assert_eq!(result.metrics.new_checkpoint_created, version == 1);
+        if version == 1 {
+            let bytes = store
+                .inner
+                .get(&Path::from("_delta_log/_last_checkpoint"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let hint: LastCheckpointHint = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(hint.version, version);
+            store
+                .inner
+                .head(&Path::from(
+                    "_delta_log/00000000000000000001.checkpoint.parquet",
+                ))
+                .await
+                .unwrap();
+        }
+        let reopened = DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(reopened.version(), version);
+        let mut paths = reopened
+            .adds()
+            .iter()
+            .map(|add| add.path.as_str())
+            .collect::<Vec<_>>();
+        paths.sort_unstable();
+        assert_eq!(paths, case.expected_paths());
+        assert_commit_artifacts_untouched(&store, version).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_app_transactions_conflict_on_create_and_append() {
+        for case in [CommitCase::Create, CommitCase::Append] {
+            let (_, log_store, mut first) = commit_fault_fixture(case).await;
+            first.data.actions.push(CommitAction::Txn(Transaction {
+                app_id: "app".into(),
+                version: 0,
+                last_updated: None,
+            }));
+            let second = CommitBuilder::from(CommitProperties::default())
+                .with_actions(first.data.actions.clone())
+                .build(
+                    first.table_data.clone(),
+                    log_store.clone(),
+                    first.data.operation.clone(),
+                );
+            first.await.unwrap();
+            assert!(matches!(
+                second.await,
+                Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                    CommitConflictError::ConcurrentTransaction
+                )))
+            ));
+            assert_eq!(
+                log_store.get_latest_version(-1).await.unwrap(),
+                case.version()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn landed_create_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Create).await;
+    }
+
+    #[tokio::test]
+    async fn landed_blind_append_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Append).await;
+    }
+
+    #[tokio::test]
+    async fn landed_nonblind_overwrite_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Overwrite).await;
+    }
+
+    #[tokio::test]
+    async fn landed_remove_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Remove).await;
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic)]
+    async fn landed_commit_read_failures_stop_without_retries() {
+        for case in [
+            CommitCase::Create,
+            CommitCase::Append,
+            CommitCase::Overwrite,
+            CommitCase::Remove,
+        ] {
+            for fault in [
+                CommitReadFault::Denied,
+                CommitReadFault::NotFound,
+                CommitReadFault::Body,
+            ] {
+                let (store, _, commit) = commit_fault_fixture(case).await;
+                store.arm(CommitPutFault::Landed, Some(fault));
+                let error = commit.await.err().unwrap();
+                let DeltaError::Transaction(error) = error else {
+                    panic!("unexpected error: {error:?}");
+                };
+                let version = case.version();
+                assert_unknown_commit(error, fault, version);
+                assert_eq!(
+                    store.commit_attempts(),
+                    (0..=version).map(commit_path).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    store
+                        .inner
+                        .get(&commit_path(version))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                    store.attempted_bytes()
+                );
+                assert!(matches!(
+                    store.inner.head(&checksum_path(version)).await,
+                    Err(ObjectStoreError::NotFound { .. })
+                ));
+                assert_commit_artifacts_untouched(&store, version).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn different_commit_bytes_preserve_retry_policy() {
+        for case in [
+            CommitCase::Create,
+            CommitCase::Append,
+            CommitCase::Overwrite,
+            CommitCase::Remove,
+        ] {
+            let (store, log_store, commit) = commit_fault_fixture(case).await;
+            let mut winner = commit
+                .data
+                .actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action,
+                        CommitAction::Protocol(_) | CommitAction::Metadata(_)
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            winner.push(CommitAction::Add(commit_test_add("winner.parquet")));
+            let winner = CommitData::new(
+                winner,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+                HashMap::new(),
+                OperationMetrics::default(),
+                vec![],
+                Some("competing writer".to_string()),
+            );
+            let winner_bytes = actions_to_log_bytes(&winner.actions).unwrap();
+            store.arm(CommitPutFault::Collision(winner_bytes.clone()), None);
+            let result = commit.await;
+            let version = case.version();
+            assert_eq!(
+                log_store.read_commit_entry(version).await.unwrap().unwrap(),
+                winner_bytes
+            );
+            assert_ne!(store.attempted_bytes(), winner_bytes);
+            let expected_version = if matches!(case, CommitCase::Create | CommitCase::Append) {
+                let result = result.unwrap();
+                assert_eq!(result.metrics.num_retries, 1);
+                assert_eq!(result.snapshot.unwrap().version(), version + 1);
+                version + 1
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeltaError::Transaction(
+                        TransactionError::MaxCommitAttempts(0)
+                    ))
+                ));
+                version
+            };
+            assert_eq!(
+                store.commit_attempts(),
+                (0..=expected_version).map(commit_path).collect::<Vec<_>>()
+            );
+            assert_commit_artifacts_untouched(&store, expected_version).await;
+        }
     }
 
     fn test_metadata(
@@ -2319,6 +3133,336 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    async fn optimize_conflict_add(
+        store: &dyn ObjectStore,
+        path: &str,
+        partition: &str,
+        ids: Vec<i64>,
+    ) -> Add {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType as ArrowType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", ArrowType::Int64, false)]));
+        let count = ids.len();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(ids))]).unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let bytes = writer.into_inner().unwrap();
+        let size = bytes.len() as i64;
+        store.put(&Path::from(path), bytes.into()).await.unwrap();
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::from([("part".to_string(), Some(partition.to_string()))]),
+            size,
+            data_change: true,
+            stats: Some(serde_json::json!({"numRecords": count}).to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn optimize_conflict_remove(add: &Add, data_change: bool) -> CommitAction {
+        CommitAction::Remove(Remove {
+            path: add.path.clone(),
+            deletion_timestamp: Some(Utc::now().timestamp_millis()),
+            data_change,
+            extended_file_metadata: Some(true),
+            partition_values: Some(add.partition_values.clone()),
+            size: Some(add.size),
+            deletion_vector: add.deletion_vector.clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn optimize_conflict_objects(
+        store: &dyn ObjectStore,
+    ) -> std::collections::BTreeMap<String, Bytes> {
+        let mut objects = std::collections::BTreeMap::new();
+        for entry in store.list(None).try_collect::<Vec<_>>().await.unwrap() {
+            let bytes = store
+                .get(&entry.location)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            objects.insert(entry.location.to_string(), bytes);
+        }
+        objects
+    }
+
+    async fn optimize_conflict_rows(
+        store: &dyn ObjectStore,
+        snapshot: &DeltaSnapshot,
+    ) -> Vec<(i64, String)> {
+        use datafusion::arrow::array::Int64Array;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let mut rows = vec![];
+        for add in snapshot.adds() {
+            assert!(add.deletion_vector.is_none());
+            let bytes = store
+                .get(&Path::from(add.path.as_str()))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                .unwrap()
+                .build()
+                .unwrap();
+            for batch in reader {
+                let batch = batch.unwrap();
+                let ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let partition = add.partition_values["part"].as_ref().unwrap();
+                rows.extend(ids.values().iter().map(|id| (*id, partition.clone())));
+            }
+        }
+        rows.sort();
+        rows
+    }
+
+    // [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/optimize/OptimizeConflictSuite.scala#L43-L97
+    #[tokio::test]
+    async fn optimize_prepared_commit_checks_intervening_business_writes() {
+        for case in [
+            "delete",
+            "overwrite",
+            "append-same",
+            "append-disjoint",
+            "delete-disjoint",
+        ] {
+            let store = Arc::new(InMemory::new());
+            let log_store = test_log_store(store.clone());
+            let first =
+                optimize_conflict_add(store.as_ref(), "part=a/first.parquet", "a", vec![1]).await;
+            let second =
+                optimize_conflict_add(store.as_ref(), "part=a/second.parquet", "a", vec![2]).await;
+            let other =
+                optimize_conflict_add(store.as_ref(), "part=b/other.parquet", "b", vec![10]).await;
+            let mut compacted =
+                optimize_conflict_add(store.as_ref(), "part=a/compacted.parquet", "a", vec![1, 2])
+                    .await;
+            compacted.data_change = false;
+            let (partition, id) = if case == "append-disjoint" {
+                ("b", 11)
+            } else {
+                ("a", 99)
+            };
+            let business = optimize_conflict_add(
+                store.as_ref(),
+                &format!("part={partition}/business.parquet"),
+                partition,
+                vec![id],
+            )
+            .await;
+            let metadata = Metadata::try_new(
+                None,
+                None,
+                StructType::try_new([
+                    StructField::not_null("id", DataType::LONG),
+                    StructField::not_null("part", DataType::STRING),
+                ])
+                .unwrap(),
+                vec!["part".to_string()],
+                0,
+                HashMap::new(),
+            )
+            .unwrap();
+            let protocol = Protocol::new(1, 2, None, None);
+            let initial = CommitBuilder::default()
+                .with_actions(vec![
+                    CommitAction::Protocol(protocol.clone()),
+                    CommitAction::Metadata(metadata.clone()),
+                    CommitAction::Add(first.clone()),
+                    CommitAction::Add(second.clone()),
+                    CommitAction::Add(other.clone()),
+                ])
+                .build(
+                    None,
+                    log_store.clone(),
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: "memory:///".to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
+                    },
+                )
+                .await
+                .unwrap()
+                .snapshot
+                .unwrap();
+            let optimize_actions = vec![
+                optimize_conflict_remove(&first, false),
+                optimize_conflict_remove(&second, false),
+                CommitAction::Add(compacted.clone()),
+            ];
+            let before_prepare = optimize_conflict_objects(store.as_ref()).await;
+            let prepared = CommitBuilder::default()
+                .with_actions(optimize_actions.clone())
+                .build(
+                    Some(initial.clone()),
+                    log_store.clone(),
+                    DeltaOperation::Optimize {
+                        predicate: Some("part = 'a'".to_string()),
+                    },
+                )
+                .into_prepared_commit_future()
+                .await
+                .unwrap();
+            assert_eq!(
+                optimize_conflict_objects(store.as_ref()).await,
+                before_prepare,
+                "{case}"
+            );
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+
+            let (business_actions, operation) = match case {
+                "delete" | "delete-disjoint" => (
+                    vec![optimize_conflict_remove(
+                        if case == "delete" { &first } else { &other },
+                        true,
+                    )],
+                    DeltaOperation::Delete {
+                        predicate: Some(format!("id = {}", if case == "delete" { 1 } else { 10 })),
+                    },
+                ),
+                "overwrite" => (
+                    vec![
+                        optimize_conflict_remove(&first, true),
+                        CommitAction::Add(business.clone()),
+                    ],
+                    DeltaOperation::Write {
+                        mode: SaveMode::Overwrite,
+                        partition_by: None,
+                        predicate: Some("id = 1".to_string()),
+                    },
+                ),
+                _ => (
+                    vec![CommitAction::Add(business.clone())],
+                    DeltaOperation::Write {
+                        mode: SaveMode::Append,
+                        partition_by: None,
+                        predicate: None,
+                    },
+                ),
+            };
+            let winner = CommitBuilder::default()
+                .with_actions(business_actions.clone())
+                .build(Some(initial.clone()), log_store.clone(), operation)
+                .await
+                .unwrap();
+            assert_eq!(winner.snapshot.as_ref().unwrap().version(), 1);
+            let winner_objects = optimize_conflict_objects(store.as_ref()).await;
+            let winner_actions = read_commit_actions(&log_store, 1).await;
+            let file_actions = |actions: Vec<Action>| {
+                actions
+                    .into_iter()
+                    .filter(|action| matches!(action, Action::Add(_) | Action::Remove(_)))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                file_actions(winner_actions.clone()),
+                business_actions
+                    .into_iter()
+                    .map(Action::from)
+                    .collect::<Vec<_>>()
+            );
+            let compatible = case.starts_with("append-");
+            let result = prepared.await;
+            if compatible {
+                let finalized = result.unwrap().await.unwrap();
+                assert_eq!(finalized.snapshot.unwrap().version(), 2);
+                assert_eq!(
+                    file_actions(read_commit_actions(&log_store, 2).await),
+                    optimize_actions
+                        .into_iter()
+                        .map(Action::from)
+                        .collect::<Vec<_>>()
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                            CommitConflictError::ConcurrentDeleteRead
+                        )))
+                    ),
+                    "{case}"
+                );
+                assert_eq!(
+                    optimize_conflict_objects(store.as_ref()).await,
+                    winner_objects,
+                    "{case}"
+                );
+            }
+            assert_eq!(read_commit_actions(&log_store, 1).await, winner_actions);
+            let version = if compatible { 2 } else { 1 };
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), version);
+            let reopened =
+                DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version), None)
+                    .await
+                    .unwrap();
+            let mut expected_adds = match case {
+                "delete" => vec![second.clone(), other.clone()],
+                "overwrite" => vec![second.clone(), other.clone(), business.clone()],
+                "delete-disjoint" => vec![first.clone(), second.clone()],
+                _ => vec![compacted.clone(), other.clone(), business.clone()],
+            };
+            expected_adds.sort_by(|a, b| a.path.cmp(&b.path));
+            let mut actual_adds = reopened.adds().to_vec();
+            actual_adds.sort_by(|a, b| a.path.cmp(&b.path));
+            assert_eq!(actual_adds, expected_adds, "{case}");
+            let expected_rows = match case {
+                "delete" => vec![(2, "a"), (10, "b")],
+                "overwrite" => vec![(2, "a"), (10, "b"), (99, "a")],
+                "append-same" => vec![(1, "a"), (2, "a"), (10, "b"), (99, "a")],
+                "append-disjoint" => vec![(1, "a"), (2, "a"), (10, "b"), (11, "b")],
+                "delete-disjoint" => vec![(1, "a"), (2, "a")],
+                _ => unreachable!(),
+            }
+            .into_iter()
+            .map(|(id, part)| (id, part.to_string()))
+            .collect::<Vec<_>>();
+            assert_eq!(
+                optimize_conflict_rows(store.as_ref(), &reopened).await,
+                expected_rows,
+                "{case}"
+            );
+            assert_eq!(
+                optimize_conflict_rows(store.as_ref(), &initial).await,
+                vec![
+                    (1, "a".to_string()),
+                    (2, "a".to_string()),
+                    (10, "b".to_string())
+                ]
+            );
+            let final_objects = optimize_conflict_objects(store.as_ref()).await;
+            for (path, bytes) in before_prepare {
+                assert_eq!(final_objects.get(&path), Some(&bytes), "{case}: {path}");
+            }
+            let mut versions = store
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .filter_map(|entry| {
+                    crate::delta_log::parse_commit_version_from_location(&entry.location)
+                })
+                .collect::<Vec<_>>();
+            versions.sort_unstable();
+            assert_eq!(versions, (0..=version).collect::<Vec<_>>());
+        }
     }
 
     fn deletion_vector_add(stats: Option<&str>, cardinality: i64) -> Add {
@@ -2836,7 +3980,13 @@ mod tests {
                 "missing numRecords",
                 Some(r#"{"tightBounds":true}"#),
                 1,
-                Some("invalid stats.numRecords"),
+                Some("requires stats.numRecords"),
+            ),
+            (
+                "null numRecords",
+                Some(r#"{"numRecords":null}"#),
+                1,
+                Some("requires stats.numRecords"),
             ),
             (
                 "negative numRecords",

@@ -1,18 +1,11 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use datafusion_common::{DataFusionError, Result};
+use parquet::basic::{Compression, GzipLevel, ZstdLevel};
+use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
@@ -41,31 +34,47 @@ pub struct VariantShreddingOptionPresence {
 /// during physical writing. It derives serde for use in the physical plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IcebergWriterExecOptions {
+    pub copy_on_write_partitioning: bool,
+    #[serde(default)]
+    pub copy_on_write_single_partition: bool,
+    pub target_file_size_bytes: Option<u64>,
+    pub compression_codec: Option<String>,
+    pub compression_level: Option<String>,
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub write_data_path: Option<String>,
     pub write_folder_storage_path: Option<String>,
     pub table_properties: Vec<(String, String)>,
+    #[serde(default)]
+    pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub shred_variants: bool,
     pub shred_variants_explicit: bool,
     pub variant_inference_buffer_size: usize,
     pub variant_inference_buffer_size_explicit: bool,
+    pub target_file_size: u64,
 }
 
 impl Default for IcebergWriterExecOptions {
     fn default() -> Self {
         Self {
+            copy_on_write_partitioning: true,
+            copy_on_write_single_partition: false,
+            target_file_size_bytes: None,
+            compression_codec: None,
+            compression_level: None,
             merge_schema: false,
             overwrite_schema: false,
             write_data_path: None,
             write_folder_storage_path: None,
             table_properties: vec![],
+            snapshot_properties: BTreeMap::new(),
             lakehouse_table: None,
             shred_variants: false,
             shred_variants_explicit: false,
             variant_inference_buffer_size: 100,
             variant_inference_buffer_size_explicit: false,
+            target_file_size: 134_217_728,
         }
     }
 }
@@ -73,21 +82,126 @@ impl Default for IcebergWriterExecOptions {
 impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
     fn from(options: IcebergWriteOptions) -> Self {
         Self {
+            copy_on_write_partitioning: true,
+            copy_on_write_single_partition: false,
+            target_file_size_bytes: options.target_file_size_bytes,
+            compression_codec: options.compression_codec,
+            compression_level: options.compression_level,
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             write_data_path: options.write_data_path,
             write_folder_storage_path: options.write_folder_storage_path,
             table_properties: vec![],
+            snapshot_properties: options.snapshot_properties,
             lakehouse_table: None,
             shred_variants: options.shred_variants,
             shred_variants_explicit: false,
             variant_inference_buffer_size: options.variant_inference_buffer_size,
             variant_inference_buffer_size_explicit: false,
+            target_file_size: 134_217_728,
         }
     }
 }
 
 impl IcebergWriterExecOptions {
+    pub fn target_file_size(&self, properties: &HashMap<String, String>) -> Result<u64> {
+        let size = self.target_file_size_bytes.map(Ok).unwrap_or_else(|| {
+            properties
+                .get("write.target-file-size-bytes")
+                .map(|value| {
+                    value.parse::<u64>().map_err(|_| {
+                        DataFusionError::Plan(format!(
+                            "Invalid Iceberg write.target-file-size-bytes: {value}"
+                        ))
+                    })
+                })
+                .unwrap_or(Ok(512 * 1024 * 1024))
+        })?;
+        if size == 0 {
+            return datafusion_common::plan_err!("Iceberg target file size must be positive");
+        }
+        Ok(size)
+    }
+
+    pub fn parquet_properties(
+        &self,
+        properties: &HashMap<String, String>,
+    ) -> Result<WriterProperties> {
+        let codec = self
+            .compression_codec
+            .as_deref()
+            .or_else(|| {
+                properties
+                    .get("write.parquet.compression-codec")
+                    .map(String::as_str)
+            })
+            .unwrap_or("zstd");
+        let level = self.compression_level.as_deref().or_else(|| {
+            properties
+                .get("write.parquet.compression-level")
+                .map(String::as_str)
+        });
+        let invalid = |error: String| {
+            DataFusionError::Plan(format!(
+                "Invalid Iceberg Parquet compression {codec}: {error}"
+            ))
+        };
+        let compression = match codec.to_ascii_lowercase().as_str() {
+            "uncompressed" | "none" => Compression::UNCOMPRESSED,
+            "snappy" => Compression::SNAPPY,
+            "lz4" | "lz4_raw" => Compression::LZ4_RAW,
+            "zstd" => Compression::ZSTD(match level {
+                Some(level) => ZstdLevel::try_new(
+                    level
+                        .parse()
+                        .map_err(|error: std::num::ParseIntError| invalid(error.to_string()))?,
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+                None => ZstdLevel::default(),
+            }),
+            "gzip" => Compression::GZIP(match level {
+                Some(level) => GzipLevel::try_new(
+                    level
+                        .parse()
+                        .map_err(|error: std::num::ParseIntError| invalid(error.to_string()))?,
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+                None => GzipLevel::default(),
+            }),
+            _ => {
+                return datafusion_common::plan_err!(
+                    "Unsupported Iceberg Parquet compression codec: {codec}"
+                );
+            }
+        };
+        let positive = |key: &str, default: usize| -> Result<usize> {
+            let value = properties
+                .get(key)
+                .map(|value| parse_usize_property(key, value))
+                .transpose()?
+                .unwrap_or(default);
+            if value == 0 {
+                return datafusion_common::plan_err!("Iceberg {key} must be positive");
+            }
+            Ok(value)
+        };
+        Ok(WriterProperties::builder()
+            .set_compression(compression)
+            .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+            .set_statistics_truncate_length(None)
+            .set_max_row_group_bytes(Some(positive(
+                "write.parquet.row-group-size-bytes",
+                128 * 1024 * 1024,
+            )?))
+            .set_data_page_size_limit(positive("write.parquet.page-size-bytes", 1024 * 1024)?)
+            .set_data_page_row_count_limit(positive("write.parquet.page-row-limit", 20_000)?)
+            .set_dictionary_page_size_limit(positive(
+                "write.parquet.dict-size-bytes",
+                2 * 1024 * 1024,
+            )?)
+            .build())
+    }
+
     pub fn variant_shredding_option_presence(
         layers: &[OptionLayer],
     ) -> VariantShreddingOptionPresence {
@@ -185,4 +299,32 @@ fn parse_usize_property(key: &str, value: &str) -> Result<usize> {
             "invalid Iceberg table property {key} value: {value}"
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn snapshot_properties_json_defaults_and_roundtrips() {
+        let options = IcebergWriterExecOptions {
+            snapshot_properties: BTreeMap::from([
+                ("run.id".into(), "CaseValue".into()),
+                ("empty".into(), "".into()),
+            ]),
+            ..Default::default()
+        };
+        let mut value = serde_json::to_value(&options).expect("writer options JSON");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_value(value.clone()).expect("roundtrip");
+        assert_eq!(decoded.snapshot_properties, options.snapshot_properties);
+        value
+            .as_object_mut()
+            .expect("JSON object")
+            .remove("snapshot_properties");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_value(value).expect("older options");
+        assert!(decoded.snapshot_properties.is_empty());
+    }
 }

@@ -1,6 +1,6 @@
-from __future__ import annotations
+# SPDX-License-Identifier: Apache-2.0
 
-from pysail import _native
+from __future__ import annotations
 
 __all__ = [
     "SparkConnectServer",
@@ -17,6 +17,8 @@ class SparkConnectServer:
         :param ip: The IP address to bind the server to.
         :param port: The port to bind the server to.
         """
+        from pysail import _native  # noqa: PLC0415
+
         self._inner = _native.spark.SparkConnectServer(ip, port)
 
     def start(self, *, background=True) -> None:

@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_expr::{Expr, ScalarUDF, expr};
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -15,7 +17,8 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .enumerate()
         .map(|(i, (expr, name))| -> PlanResult<_> {
             match expr {
-                Expr::Column(_) | Expr::Alias(_) => Ok(name.clone()),
+                Expr::Column(_) => Ok(name.clone()),
+                Expr::Alias(alias) => Ok(alias.name.clone()),
                 #[expect(deprecated)]
                 Expr::Wildcard { .. } => Err(PlanError::internal(
                     "wildcard should have been expanded before struct",
@@ -25,7 +28,7 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
         })
         .collect::<PlanResult<_>>()?;
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(StructFunction::new(field_names))),
+        func: Arc::new(ScalarUDF::from(StructFromFields::new(field_names))),
         args: input.arguments,
     }))
 }

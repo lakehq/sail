@@ -9,8 +9,8 @@ use sail_common::storage::StorageAccessSpec;
 use sail_physical_plan::storage_access::StorageAccessExec;
 
 use crate::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeletionVectorRowsWriterExec, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
+    DeltaMetadataStatsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 
 pub(crate) fn bind_storage(
@@ -33,7 +33,6 @@ pub(crate) fn bind_storage(
                 || node.is::<DeltaMetadataStatsExec>()
                 || node.is::<DeltaWriterExec>()
                 || node.is::<DeltaCommitExec>()
-                || node.is::<DeletionVectorWriterExec>()
                 || node.is::<DeletionVectorRowsWriterExec>()
             {
                 // Bind descendants before wrapping so every distributed stage retains its scope.

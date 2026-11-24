@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_common::{Column, DFSchemaRef, TableReference};
@@ -41,9 +43,11 @@ impl PlanResolver<'_> {
         schema
             .iter()
             .filter(|(_, field)| {
-                state
-                    .get_field_info(field.name())
-                    .is_ok_and(|info| !info.is_hidden() && info.matches(name, plan_id))
+                state.get_field_info(field.name()).is_ok_and(|info| {
+                    !info.is_hidden()
+                        && info.matches(name, plan_id)
+                        && (!self.config.case_sensitive || info.name() == name)
+                })
             })
             .map(|x| x.into())
             .collect()
@@ -56,6 +60,7 @@ impl PlanResolver<'_> {
         plan_id: Option<i64>,
         state: &PlanResolverState,
     ) -> PlanResult<Option<Column>> {
+        // TODO: Deduplicate candidates of the same attribute (e.g. `SELECT a, a`) as Spark does.
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
             return Err(PlanError::AnalysisError(format!(

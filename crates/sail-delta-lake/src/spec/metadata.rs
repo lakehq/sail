@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026
 
 use std::collections::HashMap;
 
@@ -24,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::spec::schema::StructType;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L185-L223
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L185-L223>
 pub struct Format {
     provider: String,
     options: HashMap<String, String>,
@@ -40,10 +30,13 @@ impl Format {
         }
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L225-L372
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L225-L372>
 pub struct Metadata {
     id: String,
     name: Option<String>,
@@ -54,9 +47,12 @@ pub struct Metadata {
     created_time: Option<i64>,
     configuration: HashMap<String, String>,
 }
+// SPDX-SnippetEnd
 
 impl Metadata {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L244-L285>
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L244-L285
     pub fn try_new(
         name: Option<String>,
         description: Option<String>,
@@ -76,6 +72,7 @@ impl Metadata {
             configuration,
         })
     }
+    // SPDX-SnippetEnd
 
     pub fn id(&self) -> &str {
         &self.id
@@ -113,6 +110,16 @@ impl Metadata {
         &self.partition_columns
     }
 
+    pub(crate) fn for_clone(&self, target: Option<&Self>) -> Self {
+        Self {
+            id: target.map_or_else(|| uuid::Uuid::new_v4().to_string(), |m| m.id.clone()),
+            name: target.and_then(|m| m.name.clone()),
+            description: target.and_then(|m| m.description.clone()),
+            created_time: Some(chrono::Utc::now().timestamp_millis()),
+            ..self.clone()
+        }
+    }
+
     pub fn with_table_id(self, table_id: String) -> Metadata {
         Metadata {
             id: table_id,
@@ -127,9 +134,9 @@ impl Metadata {
         }
     }
 
-    pub fn with_description(self, description: String) -> Metadata {
+    pub fn with_description(self, description: Option<String>) -> Metadata {
         Metadata {
-            description: Some(description),
+            description,
             ..self
         }
     }

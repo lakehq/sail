@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod cache;
 mod namespace;
 mod options;
 mod runtime;
 
 pub use cache::*;
+use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
@@ -18,6 +21,11 @@ use crate::lakehouse::{
     plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
 };
 
+/// Storage publication performed only after the catalog has reserved and prevalidated the
+/// replacement. An uncertain result must use `CatalogError::CommitStateUnknown`.
+pub type TablePublication =
+    std::pin::Pin<Box<dyn std::future::Future<Output = CatalogResult<()>> + Send + 'static>>;
+
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
 /// that represents a *namespace*.
@@ -28,6 +36,14 @@ pub trait CatalogProvider: Send + Sync {
     /// Note that the same catalog can be registered under different names
     /// in different sessions.
     fn get_name(&self) -> &str;
+
+    /// The namespace used for unqualified objects when this is not the current catalog.
+    fn default_namespace(&self) -> Namespace {
+        Namespace {
+            head: "default".into(),
+            tail: vec![],
+        }
+    }
 
     /// Creates a new database in the catalog.
     async fn create_database(
@@ -79,6 +95,32 @@ pub trait CatalogProvider: Send + Sync {
         ))
     }
 
+    /// Stage an Iceberg replacement without changing visible catalog or storage state.
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: StageTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let _ = (database, table, options);
+        Err(CatalogError::UnsupportedCapability(
+            "atomic Iceberg table replacement".to_string(),
+        ))
+    }
+
+    /// Reserve the staged identity, publish storage, and install prepared status without a
+    /// second fallible catalog mutation. Finalization must outlive caller cancellation.
+    async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: TablePublication,
+    ) -> CatalogResult<()> {
+        let _ = (replacement, publication);
+        Err(CatalogError::UnsupportedCapability(
+            "atomic Iceberg table replacement".to_string(),
+        ))
+    }
+
     /// Whether catalog `CREATE TABLE` needs the lake source to create storage metadata before
     /// registering the catalog object. Providers that can reject create options should do so here
     /// before storage metadata is materialized.
@@ -96,20 +138,24 @@ pub trait CatalogProvider: Send + Sync {
         Vec::new()
     }
 
-    async fn resolve_lakehouse_table(
+    /// Returns the table status together with its lakehouse resolution.
+    /// Providers whose resolution needs more than the table status should load both
+    /// from one catalog response.
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
-        Ok(resolve_lakehouse_table_status(
+        let resolved = resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
             &status,
             request.operation,
             &self.lakehouse_capabilities(),
-        ))
+        );
+        Ok((status, resolved))
     }
 
     async fn plan_lakehouse_create(
@@ -180,6 +226,18 @@ pub trait CatalogProvider: Send + Sync {
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
 
+    /// Returns registered file locations, including a single root for an unpartitioned table,
+    /// or `None` to discover files at the location in the table status. Values are in source
+    /// partition column order; `None` means unrestricted. Callers check returned values.
+    async fn list_file_partitions(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        Ok(None)
+    }
+
     /// Lists all tables in a database in the catalog.
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>>;
 
@@ -191,6 +249,24 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    async fn rename_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _destination_database: &Namespace,
+        _destination_table: &str,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(format!(
+            "RENAME TABLE for catalog {}",
+            self.get_name()
+        )))
+    }
+
+    /// Validates catalog restrictions before lakehouse storage metadata is changed.
+    fn validate_alter_table(&self, _options: &AlterTableOptions) -> CatalogResult<()> {
+        Ok(())
+    }
+
     /// Alters a table in the catalog.
     async fn alter_table(
         &self,
@@ -198,6 +274,30 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
+
+    /// Synchronizes a lakehouse alteration with its committed storage schema.
+    /// Catalogs that cache columns should reconcile them before applying the options.
+    async fn alter_table_with_schema(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+        _schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        self.alter_table(database, table, options).await
+    }
+
+    /// Applies all changes in one catalog mutation, including metadata-pointer preconditions.
+    async fn alter_table_atomically(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "Atomic table alterations are not supported by this catalog".to_string(),
+        ))
+    }
 
     /// Creates a view in the catalog.
     async fn create_view(

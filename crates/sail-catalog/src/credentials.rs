@@ -1,6 +1,10 @@
-use std::fmt::Debug;
+// SPDX-License-Identifier: Apache-2.0
+
+use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use sail_common::storage::{CatalogCredentialSource, OAuth2ClientCredentials};
 use sail_common::utils::oauth::OAuth2Client;
 
@@ -16,6 +20,12 @@ pub trait CatalogCredentials: Debug + Send + Sync + 'static {
         Err(CatalogError::UnsupportedCapability(
             "worker credential refresh requires transferable catalog authentication; driver-local token sources are unsupported".to_string(),
         ))
+    }
+
+    /// The HTTP authentication scheme of the retrieved credential, used as the
+    /// prefix of the `Authorization` header value.
+    fn scheme(&self) -> &str {
+        "Bearer"
     }
 }
 
@@ -33,8 +43,19 @@ impl CatalogCredentials for EmptyCatalogCredentials {
     }
 }
 
+/// Credentials holding a bearer or OAuth token as the catalog options supply it.
 pub struct StaticCatalogCredentials {
     credential: String,
+}
+
+// The token is usable exactly as it is printed, so it is kept out of the debug
+// output that the trait requires.
+impl Debug for StaticCatalogCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticCatalogCredentials")
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl StaticCatalogCredentials {
@@ -53,6 +74,42 @@ impl CatalogCredentials for StaticCatalogCredentials {
 
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         Ok(Some(self.credential.clone()))
+    }
+}
+
+/// Credentials for a server that accepts only HTTP Basic authentication, such
+/// as Apache Gravitino. The user name and password are joined and encoded as
+/// `base64(username:password)` for the `Authorization` header.
+pub struct BasicCatalogCredentials {
+    credential: String,
+}
+
+// Base64 is reversible, so the encoded credential is kept out of the debug
+// output, which would otherwise expose the password.
+impl Debug for BasicCatalogCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BasicCatalogCredentials")
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl BasicCatalogCredentials {
+    pub fn new(username: &str, password: &str) -> Self {
+        Self {
+            credential: BASE64_STANDARD.encode(format!("{username}:{password}")),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CatalogCredentials for BasicCatalogCredentials {
+    async fn retrieve(&self) -> CatalogResult<Option<String>> {
+        Ok(Some(self.credential.clone()))
+    }
+
+    fn scheme(&self) -> &str {
+        "Basic"
     }
 }
 
@@ -92,12 +149,6 @@ impl CatalogCredentials for FileCatalogCredentials {
             )));
         }
         Ok(Some(credential))
-    }
-}
-
-impl Debug for StaticCatalogCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("StaticCatalogCredentials([REDACTED])")
     }
 }
 
@@ -151,6 +202,36 @@ mod tests {
     fn write_token(path: &Path, contents: &str) {
         let mut file = File::create(path).unwrap();
         file.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_returns_encoded_basic_credential() {
+        let credentials = BasicCatalogCredentials::new("user", "pass");
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("dXNlcjpwYXNz".to_string())
+        );
+        assert_eq!(credentials.scheme(), "Basic");
+    }
+
+    #[test]
+    fn debug_output_hides_the_static_credential() {
+        let credentials = StaticCatalogCredentials::new("s3cr3t-token".to_string());
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_output_hides_the_basic_credential() {
+        let credentials = BasicCatalogCredentials::new("user", "s3cr3t-pass");
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-pass") && !output.contains("dXNlcjpzM2NyM3QtcGFzcw"),
+            "unexpected debug output: {output}"
+        );
     }
 
     #[tokio::test]

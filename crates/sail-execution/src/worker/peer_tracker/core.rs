@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::common::HashMap;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -45,6 +47,11 @@ impl PeerTracker {
                 enable_tls: self.options.enable_tls,
                 host: peer.host.clone(),
                 port: peer.port,
+                flight_connection_count: self.options.flight_connection_count,
+                flight_initial_stream_window_size: self.options.flight_initial_stream_window_size,
+                flight_initial_connection_window_size: self
+                    .options
+                    .flight_initial_connection_window_size,
             };
             WorkerClientSet::new(options)
         });

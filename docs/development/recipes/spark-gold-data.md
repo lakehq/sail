@@ -5,7 +5,7 @@ rank: 32
 
 # Working with Spark Gold Data
 
-We use gold data to record Sail's behavior for Spark SQL test cases.
+We use gold data to record how Sail behaves in Spark SQL test cases.
 
 The `scripts/spark-gold-data` directory contains scripts to generate gold data for Spark tests. The gold data files are stored in the `crates/sail-spark-connect/tests/gold_data` directory.
 

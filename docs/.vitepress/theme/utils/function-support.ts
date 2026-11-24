@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 
 export const FUNCTION_SUPPORT_DATA_PATH = path.join(
-  __dirname,
+  import.meta.dirname,
   "../../../../python/pysail/data/compatibility/functions",
 );
 

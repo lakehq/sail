@@ -23,14 +23,14 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_avg"
+        "success": "ok"
       }
     },
     {
       "input": {
         "query": "SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));",
         "result": [
-          "0.9746319"
+          "0.97463185"
         ],
         "schema": {
           "type": "struct",
@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_cosine_similarity"
+        "success": "ok"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_l2_distance"
+        "success": "ok"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {
@@ -155,7 +155,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_norm"
+        "success": "ok"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {
@@ -233,7 +233,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_normalize"
+        "success": "ok"
       }
     },
     {
@@ -259,7 +259,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_sum"
+        "success": "ok"
       }
     }
   ]

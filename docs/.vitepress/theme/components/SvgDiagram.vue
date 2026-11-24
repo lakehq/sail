@@ -56,9 +56,7 @@ const props = defineProps<{
   @apply fill-gray-200 dark:fill-gray-700;
 }
 
-@media (prefers-color-scheme: dark) {
-  :deep(svg.vega) {
-    filter: invert(1) hue-rotate(180deg);
-  }
+:deep(svg.vega) {
+  @apply dark:hue-rotate-180 dark:invert;
 }
 </style>

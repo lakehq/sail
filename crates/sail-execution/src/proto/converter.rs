@@ -1,12 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{Result, plan_datafusion_err, plan_err};
-use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion::arrow::datatypes::{ArrowPrimitiveType, FieldRef, Float16Type, Schema};
+use datafusion::common::metadata::FieldMetadata;
+use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
+use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
+use datafusion::logical_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda};
+use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable, Literal};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
@@ -21,7 +25,8 @@ use prost::Message;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
+    ExtendedPhysicalExprNode, Float16LiteralExprNode, HigherOrderUdfExprNode, LambdaExprNode,
+    LambdaVariableExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
@@ -29,6 +34,7 @@ use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 #[derive(Default)]
 pub(super) struct RemotePhysicalProtoConverter {
     decoded_expressions: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    query_runtime: std::cell::OnceCell<Arc<datafusion::execution::runtime_env::RuntimeEnv>>,
     storage_runtimes: RefCell<
         HashMap<
             sail_common::storage::StorageAccessSpec,
@@ -63,17 +69,24 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 let [input] = extension.inputs.as_slice() else {
                     return plan_err!("StorageAccessExec requires one encoded input");
                 };
-                let spec: sail_common::storage::StorageAccessSpec =
+                let query_runtime = self
+                    .query_runtime
+                    .get_or_init(|| ctx.task_ctx().runtime_env());
+                let spec: Option<sail_common::storage::StorageAccessSpec> =
                     serde_json::from_slice(&access.access)
                         .map_err(|_| plan_datafusion_err!("Invalid storage access payload"))?;
-                let runtime = match self.storage_runtimes.borrow_mut().entry(spec.clone()) {
-                    std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
-                    std::collections::hash_map::Entry::Vacant(entry) => entry
-                        .insert(sail_object_store::access::storage_runtime(
-                            &ctx.task_ctx().runtime_env(),
-                            &spec,
-                        )?)
-                        .clone(),
+                let runtime = if let Some(spec) = &spec {
+                    match self.storage_runtimes.borrow_mut().entry(spec.clone()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                        std::collections::hash_map::Entry::Vacant(entry) => entry
+                            .insert(sail_object_store::access::storage_runtime(
+                                query_runtime,
+                                spec,
+                            )?)
+                            .clone(),
+                    }
+                } else {
+                    query_runtime.clone()
                 };
                 let task = sail_object_store::access::storage_task_context(
                     ctx.task_ctx(),
@@ -84,14 +97,22 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                     scope = scope.with_scalar_subquery_results(results.clone());
                 }
                 let input = self.proto_to_execution_plan(input, &scope)?;
-                return Ok(Arc::new(
-                    sail_physical_plan::storage_access::StorageAccessExec::new(
-                        input, spec, runtime,
-                    ),
-                ));
+                use sail_physical_plan::storage_access::StorageAccessExec;
+                return Ok(Arc::new(match spec {
+                    Some(spec) => StorageAccessExec::new(input, spec, runtime),
+                    None => StorageAccessExec::query_input(input, runtime),
+                }));
             }
         }
-        self.default_proto_to_execution_plan(proto, ctx)
+        if let Some(results) = ctx.scalar_subquery_results() {
+            let converter = ScopedPhysicalProtoConverter {
+                inner: self,
+                results,
+            };
+            converter.default_proto_to_execution_plan(proto, ctx)
+        } else {
+            self.default_proto_to_execution_plan(proto, ctx)
+        }
     }
 
     fn execution_plan_to_proto(
@@ -109,6 +130,24 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let decoded = match decode_remote_expr_kind(proto)? {
+            Some((ExprKind::Float16Literal(node), inputs)) => {
+                if !inputs.is_empty() {
+                    return plan_err!("Float16Literal expects no inputs, got {}", inputs.len());
+                }
+                let value = node
+                    .bits
+                    .map(|bits| -> Result<_> {
+                        let bits = u16::try_from(bits).map_err(|_| {
+                            plan_datafusion_err!("Float16Literal bits {bits} do not fit in u16")
+                        })?;
+                        Ok(<Float16Type as ArrowPrimitiveType>::Native::from_bits(bits))
+                    })
+                    .transpose()?;
+                Ok(Arc::new(Literal::new_with_metadata(
+                    ScalarValue::Float16(value),
+                    Some(FieldMetadata::from(node.metadata)),
+                )) as Arc<dyn PhysicalExpr>)
+            }
             Some((ExprKind::HigherOrderUdf(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
@@ -157,6 +196,19 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
+        if let Some(literal) = expr.downcast_ref::<Literal>()
+            && let ScalarValue::Float16(value) = literal.value()
+        {
+            // DataFusion's scalar protobuf widens non-null Float16 values to Float32.
+            return extension_expr_to_proto(
+                expr,
+                ExprKind::Float16Literal(Float16LiteralExprNode {
+                    bits: value.map(|value| u32::from(value.to_bits())),
+                    metadata: literal.return_field(&Schema::empty())?.metadata().clone(),
+                }),
+                vec![],
+            );
+        }
         if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
             return self.higher_order_expr_to_proto(expr, hof, codec);
         }
@@ -177,6 +229,66 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
             );
         }
         serialize_physical_expr_with_converter(expr, codec, self)
+    }
+}
+
+/// Extension codecs receive a TaskContext rather than a PhysicalPlanDecodeContext.
+/// Carry the enclosing scalar scope through their converter so that decoding
+/// embedded plans and expressions does not lose the shared results container.
+struct ScopedPhysicalProtoConverter<'a> {
+    inner: &'a RemotePhysicalProtoConverter,
+    results: &'a ScalarSubqueryResults,
+}
+
+impl PhysicalProtoConverterExtension for ScopedPhysicalProtoConverter<'_> {
+    fn proto_to_execution_plan(
+        &self,
+        proto: &PhysicalPlanNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let ctx = self.restore_scalar_scope(ctx);
+        self.inner.proto_to_execution_plan(proto, &ctx)
+    }
+
+    fn proto_to_physical_expr(
+        &self,
+        proto: &PhysicalExprNode,
+        input_schema: &Schema,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let ctx = self.restore_scalar_scope(ctx);
+        self.inner.proto_to_physical_expr(proto, input_schema, &ctx)
+    }
+
+    fn execution_plan_to_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalPlanNode> {
+        self.inner.execution_plan_to_proto(plan, codec)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalExprNode> {
+        self.inner.physical_expr_to_proto(expr, codec)
+    }
+}
+
+impl ScopedPhysicalProtoConverter<'_> {
+    fn restore_scalar_scope<'a>(
+        &self,
+        ctx: &PhysicalPlanDecodeContext<'a>,
+    ) -> PhysicalPlanDecodeContext<'a> {
+        // A nested ScalarSubqueryExec establishes its own scope, which must win
+        // over the enclosing scope retained for extension codec callbacks.
+        if ctx.scalar_subquery_results().is_some() {
+            ctx.clone()
+        } else {
+            ctx.with_scalar_subquery_results(self.results.clone())
+        }
     }
 }
 
@@ -246,12 +358,8 @@ impl RemotePhysicalProtoConverter {
             }
         }
 
-        let param_sets = match fun.lambda_parameters(0, &value_or_lambda)? {
-            LambdaParametersProgress::Complete(params) => params,
-            LambdaParametersProgress::Partial(_) => {
-                return plan_err!("`{}` returned partial lambda parameters", fun.name());
-            }
-        };
+        let param_sets =
+            self.resolve_lambda_parameters(&fun, inputs, input_schema, &mut value_or_lambda, ctx)?;
 
         let mut lambda_index = 0usize;
         let args = inputs
@@ -281,6 +389,63 @@ impl RemotePhysicalProtoConverter {
             input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
         )?))
+    }
+
+    fn resolve_lambda_parameters(
+        &self,
+        fun: &HigherOrderUDF,
+        inputs: &[PhysicalExprNode],
+        input_schema: &Schema,
+        value_or_lambda: &mut [ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Vec<Vec<FieldRef>>> {
+        let mut step = 0;
+        loop {
+            match fun.lambda_parameters(step, value_or_lambda)? {
+                LambdaParametersProgress::Complete(params) => return Ok(params),
+                LambdaParametersProgress::Partial(partial_params) => {
+                    let lambda_count = value_or_lambda
+                        .iter()
+                        .filter(|value| matches!(value, ValueOrLambda::Lambda(_)))
+                        .count();
+                    if partial_params.len() != lambda_count {
+                        return plan_err!(
+                            "`{}` returned {} lambda parameter sets, expected {lambda_count}",
+                            fun.name(),
+                            partial_params.len()
+                        );
+                    }
+                    let mut lambda_ordinal = 0;
+                    for (input, value) in inputs.iter().zip(value_or_lambda.iter_mut()) {
+                        let ValueOrLambda::Lambda(field) = value else {
+                            continue;
+                        };
+                        let fields = partial_params.get(lambda_ordinal).and_then(Option::as_ref);
+                        lambda_ordinal += 1;
+                        let Some(fields) = fields else {
+                            continue;
+                        };
+                        let Some((params, body)) = lambda_proto_parts(input)? else {
+                            return plan_err!(
+                                "`{}` returned parameters for a non-lambda input",
+                                fun.name()
+                            );
+                        };
+                        let schema = extend_lambda_schema(input_schema, &params, fields);
+                        let body = self.proto_to_physical_expr(body, &schema, ctx)?;
+                        *field = Some(body.return_field(&schema)?);
+                    }
+                    step += 1;
+                    let limit = fun.signature().lambda_parameters_max_iterations;
+                    if step > limit {
+                        return plan_err!(
+                            "`{}` lambda parameters did not resolve within {limit} iterations",
+                            fun.name()
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -337,4 +502,271 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
         output.push(Arc::new(field.as_ref().clone().with_name(name)));
     }
     Schema::new_with_metadata(output, base.metadata().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::execution::TaskContext;
+    use datafusion::logical_expr::{
+        ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+        HigherOrderUDFImpl, Operator, Volatility,
+    };
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+
+    use super::*;
+    use crate::proto::codec::RemoteExecutionCodec;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    enum InferenceBehavior {
+        ChangingFields,
+        NeverCompletes,
+        WrongParameterCount,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestInference {
+        signature: HigherOrderSignature,
+        behavior: InferenceBehavior,
+    }
+
+    impl HigherOrderUDFImpl for TestInference {
+        fn name(&self) -> &str {
+            "test_inference"
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            step: usize,
+            fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            match self.behavior {
+                InferenceBehavior::ChangingFields => {
+                    let expected = match step {
+                        0 => None,
+                        1 => Some(DataType::Int32),
+                        _ => Some(DataType::Int64),
+                    };
+                    let [ValueOrLambda::Lambda(actual)] = fields else {
+                        return plan_err!("expected one lambda");
+                    };
+                    if actual.as_ref().map(|field| field.data_type()) != expected.as_ref() {
+                        return plan_err!("unexpected lambda field at step {step}");
+                    }
+                    let data_type = if step == 0 {
+                        DataType::Int32
+                    } else {
+                        DataType::Int64
+                    };
+                    let params = vec![Arc::new(Field::new("", data_type, true))];
+                    if step >= 2 {
+                        Ok(LambdaParametersProgress::Complete(vec![params]))
+                    } else {
+                        Ok(LambdaParametersProgress::Partial(vec![Some(params)]))
+                    }
+                }
+                InferenceBehavior::NeverCompletes => Ok(LambdaParametersProgress::Partial(vec![
+                    Some(vec![Arc::new(Field::new("", DataType::Int32, true))]),
+                ])),
+                InferenceBehavior::WrongParameterCount => {
+                    Ok(LambdaParametersProgress::Partial(vec![]))
+                }
+            }
+        }
+
+        fn return_field_from_args(&self, _args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
+            plan_err!("not used")
+        }
+
+        fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+            plan_err!("not used")
+        }
+    }
+
+    fn resolve_test_parameters(behavior: InferenceBehavior) -> Result<Vec<Vec<FieldRef>>> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let body = Arc::new(Column::new("parameter", 0)) as Arc<dyn PhysicalExpr>;
+        let lambda = Arc::new(LambdaExpr::try_new(vec!["parameter".to_string()], body)?)
+            as Arc<dyn PhysicalExpr>;
+        let inputs = vec![converter.physical_expr_to_proto(&lambda, &RemoteExecutionCodec)?];
+        let mut signature = HigherOrderSignature::variadic_any(Volatility::Immutable);
+        signature.lambda_parameters_max_iterations = 2;
+        let fun = HigherOrderUDF::new_from_impl(TestInference {
+            signature,
+            behavior,
+        });
+        let mut fields = vec![ValueOrLambda::Lambda(None)];
+        let task_context = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_context, &RemoteExecutionCodec);
+        converter.resolve_lambda_parameters(&fun, &inputs, &Schema::empty(), &mut fields, &ctx)
+    }
+
+    #[test]
+    fn test_revisits_lambda_when_parameter_fields_change() -> Result<()> {
+        let params = resolve_test_parameters(InferenceBehavior::ChangingFields)?;
+        assert_eq!(params[0][0].data_type(), &DataType::Int64);
+        Ok(())
+    }
+
+    fn round_trip(expr: &Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let proto = converter.physical_expr_to_proto(expr, &codec)?;
+        let proto = PhysicalExprNode::decode(proto.encode_to_vec().as_slice())
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        converter.proto_to_physical_expr(&proto, &Schema::empty(), &ctx)
+    }
+
+    #[test]
+    fn float16_literal_round_trip_preserves_bits_and_metadata() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "literal".to_string())]);
+        // Finite values, subnormals, signed zeros/infinities, and NaN payloads.
+        for bits in [
+            Some(0x3c00),
+            Some(0xc100),
+            Some(0x0001),
+            Some(0x8001),
+            Some(0x0000),
+            Some(0x8000),
+            Some(0x7c00),
+            Some(0xfc00),
+            Some(0x7e01),
+            Some(0xfd23),
+            None,
+        ] {
+            let value = bits.map(<Float16Type as ArrowPrimitiveType>::Native::from_bits);
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+                ScalarValue::Float16(value),
+                Some(FieldMetadata::from(metadata.clone())),
+            ));
+            let decoded = round_trip(&expr)?;
+            let literal = decoded
+                .downcast_ref::<Literal>()
+                .ok_or_else(|| plan_datafusion_err!("expected literal"))?;
+            let ScalarValue::Float16(value) = literal.value() else {
+                return plan_err!("Float16 literal changed type");
+            };
+            assert_eq!(value.map(|value| value.to_bits()), bits);
+            assert_eq!(decoded.data_type(&Schema::empty())?, DataType::Float16);
+            assert_eq!(decoded.nullable(&Schema::empty())?, bits.is_none());
+            assert_eq!(
+                decoded.return_field(&Schema::empty())?,
+                expr.return_field(&Schema::empty())?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float32_literal_keeps_standard_encoding() -> Result<()> {
+        for value in [Some(1.25), None] {
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Float32(value)));
+            let proto = RemotePhysicalProtoConverter::default()
+                .physical_expr_to_proto(&expr, &DefaultPhysicalExtensionCodec {})?;
+            assert!(matches!(
+                proto.expr_type,
+                Some(physical_expr_node::ExprType::Literal(_))
+            ));
+            let decoded = round_trip(&expr)?;
+            assert_eq!(
+                decoded
+                    .downcast_ref::<Literal>()
+                    .ok_or_else(|| plan_datafusion_err!("expected literal"))?
+                    .value(),
+                &ScalarValue::Float32(value)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float16_literal_rejects_invalid_payloads() -> Result<()> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Float16(None)));
+        for (bits, inputs, message) in [
+            (Some(65536), vec![], "do not fit in u16"),
+            (Some(u32::MAX), vec![], "do not fit in u16"),
+            (None, vec![PhysicalExprNode::default()], "expects no inputs"),
+        ] {
+            let proto = extension_expr_to_proto(
+                &expr,
+                ExprKind::Float16Literal(Float16LiteralExprNode {
+                    bits,
+                    metadata: HashMap::new(),
+                }),
+                inputs,
+            )?;
+            let error = converter
+                .proto_to_physical_expr(&proto, &Schema::empty(), &ctx)
+                .err()
+                .ok_or_else(|| plan_datafusion_err!("invalid payload was accepted"))?;
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_rejects_unresolved_or_invalid_lambda_parameters() -> Result<()> {
+        let error = resolve_test_parameters(InferenceBehavior::NeverCompletes)
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("non-converging inference was accepted"))?;
+        assert!(error.to_string().contains("within 2 iterations"));
+
+        let error = resolve_test_parameters(InferenceBehavior::WrongParameterCount)
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("wrong parameter count was accepted"))?;
+        assert!(error.to_string().contains("expected 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn float16_literal_nested_in_projection_round_trip() -> Result<()> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let value = <Float16Type as ArrowPrimitiveType>::Native::from_bits(0x3c00);
+        let literal: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Float16(Some(value))));
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(Arc::clone(&literal), Operator::Eq, literal));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(expression, "equal".to_string())],
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        )?);
+        let proto = converter.execution_plan_to_proto(&plan, &codec)?;
+        let proto = PhysicalPlanNode::decode(proto.encode_to_vec().as_slice())
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let decoded = converter.proto_to_execution_plan(&proto, &ctx)?;
+        let projection = decoded
+            .downcast_ref::<ProjectionExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected projection"))?;
+        let expression = &projection.expr()[0].expr;
+        let binary = expression
+            .downcast_ref::<BinaryExpr>()
+            .ok_or_else(|| plan_datafusion_err!("expected binary expression"))?;
+        for child in [binary.left(), binary.right()] {
+            assert_eq!(
+                child
+                    .downcast_ref::<Literal>()
+                    .ok_or_else(|| plan_datafusion_err!("expected literal"))?
+                    .value(),
+                &ScalarValue::Float16(Some(value))
+            );
+        }
+        assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
+    }
 }

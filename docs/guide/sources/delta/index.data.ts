@@ -1,5 +1,5 @@
 import { createContentLoader } from "vitepress";
 
 export default createContentLoader([
-  "/guide/sources/delta/!(index|_*/**|**/_*/**).md",
+  "guide/sources/delta/!(index|_*/**|**/_*/**).md",
 ]);

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod actor;
 mod client;
 mod debug;
@@ -6,7 +8,7 @@ pub(crate) mod peer_tracker;
 mod server;
 
 #[expect(clippy::allow_attributes)]
-mod r#gen {
+pub(crate) mod r#gen {
     tonic::include_proto!("sail.worker");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
@@ -35,8 +37,12 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub table_uri: String,
     pub row_count: u64,
+    pub action_summary: Option<crate::operation_metrics::IcebergActionSummary>,
+    pub removed_data_file_paths: Vec<String>,
+    pub skip_empty_commit: bool,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
+    pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
@@ -46,10 +52,15 @@ pub struct CommitMeta {
 pub struct CommitMetaAction {
     pub table_uri: String,
     pub row_count: u64,
+    pub action_summary_json: Option<String>,
+    pub removed_data_file_paths: Vec<String>,
+    pub skip_empty_commit: bool,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
     pub table_properties_json: String,
+    /// Per-write annotations, independent of persistent table properties.
+    pub snapshot_properties_json: String,
     pub lakehouse_table_json: Option<String>,
     /// Optional Iceberg Schema JSON (rare) to avoid huge Arrow schema.
     pub schema_json: Option<String>,
@@ -429,6 +440,18 @@ impl TryFrom<DataFile> for AddFileAction {
     }
 }
 
+pub(super) fn parse_data_file_format(value: &str) -> Result<DataFileFormat> {
+    match value {
+        "Avro" => Ok(DataFileFormat::Avro),
+        "Orc" => Ok(DataFileFormat::Orc),
+        "Parquet" => Ok(DataFileFormat::Parquet),
+        "Puffin" => Ok(DataFileFormat::Puffin),
+        other => Err(DataFusionError::Plan(format!(
+            "unknown DataFileFormat string '{other}'"
+        ))),
+    }
+}
+
 impl TryFrom<AddFileAction> for DataFile {
     type Error = DataFusionError;
 
@@ -443,17 +466,7 @@ impl TryFrom<AddFileAction> for DataFile {
                 )));
             }
         };
-        let file_format = match a.file_format.as_str() {
-            "Avro" => DataFileFormat::Avro,
-            "Orc" => DataFileFormat::Orc,
-            "Parquet" => DataFileFormat::Parquet,
-            "Puffin" => DataFileFormat::Puffin,
-            other => {
-                return Err(DataFusionError::Plan(format!(
-                    "unknown DataFileFormat string '{other}'"
-                )));
-            }
-        };
+        let file_format = parse_data_file_format(&a.file_format)?;
 
         let partition = a
             .partition
@@ -535,9 +548,17 @@ pub fn encode_delete_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch
 }
 
 pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
+    let action_summary_json = meta
+        .action_summary
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let requirements_json = serde_json::to_string(&meta.requirements)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let table_properties_json = serde_json::to_string(&meta.table_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let snapshot_properties_json = serde_json::to_string(&meta.snapshot_properties)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let lakehouse_table_json = meta
         .lakehouse_table
@@ -562,8 +583,12 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         action: ExecAction::CommitMeta(CommitMetaAction {
             table_uri: meta.table_uri,
             row_count: meta.row_count,
+            action_summary_json,
+            removed_data_file_paths: meta.removed_data_file_paths,
+            skip_empty_commit: meta.skip_empty_commit,
             requirements_json,
             table_properties_json,
+            snapshot_properties_json,
             lakehouse_table_json,
             schema_json,
             partition_spec_json,
@@ -574,25 +599,33 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
 
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
-) -> Result<(Vec<DataFile>, Vec<DataFile>, Option<CommitMeta>)> {
+) -> Result<(Vec<DataFile>, Vec<DataFile>, Vec<CommitMeta>)> {
     let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut adds: Vec<DataFile> = Vec::new();
     let mut deletes: Vec<DataFile> = Vec::new();
-    let mut meta: Option<CommitMeta> = None;
+    let mut meta = Vec::new();
 
     for row in rows {
         match row.action {
             ExecAction::Add(a) => adds.push(a.try_into()?),
             ExecAction::Delete(d) => deletes.push(d.data_file.try_into()?),
             ExecAction::CommitMeta(m) => {
+                let action_summary = m
+                    .action_summary_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let table_properties: Vec<(String, String)> =
                     serde_json::from_str(&m.table_properties_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let snapshot_properties = serde_json::from_str(&m.snapshot_properties_json)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let lakehouse_table: Option<LakehouseExecutionContext> = m
                     .lakehouse_table_json
                     .as_deref()
@@ -611,11 +644,15 @@ pub fn decode_actions_and_meta_from_batch(
                     .map(serde_json::from_str::<PartitionSpec>)
                     .transpose()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                meta = Some(CommitMeta {
+                meta.push(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
+                    action_summary,
+                    removed_data_file_paths: m.removed_data_file_paths,
+                    skip_empty_commit: m.skip_empty_commit,
                     requirements,
                     table_properties,
+                    snapshot_properties,
                     lakehouse_table,
                     schema,
                     partition_spec,
@@ -634,6 +671,37 @@ mod tests {
     use datafusion::arrow::compute::concat_batches;
 
     use super::*;
+
+    #[test]
+    fn coalesced_batches_preserve_every_writer_commit_meta() -> Result<()> {
+        let first = CommitMeta {
+            table_uri: "file:///table/".to_string(),
+            row_count: 100,
+            snapshot_properties: BTreeMap::from([
+                ("run.id".to_string(), "CaseValue".to_string()),
+                ("empty".to_string(), "".to_string()),
+            ]),
+            removed_data_file_paths: vec!["data/old.parquet".to_string()],
+            skip_empty_commit: true,
+            ..Default::default()
+        };
+        let empty = CommitMeta {
+            row_count: 0,
+            removed_data_file_paths: vec![],
+            ..first.clone()
+        };
+        for metadata in [vec![first.clone(), empty.clone()], vec![empty, first]] {
+            let batches = metadata
+                .iter()
+                .cloned()
+                .map(encode_commit_meta)
+                .collect::<Result<Vec<_>>>()?;
+            let batch = concat_batches(&iceberg_action_schema()?, &batches)?;
+            let (_, _, decoded) = decode_actions_and_meta_from_batch(&batch)?;
+            assert_eq!(decoded, metadata);
+        }
+        Ok(())
+    }
 
     #[test]
     fn bounds_roundtrip_preserves_empty_partial_and_full_maps() -> Result<()> {
@@ -686,8 +754,14 @@ mod tests {
         let meta = CommitMeta {
             table_uri: "s3://bucket/table".to_string(),
             row_count: 10,
+            action_summary: Some(crate::operation_metrics::IcebergActionSummary::new(
+                crate::operation_metrics::IcebergOperation::Insert,
+            )),
+            removed_data_file_paths: vec!["s3://bucket/old.parquet".to_string()],
+            skip_empty_commit: true,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
+            snapshot_properties: BTreeMap::from([("run-id".into(), "first".into())]),
             lakehouse_table: None,
             schema: None,
             partition_spec: None,
@@ -701,12 +775,12 @@ mod tests {
                 referenced_data_file: Some(df.file_path.clone()),
                 ..df.clone()
             }])?,
-            encode_commit_meta(meta)?,
+            encode_commit_meta(meta.clone())?,
         ];
         let merged = concat_batches(&schema, &batches)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
+        let (adds, deletes, decoded_meta) = decode_actions_and_meta_from_batch(&merged)?;
         assert_eq!(adds.len(), 1);
         assert_eq!(deletes.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
@@ -721,7 +795,7 @@ mod tests {
             deletes[0].referenced_data_file.as_deref(),
             Some(df.file_path.as_str())
         );
-        assert!(meta.is_some());
+        assert_eq!(decoded_meta, vec![meta]);
         Ok(())
     }
 }

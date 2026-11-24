@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-pub use sail_common::spec::CreateTableMode;
+pub use sail_common::spec::{ColumnChange, CreateTableMode};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -43,6 +45,22 @@ pub struct CreateTableOptions {
     pub is_write_precondition: bool,
 }
 
+pub enum StageTableOptions {
+    Definition(CreateTableOptions),
+    ShallowClone {
+        default_location: String,
+        location: Option<String>,
+        mode: CreateTableMode,
+        is_external: bool,
+    },
+}
+
+impl From<CreateTableOptions> for StageTableOptions {
+    fn from(options: CreateTableOptions) -> Self {
+        Self::Definition(options)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,
@@ -74,6 +92,9 @@ pub fn plain_lakehouse_create_table_metadata_requirement(
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableColumnOptions {
+    /// Arrow field metadata, including logical type identity.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
@@ -137,6 +158,39 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterSnapshotReference {
+        operation: sail_common::spec::SnapshotReferenceOperation,
+    },
+    AlterIdentifierFields {
+        names: Vec<Vec<String>>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(CatalogPartitionField, Option<String>)>,
+        drop: Option<CatalogPartitionField>,
+    },
+    SetPartitioning {
+        partition_by: Vec<CatalogPartitionField>,
+    },
+    SetWriteOrder {
+        order: Vec<sail_common_datafusion::catalog::CatalogSortField>,
+        distribution: Option<String>,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+    SetLocation {
+        location: String,
+    },
+    ReplaceColumns {
+        fields: datafusion::arrow::datatypes::Fields,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+    AlterColumns {
+        changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -147,13 +201,135 @@ pub enum AlterTableOptions {
     AlterColumnType {
         name: Vec<String>,
         data_type: DataType,
+        #[serde(default)]
+        metadata: Vec<(String, String)>,
+        #[serde(default)]
+        case_sensitive: bool,
     },
     AlterColumnDefault {
         name: Vec<String>,
         default: Option<String>,
     },
+    DropCheckConstraint {
+        name: String,
+        if_exists: bool,
+    },
     AddCheckConstraint {
         name: String,
         expression: String,
     },
+}
+
+impl From<&AlterTableOptions>
+    for sail_common_datafusion::lakesource::LakeSourceAlterTableOperation
+{
+    fn from(options: &AlterTableOptions) -> Self {
+        use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
+        match options {
+            AlterTableOptions::AlterSnapshotReference { operation } => {
+                LakeSourceAlterTableOperation::AlterSnapshotReference {
+                    operation: operation.clone(),
+                }
+            }
+            AlterTableOptions::AlterIdentifierFields { names, drop } => {
+                LakeSourceAlterTableOperation::AlterIdentifierFields {
+                    names: names.clone(),
+                    drop: *drop,
+                }
+            }
+            AlterTableOptions::AlterPartitionSpec { add, drop } => {
+                LakeSourceAlterTableOperation::AlterPartitionSpec {
+                    add: add.clone(),
+                    drop: drop.clone(),
+                }
+            }
+            AlterTableOptions::SetPartitioning { partition_by } => {
+                LakeSourceAlterTableOperation::SetPartitioning {
+                    partition_by: partition_by.clone(),
+                }
+            }
+            AlterTableOptions::SetWriteOrder {
+                order,
+                distribution,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::SetWriteOrder {
+                order: order.clone(),
+                distribution: distribution.clone(),
+                case_sensitive: *case_sensitive,
+            },
+            AlterTableOptions::SetLocation { location } => {
+                LakeSourceAlterTableOperation::SetLocation {
+                    location: location.clone(),
+                }
+            }
+            AlterTableOptions::ReplaceColumns {
+                fields,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::ReplaceColumns {
+                schema: std::sync::Arc::new(datafusion::arrow::datatypes::Schema::new(
+                    fields.clone(),
+                )),
+                case_sensitive: *case_sensitive,
+            },
+            AlterTableOptions::AlterColumns {
+                changes,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::AlterColumns {
+                changes: changes.clone(),
+                case_sensitive: *case_sensitive,
+            },
+            AlterTableOptions::SetTableProperties { properties } => {
+                LakeSourceAlterTableOperation::SetTableProperties {
+                    changes: properties
+                        .iter()
+                        .map(|(key, value)| (key.clone(), Some(value.clone())))
+                        .collect(),
+                    if_exists: false,
+                }
+            }
+            AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                LakeSourceAlterTableOperation::SetTableProperties {
+                    changes: keys.iter().map(|key| (key.clone(), None)).collect(),
+                    if_exists: *if_exists,
+                }
+            }
+            AlterTableOptions::AlterColumnType {
+                name,
+                data_type,
+                metadata,
+                case_sensitive,
+            } => LakeSourceAlterTableOperation::AlterColumnType {
+                column_path: name.clone(),
+                data_type: data_type.clone(),
+                metadata: metadata.clone(),
+                case_sensitive: *case_sensitive,
+            },
+            AlterTableOptions::AlterColumnDefault { name, default } => {
+                LakeSourceAlterTableOperation::AlterColumnDefault {
+                    column_path: name.clone(),
+                    default: default.clone(),
+                }
+            }
+            AlterTableOptions::DropCheckConstraint { name, if_exists } => {
+                LakeSourceAlterTableOperation::DropCheckConstraint {
+                    name: name.clone(),
+                    if_exists: *if_exists,
+                }
+            }
+            AlterTableOptions::AddCheckConstraint { name, expression } => {
+                LakeSourceAlterTableOperation::AddCheckConstraint {
+                    name: name.clone(),
+                    expression: expression.clone(),
+                }
+            }
+        }
+    }
+}
+
+/// A registered file-table partition. Values follow the table's partition-column order.
+#[derive(Debug, Clone)]
+pub struct CatalogFilePartition {
+    pub values: Vec<String>,
+    pub location: Option<String>,
+    pub format: String,
 }

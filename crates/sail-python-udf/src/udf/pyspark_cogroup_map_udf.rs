@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayData, ArrayRef, AsArray};
@@ -18,7 +20,7 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
     name: String,
@@ -72,6 +74,15 @@ impl PySparkCoGroupMapUDF {
             is_pandas,
             udf: LazyPyObject::new(),
         })
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
+        }
     }
 
     pub fn payload(&self) -> &[u8] {

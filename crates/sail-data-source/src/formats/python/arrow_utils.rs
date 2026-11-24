@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Arrow conversion utilities for Python data sources.
 //!
 //! This module provides efficient conversion between Arrow and Python types
@@ -477,6 +479,17 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
 
+    // With no columns, only cardinality matters; no Python values need decoding.
+    if schema.fields().is_empty() {
+        let options =
+            arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(pickled_rows.len()));
+        return Ok(RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &options,
+        )?);
+    }
+
     Python::attach(|py| {
         let cloudpickle = import_cloudpickle(py)?;
 
@@ -521,7 +534,7 @@ macro_rules! build_primitive_array {
 
 /// Build an Arrow array from Python row values.
 fn build_array_from_rows(
-    _py: Python<'_>,
+    py: Python<'_>,
     rows: &[Bound<'_, PyAny>],
     col_idx: usize,
     field: &Arc<Field>,
@@ -568,8 +581,34 @@ fn build_array_from_rows(
         DataType::Utf8 => build_string_array!(rows, col_idx, StringArray),
         DataType::LargeUtf8 => build_string_array!(rows, col_idx, LargeStringArray),
         DataType::Date32 => build_primitive_array!(rows, col_idx, i32, Date32Array),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            build_primitive_array!(rows, col_idx, i64, TimestampMicrosecondArray)
+        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+            let type_name = if timezone.is_some() {
+                "TimestampType"
+            } else {
+                "TimestampNTZType"
+            };
+            let converter = py
+                .import("pyspark.sql.types")
+                .and_then(|types| types.getattr(type_name)?.call0()?.getattr("toInternal"))
+                .map_err(py_err)?;
+            let values = rows
+                .iter()
+                .map(|row| {
+                    let item = row.get_item(col_idx)?;
+                    if item.is_none() {
+                        Ok(None)
+                    } else if let Ok(value) = item.extract::<i64>() {
+                        // Preserve support for integer microseconds alongside Python datetimes.
+                        Ok(Some(value))
+                    } else {
+                        converter.call1((item,))?.extract::<Option<i64>>()
+                    }
+                })
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(py_err)?;
+            Ok(Arc::new(
+                TimestampMicrosecondArray::from(values).with_timezone_opt(timezone.clone()),
+            ))
         }
         DataType::Binary => build_binary_array!(rows, col_idx, arrow::array::BinaryArray),
         DataType::LargeBinary => build_binary_array!(rows, col_idx, LargeBinaryArray),
@@ -604,6 +643,25 @@ mod tests {
 
     fn init_python() {
         Python::initialize();
+    }
+
+    #[test]
+    fn test_zero_column_rows_preserve_count() -> Result<()> {
+        // Protocol 4 pickle of an empty tuple from a zero-column data source.
+        // This path must not require Python initialization or PySpark.
+        let rows = vec![vec![0x80, 0x04, b')', b'.']; 3];
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &rows)?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_zero_column_empty_rows() -> Result<()> {
+        let batch = convert_rows_to_batch(&Arc::new(Schema::empty()), &[])?;
+        assert_eq!(batch.num_columns(), 0);
+        assert_eq!(batch.num_rows(), 0);
+        Ok(())
     }
 
     #[test]

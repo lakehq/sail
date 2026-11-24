@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::{DataFusionError, Result};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::lakehouse::{
@@ -113,7 +115,7 @@ fn map_commit_outcome(outcome: CatalogResult<LakehouseCommitOutcome>) -> Result<
             DataFusionError::Execution(format!("Delta catalog commit conflict: {message}")),
         ),
         Ok(LakehouseCommitOutcome::StateUnknown { message }) => Err(DataFusionError::External(
-            Box::new(CatalogError::CommitStateUnknown(message)),
+            Box::new(CatalogError::CommitStateUnknown(message.into())),
         )),
         Ok(LakehouseCommitOutcome::Rejected { message }) => Err(DataFusionError::External(
             Box::new(CatalogError::CommitRejected(message)),

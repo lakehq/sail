@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use figment::providers::Env;
@@ -183,6 +186,16 @@ mod memory_pool {
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
+    pub compression: TemporaryFileCompression,
+}
+
+/// Compression for temporary Arrow IPC spill files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporaryFileCompression {
+    Uncompressed,
+    Lz4Frame,
+    Zstd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +226,9 @@ pub struct ClusterConfig {
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
@@ -307,9 +323,26 @@ mod retry_strategy {
     from = "shuffle_backend::ShuffleBackend"
 )]
 pub enum ShuffleBackend {
-    Flight,
+    Flight(FlightShuffleBackend),
     Storage(StorageShuffleBackend),
     Celeborn(CelebornShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightShuffleBackend {
+    pub compression: ShuffleCompression,
+    pub connection_count: NonZeroUsize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_stream_window_size: Option<u32>,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_connection_window_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,8 +398,7 @@ impl FromStr for CelebornCompressionCodec {
             "none" => Ok(Self::None),
             "lz4" => Ok(Self::Lz4),
             value => value
-                .strip_prefix("zstd(")
-                .and_then(|value| value.strip_suffix(')'))
+                .strip_circumfix("zstd(", ')')
                 .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
                 .parse::<i8>()
                 .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
@@ -441,6 +473,7 @@ mod shuffle_backend {
     #[serde(deny_unknown_fields)]
     pub struct ShuffleBackend {
         pub r#type: Type,
+        pub flight: super::FlightShuffleBackend,
         pub storage: super::StorageShuffleBackend,
         pub celeborn: super::CelebornShuffleBackend,
     }
@@ -448,7 +481,7 @@ mod shuffle_backend {
     impl From<ShuffleBackend> for super::ShuffleBackend {
         fn from(value: ShuffleBackend) -> Self {
             match value.r#type {
-                Type::Flight => super::ShuffleBackend::Flight,
+                Type::Flight => super::ShuffleBackend::Flight(value.flight),
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
                 Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
             }
@@ -458,8 +491,9 @@ mod shuffle_backend {
     impl From<super::ShuffleBackend> for ShuffleBackend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
-                super::ShuffleBackend::Flight => ShuffleBackend {
+                super::ShuffleBackend::Flight(flight) => ShuffleBackend {
                     r#type: Type::Flight,
+                    flight,
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -476,6 +510,12 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
                     storage,
                     celeborn: super::CelebornShuffleBackend {
                         master_endpoints: vec![],
@@ -488,6 +528,12 @@ mod shuffle_backend {
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
                     r#type: Type::Celeborn,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
                     storage: super::StorageShuffleBackend {
                         path: None,
                         max_file_size: 0,
@@ -552,9 +598,11 @@ pub struct ParquetConfig {
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
+    pub force_filter_selections: bool,
     pub schema_force_view_types: bool,
     pub binary_as_string: bool,
     pub max_predicate_cache_size: usize,
+    pub max_in_list_size: usize,
     pub data_page_size_limit: usize,
     pub write_batch_size: usize,
     pub writer_version: String,
@@ -564,6 +612,11 @@ pub struct ParquetConfig {
     pub dictionary_page_size_limit: usize,
     pub statistics_enabled: String,
     pub max_row_group_size: usize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub max_row_group_bytes: Option<usize>,
     #[serde(
         serialize_with = "serialize_non_zero",
         deserialize_with = "deserialize_non_zero"
@@ -583,7 +636,11 @@ pub struct ParquetConfig {
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
     pub bloom_filter_fpp: f64,
-    pub bloom_filter_ndv: u64,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub bloom_filter_ndv: Option<u64>,
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
@@ -797,6 +854,8 @@ pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
+    pub enable_window_topn: bool,
+    pub share_cte_definitions: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -841,6 +900,10 @@ pub enum CatalogType {
         prefix: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         namespace_separator: Option<String>,
+        /// The value of the `X-Iceberg-Access-Delegation` header sent when loading a table.
+        /// The header is not sent if this is not set, is empty, or is `none`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access_delegation: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -860,7 +923,30 @@ pub enum CatalogType {
         #[serde(skip_serializing_if = "Option::is_none")]
         bearer_access_token_file: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        oauth_client_credentials: Option<OAuth2CatalogConfig>,
+        oauth_client_credentials: Option<Box<OAuth2CatalogConfig>>,
+        /// User name for HTTP Basic authentication, which some REST catalog
+        /// servers accept instead of a token. Must be set together with
+        /// `password` and cannot be combined with the token options.
+        /// The user name is not a secret, so it is kept as a plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        /// Password for HTTP Basic authentication. Must be set together with
+        /// `username`.
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
+        password: Option<SecretString>,
+        /// Signs every request with AWS Signature Version 4, for example for the
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_name: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -988,6 +1074,13 @@ pub enum OtlpProtocol {
     HttpJson,
 }
 
+/// Environment variables for application execution configuration.
+pub struct ExecutionConfigEnv;
+
+impl ExecutionConfigEnv {
+    pub const BATCH_SIZE: &'static str = "SAIL_EXECUTION__BATCH_SIZE";
+}
+
 /// Environment variables for application cluster configuration.
 pub struct ClusterConfigEnv;
 
@@ -1009,9 +1102,16 @@ impl ClusterConfigEnv {
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
         TASK_STREAM_BUFFER,
+        TASK_STREAM_MEMORY_LIMIT,
+        SHUFFLE_WRITE_BUFFER_SIZE,
+        TASK_STREAM_STALL_TIMEOUT_SECS,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
+        SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE,
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,

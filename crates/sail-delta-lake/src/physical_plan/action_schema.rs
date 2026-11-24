@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
@@ -6,8 +8,8 @@ use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Action, Add, DeltaOperation, Metadata, Protocol, Remove, add_struct_type, metadata_struct_type,
-    protocol_struct_type, remove_struct_type,
+    Action, Add, AddCDCFile, DeltaOperation, Metadata, Protocol, Remove, add_struct_type,
+    metadata_struct_type, protocol_struct_type, remove_struct_type,
 };
 use crate::transaction::OperationMetrics;
 
@@ -23,6 +25,14 @@ pub struct ExecCommitMeta {
     pub row_count: u64,
     pub operation: Option<DeltaOperation>,
     pub operation_metrics: OperationMetrics,
+    pub identity_high_water_marks: Option<IdentityHighWaterMarks>,
+}
+
+/// Successful completion of one data-writer partition. None candidates prove empty/all-null.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityHighWaterMarks {
+    pub partition: usize,
+    pub candidates: std::collections::HashMap<String, Option<i64>>,
 }
 
 fn action_field(name: &str, data_type: ArrowDataType, nullable: bool) -> Arc<Field> {
@@ -34,6 +44,21 @@ fn action_struct_field(name: &str, schema: crate::spec::StructType, nullable: bo
     let data_type = ArrowDataType::try_from(&crate::spec::DataType::from(schema))
         .expect("action payload schema should convert to Arrow");
     action_field(name, data_type, nullable)
+}
+
+fn cdc_struct_type() -> crate::spec::StructType {
+    let fields = add_struct_type()
+        .fields()
+        .filter(|field| {
+            matches!(
+                field.name().as_str(),
+                "path" | "partitionValues" | "size" | "dataChange" | "tags"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    #[expect(clippy::expect_used)]
+    crate::spec::StructType::try_new(fields).expect("CDC action fields are unique")
 }
 
 fn action_union_type() -> ArrowDataType {
@@ -56,6 +81,7 @@ fn action_union_type() -> ArrowDataType {
                 4,
                 action_field("commit_meta", ExecCommitMetaTransport::data_type(), false),
             ),
+            (5, action_struct_field("cdc", cdc_struct_type(), false)),
         ]
         .into_iter()
         .collect(),
@@ -68,6 +94,7 @@ struct ExecCommitMetaTransport {
     commit_row_count: u64,
     operation_json: Option<String>,
     operation_metrics_json: Option<String>,
+    identity_high_water_marks_json: Option<String>,
 }
 
 impl ExecCommitMetaTransport {
@@ -77,6 +104,7 @@ impl ExecCommitMetaTransport {
                 action_field("commit_row_count", ArrowDataType::UInt64, false),
                 action_field("operation_json", ArrowDataType::Utf8, true),
                 action_field("operation_metrics_json", ArrowDataType::Utf8, true),
+                action_field("identity_high_water_marks_json", ArrowDataType::Utf8, true),
             ]
             .into(),
         )
@@ -102,6 +130,12 @@ impl ExecCommitMetaTransport {
             commit_row_count: meta.row_count,
             operation_json,
             operation_metrics_json,
+            identity_high_water_marks_json: meta
+                .identity_high_water_marks
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         })
     }
 
@@ -124,6 +158,12 @@ impl ExecCommitMetaTransport {
             row_count: self.commit_row_count,
             operation,
             operation_metrics,
+            identity_high_water_marks: self
+                .identity_high_water_marks_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         })
     }
 }
@@ -140,6 +180,8 @@ enum PhysicalExecAction {
     Metadata(Metadata),
     #[serde(rename = "commit_meta")]
     CommitMeta(ExecCommitMetaTransport),
+    #[serde(rename = "cdc")]
+    Cdc(AddCDCFile),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +222,7 @@ impl TryFrom<Action> for PhysicalExecAction {
         match action {
             Action::Add(add) => Ok(Self::Add(add)),
             Action::Remove(remove) => Ok(Self::Remove(remove)),
+            Action::Cdc(cdc) => Ok(Self::Cdc(cdc)),
             Action::Protocol(protocol) => Ok(Self::Protocol(protocol)),
             Action::Metadata(metadata) => Ok(Self::Metadata(metadata)),
             unsupported => Err(DataFusionError::Plan(format!(
@@ -220,9 +263,9 @@ pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
 
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
-) -> Result<(Vec<Action>, Option<ExecCommitMeta>)> {
+) -> Result<(Vec<Action>, Vec<ExecCommitMeta>)> {
     let mut out_actions: Vec<Action> = Vec::new();
-    let mut out_meta: Option<ExecCommitMeta> = None;
+    let mut out_meta = Vec::new();
 
     let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -231,10 +274,11 @@ pub fn decode_actions_and_meta_from_batch(
         match row.action {
             PhysicalExecAction::Add(add) => out_actions.push(Action::Add(add)),
             PhysicalExecAction::Remove(remove) => out_actions.push(Action::Remove(remove)),
+            PhysicalExecAction::Cdc(cdc) => out_actions.push(Action::Cdc(cdc)),
             PhysicalExecAction::Protocol(protocol) => out_actions.push(Action::Protocol(protocol)),
             PhysicalExecAction::Metadata(metadata) => out_actions.push(Action::Metadata(metadata)),
             PhysicalExecAction::CommitMeta(cm) => {
-                out_meta = Some(cm.into_exec_meta()?);
+                out_meta.push(cm.into_exec_meta()?);
             }
         }
     }
@@ -251,6 +295,63 @@ mod tests {
     use super::*;
     use crate::spec::{DeletionVectorDescriptor, StorageType, StructType};
     use crate::transaction::OperationMetrics;
+
+    #[test]
+    fn coalesced_batches_preserve_every_writer_commit_meta() -> Result<()> {
+        let metadata = [
+            ExecCommitMeta {
+                identity_high_water_marks: Some(IdentityHighWaterMarks {
+                    partition: 0,
+                    candidates: HashMap::from([
+                        ("positive".into(), Some(i64::MAX)),
+                        ("empty".into(), None),
+                    ]),
+                }),
+                row_count: 10,
+                operation: Some(DeltaOperation::Delete { predicate: None }),
+                operation_metrics: OperationMetrics {
+                    num_removed_files: Some(1),
+                    ..Default::default()
+                },
+            },
+            ExecCommitMeta {
+                identity_high_water_marks: Some(IdentityHighWaterMarks {
+                    partition: 1,
+                    candidates: HashMap::from([
+                        ("positive".into(), None),
+                        ("negative".into(), Some(i64::MIN)),
+                    ]),
+                }),
+                row_count: 20,
+                operation: Some(DeltaOperation::Delete { predicate: None }),
+                operation_metrics: OperationMetrics {
+                    num_removed_files: Some(2),
+                    ..Default::default()
+                },
+            },
+        ];
+        let batches = metadata
+            .iter()
+            .cloned()
+            .map(|meta| encode_actions(vec![], Some(meta)))
+            .collect::<Result<Vec<_>>>()?;
+        let batch = datafusion::arrow::compute::concat_batches(&delta_action_schema()?, &batches)?;
+        let (_, decoded) = decode_actions_and_meta_from_batch(&batch)?;
+        assert_eq!(decoded.len(), metadata.len());
+        for (actual, expected) in decoded.iter().zip(metadata) {
+            assert_eq!(actual.row_count, expected.row_count);
+            assert_eq!(
+                actual.identity_high_water_marks,
+                expected.identity_high_water_marks
+            );
+            assert!(matches!(
+                actual.operation,
+                Some(DeltaOperation::Delete { predicate: None })
+            ));
+            assert_eq!(actual.operation_metrics, expected.operation_metrics);
+        }
+        Ok(())
+    }
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {
@@ -311,6 +412,7 @@ mod tests {
             row_count: 10,
             operation: None,
             operation_metrics: OperationMetrics::default(),
+            identity_high_water_marks: None,
         };
         let batch = encode_actions(
             adds.into_iter()
@@ -324,7 +426,8 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::Add(_)));
         assert!(matches!(actions[1], Action::Remove(_)));
-        let decoded_meta = decoded_meta.ok_or_else(|| {
+        assert_eq!(decoded_meta.len(), 1);
+        let decoded_meta = decoded_meta.first().ok_or_else(|| {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
         assert_eq!(decoded_meta.row_count, 10);
@@ -334,6 +437,7 @@ mod tests {
     #[test]
     fn exec_commit_meta_transport_uses_compact_operation_metrics_json() -> Result<()> {
         let meta = ExecCommitMeta {
+            identity_high_water_marks: None,
             row_count: 10,
             operation: None,
             operation_metrics: OperationMetrics {
@@ -391,7 +495,7 @@ mod tests {
         )?;
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
 
-        assert!(decoded_meta.is_none());
+        assert!(decoded_meta.is_empty());
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], Action::Protocol(value) if value == &protocol));
         assert!(matches!(&actions[1], Action::Metadata(value) if value == &metadata));
@@ -441,7 +545,7 @@ mod tests {
         )?;
         let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
 
-        assert!(decoded_meta.is_none());
+        assert!(decoded_meta.is_empty());
         assert_eq!(actions, vec![Action::Add(add), Action::Remove(remove)]);
         Ok(())
     }

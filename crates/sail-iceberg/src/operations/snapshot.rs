@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -20,14 +10,33 @@ use serde::{Deserialize, Serialize};
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
+use crate::operation_metrics::IcebergOperation;
 use crate::spec::manifest::{ManifestEntry, ManifestWriter, ManifestWriterBuilder};
-use crate::spec::manifest_list::ManifestListWriter;
+use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
+use crate::spec::snapshots::summary as summary_properties;
 use crate::spec::{
     DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile, ManifestStatus,
     Operation, PartitionSpec, Schema, SnapshotBuilder, SnapshotReference, SnapshotRetention,
     TableRequirement, TableUpdate,
 };
 use crate::utils::join_table_uri;
+
+/// Allocate lineage for live data in manifests carried forward from before a v3 upgrade.
+pub(crate) fn assign_parent_row_ids(
+    manifests: &mut [ManifestFile],
+    mut next: i64,
+) -> Result<i64, String> {
+    for manifest in manifests {
+        if manifest.content == ManifestContentType::Data && manifest.first_row_id.is_none() {
+            manifest.first_row_id = Some(next);
+            next = next
+                .checked_add(manifest.added_rows_count.unwrap_or(0))
+                .and_then(|n| n.checked_add(manifest.existing_rows_count.unwrap_or(0)))
+                .ok_or_else(|| "Iceberg row ID overflow".to_string())?;
+        }
+    }
+    Ok(next)
+}
 
 fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Option<i64> {
     Some(i64::from(manifest.added_files_count?) + i64::from(manifest.existing_files_count?))
@@ -83,28 +92,35 @@ fn with_manifest_totals<'a>(
     }
 
     if let Some(total_data_files) = total_data_files {
-        summary = summary.with_property("total-data-files", total_data_files.to_string());
+        summary = summary.with_property(
+            summary_properties::TOTAL_DATA_FILES,
+            total_data_files.to_string(),
+        );
     }
     if let Some(total_delete_files) = total_delete_files {
-        summary = summary.with_property("total-delete-files", total_delete_files.to_string());
+        summary = summary.with_property(
+            summary_properties::TOTAL_DELETE_FILES,
+            total_delete_files.to_string(),
+        );
     }
     if let Some(total_records) = total_records {
-        summary = summary.with_property("total-records", total_records.to_string());
+        summary =
+            summary.with_property(summary_properties::TOTAL_RECORDS, total_records.to_string());
     }
 
     if let Some(previous_position_deletes) =
-        delete_totals_base.previous_total("total-position-deletes")
+        delete_totals_base.previous_total(summary_properties::TOTAL_POSITION_DELETES)
     {
         summary = summary.with_property(
-            "total-position-deletes",
+            summary_properties::TOTAL_POSITION_DELETES,
             (previous_position_deletes + added_position_deletes).to_string(),
         );
     }
     if let Some(previous_equality_deletes) =
-        delete_totals_base.previous_total("total-equality-deletes")
+        delete_totals_base.previous_total(summary_properties::TOTAL_EQUALITY_DELETES)
     {
         summary = summary.with_property(
-            "total-equality-deletes",
+            summary_properties::TOTAL_EQUALITY_DELETES,
             (previous_equality_deletes + added_equality_deletes).to_string(),
         );
     }
@@ -190,15 +206,23 @@ fn validate_delete_files_for_format(
     if format_version == FormatVersion::V1 && !delete_files.is_empty() {
         return Err("Iceberg v1 snapshots cannot add delete files".to_string());
     }
-    if format_version == FormatVersion::V3
-        && delete_files
-            .iter()
-            .any(|file| file.content == crate::spec::DataContentType::PositionDeletes)
-    {
-        return Err(
-            "Iceberg v3 snapshots cannot add position delete files; v3 requires deletion vectors"
-                .to_string(),
-        );
+    let mut referenced_paths = HashSet::new();
+    for file in delete_files {
+        if file.is_deletion_vector() {
+            if format_version != FormatVersion::V3 {
+                return Err("Iceberg deletion vectors require format-version 3".to_string());
+            }
+            file.validate_deletion_vector()?;
+            if !referenced_paths.insert(file.referenced_data_file.as_deref()) {
+                return Err(
+                    "Multiple Iceberg deletion vectors reference the same data file".to_string(),
+                );
+            }
+        } else if format_version == FormatVersion::V3
+            && file.content == crate::spec::DataContentType::PositionDeletes
+        {
+            return Err("Iceberg v3 snapshots cannot add position delete files; v3 requires deletion vectors".to_string());
+        }
     }
     Ok(())
 }
@@ -216,7 +240,7 @@ async fn populate_retained_manifest_counts(
     store_ctx: &StoreContext,
     manifest_file: &mut crate::spec::manifest_list::ManifestFile,
 ) -> Result<(), String> {
-    if manifest_counts_are_complete(manifest_file) {
+    if manifest_counts_are_complete(manifest_file) && manifest_file.partitions.is_some() {
         return Ok(());
     }
 
@@ -224,10 +248,16 @@ async fn populate_retained_manifest_counts(
         .await
         .map_err(|error| {
             format!(
-                "failed to load retained manifest {} to recover missing counts: {error}",
+                "failed to load retained manifest {} to recover missing counts or summaries: {error}",
                 manifest_file.manifest_path
             )
         })?;
+    if manifest_file.partitions.is_none() {
+        manifest_file.partitions = Some(crate::spec::manifest::partition_summaries(
+            manifest.metadata(),
+            manifest.entries(),
+        )?);
+    }
     let mut file_counts = [0i32; 3];
     let mut row_counts = [0i64; 3];
     for entry in manifest.entries() {
@@ -267,36 +297,54 @@ async fn populate_retained_manifest_counts(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotUpdateKind {
+    Truncate,
     FastAppend,
     FullOverwrite,
     RowDelta,
     CopyOnWrite,
+    RewriteDataFiles,
+    /// Row-level COW actions classified from files added and removed at runtime.
+    RowLevelRewrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SnapshotChanges {
     added_data_files: usize,
     added_delete_files: usize,
+    removed_data_files: usize,
     dynamic_partition_overwrite: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct RewriteStats {
+    removed_bytes: u64,
     parent_live_files: i64,
     parent_live_rows: i64,
     deleted_files: i64,
     deleted_rows: i64,
 }
 
+#[derive(Debug, Default)]
+struct RemovedPositionDeletes {
+    removed_bytes: u64,
+    equality_delete_files: u64,
+    equality_deletes: u64,
+    position_delete_files: u64,
+    deletion_vectors: u64,
+    positions: u64,
+}
+
 impl SnapshotChanges {
     fn new(
         added_data_files: &[DataFile],
         added_delete_files: &[DataFile],
+        removed_data_files: usize,
         dynamic_partition_overwrite: bool,
     ) -> Self {
         Self {
             added_data_files: added_data_files.len(),
             added_delete_files: added_delete_files.len(),
+            removed_data_files,
             dynamic_partition_overwrite,
         }
     }
@@ -311,8 +359,13 @@ impl SnapshotChanges {
 }
 
 impl SnapshotUpdateKind {
-    fn summary_operation(self, changes: SnapshotChanges) -> Operation {
+    fn summary_operation(
+        self,
+        changes: SnapshotChanges,
+        operation: Option<IcebergOperation>,
+    ) -> Operation {
         match self {
+            Self::Truncate => Operation::Delete,
             Self::FastAppend => Operation::Append,
             Self::FullOverwrite => Operation::Overwrite,
             Self::RowDelta if changes.adds_data_files() && !changes.adds_delete_files() => {
@@ -323,8 +376,30 @@ impl SnapshotUpdateKind {
             }
             Self::RowDelta => Operation::Overwrite,
             Self::CopyOnWrite if changes.dynamic_partition_overwrite => Operation::Overwrite,
-            Self::CopyOnWrite if changes.adds_data_files() => Operation::Overwrite,
-            Self::CopyOnWrite => Operation::Delete,
+            Self::RowLevelRewrite
+                if changes.adds_data_files() && changes.removed_data_files == 0 =>
+            {
+                Operation::Append
+            }
+            Self::CopyOnWrite | Self::RowLevelRewrite if changes.adds_data_files() => {
+                Operation::Overwrite
+            }
+            Self::RowLevelRewrite
+                if !changes.adds_delete_files()
+                    && changes.removed_data_files == 0
+                    && matches!(
+                        operation,
+                        Some(
+                            IcebergOperation::Update
+                                | IcebergOperation::Delete
+                                | IcebergOperation::Merge
+                        )
+                    ) =>
+            {
+                Operation::Overwrite
+            }
+            Self::CopyOnWrite | Self::RowLevelRewrite => Operation::Delete,
+            Self::RewriteDataFiles => Operation::Replace,
         }
     }
 
@@ -332,8 +407,11 @@ impl SnapshotUpdateKind {
         !matches!(self, Self::FullOverwrite)
     }
 
-    fn is_targeted_rewrite(self) -> bool {
-        matches!(self, Self::CopyOnWrite)
+    pub(crate) fn is_targeted_rewrite(self) -> bool {
+        matches!(
+            self,
+            Self::Truncate | Self::CopyOnWrite | Self::RowLevelRewrite | Self::RewriteDataFiles
+        )
     }
 
     fn delete_totals_base<'a>(
@@ -361,7 +439,10 @@ pub struct SnapshotProducer<'a> {
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
+    added_data_sequence_number: Option<i64>,
     pub dynamic_partition_overwrite: bool,
+    pub snapshot_properties: BTreeMap<String, String>,
+    action_summary_properties: crate::operation_metrics::ActionSummaryProperties,
 }
 
 pub(crate) struct PreparedSnapshotCommit {
@@ -369,14 +450,14 @@ pub(crate) struct PreparedSnapshotCommit {
     cleanup: CreatedPathCleanup,
 }
 
-struct CreatedPathCleanup {
+pub(crate) struct CreatedPathCleanup {
     store_ctx: StoreContext,
     created_paths: Vec<ObjectPath>,
     cleanup_on_drop: bool,
 }
 
 impl CreatedPathCleanup {
-    fn new(store_ctx: StoreContext) -> Self {
+    pub(crate) fn new(store_ctx: StoreContext) -> Self {
         Self {
             store_ctx,
             created_paths: Vec::new(),
@@ -384,22 +465,26 @@ impl CreatedPathCleanup {
         }
     }
 
-    async fn cleanup(&mut self) {
+    pub(crate) fn register(&mut self, path: ObjectPath) {
+        self.created_paths.push(path);
+    }
+
+    pub(crate) async fn cleanup(&mut self) {
         let paths = std::mem::take(&mut self.created_paths);
         self.cleanup_on_drop = false;
         cleanup_created_paths(&self.store_ctx, &paths).await;
     }
 
-    fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         self.cleanup_on_drop = false;
         self.created_paths.clear();
     }
 
-    fn publication_started(&mut self) {
+    pub(crate) fn publication_started(&mut self) {
         self.cleanup_on_drop = false;
     }
 
-    fn publication_did_not_happen(&mut self) {
+    pub(crate) fn publication_did_not_happen(&mut self) {
         self.cleanup_on_drop = true;
     }
 }
@@ -485,8 +570,24 @@ impl<'a> SnapshotProducer<'a> {
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
             row_lineage_start_row_id: None,
+            added_data_sequence_number: None,
             dynamic_partition_overwrite: false,
+            snapshot_properties: BTreeMap::new(),
+            action_summary_properties: Default::default(),
         }
+    }
+
+    pub fn with_snapshot_properties(mut self, properties: BTreeMap<String, String>) -> Self {
+        self.snapshot_properties = properties;
+        self
+    }
+
+    pub(crate) fn with_action_summary_properties(
+        mut self,
+        properties: crate::operation_metrics::ActionSummaryProperties,
+    ) -> Self {
+        self.action_summary_properties = properties;
+        self
     }
 
     pub fn with_write_path_mode(mut self, mode: crate::utils::WritePathMode) -> Self {
@@ -503,6 +604,11 @@ impl<'a> SnapshotProducer<'a> {
 
     pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
         self.row_lineage_start_row_id = start_row_id;
+        self
+    }
+
+    pub fn with_added_data_sequence_number(mut self, sequence_number: Option<i64>) -> Self {
+        self.added_data_sequence_number = sequence_number;
         self
     }
 
@@ -592,6 +698,107 @@ impl<'a> SnapshotProducer<'a> {
         Ok(entry)
     }
 
+    async fn rewrite_parent_delete_manifests(
+        &self,
+        store_ctx: &StoreContext,
+        parent_manifests: Vec<ManifestFile>,
+        removed_data_file_paths: &HashSet<String>,
+        remove_all: bool,
+        sequence_number: i64,
+        snapshot_id: i64,
+        created_paths: &mut Vec<ObjectPath>,
+    ) -> Result<(Vec<ManifestFile>, RemovedPositionDeletes), String> {
+        let replaced = self
+            .added_delete_files
+            .iter()
+            .filter(|file| file.is_deletion_vector())
+            .filter_map(|file| file.referenced_data_file.as_ref())
+            .collect::<HashSet<_>>();
+        let mut output = Vec::new();
+        let mut removed = RemovedPositionDeletes::default();
+        for parent in parent_manifests {
+            if parent.content != ManifestContentType::Deletes
+                || (!remove_all && replaced.is_empty() && removed_data_file_paths.is_empty())
+            {
+                output.push(parent);
+                continue;
+            }
+            let manifest = crate::io::load_manifest(store_ctx, &parent.manifest_path)
+                .await
+                .map_err(|error| error.to_string())?;
+            let removes = |file: &DataFile| {
+                remove_all
+                    || (file.content == crate::spec::DataContentType::PositionDeletes
+                        && file.referenced_data_file.as_ref().is_some_and(|path| {
+                            replaced.contains(path) || removed_data_file_paths.contains(path)
+                        }))
+            };
+            if !manifest
+                .entries()
+                .iter()
+                .any(|entry| entry.status != ManifestStatus::Deleted && removes(&entry.data_file))
+            {
+                output.push(parent);
+                continue;
+            }
+            let (entries, mut metadata) = manifest.into_parts();
+            if let Some(current) = &self.manifest_metadata {
+                metadata.format_version = current.format_version;
+            }
+            let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
+            for entry in entries
+                .iter()
+                .filter(|entry| entry.status != ManifestStatus::Deleted)
+            {
+                let mut entry =
+                    Self::materialize_inherited_entry(entry.as_ref().clone(), &parent, &mut None)?;
+                entry.data_file.partition_spec_id = parent.partition_spec_id;
+                if removes(&entry.data_file) {
+                    let bytes = match entry.data_file.content_size_in_bytes {
+                        Some(size) => u64::try_from(size)
+                            .map_err(|_| "Invalid Iceberg delete content size")?,
+                        None => entry.data_file.file_size_in_bytes,
+                    };
+                    removed.removed_bytes = removed
+                        .removed_bytes
+                        .checked_add(bytes)
+                        .ok_or("Iceberg removed delete file size overflow")?;
+                    let rows = if entry.data_file.content
+                        == crate::spec::DataContentType::EqualityDeletes
+                    {
+                        removed.equality_delete_files += 1;
+                        &mut removed.equality_deletes
+                    } else {
+                        if entry.data_file.is_deletion_vector() {
+                            removed.deletion_vectors += 1;
+                        } else {
+                            removed.position_delete_files += 1;
+                        }
+                        &mut removed.positions
+                    };
+                    *rows = rows
+                        .checked_add(entry.data_file.record_count)
+                        .ok_or_else(|| "Iceberg removed delete count overflow".to_string())?;
+                    writer.add_deleted_entry(entry)?;
+                } else {
+                    writer.add_existing_entry(entry)?;
+                }
+            }
+            output.push(
+                self.write_manifest(
+                    store_ctx,
+                    writer,
+                    sequence_number,
+                    snapshot_id,
+                    None,
+                    created_paths,
+                )
+                .await?,
+            );
+        }
+        Ok((output, removed))
+    }
+
     async fn rewrite_parent_manifests(
         &self,
         store_ctx: &StoreContext,
@@ -675,12 +882,17 @@ impl<'a> SnapshotProducer<'a> {
                     )
                 })?;
             if let Some(current) = &self.manifest_metadata {
-                metadata.schema = current.schema.clone();
-                metadata.schema_id = current.schema_id;
+                // Dropped partition source columns still need their historical types.
+                if partition_spec
+                    .fields()
+                    .iter()
+                    .all(|field| current.schema.field_by_id(field.source_id).is_some())
+                {
+                    metadata.schema = current.schema.clone();
+                }
                 metadata.format_version = current.format_version;
-            } else {
-                metadata.schema_id = metadata.schema.schema_id();
             }
+            metadata.schema_id = metadata.schema.schema_id();
             metadata.partition_spec = partition_spec;
             let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
             let mut inherited_next_row_id = parent_manifest_file.first_row_id;
@@ -698,6 +910,10 @@ impl<'a> SnapshotProducer<'a> {
                 )?;
                 entry.data_file.partition_spec_id = parent_manifest_file.partition_spec_id;
                 if removed_data_file_paths.contains(&entry.data_file.file_path) {
+                    stats.removed_bytes = stats
+                        .removed_bytes
+                        .checked_add(entry.data_file.file_size_in_bytes)
+                        .ok_or("Iceberg removed data file size overflow")?;
                     stats.deleted_files = stats
                         .deleted_files
                         .checked_add(1)
@@ -769,6 +985,7 @@ impl<'a> SnapshotProducer<'a> {
         self,
         update_kind: SnapshotUpdateKind,
     ) -> Result<PreparedSnapshotCommit, String> {
+        summary_properties::validate_snapshot_properties(&self.snapshot_properties)?;
         let store_ctx = self
             .store_ctx
             .clone()
@@ -817,9 +1034,11 @@ impl<'a> SnapshotProducer<'a> {
         let changes = SnapshotChanges::new(
             &self.added_data_files,
             &self.added_delete_files,
+            removed_data_file_paths.len(),
             self.dynamic_partition_overwrite,
         );
-        let operation = update_kind.summary_operation(changes);
+        let operation =
+            update_kind.summary_operation(changes, self.action_summary_properties.operation());
         let added_data_file_count = self.added_data_files.len();
         let added_records = self
             .added_data_files
@@ -827,13 +1046,18 @@ impl<'a> SnapshotProducer<'a> {
             .map(|df| df.record_count)
             .sum::<u64>();
         let mut added_position_delete_files = 0usize;
+        let mut added_deletion_vectors = 0usize;
         let mut added_position_deletes = 0u64;
         let mut added_equality_delete_files = 0usize;
         let mut added_equality_deletes = 0u64;
         for df in &self.added_delete_files {
             match df.content {
                 crate::spec::DataContentType::PositionDeletes => {
-                    added_position_delete_files += 1;
+                    if df.is_deletion_vector() {
+                        added_deletion_vectors += 1;
+                    } else {
+                        added_position_delete_files += 1;
+                    }
                     added_position_deletes += df.record_count;
                 }
                 crate::spec::DataContentType::EqualityDeletes => {
@@ -844,34 +1068,53 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
         let mut summary = crate::spec::snapshots::Summary::new(operation.clone());
+        summary
+            .additional_properties
+            .extend(self.snapshot_properties.clone());
         if self.dynamic_partition_overwrite {
-            summary = summary.with_property("replace-partitions", "true");
+            summary = summary.with_property(summary_properties::REPLACE_PARTITIONS, "true");
         }
         if added_data_file_count > 0 {
             summary = summary
-                .with_property("added-data-files", added_data_file_count.to_string())
-                .with_property("added-records", added_records.to_string());
+                .with_property(
+                    summary_properties::ADDED_DATA_FILES,
+                    added_data_file_count.to_string(),
+                )
+                .with_property(summary_properties::ADDED_RECORDS, added_records.to_string());
         }
         if !self.added_delete_files.is_empty() {
             summary = summary.with_property(
-                "added-delete-files",
+                summary_properties::ADDED_DELETE_FILES,
                 self.added_delete_files.len().to_string(),
             );
             if added_position_delete_files > 0 {
-                summary = summary
-                    .with_property(
-                        "added-position-delete-files",
-                        added_position_delete_files.to_string(),
-                    )
-                    .with_property("added-position-deletes", added_position_deletes.to_string());
+                summary = summary.with_property(
+                    summary_properties::ADDED_POSITION_DELETE_FILES,
+                    added_position_delete_files.to_string(),
+                );
+            }
+            if added_deletion_vectors > 0 {
+                summary = summary.with_property(
+                    summary_properties::ADDED_DVS,
+                    added_deletion_vectors.to_string(),
+                );
+            }
+            if added_position_deletes > 0 {
+                summary = summary.with_property(
+                    summary_properties::ADDED_POSITION_DELETES,
+                    added_position_deletes.to_string(),
+                );
             }
             if added_equality_delete_files > 0 {
                 summary = summary
                     .with_property(
-                        "added-equality-delete-files",
+                        summary_properties::ADDED_EQUALITY_DELETE_FILES,
                         added_equality_delete_files.to_string(),
                     )
-                    .with_property("added-equality-deletes", added_equality_deletes.to_string());
+                    .with_property(
+                        summary_properties::ADDED_EQUALITY_DELETES,
+                        added_equality_deletes.to_string(),
+                    );
             }
         }
 
@@ -947,6 +1190,56 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
+        let (rewritten_deletes, removed_position_deletes) = self
+            .rewrite_parent_delete_manifests(
+                store_ctx,
+                parent_manifest_entries,
+                &removed_data_file_paths,
+                update_kind == SnapshotUpdateKind::Truncate,
+                new_sequence_number,
+                new_snapshot_id,
+                created_paths,
+            )
+            .await?;
+        parent_manifest_entries = rewritten_deletes;
+        let removed_delete_files = removed_position_deletes.position_delete_files
+            + removed_position_deletes.deletion_vectors
+            + removed_position_deletes.equality_delete_files;
+        if removed_delete_files > 0 {
+            summary = summary
+                .with_property(
+                    summary_properties::REMOVED_DELETE_FILES,
+                    removed_delete_files.to_string(),
+                )
+                .with_property(
+                    summary_properties::REMOVED_POSITION_DELETES,
+                    removed_position_deletes.positions.to_string(),
+                );
+        }
+        if removed_position_deletes.equality_delete_files > 0 {
+            summary = summary
+                .with_property(
+                    summary_properties::REMOVED_EQUALITY_DELETE_FILES,
+                    removed_position_deletes.equality_delete_files.to_string(),
+                )
+                .with_property(
+                    summary_properties::REMOVED_EQUALITY_DELETES,
+                    removed_position_deletes.equality_deletes.to_string(),
+                );
+        }
+        if removed_position_deletes.position_delete_files > 0 {
+            summary = summary.with_property(
+                summary_properties::REMOVED_POSITION_DELETE_FILES,
+                removed_position_deletes.position_delete_files.to_string(),
+            );
+        }
+        if removed_position_deletes.deletion_vectors > 0 {
+            summary = summary.with_property(
+                summary_properties::REMOVED_DVS,
+                removed_position_deletes.deletion_vectors.to_string(),
+            );
+        }
+
         let rewrite_stats = if update_kind.is_targeted_rewrite() {
             let (rewritten_manifests, stats) = self
                 .rewrite_parent_manifests(
@@ -965,6 +1258,16 @@ impl<'a> SnapshotProducer<'a> {
         };
 
         if let Some(stats) = rewrite_stats {
+            let removed_bytes = stats
+                .removed_bytes
+                .checked_add(removed_position_deletes.removed_bytes)
+                .ok_or("Iceberg removed file size overflow")?;
+            if update_kind == SnapshotUpdateKind::RewriteDataFiles && removed_bytes > 0 {
+                summary = summary.with_property(
+                    summary_properties::REMOVED_FILES_SIZE,
+                    removed_bytes.to_string(),
+                );
+            }
             let added_files = i64::try_from(added_data_file_count)
                 .map_err(|_| "Iceberg added data file count exceeds i64".to_string())?;
             let added_rows = i64::try_from(added_records)
@@ -980,12 +1283,24 @@ impl<'a> SnapshotProducer<'a> {
                 .and_then(|count| count.checked_add(added_rows))
                 .ok_or_else(|| "Iceberg total record count overflow".to_string())?;
             summary = summary
-                .with_property("added-data-files", added_files.to_string())
-                .with_property("deleted-data-files", stats.deleted_files.to_string())
-                .with_property("added-records", added_rows.to_string())
-                .with_property("deleted-records", stats.deleted_rows.to_string())
-                .with_property("total-data-files", total_data_files.to_string())
-                .with_property("total-records", total_records.to_string());
+                .with_property(
+                    summary_properties::ADDED_DATA_FILES,
+                    added_files.to_string(),
+                )
+                .with_property(
+                    summary_properties::DELETED_DATA_FILES,
+                    stats.deleted_files.to_string(),
+                )
+                .with_property(summary_properties::ADDED_RECORDS, added_rows.to_string())
+                .with_property(
+                    summary_properties::DELETED_RECORDS,
+                    stats.deleted_rows.to_string(),
+                )
+                .with_property(
+                    summary_properties::TOTAL_DATA_FILES,
+                    total_data_files.to_string(),
+                )
+                .with_property(summary_properties::TOTAL_RECORDS, total_records.to_string());
         }
 
         let new_added_rows: i64 = self
@@ -995,23 +1310,12 @@ impl<'a> SnapshotProducer<'a> {
             .sum();
         let mut row_lineage_next_row_id = self.row_lineage_start_row_id;
         let mut snapshot_added_rows = 0;
-
-        if let Some(next_row_id) = &mut row_lineage_next_row_id {
-            for entry in &mut parent_manifest_entries {
-                if matches!(entry.content, ManifestContentType::Data)
-                    && entry.first_row_id.is_none()
-                {
-                    entry.first_row_id = Some(*next_row_id);
-                    let assigned_rows = entry.added_rows_count.unwrap_or(0)
-                        + entry.existing_rows_count.unwrap_or(0);
-                    *next_row_id += assigned_rows;
-                    snapshot_added_rows += assigned_rows;
-                }
-            }
-        }
-
-        if self.row_lineage_start_row_id.is_some() {
-            snapshot_added_rows += new_added_rows;
+        if let Some(next) = &mut row_lineage_next_row_id {
+            let start = *next;
+            *next = assign_parent_row_ids(&mut parent_manifest_entries, start)?;
+            snapshot_added_rows = (*next - start)
+                .checked_add(new_added_rows)
+                .ok_or_else(|| "Iceberg added rows overflow".to_string())?;
         }
 
         let mut new_manifest_files = Vec::new();
@@ -1027,7 +1331,13 @@ impl<'a> SnapshotProducer<'a> {
             let mut writer =
                 ManifestWriterBuilder::new(Some(new_snapshot_id), None, data_metadata).build();
             for df in &added_data_files {
-                writer.add(df.clone());
+                writer.add_entry(ManifestEntry::new(
+                    ManifestStatus::Added,
+                    Some(new_snapshot_id),
+                    self.added_data_sequence_number,
+                    None,
+                    df.clone(),
+                ));
             }
             new_manifest_files.push(
                 self.write_manifest(
@@ -1071,6 +1381,29 @@ impl<'a> SnapshotProducer<'a> {
             added_equality_deletes,
         );
 
+        if removed_position_deletes.positions > 0
+            && let Some(total) = summary
+                .additional_properties
+                .get(summary_properties::TOTAL_POSITION_DELETES)
+                .and_then(|value| value.parse::<u64>().ok())
+        {
+            let remaining = total
+                .checked_sub(removed_position_deletes.positions)
+                .ok_or_else(|| {
+                    "Iceberg removed position deletes exceed the snapshot total".to_string()
+                })?;
+            summary = summary.with_property(
+                summary_properties::TOTAL_POSITION_DELETES,
+                remaining.to_string(),
+            );
+        }
+
+        if update_kind == SnapshotUpdateKind::Truncate {
+            summary = summary
+                .with_property(summary_properties::TOTAL_POSITION_DELETES, "0")
+                .with_property(summary_properties::TOTAL_EQUALITY_DELETES, "0");
+        }
+
         let mut list_writer = ManifestListWriter::new();
         let mut total_manifest_count = 0;
 
@@ -1094,7 +1427,13 @@ impl<'a> SnapshotProducer<'a> {
             "snapshot producer: new manifest list will have files: {}",
             total_manifest_count
         );
-        let list_bytes = list_writer.to_bytes(format_version)?;
+        let list_bytes = list_writer.to_bytes_with_context(ManifestListWriteContext {
+            version: format_version,
+            snapshot_id: new_snapshot_id,
+            parent_snapshot_id: (!self.is_bootstrap).then_some(self.tx.snapshot().snapshot_id()),
+            sequence_number: new_sequence_number,
+            first_row_id: self.row_lineage_start_row_id,
+        })?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
         let list_path = object_store::path::Path::from(list_rel.as_str());
         store_ctx
@@ -1116,6 +1455,9 @@ impl<'a> SnapshotProducer<'a> {
             self.tx.snapshot().schema_id().unwrap_or_default()
         };
 
+        for (key, value) in self.action_summary_properties.iter() {
+            summary = summary.with_property(key, value);
+        }
         let mut snapshot_builder = SnapshotBuilder::new()
             .with_snapshot_id(new_snapshot_id)
             .with_sequence_number(new_sequence_number)
@@ -1194,6 +1536,246 @@ mod tests {
     use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{DataContentType, DataFileFormat, Transform};
+
+    #[test]
+    fn retained_summaries_are_recovered_from_original_manifest_metadata() {
+        futures::executor::block_on(async {
+            for partitioned in [false, true] {
+                let table_url =
+                    url::Url::parse("file:///tmp/iceberg-summary-recovery/").expect("URL");
+                let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+                let store_ctx = StoreContext::new(store, &table_url).expect("store");
+                let schema = Schema::builder()
+                    .with_fields([Arc::new(NestedField::optional(
+                        1,
+                        "historical",
+                        Type::Primitive(PrimitiveType::Long),
+                    ))])
+                    .build()
+                    .expect("historical schema");
+                let builder = PartitionSpec::builder().with_spec_id(9);
+                let partition_spec = if partitioned {
+                    builder
+                        .add_field(1, "historical", Transform::Identity)
+                        .build()
+                } else {
+                    builder.build()
+                };
+                let metadata = ManifestMetadata::new(
+                    Arc::new(schema),
+                    0,
+                    partition_spec,
+                    FormatVersion::V1,
+                    ManifestContentType::Data,
+                );
+                let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata).build();
+                for (index, value) in [Some(10), None, Some(20)].into_iter().enumerate() {
+                    let mut file = data_file(&format!("data-{index}.parquet"), 1);
+                    file.partition_spec_id = 9;
+                    if partitioned {
+                        file.partition = vec![
+                            value.map(|value| Literal::Primitive(PrimitiveLiteral::Long(value))),
+                        ];
+                    }
+                    writer.add(file);
+                }
+                let bytes = writer.to_avro_bytes_v2().expect("historical manifest");
+                let mut retained = writer
+                    .into_manifest_file("metadata/original.avro".into(), 0, 7)
+                    .expect("list entry");
+                retained.partitions = None;
+                assert!(manifest_counts_are_complete(&retained));
+                let path = Path::from("metadata/original.avro");
+                store_ctx
+                    .prefixed
+                    .put(&path, Bytes::from(bytes.clone()).into())
+                    .await
+                    .expect("write manifest");
+                populate_retained_manifest_counts(&store_ctx, &mut retained)
+                    .await
+                    .expect("recover summary despite complete counts");
+                let summaries = retained.partitions.as_ref().expect("recovered summaries");
+                if partitioned {
+                    assert_eq!(summaries.len(), 1);
+                    assert!(summaries[0].contains_null);
+                    assert_eq!(summaries[0].contains_nan, Some(false));
+                    assert_eq!(
+                        summaries[0].lower_bound_bytes.as_deref(),
+                        Some(10_i64.to_le_bytes().as_slice())
+                    );
+                    assert_eq!(
+                        summaries[0].upper_bound_bytes.as_deref(),
+                        Some(20_i64.to_le_bytes().as_slice())
+                    );
+                } else {
+                    assert!(summaries.is_empty());
+                }
+                let original_summary = retained.partitions.clone();
+                retained.added_rows_count = None;
+                populate_retained_manifest_counts(&store_ctx, &mut retained)
+                    .await
+                    .expect("recover counts without replacing summary");
+                assert_eq!(retained.added_rows_count, Some(3));
+                assert_eq!(retained.partitions, original_summary);
+                assert_eq!(
+                    store_ctx
+                        .prefixed
+                        .get(&path)
+                        .await
+                        .expect("original manifest")
+                        .bytes()
+                        .await
+                        .expect("bytes")
+                        .as_ref(),
+                    bytes.as_slice()
+                );
+
+                retained.partitions = None;
+                store_ctx
+                    .prefixed
+                    .put(&path, Bytes::from_static(b"invalid manifest").into())
+                    .await
+                    .expect("replace fixture");
+                assert!(
+                    populate_retained_manifest_counts(&store_ctx, &mut retained)
+                        .await
+                        .is_err()
+                );
+                store_ctx
+                    .prefixed
+                    .delete(&path)
+                    .await
+                    .expect("remove fixture");
+                assert!(
+                    populate_retained_manifest_counts(&store_ctx, &mut retained)
+                        .await
+                        .is_err()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn copy_on_write_classification_preserves_explicit_overwrite_modes() {
+        for (kind, added, removed, dynamic, expected) in [
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                1,
+                0,
+                false,
+                Operation::Append,
+            ),
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                1,
+                1,
+                false,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::RowLevelRewrite,
+                0,
+                1,
+                false,
+                Operation::Delete,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                1,
+                0,
+                false,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                0,
+                1,
+                false,
+                Operation::Delete,
+            ),
+            (
+                SnapshotUpdateKind::CopyOnWrite,
+                1,
+                0,
+                true,
+                Operation::Overwrite,
+            ),
+            (
+                SnapshotUpdateKind::FullOverwrite,
+                1,
+                0,
+                false,
+                Operation::Overwrite,
+            ),
+        ] {
+            for operation in [
+                None,
+                Some(IcebergOperation::Insert),
+                Some(IcebergOperation::Update),
+                Some(IcebergOperation::Delete),
+                Some(IcebergOperation::Merge),
+            ] {
+                assert_eq!(
+                    kind.summary_operation(
+                        SnapshotChanges {
+                            added_data_files: added,
+                            added_delete_files: 0,
+                            removed_data_files: removed,
+                            dynamic_partition_overwrite: dynamic,
+                        },
+                        operation,
+                    ),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_row_level_rewrite_requires_command_identity() {
+        for (operation, row_level_expected) in [
+            (None, Operation::Delete),
+            (Some(IcebergOperation::Insert), Operation::Delete),
+            (Some(IcebergOperation::Update), Operation::Overwrite),
+            (Some(IcebergOperation::Delete), Operation::Overwrite),
+            (Some(IcebergOperation::Merge), Operation::Overwrite),
+        ] {
+            for (kind, expected) in [
+                (SnapshotUpdateKind::RowLevelRewrite, row_level_expected),
+                (SnapshotUpdateKind::CopyOnWrite, Operation::Delete),
+                (SnapshotUpdateKind::FastAppend, Operation::Append),
+                (SnapshotUpdateKind::FullOverwrite, Operation::Overwrite),
+                (SnapshotUpdateKind::RowDelta, Operation::Overwrite),
+                (SnapshotUpdateKind::Truncate, Operation::Delete),
+                (SnapshotUpdateKind::RewriteDataFiles, Operation::Replace),
+            ] {
+                assert_eq!(
+                    kind.summary_operation(
+                        SnapshotChanges {
+                            added_data_files: 0,
+                            added_delete_files: 0,
+                            removed_data_files: 0,
+                            dynamic_partition_overwrite: false,
+                        },
+                        operation,
+                    ),
+                    expected
+                );
+            }
+            assert_eq!(
+                SnapshotUpdateKind::RowLevelRewrite.summary_operation(
+                    SnapshotChanges {
+                        added_data_files: 0,
+                        added_delete_files: 1,
+                        removed_data_files: 0,
+                        dynamic_partition_overwrite: false,
+                    },
+                    operation,
+                ),
+                Operation::Delete
+            );
+        }
+    }
 
     #[derive(Debug)]
     struct ManifestListRejectingStore {
@@ -1312,7 +1894,8 @@ mod tests {
             }"#,
         )
         .expect("nullable manifest list schema");
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
+        let mut writer =
+            apache_avro::Writer::new(&schema, Vec::new()).expect("nullable manifest list writer");
         writer
             .append_ser(NullableManifestCounts {
                 manifest_path,
@@ -1447,7 +2030,7 @@ mod tests {
 
     #[test]
     fn targeted_rewrite_marks_removed_files_and_reuses_unaffected_manifests() {
-        futures::executor::block_on(async {
+        let check = |version, kind, data_sequence| async move {
             let table_url =
                 url::Url::parse("file:///tmp/iceberg-targeted-rewrite/").expect("table URL");
             let store: Arc<dyn object_store::ObjectStore> =
@@ -1459,7 +2042,7 @@ mod tests {
                 Arc::new(schema.clone()),
                 0,
                 partition_spec.clone(),
-                FormatVersion::V2,
+                version,
                 ManifestContentType::Data,
             );
             let parent_snapshot_id = 10;
@@ -1523,9 +2106,7 @@ mod tests {
             let mut parent_list = ManifestListWriter::new();
             parent_list.append(affected_file);
             parent_list.append(unaffected_file);
-            let parent_list_bytes = parent_list
-                .to_bytes(FormatVersion::V2)
-                .expect("parent manifest list");
+            let parent_list_bytes = parent_list.to_bytes(version).expect("parent manifest list");
             store_ctx
                 .prefixed
                 .put(
@@ -1545,7 +2126,7 @@ mod tests {
             let transaction = Transaction::new(
                 table_url.to_string(),
                 parent_snapshot,
-                parent_sequence_number,
+                parent_sequence_number + 2,
             );
             let action_commit = SnapshotProducer::new(
                 &transaction,
@@ -1555,7 +2136,9 @@ mod tests {
             )
             .with_partition_specs(vec![partition_spec])
             .with_removed_data_file_paths(vec!["data/remove.parquet".to_string()])
-            .commit(SnapshotUpdateKind::CopyOnWrite)
+            .with_added_data_sequence_number(data_sequence)
+            .with_row_lineage_start_row_id((version == FormatVersion::V3).then_some(0))
+            .commit(kind)
             .await
             .expect("targeted rewrite");
 
@@ -1567,7 +2150,15 @@ mod tests {
                     _ => None,
                 })
                 .expect("new snapshot");
-            assert_eq!(snapshot.summary.operation, Operation::Overwrite);
+            assert_eq!(snapshot.sequence_number(), parent_sequence_number + 3);
+            assert_eq!(
+                snapshot.summary.operation,
+                if kind == SnapshotUpdateKind::RewriteDataFiles {
+                    Operation::Replace
+                } else {
+                    Operation::Overwrite
+                }
+            );
             let summary = &snapshot.summary.additional_properties;
             assert_eq!(
                 summary.get("deleted-data-files").map(String::as_str),
@@ -1583,9 +2174,13 @@ mod tests {
             );
             assert_eq!(summary.get("total-records").map(String::as_str), Some("9"));
 
-            let manifest_list = crate::io::load_manifest_list(&store_ctx, snapshot.manifest_list())
-                .await
-                .expect("new manifest list");
+            let manifest_list = crate::io::load_manifest_list_with_version(
+                &store_ctx,
+                snapshot.manifest_list(),
+                version,
+            )
+            .await
+            .expect("new manifest list");
             assert!(
                 manifest_list
                     .entries()
@@ -1599,12 +2194,141 @@ mod tests {
                     .expect("manifest");
                 for entry in manifest.entries() {
                     statuses.insert(entry.data_file.file_path.clone(), entry.status);
+                    if entry.data_file.file_path == "data/replacement.parquet" {
+                        assert_eq!(entry.sequence_number, data_sequence);
+                        assert_eq!(entry.file_sequence_number, None);
+                        assert_eq!(manifest_file.sequence_number, snapshot.sequence_number());
+                        assert_eq!(
+                            manifest_file.min_sequence_number,
+                            data_sequence.unwrap_or(snapshot.sequence_number())
+                        );
+                    }
                 }
             }
             assert_eq!(statuses["data/remove.parquet"], ManifestStatus::Deleted);
             assert_eq!(statuses["data/survivor.parquet"], ManifestStatus::Existing);
             assert_eq!(statuses["data/unaffected.parquet"], ManifestStatus::Added);
             assert_eq!(statuses["data/replacement.parquet"], ManifestStatus::Added);
+        };
+        for (version, kind, data_sequence) in [
+            (FormatVersion::V2, SnapshotUpdateKind::CopyOnWrite, None),
+            (
+                FormatVersion::V2,
+                SnapshotUpdateKind::RewriteDataFiles,
+                Some(1),
+            ),
+            (
+                FormatVersion::V3,
+                SnapshotUpdateKind::RewriteDataFiles,
+                None,
+            ),
+        ] {
+            futures::executor::block_on(check(version, kind, data_sequence));
+        }
+    }
+
+    #[test]
+    fn rewrite_delete_pruning_retains_shared_blobs_and_unscoped_deletes() {
+        futures::executor::block_on(async {
+            let table_url = url::Url::parse("file:///tmp/iceberg-delete-pruning/").expect("URL");
+            let store_ctx =
+                StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)
+                    .expect("store context");
+            let snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(10)
+                .with_sequence_number(3)
+                .with_manifest_list("metadata/parent-list.avro")
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot");
+            let transaction = Transaction::new(table_url.to_string(), snapshot, 3);
+            let metadata = ManifestMetadata::new(
+                Arc::new(Schema::builder().build().expect("schema")),
+                0,
+                PartitionSpec::unpartitioned_spec(),
+                FormatVersion::V3,
+                ManifestContentType::Deletes,
+            );
+            let producer = SnapshotProducer::new(
+                &transaction,
+                vec![],
+                Some(store_ctx.clone()),
+                Some(metadata.clone()),
+            );
+            let mut writer = ManifestWriterBuilder::new(Some(10), None, metadata).build();
+            for (target, offset) in [("data/remove.parquet", 4), ("data/keep.parquet", 36)] {
+                let mut file = delete_file("data/shared.puffin", 0);
+                file.file_format = DataFileFormat::Puffin;
+                file.file_size_in_bytes = 100;
+                file.referenced_data_file = Some(target.to_string());
+                file.content_offset = Some(offset);
+                file.content_size_in_bytes = Some(32);
+                writer.add(file);
+            }
+            let mut targeted = delete_file("data/targeted.parquet", 0);
+            targeted.referenced_data_file = Some("data/remove.parquet".to_string());
+            writer.add(targeted);
+            let mut generic = delete_file("data/generic.parquet", 0);
+            generic.referenced_data_file = None;
+            writer.add(generic.clone());
+            let mut equality = generic;
+            equality.file_path = "data/equality.parquet".to_string();
+            equality.content = DataContentType::EqualityDeletes;
+            equality.equality_ids = vec![1];
+            writer.add(equality);
+            let mut created_paths = vec![];
+            let parent = producer
+                .write_manifest(&store_ctx, writer, 3, 10, None, &mut created_paths)
+                .await
+                .expect("parent manifest");
+            let (rewritten, removed) = producer
+                .rewrite_parent_delete_manifests(
+                    &store_ctx,
+                    vec![parent.clone()],
+                    &HashSet::from(["data/remove.parquet".to_string()]),
+                    false,
+                    4,
+                    11,
+                    &mut created_paths,
+                )
+                .await
+                .expect("prune selected deletes");
+            assert_eq!(removed.deletion_vectors, 1);
+            assert_eq!(removed.position_delete_files, 1);
+            assert_eq!(removed.equality_delete_files, 0);
+            let manifest = crate::io::load_manifest(&store_ctx, &rewritten[0].manifest_path)
+                .await
+                .expect("rewritten manifest");
+            let entries = manifest.entries();
+            assert_eq!(entries.len(), 5);
+            for entry in entries {
+                let file = &entry.data_file;
+                let removed = file.referenced_data_file.as_deref() == Some("data/remove.parquet");
+                assert_eq!(
+                    entry.status,
+                    if removed {
+                        ManifestStatus::Deleted
+                    } else {
+                        ManifestStatus::Existing
+                    }
+                );
+                assert_eq!(entry.sequence_number, Some(3));
+                assert_eq!(entry.file_sequence_number, Some(3));
+                if file.is_deletion_vector() {
+                    assert_eq!(file.file_path, "data/shared.puffin");
+                    assert_eq!(file.content_offset, Some(if removed { 4 } else { 36 }));
+                    assert_eq!(file.content_size_in_bytes, Some(32));
+                }
+            }
+            let historical = crate::io::load_manifest(&store_ctx, &parent.manifest_path)
+                .await
+                .expect("historical manifest");
+            assert!(
+                historical
+                    .entries()
+                    .iter()
+                    .all(|entry| entry.status == ManifestStatus::Added)
+            );
         });
     }
 

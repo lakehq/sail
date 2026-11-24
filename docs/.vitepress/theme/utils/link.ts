@@ -1,4 +1,4 @@
-import { PathLike } from "./tree";
+import { PathLike } from "./tree.ts";
 
 class PageLink implements PathLike {
   readonly url: string;

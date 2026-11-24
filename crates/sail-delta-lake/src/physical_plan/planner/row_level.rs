@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -5,6 +7,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::{MergeMatchedAction, MergeNotMatchedBySourceAction};
@@ -44,19 +47,29 @@ pub async fn create_row_level_write_physical_plan(
     let target = node.target().clone();
 
     let plan = match node.command() {
-        RowLevelCommand::Delete => {
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => {
             let info = RowLevelWriteInfo {
-                command: RowLevelCommand::Delete,
+                command: node.command(),
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: None,
+                change_data_plan: None,
+                change_data_preimage: None,
                 touched_file_plan: None,
                 deletion_vector_plan: None,
                 deletion_vector_operation_mode: None,
                 with_schema_evolution: false,
                 operation: None,
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                Vec::new(),
+            )
+            .await
         }
         RowLevelCommand::Merge => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -65,16 +78,39 @@ pub async fn create_row_level_write_physical_plan(
 
             let info = RowLevelWriteInfo {
                 command: RowLevelCommand::Merge,
+                change_data_preimage: node.effects().change_data_preimage().map(str::to_owned),
                 target,
                 condition: None,
                 expanded_input: Some(expanded_input),
+                change_data_plan: effects.change_data,
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
                 deletion_vector_operation_mode: merge_deletion_vector_operation_mode(node),
                 with_schema_evolution: node.with_schema_evolution(),
                 operation: build_merge_operation(node),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            let tracked = node
+                .merge_options()
+                .map(|options| {
+                    options
+                        .identity_columns
+                        .iter()
+                        .filter(|(name, _)| {
+                            sail_logical_plan::merge::merge_generates_identity(options, name)
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                tracked,
+            )
+            .await
         }
         RowLevelCommand::Update => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -82,9 +118,11 @@ pub async fn create_row_level_write_physical_plan(
             })?;
             let info = RowLevelWriteInfo {
                 command: RowLevelCommand::Update,
+                change_data_preimage: None,
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: Some(expanded_input),
+                change_data_plan: effects.change_data,
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
                 deletion_vector_operation_mode: Some(DeletionVectorRowOperationMode::Update),
@@ -95,7 +133,15 @@ pub async fn create_row_level_write_physical_plan(
                         .and_then(|condition| condition.source.clone()),
                 }),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                Vec::new(),
+            )
+            .await
         }
     }?;
     match storage_access {
@@ -111,6 +157,7 @@ struct PhysicalRowLevelEffects {
     write_rows: Option<Arc<dyn ExecutionPlan>>,
     touched_files: Option<Arc<dyn ExecutionPlan>>,
     row_index_deletes: Option<Arc<dyn ExecutionPlan>>,
+    change_data: Option<Arc<dyn ExecutionPlan>>,
 }
 
 fn collect_physical_effects(
@@ -144,6 +191,7 @@ fn collect_physical_effects(
         write_rows: take(logical_effects.write_rows().is_some())?,
         touched_files: take(logical_effects.touched_files().is_some())?,
         row_index_deletes: take(logical_effects.row_index_deletes().is_some())?,
+        change_data: take(logical_effects.change_data().is_some())?,
     })
 }
 
@@ -152,13 +200,16 @@ async fn create_delta_row_level_writer(
     mode: RowLevelWriteMode,
     info: RowLevelWriteInfo,
     target_snapshot: Arc<DeltaSnapshot>,
+    output: CommandOutput,
+    identity_columns_to_track: Vec<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (target_options, _) =
         split_delta_write_options_and_table_properties(info.target.options.clone())?;
-    let table_url = DeltaLakeSource::parse_table_url(vec![info.target.location.clone()])?;
+    let table_url =
+        DeltaLakeSource::parse_table_url(ctx, vec![info.target.location.clone()]).await?;
     let delta_options = DeltaWriteOptions::resolve(ctx, target_options)?;
     let partition_columns = match info.command {
-        RowLevelCommand::Delete => Vec::new(),
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => Vec::new(),
         RowLevelCommand::Merge | RowLevelCommand::Update => info.target.partition_by.clone(),
     };
     let config = DeltaPlannerConfig::new(
@@ -169,11 +220,16 @@ async fn create_delta_row_level_writer(
         None,
         true,
     )
+    .with_output(output)
+    .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(Some(target_snapshot))
     .with_lakehouse_table(info.target.lakehouse_table.clone());
     let planner_ctx = PlannerContext::new(ctx, config);
 
     match (mode, info.command) {
+        (_, RowLevelCommand::Truncate) => {
+            super::op_truncate::build_truncate_plan(&planner_ctx).await
+        }
         (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_delete_mor(&planner_ctx, delete_condition(&info)).await
         }

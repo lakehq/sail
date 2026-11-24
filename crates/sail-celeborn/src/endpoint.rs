@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -36,10 +38,7 @@ impl StaticEndpointResolver {
 /// Parses a `host:port` endpoint, accepting the bracketed IPv6 form.
 pub(crate) fn parse_endpoint(endpoint: &str) -> Option<(String, u16)> {
     let (host, port) = endpoint.rsplit_once(':')?;
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
+    let host = host.strip_circumfix('[', ']').unwrap_or(host);
     if host.is_empty() {
         return None;
     }

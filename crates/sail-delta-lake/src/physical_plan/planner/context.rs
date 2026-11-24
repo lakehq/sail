@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -18,6 +8,7 @@ use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -36,6 +27,7 @@ use crate::table::{
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]
 pub struct DeltaPlannerConfig {
+    pub output: CommandOutput,
     pub table_url: Url,
     pub options: DeltaWriteOptions,
     pub metadata_configuration: HashMap<String, String>,
@@ -58,6 +50,7 @@ pub struct DeltaPlannerConfig {
     /// projection rewrites.
     pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    pub identity_columns_to_track: Vec<String>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
@@ -72,6 +65,7 @@ impl DeltaPlannerConfig {
         table_exists: bool,
     ) -> Self {
         Self {
+            output: CommandOutput::Count,
             table_url,
             options,
             metadata_configuration,
@@ -83,9 +77,15 @@ impl DeltaPlannerConfig {
             target_nullability: HashMap::new(),
             metadata_schema: None,
             identity_columns: HashMap::new(),
+            identity_columns_to_track: Vec::new(),
             table_snapshot: None,
             lakehouse_table: None,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self
     }
 
     pub fn with_generation_expressions(
@@ -119,6 +119,11 @@ impl DeltaPlannerConfig {
         identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     ) -> Self {
         self.identity_columns = identity_columns;
+        self
+    }
+
+    pub fn with_identity_columns_to_track(mut self, columns: Vec<String>) -> Self {
+        self.identity_columns_to_track = columns;
         self
     }
 
@@ -226,9 +231,26 @@ impl<'a> PlannerContext<'a> {
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {
-        self.table_snapshot()
+        let mut context = self
+            .table_snapshot()
             .map(|snapshot| DeltaCommitContext::from_snapshot(snapshot.as_ref()))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        context.identity_columns_to_track = self.config.identity_columns_to_track.clone();
+        context
+    }
+
+    pub fn configure_write_commit(&self, context: &mut DeltaCommitContext) {
+        context.identity_columns_to_track = self.config.identity_columns_to_track.clone();
+        context.transaction = self
+            .options()
+            .txn_app_id
+            .clone()
+            .zip(self.options().txn_version)
+            .map(|(app_id, version)| crate::spec::Transaction {
+                app_id,
+                version,
+                last_updated: None,
+            });
     }
 
     pub fn prepare_write_context(
@@ -243,7 +265,7 @@ impl<'a> PlannerContext<'a> {
             .with_target_nullability(self.target_nullability().clone())
             .with_identity_columns(self.identity_columns().clone());
         let input_schema = self.metadata_schema().unwrap_or(input_schema);
-        prepare_delta_write_context(
+        let mut context = prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),
             &options,
@@ -253,7 +275,9 @@ impl<'a> PlannerContext<'a> {
             self.table_exists(),
             input_schema,
             operation_override,
-        )
+        )?;
+        self.configure_write_commit(&mut context.commit_context);
+        Ok(context)
     }
 
     pub fn into_config(self) -> DeltaPlannerConfig {

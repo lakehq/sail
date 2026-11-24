@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
@@ -31,16 +33,31 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
-        let execution = resolved.execution;
+        self.begin_lakehouse_table_access(
+            table,
+            resolved.execution,
+            table_access_purpose(operation),
+        )
+        .await
+    }
+
+    /// Begins access to a table that the catalog has already resolved.
+    pub(super) async fn begin_lakehouse_table_access(
+        &self,
+        table: &[String],
+        execution: LakehouseExecutionContext,
+        access_purpose: TableAccessPurpose,
+    ) -> PlanResult<LakehouseExecutionContext> {
         if execution.access_session.is_some() {
             return Ok(execution);
         }
+        let manager = self.ctx.extension::<CatalogManager>()?;
         match manager
             .begin_table_access(
                 table,
                 BeginTableAccessRequest {
                     context: execution.clone(),
-                    purpose: table_access_purpose(operation),
+                    purpose: access_purpose,
                 },
             )
             .await

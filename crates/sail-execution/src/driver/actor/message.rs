@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 use std::fmt;
 use std::fmt::Formatter;
@@ -17,7 +19,7 @@ use crate::driver::r#gen;
 use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
@@ -80,9 +82,9 @@ pub enum DriverMessage {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchWorkerStream {
+    FetchWorkerStreams {
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
@@ -153,7 +155,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
-            DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            DriverMessage::FetchWorkerStreams { .. } => "FetchWorkerStreams",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
@@ -264,25 +266,15 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverMessage::FetchWorkerStream {
+            DriverMessage::FetchWorkerStreams {
                 worker_id,
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
+                keys: TaskStreamKeySet { job_id, stage, .. },
                 schema: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             DriverMessage::CelebornGetLifecycleManager { result: _ } => {}
             DriverMessage::Shutdown { .. } => {}

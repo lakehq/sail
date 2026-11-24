@@ -1,23 +1,11 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/credential.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-// [CREDIT]: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/credential.rs
-
+use std::fmt::{Debug, Formatter};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -76,9 +64,19 @@ pub enum CredentialProvider {
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
 }
 
-impl std::fmt::Debug for CredentialProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("UnityCatalogCredentials [REDACTED]")
+// The trait requires `Debug`, and a static token is usable exactly as it is printed, so it does
+// not reach the output. The cached token and the client secret of a token credential are redacted
+// where they are held, so the credential prints itself.
+impl Debug for CredentialProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BearerToken(_) => f.debug_tuple("BearerToken").field(&"[REDACTED]").finish(),
+            Self::TokenCredential(cache, credential) => f
+                .debug_tuple("TokenCredential")
+                .field(cache)
+                .field(credential)
+                .finish(),
+        }
     }
 }
 
@@ -117,11 +115,23 @@ struct TokenResponse {
 
 /// The same thing as the azure oauth provider, but uses the databricks api to
 /// get tokens directly from the workspace.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkspaceOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
+}
+
+// The client secret is usable exactly as it is printed, so it is kept out of the debug output
+// that the `TokenCredential` trait requires.
+impl Debug for WorkspaceOAuthProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceOAuthProvider")
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 async fn non200_or_json<T: DeserializeOwned>(response: Response) -> CatalogResult<T> {
@@ -187,11 +197,23 @@ impl TokenCredential for WorkspaceOAuthProvider {
 }
 
 /// Encapsulates the logic to perform an OAuth token challenge
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
+}
+
+// The client secret is usable exactly as it is printed, so it is kept out of the debug output
+// that the `TokenCredential` trait requires.
+impl Debug for ClientSecretOAuthProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecretOAuthProvider")
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ClientSecretOAuthProvider {
@@ -588,6 +610,52 @@ mod tests {
             assert_eq!(credentials.client_secret.expose(), "secret");
             assert!(!format!("{source:?}").contains("secret"));
         }
+    }
+
+    #[test]
+    fn debug_output_hides_the_bearer_token() {
+        let credentials = CredentialProvider::BearerToken("s3cr3t-token".to_string());
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_output_hides_the_client_secret() {
+        let workspace = WorkspaceOAuthProvider::new("client", "s3cr3t-secret", "https://host");
+        let client =
+            ClientSecretOAuthProvider::new("client", "s3cr3t-secret", "authority", None::<String>);
+        for output in [format!("{workspace:?}"), format!("{client:?}")] {
+            assert!(
+                !output.contains("s3cr3t-secret") && output.contains("client"),
+                "unexpected debug output: {output}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn debug_output_hides_a_cached_token() {
+        let cache = TokenCache::default();
+        let token = cache
+            .get_or_insert_with(|| async {
+                Ok::<_, CatalogError>(TemporaryToken {
+                    token: "s3cr3t-token".to_string(),
+                    expiry: None,
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(token, "s3cr3t-token");
+
+        let credentials =
+            CredentialProvider::TokenCredential(cache, Box::new(AzureCliCredential::new()));
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,6 @@
 declare module "markdown-it-deflist";
-declare module "markdown-it-footnote";
 declare module "*.css";
 
-declare module "*/.vitepress/cache/sphinx-pages" {
-  export const sphinxPages: SphinxPage[];
+declare module "*/.vitepress/cache/sphinx-pages.ts" {
+  export const sphinxPages: import("./theme/utils/sphinx.ts").SphinxPageData[];
 }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -65,7 +67,7 @@ impl IcebergDiscoveryExec {
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(output_partitions),
-            EmissionType::Final,
+            EmissionType::Incremental,
             Boundedness::Bounded,
         ));
         Ok(Self {

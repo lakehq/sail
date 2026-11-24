@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
@@ -17,6 +19,8 @@ use crate::driver::server::DriverServer;
 use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
+use crate::rpc::server_options;
+use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
@@ -36,6 +40,7 @@ enum DriverGatewayState {
 pub struct DriverGatewayOptions {
     pub listen_host: String,
     pub listen_port: u16,
+    pub flight_compression: ShuffleCompression,
 }
 
 impl DriverGatewayOptions {
@@ -43,6 +48,8 @@ impl DriverGatewayOptions {
         Self {
             listen_host: config.cluster.driver_listen_host.clone(),
             listen_port: config.cluster.driver_listen_port,
+            flight_compression: ShuffleBackendKind::from(&config.cluster.shuffle_backend)
+                .flight_compression(),
         }
     }
 }
@@ -65,7 +72,7 @@ impl TaskStreamKeyDecoder for DriverTaskStreamKey {
             stream.ok_or_else(|| Status::invalid_argument("task stream ticket is required"))?;
         Ok(Self {
             driver_id: driver_id.into(),
-            stream: stream.into(),
+            stream: stream.try_into()?,
         })
     }
 }
@@ -91,6 +98,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
 
 pub struct DriverGateway {
     port: u16,
+    flight_compression: ShuffleCompression,
     state: DriverGatewayState,
 }
 
@@ -100,6 +108,7 @@ impl DriverGateway {
         let port = listener.local_addr()?.port();
         Ok(Self {
             port,
+            flight_compression: options.flight_compression,
             state: DriverGatewayState::Pending { listener },
         })
     }
@@ -129,6 +138,7 @@ impl DriverGateway {
         let flight_service =
             FlightServiceServer::new(TaskStreamFlightServer::<DriverTaskStreamKey>::new(
                 Box::new(DriverTaskStreamFetcher { registry }),
+                self.flight_compression,
             ))
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
@@ -137,7 +147,7 @@ impl DriverGateway {
             .send_compressed(CompressionEncoding::Zstd);
 
         let handle = tokio::spawn(async move {
-            ServerBuilder::new("sail_driver", Default::default())
+            ServerBuilder::new("sail_driver", server_options())
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
                 .await
                 .add_service(celeborn_service, None)

@@ -4,7 +4,7 @@ import path from "path";
 import { instance } from "@viz-js/viz";
 import { optimize } from "svgo";
 
-import { scaleSize, setClass } from "./svgo-plugins";
+import { scaleSize, setClass } from "./svgo-plugins.ts";
 
 function createGraphvizLoader(
   glob: string[],

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -59,6 +61,7 @@ pub enum TerminalKind {
     NumberLiteral,
     IntegerLiteral,
     StringLiteral,
+    ConfigValue,
 }
 
 /// A syntax descriptor for an AST node type.

@@ -1,16 +1,31 @@
-fn build_hms_thrift() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=thrift/hive_metastore.thrift");
-
-    // We use the default output directory and filename for volo build.
-    volo_build::Builder::thrift()
-        .add_service("thrift/hive_metastore.thrift")
-        .split_generated_files(true)
-        .write()?;
-
-    Ok(())
-}
+// SPDX-License-Identifier: Apache-2.0
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    build_hms_thrift()
+    println!("cargo:rerun-if-changed=build.rs");
+    sail_build_scripts::thrift::generate_client(
+        "thrift/hive_metastore.thrift",
+        std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("hms.rs"),
+        &[
+            "create_database",
+            "get_database",
+            "drop_database",
+            "get_databases",
+            "get_all_databases",
+            "create_table",
+            "drop_table",
+            "drop_table_with_environment_context",
+            "get_all_tables",
+            "get_table",
+            "get_table_objects_by_name",
+            "get_table_req",
+            "get_partition_names",
+            "get_partition_names_ps",
+            "get_partitions_by_names",
+            "alter_table",
+            "lock",
+            "check_lock",
+            "unlock",
+        ],
+    )?;
+    Ok(())
 }

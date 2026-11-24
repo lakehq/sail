@@ -1,8 +1,8 @@
-pub mod hms {
-    #[expect(clippy::allow_attributes)]
-    mod internal {
-        include!(concat!(env!("OUT_DIR"), "/volo_gen.rs"));
-    }
+// SPDX-License-Identifier: Apache-2.0
 
-    pub use internal::volo_gen::hive_metastore::*;
+pub mod hms {
+    include!(concat!(env!("OUT_DIR"), "/hms.rs"));
 }
+
+#[cfg(test)]
+mod tests;

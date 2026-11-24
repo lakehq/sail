@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -32,5 +34,15 @@ impl CatalogManager {
             .filter(|name| match_pattern(name.as_ref(), pattern))
             .cloned()
             .collect::<Vec<_>>())
+    }
+
+    /// Resolves an explicit or default catalog name and verifies that it exists.
+    pub fn resolve_catalog_reference(&self, catalog: Option<&str>) -> CatalogResult<Arc<str>> {
+        let state = self.state()?;
+        let catalog = catalog
+            .map(Arc::<str>::from)
+            .unwrap_or_else(|| state.default_catalog.clone());
+        state.get_catalog(&catalog)?;
+        Ok(catalog)
     }
 }

@@ -3,6 +3,7 @@
     "module": "ESNext",
     "target": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,

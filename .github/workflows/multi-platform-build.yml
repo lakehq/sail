@@ -111,6 +111,8 @@ jobs:
 
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
+        with:
+          rust-toolchain: stable
         env:
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0

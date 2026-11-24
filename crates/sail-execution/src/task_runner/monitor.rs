@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -5,6 +7,7 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::StreamExt;
 use sail_common::actor::ActorHandle;
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
@@ -54,7 +57,19 @@ impl TaskMonitor {
     pub async fn supervise(self) {
         let handle = self.handle.clone();
         let key = self.key.clone();
-        let span = Span::enter_with_local_parent("TaskMonitor::run");
+        // Admission now has one span per batch. Preserve task identity on the monitor
+        // so preparation and execution spans can still be attributed to each attempt.
+        let span = Span::enter_with_local_parent("TaskMonitor::run").with_properties(|| {
+            [
+                (SpanAttribute::EXECUTION_JOB_ID, key.job_id.to_string()),
+                (SpanAttribute::EXECUTION_STAGE, key.stage.to_string()),
+                (
+                    SpanAttribute::EXECUTION_PARTITION,
+                    key.partition.to_string(),
+                ),
+                (SpanAttribute::EXECUTION_ATTEMPT, key.attempt.to_string()),
+            ]
+        });
         let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
             let _ = handle.send(message).await;
@@ -152,6 +167,87 @@ mod tests {
 
     use super::*;
     use crate::id::JobId;
+
+    #[tokio::test]
+    async fn preserves_unknown_commit_cause_through_task_status_and_remote_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+        use sail_catalog::error::CatalogError;
+        use sail_common_datafusion::error::RemoteError;
+
+        let error = DataFusionError::Collection(vec![
+            DataFusionError::Execution("another failure".into()),
+            DataFusionError::Context(
+                "commit failed".into(),
+                Box::new(DataFusionError::External(Box::new(
+                    CatalogError::CommitStateUnknown("response lost".to_string().into()),
+                ))),
+            ),
+        ]);
+        let stream = RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::iter([Err(error)]),
+        );
+        let message = TaskMonitor::execute(task_key(), Box::pin(stream)).await;
+        let TaskRunnerMessage::ReportTaskStatus {
+            status: TaskStatus::Failed,
+            cause: Some(cause),
+            ..
+        } = message
+        else {
+            return Err("expected task failure with cause".into());
+        };
+        assert!(!cause.is_retryable());
+        let cause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
+        let error = DataFusionError::External(Box::new(RemoteError { cause }));
+        assert!(matches!(
+            CommonErrorCause::new::<PyErrExtractor>(&error),
+            CommonErrorCause::CommitStateUnknown(message) if message == "commit state unknown: response lost"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn preserves_replanning_cause_through_task_status_and_remote_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+        use sail_common_datafusion::error::{CommitRequiresReplanningError, RemoteError};
+
+        let stream = RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::iter([Err(DataFusionError::Collection(vec![
+                DataFusionError::Execution("worker disconnected".into()),
+                DataFusionError::External(Box::new(CommitRequiresReplanningError(
+                    "stale replacement".into(),
+                ))),
+            ]))]),
+        );
+        let TaskRunnerMessage::ReportTaskStatus {
+            status: TaskStatus::Failed,
+            cause: Some(cause),
+            ..
+        } = TaskMonitor::execute(task_key(), Box::pin(stream)).await
+        else {
+            return Err("expected task failure with cause".into());
+        };
+        assert!(!cause.is_retryable());
+        let cause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
+        let error = DataFusionError::External(Box::new(RemoteError { cause }));
+        assert!(matches!(
+            CommonErrorCause::new::<PyErrExtractor>(&error),
+            CommonErrorCause::CommitRequiresReplanning(message)
+                if message == "commit requires replanning: stale replacement"
+        ));
+        Ok(())
+    }
 
     fn task_key() -> TaskKey {
         TaskKey {

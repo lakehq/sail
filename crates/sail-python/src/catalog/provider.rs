@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow_schema::{DataType, TimeUnit};
@@ -349,6 +351,7 @@ fn table_columns(columns: Vec<PyColumnDefinition>) -> PyResult<Vec<CreateTableCo
         .into_iter()
         .map(|(name, data_type, nullable, comment)| {
             Ok(CreateTableColumnOptions {
+                metadata: Default::default(),
                 name,
                 data_type: parse_data_type(&data_type)?,
                 nullable,
@@ -421,10 +424,7 @@ fn parse_partition_transform(value: &str) -> PyResult<PartitionTransform> {
         "day" => Ok(PartitionTransform::Day),
         "hour" => Ok(PartitionTransform::Hour),
         _ => {
-            if let Some(argument) = value
-                .strip_prefix("bucket(")
-                .and_then(|value| value.strip_suffix(')'))
-            {
+            if let Some(argument) = value.strip_circumfix("bucket(", ')') {
                 return argument
                     .parse()
                     .map(PartitionTransform::Bucket)
@@ -434,10 +434,7 @@ fn parse_partition_transform(value: &str) -> PyResult<PartitionTransform> {
                         ))
                     });
             }
-            if let Some(argument) = value
-                .strip_prefix("truncate(")
-                .and_then(|value| value.strip_suffix(')'))
-            {
+            if let Some(argument) = value.strip_circumfix("truncate(", ')') {
                 return argument
                     .parse()
                     .map(PartitionTransform::Truncate)

@@ -1,21 +1,10 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::array::{Int32Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -30,15 +19,15 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
 use futures::stream::once;
-use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use url::Url;
 
 use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
-    IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
+    IcebergCatalogCommitMode, catalog_requirements,
 };
-use crate::io::{StoreContext, load_manifest, load_manifest_list};
+use crate::io::StoreContext;
 use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
     resolve_iceberg_metadata_location,
@@ -48,73 +37,27 @@ use crate::operations::bootstrap::{
     bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
 };
 use crate::operations::helpers::format_version_for_schema;
+use crate::operations::metadata_commit::{
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, apply_snapshot_updates,
+};
 use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
-use crate::spec::manifest::ManifestStatus;
-use crate::spec::metadata::table_metadata::SnapshotLog;
-use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{
-    DataContentType, DataFile, FormatVersion, Literal, PartitionKey, PartitionSpec,
-    Schema as IcebergSchema, StructType, TableMetadata, TableRequirement, Type,
+    DataContentType, DataFile, Literal, PartitionKey, PartitionSpec, Schema as IcebergSchema,
+    StructType, TableMetadata, TableRequirement, Type,
 };
 use crate::table::metadata_loader::{
-    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
+    load_metadata_file_bytes, metadata_file_version_from_path,
+    metadata_location_to_object_path_string, table_metadata_location,
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
-
-async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[String]) {
-    let mut base_paths = Vec::new();
-    let mut prefixed_paths = Vec::new();
-    for file_path in file_paths.iter().collect::<BTreeSet<_>>() {
-        let (store, path) = match store_ctx.resolve(file_path) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                log::warn!(
-                    "Failed to resolve uncommitted Iceberg task file {file_path} for cleanup: {error}"
-                );
-                continue;
-            }
-        };
-        if Arc::ptr_eq(store, &store_ctx.base) {
-            base_paths.push(path);
-        } else {
-            prefixed_paths.push(path);
-        }
-    }
-
-    delete_task_files(&store_ctx.base, base_paths).await;
-    delete_task_files(&store_ctx.prefixed, prefixed_paths).await;
-}
-
-async fn delete_task_files(
-    store: &Arc<dyn object_store::ObjectStore>,
-    paths: Vec<object_store::path::Path>,
-) {
-    let locations = futures::stream::iter(paths.into_iter().map(Ok));
-    let mut deletions = store.delete_stream(Box::pin(locations));
-    while let Some(result) = deletions.next().await {
-        match result {
-            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
-            Err(error) => {
-                log::warn!("Failed to remove an uncommitted Iceberg task file: {error}");
-            }
-        }
-    }
-}
-
-fn task_file_paths(data_files: &[DataFile], delete_files: &[DataFile]) -> Vec<String> {
-    data_files
-        .iter()
-        .chain(delete_files.iter())
-        .map(|file| file.file_path.clone())
-        .collect()
-}
 
 fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
     let row_count = i64::try_from(row_count).map_err(|e| {
@@ -123,6 +66,59 @@ fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> 
     let array = Arc::new(Int64Array::from(vec![row_count]));
     RecordBatch::try_new(schema, vec![array])
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOutput {
+    Command(CommandOutput),
+    RewriteDataFiles {
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+        starting_sequence_number: Option<i64>,
+    },
+}
+
+fn commit_output_batch(
+    schema: SchemaRef,
+    output: &CommitOutput,
+    row_count: u64,
+    added_data_files_count: usize,
+    removed_delete_files_count: usize,
+) -> Result<RecordBatch> {
+    match output {
+        CommitOutput::Command(CommandOutput::Empty) => Ok(RecordBatch::new_empty(schema)),
+        CommitOutput::Command(CommandOutput::Count) => commit_count_batch(schema, row_count),
+        CommitOutput::Command(_) => internal_err!("unsupported Iceberg command result"),
+        CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+            ..
+        } => {
+            let added_data_files_count =
+                i32::try_from(added_data_files_count).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "rewrite_data_files added file count overflow: {error}"
+                    ))
+                })?;
+            let removed_delete_files_count =
+                i32::try_from(removed_delete_files_count).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "rewrite_data_files removed delete count overflow: {error}"
+                    ))
+                })?;
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![*rewritten_data_files_count])),
+                    Arc::new(Int32Array::from(vec![added_data_files_count])),
+                    Arc::new(Int64Array::from(vec![*rewritten_bytes_count])),
+                    Arc::new(Int32Array::from(vec![0])),
+                    Arc::new(Int32Array::from(vec![removed_delete_files_count])),
+                ],
+            )
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))
+        }
+    }
 }
 
 fn expected_snapshot_requirement(
@@ -134,19 +130,22 @@ fn expected_snapshot_requirement(
     })
 }
 
-fn validate_scoped_overwrite_format(
+fn initializes_catalog_metadata_pointer(
+    expected_snapshot_id: Option<Option<i64>>,
+    commit_mode: IcebergCatalogCommitMode,
+    catalog_metadata_location: Option<&str>,
+) -> bool {
+    expected_snapshot_id.is_none()
+        && catalog_metadata_location.is_none()
+        && commit_mode.uses_metadata_location_update()
+}
+
+fn empty_rewrite_is_noop(
     snapshot_update_kind: SnapshotUpdateKind,
-    format_version: FormatVersion,
-) -> Result<()> {
-    if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-        && matches!(format_version, FormatVersion::V3)
-    {
-        return Err(DataFusionError::NotImplemented(
-            "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
-                .to_string(),
-        ));
-    }
-    Ok(())
+    dynamic_partition_overwrite: bool,
+) -> bool {
+    matches!(snapshot_update_kind, SnapshotUpdateKind::RewriteDataFiles)
+        || (snapshot_update_kind.is_targeted_rewrite() && dynamic_partition_overwrite)
 }
 
 #[derive(Debug)]
@@ -156,8 +155,10 @@ pub struct IcebergCommitExec {
     lakehouse_table: Option<LakehouseExecutionContext>,
     snapshot_update_kind: SnapshotUpdateKind,
     expected_snapshot_id: Option<Option<i64>>,
+    table_replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
+    output: CommitOutput,
     cache: Arc<PlanProperties>,
 }
 
@@ -185,10 +186,41 @@ impl IcebergCommitExec {
             lakehouse_table,
             snapshot_update_kind,
             expected_snapshot_id: None,
+            table_replacement: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
+            output: CommitOutput::Command(CommandOutput::Count),
             cache,
         }
+    }
+
+    pub fn with_table_replacement(
+        mut self,
+        replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
+    ) -> Self {
+        self.table_replacement = replacement;
+        self
+    }
+
+    pub fn table_replacement(
+        &self,
+    ) -> Option<&crate::operations::replacement::IcebergTableReplacement> {
+        self.table_replacement.as_ref()
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = CommitOutput::Command(output);
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(output.schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        self
+    }
+
+    pub fn output(&self) -> &CommitOutput {
+        &self.output
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -203,6 +235,27 @@ impl IcebergCommitExec {
 
     pub fn with_dynamic_partition_overwrite(mut self, enabled: bool) -> Self {
         self.dynamic_partition_overwrite = enabled;
+        self
+    }
+
+    pub fn with_rewrite_data_files_output(
+        mut self,
+        schema: SchemaRef,
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+        starting_sequence_number: Option<i64>,
+    ) -> Self {
+        self.output = CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+            starting_sequence_number,
+        };
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
         self
     }
 
@@ -257,23 +310,29 @@ impl IcebergCommitExec {
             .max(format_version_for_schema(&new_schema));
     }
 
-    fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
+    fn apply_partition_spec_update(
+        table_meta: &mut TableMetadata,
+        new_spec: PartitionSpec,
+    ) -> Result<()> {
         let spec_id = new_spec.spec_id();
-        let mut replaced = false;
-        for spec in table_meta.partition_specs.iter_mut() {
-            if spec.spec_id() == spec_id {
-                *spec = new_spec.clone();
-                replaced = true;
-                break;
+        if let Some(previous) = table_meta
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == spec_id)
+        {
+            if previous != &new_spec {
+                return Err(DataFusionError::Plan(format!(
+                    "Cannot replace Iceberg partition spec {spec_id} with a different definition"
+                )));
             }
-        }
-        if !replaced {
+        } else {
             table_meta.partition_specs.push(new_spec.clone());
         }
         table_meta.default_spec_id = spec_id;
         table_meta.last_partition_id = table_meta
             .last_partition_id
             .max(new_spec.last_assigned_field_id());
+        Ok(())
     }
 
     fn validate_requirements(
@@ -412,16 +471,7 @@ impl IcebergCommitExec {
     }
 
     fn unbound_partition_spec(spec: &PartitionSpec) -> UnboundPartitionSpec {
-        let fields = spec
-            .fields()
-            .iter()
-            .map(|field| UnboundPartitionField {
-                source_id: field.source_id,
-                name: field.name.clone(),
-                transform: field.transform,
-            })
-            .collect();
-        UnboundPartitionSpec { fields }
+        spec.into()
     }
 
     async fn load_catalog_table_info(
@@ -475,31 +525,15 @@ impl IcebergCommitExec {
         store_ctx: &StoreContext,
         table_metadata: &TableMetadata,
     ) -> Result<Vec<DataFile>> {
-        let Some(snapshot) = table_metadata.current_snapshot() else {
-            return Ok(Vec::new());
-        };
-        let manifest_list = load_manifest_list(store_ctx, snapshot.manifest_list()).await?;
-        let mut live_data_files = Vec::new();
-        for manifest_file in manifest_list.entries() {
-            let manifest = load_manifest(store_ctx, &manifest_file.manifest_path).await?;
-            for entry in manifest.entries().iter().filter(|entry| {
-                matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                )
-            }) {
-                if !matches!(entry.data_file.content, DataContentType::Data) {
-                    return Err(DataFusionError::Plan(
-                        "copy-on-write scoped overwrite is not supported for Iceberg tables with active delete files"
-                            .to_string(),
-                    ));
-                }
-                let mut file = entry.data_file.clone();
-                file.partition_spec_id = manifest_file.partition_spec_id;
-                live_data_files.push(file);
+        crate::table::files::collect_live_files(store_ctx, table_metadata, 1, |file| {
+            if !matches!(file.content, DataContentType::Data) {
+                return Err(DataFusionError::Plan(
+                    "copy-on-write scoped overwrite is not supported for Iceberg tables with active delete files"
+                        .to_string(),
+                ));
             }
-        }
-        Ok(live_data_files)
+            Ok(Some(file))
+        }).await
     }
 
     fn dynamic_partition_overwrite_paths(
@@ -600,13 +634,25 @@ impl IcebergCommitExec {
             return Ok(());
         };
 
+        let action_summary = match (&existing.action_summary, &incoming.action_summary) {
+            (Some(existing), Some(incoming)) => Some(existing.checked_add(incoming)?),
+            (None, None) => None,
+            _ => return internal_err!("Inconsistent Iceberg action summary availability"),
+        };
+        incoming.action_summary.clone_from(&existing.action_summary);
         let incoming_row_count = incoming.row_count;
+        let incoming_removals = std::mem::take(&mut incoming.removed_data_file_paths);
+        incoming
+            .removed_data_file_paths
+            .clone_from(&existing.removed_data_file_paths);
         incoming.row_count = existing.row_count;
         if existing != &incoming {
             return Err(DataFusionError::Internal(
                 "inconsistent commit_meta actions from Iceberg writer partitions".to_string(),
             ));
         }
+        existing.action_summary = action_summary;
+        existing.removed_data_file_paths.extend(incoming_removals);
         existing.row_count = existing
             .row_count
             .checked_add(incoming_row_count)
@@ -660,17 +706,33 @@ impl ExecutionPlan for IcebergCommitExec {
         if children.len() != 1 {
             return internal_err!("IcebergCommitExec requires exactly one child");
         }
-        Ok(Arc::new(
-            Self::new(
-                Arc::clone(&children[0]),
-                self.table_url.clone(),
-                self.lakehouse_table.clone(),
-                self.snapshot_update_kind,
-            )
-            .with_expected_snapshot_id(self.expected_snapshot_id)
-            .with_removed_data_file_paths(self.removed_data_file_paths.clone())
-            .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),
-        ))
+        let mut commit = Self::new(
+            Arc::clone(&children[0]),
+            self.table_url.clone(),
+            self.lakehouse_table.clone(),
+            self.snapshot_update_kind,
+        )
+        .with_expected_snapshot_id(self.expected_snapshot_id)
+        .with_table_replacement(self.table_replacement.clone())
+        .with_removed_data_file_paths(self.removed_data_file_paths.clone())
+        .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
+        if let CommitOutput::Command(output) = &self.output {
+            commit = commit.with_output(*output);
+        }
+        if let CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+            starting_sequence_number,
+        } = &self.output
+        {
+            commit = commit.with_rewrite_data_files_output(
+                self.schema(),
+                *rewritten_data_files_count,
+                *rewritten_bytes_count,
+                *starting_sequence_number,
+            );
+        }
+        Ok(Arc::new(commit))
     }
 
     fn execute(
@@ -695,8 +757,10 @@ impl ExecutionPlan for IcebergCommitExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let snapshot_update_kind = self.snapshot_update_kind;
         let expected_snapshot_id = self.expected_snapshot_id;
+        let table_replacement = self.table_replacement.clone();
         let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
         let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
+        let output = self.output.clone();
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -707,38 +771,25 @@ impl ExecutionPlan for IcebergCommitExec {
             let mut added_data_files: Vec<DataFile> = Vec::new();
             let mut added_delete_files: Vec<DataFile> = Vec::new();
             let mut commit_meta = None;
-            let input_result: Result<()> = async {
-                while let Some(batch_result) = data.next().await {
-                    let batch = batch_result?;
-                    if batch.num_rows() == 0 {
-                        continue;
-                    }
-                    let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
-                    added_data_files.extend(adds);
-                    added_delete_files.extend(deletes);
-                    if let Some(meta) = meta {
-                        Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
-                    }
+            // Writer output may be replayed after publication. Commit attempts do not own
+            // these task files, including when input consumption or publication fails.
+            while let Some(batch_result) = data.next().await {
+                let batch = batch_result?;
+                if batch.num_rows() == 0 {
+                    continue;
                 }
-                Ok(())
+                let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
+                added_data_files.extend(adds);
+                added_delete_files.extend(deletes);
+                for meta in meta {
+                    Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
+                }
             }
-            .await;
-            if let Err(error) = input_result {
-                let paths = task_file_paths(&added_data_files, &added_delete_files);
-                cleanup_uncommitted_task_files(&store_ctx, &paths).await;
-                return Err(error);
-            }
-
-            let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
-            let mut task_files_may_be_committed = false;
-            // FIXME: Move task-file cleanup to the job terminal state. Attempt-local cleanup is
-            // unsafe when blocking-shuffle retries replay these actions.
-            let commit_result: Result<RecordBatch> = async {
-
+            let added_data_files_count = added_data_files.len();
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
             {
-                return commit_count_batch(schema, 0);
+                return commit_output_batch(schema, &output, 0, 0, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -747,9 +798,16 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
+            let skip_empty_commit = commit_meta.skip_empty_commit;
+            let mut removed_data_file_paths = planned_removed_data_file_paths;
+            removed_data_file_paths.extend(commit_meta.removed_data_file_paths);
+            removed_data_file_paths.sort();
+            removed_data_file_paths.dedup();
+
             let mut commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
+                action_summary: commit_meta.action_summary,
                 data_files: added_data_files,
                 delete_files: added_delete_files,
                 manifest_path: String::new(),
@@ -757,30 +815,46 @@ impl ExecutionPlan for IcebergCommitExec {
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
+                snapshot_properties: commit_meta.snapshot_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 snapshot_update_kind,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
+            if let Some(replacement) = table_replacement {
+                crate::operations::replacement::commit_replacement(
+                    &context,
+                    &table_url,
+                    &store_ctx,
+                    replacement,
+                    &commit_info,
+                )
+                .await?;
+                return commit_output_batch(
+                    schema,
+                    &output,
+                    commit_info.row_count,
+                    added_data_files_count,
+                    0,
+                );
+            }
             if let Some(requirement) = expected_snapshot_requirement(expected_snapshot_id)
                 && !commit_info.requirements.contains(&requirement)
             {
                 commit_info.requirements.push(requirement);
             }
-            if !matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-                && (dynamic_partition_overwrite || !planned_removed_data_file_paths.is_empty())
+            if !snapshot_update_kind.is_targeted_rewrite()
+                && (dynamic_partition_overwrite || !removed_data_file_paths.is_empty())
             {
                 return Err(DataFusionError::Internal(
                     "scoped overwrite requires a copy-on-write snapshot update".to_string(),
                 ));
             }
-            if dynamic_partition_overwrite && !planned_removed_data_file_paths.is_empty() {
+            if dynamic_partition_overwrite && !removed_data_file_paths.is_empty() {
                 return Err(DataFusionError::Internal(
                     "dynamic partition overwrite cannot carry planned removal paths".to_string(),
                 ));
             }
-            let mut removed_data_file_paths = planned_removed_data_file_paths;
-
             let catalog_table = commit_info
                 .lakehouse_table
                 .as_ref()
@@ -806,9 +880,11 @@ impl ExecutionPlan for IcebergCommitExec {
                     .or_else(|| catalog_table_info.metadata_location.clone());
             // A catalog entry can precede the first metadata commit for a write planned without
             // a base table. Only that plan may initialize the catalog pointer with a CAS update.
-            let initializes_catalog_metadata_pointer = expected_snapshot_id.is_none()
-                && catalog_recorded_metadata_location.is_none()
-                && catalog_commit_mode.uses_metadata_location_update();
+            let initializes_catalog_metadata_pointer = initializes_catalog_metadata_pointer(
+                expected_snapshot_id,
+                catalog_commit_mode,
+                catalog_recorded_metadata_location.as_deref(),
+            );
             let catalog_metadata_location = if initializes_catalog_metadata_pointer {
                 None
             } else {
@@ -836,6 +912,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 })
             };
+            if let Some(Err(error)) = &latest_meta_res
+                && !error.to_string().contains("No metadata files found")
+            {
+                return Err(DataFusionError::Plan(format!(
+                    "cannot resolve Iceberg table metadata: {error}"
+                )));
+            }
             let catalog_metadata_table = catalog_table
                 .as_ref()
                 .filter(|_| catalog_commit_mode.uses_catalog_metadata());
@@ -867,7 +950,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Uuid,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     let new_metadata_location =
                         Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
                     Self::update_catalog_metadata_location(
@@ -884,6 +966,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     ));
                 } else {
                     // Bootstrap a new table using the Hadoop/path-table convention.
+                    let base_codec = BaseMetadataCodec::capture(None)?;
                     let bootstrap_result = bootstrap_new_table_with_style(
                         &table_url,
                         &store_ctx,
@@ -891,7 +974,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Hadoop,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     if let Some(catalog_table) = catalog_registered_metadata_table {
                         let new_metadata_location = Self::table_metadata_location(
                             &table_url,
@@ -904,11 +986,21 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned(base_codec)
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(
+                    schema,
+                    &output,
+                    commit_info.row_count,
+                    added_data_files_count,
+                    0,
+                );
             };
 
             let mut attempt = 0;
@@ -933,11 +1025,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
-                validate_scoped_overwrite_format(
-                    snapshot_update_kind,
-                    table_meta.format_version,
-                )?;
                 if dynamic_partition_overwrite {
                     let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
                         DataFusionError::Plan(
@@ -958,13 +1047,13 @@ impl ExecutionPlan for IcebergCommitExec {
                         current_schema,
                     )?;
                 }
-                if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-                    && dynamic_partition_overwrite
+                if (skip_empty_commit
+                    || empty_rewrite_is_noop(snapshot_update_kind, dynamic_partition_overwrite))
                     && commit_info.data_files.is_empty()
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
                 {
-                    return commit_count_batch(schema, commit_info.row_count);
+                    return commit_output_batch(schema, &output, commit_info.row_count, 0, 0);
                 }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
@@ -990,18 +1079,14 @@ impl ExecutionPlan for IcebergCommitExec {
                     .cloned()
                     .unwrap_or_else(PartitionSpec::unpartitioned_spec);
                 if let Some(new_spec) = commit_info.partition_spec.clone() {
-                    let spec = if new_spec.spec_id() == 0 && table_meta.default_spec_id != 0 {
-                        new_spec.with_spec_id(table_meta.default_spec_id)
-                    } else {
-                        new_spec
-                    };
+                    let spec = new_spec;
                     let spec_id = spec.spec_id();
                     let should_add_spec = !table_meta
                         .partition_specs
                         .iter()
                         .any(|partition_spec| partition_spec.spec_id() == spec_id);
                     let should_set_default_spec = table_meta.default_spec_id != spec_id;
-                    Self::apply_partition_spec_update(&mut table_meta, spec.clone());
+                    Self::apply_partition_spec_update(&mut table_meta, spec.clone())?;
                     partition_spec_for_commit = spec;
                     if should_add_spec {
                         metadata_updates.push(TableUpdate::AddSpec {
@@ -1027,12 +1112,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         },
                     );
                 }
-                // Schema evolution can raise a loaded v2 table to v3. Re-check the effective
-                // version before row-lineage resolution or any manifest work.
-                validate_scoped_overwrite_format(
-                    snapshot_update_kind,
-                    table_meta.format_version,
-                )?;
                 let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
@@ -1047,10 +1126,8 @@ impl ExecutionPlan for IcebergCommitExec {
                             &table_meta,
                         )
                         .await?;
-                        let action_requirements = prepared_snapshot
-                            .action_commit()
-                            .requirements()
-                            .to_vec();
+                        let action_requirements =
+                            prepared_snapshot.action_commit().requirements().to_vec();
                         if let Err(error) =
                             Self::validate_requirements(Some(&table_meta), &action_requirements)
                         {
@@ -1075,7 +1152,6 @@ impl ExecutionPlan for IcebergCommitExec {
                             }
                         };
                         prepared_snapshot.publication_started();
-                        task_files_may_be_committed = true;
                         let catalog_outcome = match Self::try_commit_to_catalog(
                             &context,
                             catalog_table,
@@ -1099,10 +1175,15 @@ impl ExecutionPlan for IcebergCommitExec {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
                                 prepared_snapshot.commit_succeeded();
-                                return commit_count_batch(schema, commit_info.row_count);
+                                return commit_output_batch(
+                                    schema,
+                                    &output,
+                                    commit_info.row_count,
+                                    added_data_files_count,
+                                    0,
+                                );
                             }
                             CatalogCommitOutcome::NotSupported => {
-                                task_files_may_be_committed = false;
                                 prepared_snapshot.cleanup().await;
                                 if matches!(
                                     catalog_commit_mode,
@@ -1117,7 +1198,6 @@ impl ExecutionPlan for IcebergCommitExec {
                                 }
                             }
                             CatalogCommitOutcome::Conflict => {
-                                task_files_may_be_committed = false;
                                 prepared_snapshot.cleanup().await;
                                 if attempt >= MAX_COMMIT_RETRIES {
                                     return Err(commit_conflict_error());
@@ -1146,7 +1226,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         persist_strategy,
                     )
                     .await?;
-                    task_files_may_be_committed = true;
                     if let (Some(catalog_table), Some(previous_metadata_location)) =
                         (catalog_fallback_table, catalog_metadata_location.as_deref())
                     {
@@ -1174,10 +1253,20 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned(base_codec)
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
 
-                    return commit_count_batch(schema, commit_info.row_count);
+                    return commit_output_batch(
+                        schema,
+                        &output,
+                        commit_info.row_count,
+                        added_data_files_count,
+                        0,
+                    );
                 }
 
                 let snapshot = maybe_snapshot.ok_or_else(|| {
@@ -1187,8 +1276,13 @@ impl ExecutionPlan for IcebergCommitExec {
                 let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
                 let next_version = current_version + 1;
 
-                let existing_for_next =
-                    metadata_files_for_version(&store_ctx, next_version).await?;
+                // Catalog commits are ordered by their expected metadata pointer, not
+                // by unreferenced metadata objects left in the table directory.
+                let existing_for_next = if catalog_commit_mode.uses_catalog_metadata() {
+                    vec![]
+                } else {
+                    metadata_files_for_version(&store_ctx, next_version).await?
+                };
                 if !existing_for_next.is_empty() {
                     log::warn!(
                         "Detected existing metadata files for version {}: {:?}. Retrying attempt {}",
@@ -1219,8 +1313,27 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(store_ctx.clone()),
                     Some(manifest_meta),
                 )
+                .with_snapshot_properties(commit_info.snapshot_properties.clone())
+                .with_action_summary_properties(
+                    commit_info
+                        .action_summary
+                        .as_ref()
+                        .map(|summary| summary.properties())
+                        .unwrap_or_default(),
+                )
                 .with_added_delete_files(commit_info.delete_files.clone())
                 .with_removed_data_file_paths(removed_data_file_paths.clone())
+                .with_added_data_sequence_number(match &output {
+                    // A metadata-only upgrade can leave the pinned snapshot unchanged.
+                    // V3 must inherit the new commit sequence even for a writer planned on V2.
+                    CommitOutput::RewriteDataFiles {
+                        starting_sequence_number,
+                        ..
+                    } if table_meta.format_version != crate::spec::FormatVersion::V3 => {
+                        *starting_sequence_number
+                    }
+                    _ => None,
+                })
                 .with_partition_specs(table_meta.partition_specs.clone())
                 .with_row_lineage_start_row_id(row_lineage_start_row_id)
                 .mark_dynamic_partition_overwrite(dynamic_partition_overwrite)
@@ -1236,7 +1349,35 @@ impl ExecutionPlan for IcebergCommitExec {
                     prepared_snapshot.cleanup().await;
                     return Err(error);
                 }
-                let action_updates = prepared_snapshot.action_commit().updates().to_vec();
+                let mut action_updates = prepared_snapshot.action_commit().updates().to_vec();
+                let removed_delete_files_count = action_updates
+                    .iter()
+                    .find_map(|update| {
+                        if let TableUpdate::AddSnapshot { snapshot } = update {
+                            snapshot
+                                .summary()
+                                .additional_properties
+                                .get("removed-delete-files")
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|count| count.parse::<usize>())
+                    .transpose()
+                    .map_err(|error| {
+                        DataFusionError::Execution(format!("Invalid removed delete count: {error}"))
+                    })?
+                    .unwrap_or(0);
+                for update in &mut action_updates {
+                    if let TableUpdate::SetSnapshotRef {
+                        ref_name,
+                        reference,
+                    } = update
+                        && let Some(previous) = table_meta.refs.get(ref_name)
+                    {
+                        reference.retention = previous.retention.clone();
+                    }
+                }
                 if let Some(catalog_table) = catalog_commit_table {
                     let requirements = catalog_requirements(
                         &table_meta,
@@ -1255,7 +1396,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         }
                     };
                     prepared_snapshot.publication_started();
-                    task_files_may_be_committed = true;
                     let catalog_outcome = match Self::try_commit_to_catalog(
                         &context,
                         catalog_table,
@@ -1279,18 +1419,23 @@ impl ExecutionPlan for IcebergCommitExec {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
                             prepared_snapshot.commit_succeeded();
-                            return commit_count_batch(schema, commit_info.row_count);
+                            return commit_output_batch(
+                                schema,
+                                &output,
+                                commit_info.row_count,
+                                added_data_files_count,
+                                removed_delete_files_count,
+                            );
                         }
                         CatalogCommitOutcome::NotSupported
                             if matches!(
                                 catalog_commit_mode,
                                 IcebergCatalogCommitMode::CompatibilityCatalogCommit
-                            ) => {
-                            task_files_may_be_committed = false;
+                            ) =>
+                        {
                             prepared_snapshot.publication_did_not_happen();
                         }
                         CatalogCommitOutcome::NotSupported => {
-                            task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                             return Err(DataFusionError::Plan(
                                 "Iceberg catalog commit is not supported by the resolved catalog authority"
@@ -1298,7 +1443,6 @@ impl ExecutionPlan for IcebergCommitExec {
                             ));
                         }
                         CatalogCommitOutcome::Conflict => {
-                            task_files_may_be_committed = false;
                             prepared_snapshot.cleanup().await;
                             if attempt >= MAX_COMMIT_RETRIES {
                                 return Err(commit_conflict_error());
@@ -1308,110 +1452,34 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                log::trace!("commit_exec: applying updates: {:?}", action_updates);
-                let mut newest_snapshot_seq: Option<i64> = None;
-                let mut newest_snapshot_added_rows: Option<i64> = None;
-                let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
-                let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
-                for upd in action_updates {
-                    match upd {
-                        TableUpdate::AddSnapshot { snapshot } => {
-                            newest_snapshot_seq = Some(snapshot.sequence_number());
-                            newest_snapshot_added_rows = snapshot.added_rows;
-                            table_meta.snapshots.push(snapshot.clone());
-                            table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
-                            table_meta.snapshot_log.push(SnapshotLog {
-                                timestamp_ms,
-                                snapshot_id: snapshot.snapshot_id(),
-                            });
-                        }
-                        TableUpdate::SetSnapshotRef {
-                            ref_name,
-                            reference,
-                        } => {
-                            table_meta.refs.insert(ref_name, reference);
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(seq) = newest_snapshot_seq
-                    && seq > table_meta.last_sequence_number
-                {
-                    table_meta.last_sequence_number = seq;
-                }
-                table_meta.last_updated_ms = timestamp_ms;
-                if let Some(added_rows) = newest_snapshot_added_rows {
-                    table_meta.advance_next_row_id(added_rows);
-                }
-
-                // Add metadata_log entry referencing previous metadata file
-                table_meta
-                    .metadata_log
-                    .push(crate::spec::metadata::table_metadata::MetadataLog {
-                        timestamp_ms: previous_metadata_timestamp_ms,
-                        metadata_file: catalog_metadata_location
-                            .clone()
-                            .unwrap_or_else(|| latest_meta.clone()),
-                    });
-
-                let use_uuid_metadata_file = catalog_metadata_update_table.is_some();
-                let encoded_metadata: Result<(String, String, Vec<u8>)> = (|| {
-                    let metadata_json = table_meta
-                        .to_json()
-                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-                    let file_extension =
-                        metadata_file_extension_from_properties(&table_meta.properties)?;
-                    let metadata_file = if use_uuid_metadata_file {
-                        format!(
-                            "metadata/{next_version:05}-{}{file_extension}",
-                            uuid::Uuid::new_v4()
-                        )
-                    } else {
-                        format!("metadata/v{next_version}{file_extension}")
-                    };
-                    let metadata_location =
-                        Self::table_metadata_location(&table_url, &metadata_file)?;
-                    let metadata_bytes = encode_metadata_file(&metadata_file, &metadata_json)
-                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-                    Ok((metadata_file, metadata_location, metadata_bytes))
-                })();
-                let (metadata_file, metadata_location, metadata_bytes) = match encoded_metadata {
-                    Ok(encoded_metadata) => encoded_metadata,
+                let style = if catalog_metadata_update_table.is_some() {
+                    MetadataFileStyle::Unique
+                } else {
+                    MetadataFileStyle::Versioned(base_codec)
+                };
+                let prepared_metadata = apply_snapshot_updates(
+                    &table_url,
+                    &mut table_meta,
+                    &action_updates,
+                    catalog_metadata_location.as_deref().map_or(
+                        PreviousMetadataFile::ObjectPath(&latest_meta),
+                        PreviousMetadataFile::CatalogLocation,
+                    ),
+                )
+                .and_then(|()| {
+                    MetadataFileCommit::prepare(&table_url, &table_meta, next_version, style)
+                });
+                let prepared_metadata = match prepared_metadata {
+                    Ok(metadata) => metadata,
                     Err(error) => {
                         prepared_snapshot.cleanup().await;
                         return Err(error);
                     }
                 };
-
-                log::trace!(
-                    "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    metadata_file,
-                    table_meta.current_snapshot_id,
-                    table_url
-                );
-
-                let metadata_path = object_store::path::Path::from(metadata_file.as_str());
-                let put_opts = object_store::PutOptions {
-                    mode: object_store::PutMode::Create,
-                    ..Default::default()
-                };
-                let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes));
                 prepared_snapshot.publication_started();
-                match store_ctx
-                    .prefixed
-                    .put_opts(&metadata_path, payload, put_opts)
-                    .await
-                {
-                    Ok(_) => {
-                        task_files_may_be_committed = true;
-                    }
-                    Err(object_store::Error::AlreadyExists { .. }) => {
-                        log::warn!(
-                            "Metadata file {} already exists for version {}. Retrying attempt {}",
-                            metadata_file,
-                            next_version,
-                            attempt
-                        );
+                match prepared_metadata.write(&store_ctx).await? {
+                    MetadataWriteOutcome::Written => {}
+                    MetadataWriteOutcome::Conflict => {
                         prepared_snapshot.publication_did_not_happen();
                         prepared_snapshot.cleanup().await;
                         if attempt >= MAX_COMMIT_RETRIES {
@@ -1419,48 +1487,10 @@ impl ExecutionPlan for IcebergCommitExec {
                         }
                         continue;
                     }
-                    Err(error) => {
-                        return Err(DataFusionError::External(Box::new(error)));
-                    }
                 }
-                let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
-                let conflict_after_write = version_files.iter().any(|path| path != &metadata_file);
-                if conflict_after_write {
-                    log::warn!(
-                        "Concurrent metadata writes detected for version {}: {:?}. Retrying attempt {}",
-                        next_version,
-                        version_files,
-                        attempt
-                    );
-                    match store_ctx.prefixed.delete(&metadata_path).await {
-                        Ok(()) | Err(object_store::Error::NotFound { .. }) => {
-                            task_files_may_be_committed = false;
-                            prepared_snapshot.cleanup().await;
-                        }
-                        Err(error) => {
-                            return Err(DataFusionError::Execution(format!(
-                                "failed to remove conflicted Iceberg metadata file {metadata_file}; commit state is uncertain: {error}"
-                            )));
-                        }
-                    }
-                    if attempt >= MAX_COMMIT_RETRIES {
-                        return Err(commit_conflict_error());
-                    }
-                    continue;
-                }
-                log::trace!("Metadata written successfully");
                 prepared_snapshot.commit_succeeded();
-
-                let version_hint = if use_uuid_metadata_file {
-                    metadata_file
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(metadata_file.as_str())
-                        .to_string()
-                } else {
-                    next_version.to_string()
-                };
-                write_version_hint(&store_ctx.prefixed, &version_hint).await;
+                prepared_metadata.write_hint(&store_ctx).await;
+                let metadata_location = prepared_metadata.location();
 
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     Self::update_catalog_metadata_location(
@@ -1468,29 +1498,30 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_metadata_location.as_deref(),
-                        &metadata_location,
+                        metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
                     Self::update_catalog_metadata_location(
                         &context,
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_recorded_metadata_location.as_deref(),
-                        &metadata_location,
+                        metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(
+                    schema,
+                    &output,
+                    commit_info.row_count,
+                    added_data_files_count,
+                    removed_delete_files_count,
+                );
             }
-            }
-            .await;
-
-            if commit_result.is_err() && !task_files_may_be_committed {
-                cleanup_uncommitted_task_files(&store_ctx, &task_file_paths).await;
-            }
-            commit_result
         };
 
         let stream = once(future);
@@ -1505,7 +1536,16 @@ impl DisplayAs for IcebergCommitExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "IcebergCommitExec(table_path={})", self.table_url)
+                write!(
+                    f,
+                    "IcebergCommitExec(table_path={}{})",
+                    self.table_url,
+                    if self.table_replacement.is_some() {
+                        ", replacement=true"
+                    } else {
+                        ""
+                    }
+                )
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;
@@ -1529,6 +1569,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier, Mutex};
 
+    use bytes::Bytes;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::prelude::SessionContext;
     use futures::stream::BoxStream;
@@ -1540,9 +1581,11 @@ mod tests {
     };
 
     use super::*;
+    use crate::io::{load_manifest, load_manifest_list};
     use crate::physical_plan::action_schema::{
         encode_add_data_files, encode_commit_meta, iceberg_action_schema,
     };
+    use crate::spec::metadata::table_metadata::SnapshotLog;
     use crate::spec::transform::Transform;
     use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
@@ -1550,31 +1593,50 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
+    use crate::table::metadata_loader::encode_metadata_file;
 
     #[test]
-    fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
-        let schema = IcebergSchema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![Arc::new(NestedField::required(
-                1,
-                "event_time",
-                Type::Primitive(PrimitiveType::TimestampNs),
-            ))])
-            .build()
-            .expect("v3 schema");
-        let effective = FormatVersion::V2.max(format_version_for_schema(&schema));
-        assert_eq!(effective, FormatVersion::V3);
-
-        for mode in ["predicate", "dynamic"] {
-            let error =
-                validate_scoped_overwrite_format(SnapshotUpdateKind::CopyOnWrite, effective)
-                    .expect_err(mode);
-            assert!(error.to_string().contains("v3 scoped overwrite"), "{mode}");
+    fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {
+        for commit_mode in [
+            IcebergCatalogCommitMode::MetadataLocationCas,
+            IcebergCatalogCommitMode::CompatibilityCatalogCommit,
+        ] {
+            assert!(initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(None),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(Some(42)),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                Some("s3://bucket/table/metadata/00000.metadata.json")
+            ));
         }
+
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::Filesystem,
+            None
+        ));
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::CatalogCommit,
+            None
+        ));
     }
 
     #[test]
-    fn scoped_overwrite_execute_rechecks_format_after_schema_evolution() {
+    fn scoped_overwrite_initializes_lineage_after_schema_evolution() {
         futures::executor::block_on(async {
             let table_url = Url::parse("file:///tmp/scoped-overwrite-v3/").expect("table URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
@@ -1614,8 +1676,12 @@ mod tests {
             let action_batch = encode_commit_meta(CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: 0,
+                action_summary: None,
+                removed_data_file_paths: vec![],
+                skip_empty_commit: false,
                 requirements: vec![],
                 table_properties,
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 schema: Some(evolved_schema),
                 partition_spec: None,
@@ -1627,23 +1693,36 @@ mod tests {
                 None,
             )
             .expect("memory input");
-            let commit =
-                IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::CopyOnWrite)
-                    .with_removed_data_file_paths(vec!["old.parquet".to_string()]);
+            let commit = IcebergCommitExec::new(
+                input,
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::CopyOnWrite,
+            );
             let context = SessionContext::new();
-            context
-                .runtime_env()
-                .register_object_store(&Url::parse("file:///").expect("file store URL"), memory);
+            context.runtime_env().register_object_store(
+                &Url::parse("file:///").expect("file store URL"),
+                memory.clone(),
+            );
 
             let mut output = commit
                 .execute(0, context.task_ctx())
                 .expect("commit stream");
-            let error = output
+            output
                 .next()
                 .await
                 .expect("commit result")
-                .expect_err("effective v3 scoped overwrite must fail");
-            assert!(error.to_string().contains("v3 scoped overwrite"));
+                .expect("v3 scoped overwrite");
+            let store: Arc<dyn ObjectStore> = memory;
+            let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                .await
+                .expect("metadata location");
+            let bytes = load_metadata_file_bytes(&store, &location)
+                .await
+                .expect("metadata bytes");
+            let metadata = TableMetadata::from_json(&bytes).expect("metadata");
+            assert_eq!(metadata.format_version, FormatVersion::V3);
+            assert!(metadata.next_row_id.is_some());
         });
     }
 
@@ -1766,21 +1845,40 @@ mod tests {
         assert!(paths.is_empty());
     }
 
-    #[derive(Debug)]
-    struct ConcurrentMetadataStore {
-        memory_store: Arc<object_store::memory::InMemory>,
-        concurrent_metadata: Bytes,
-        conflict_injected: AtomicBool,
+    #[test]
+    fn empty_predicate_overwrite_keeps_delete_intent() {
+        assert!(!empty_rewrite_is_noop(
+            SnapshotUpdateKind::CopyOnWrite,
+            false
+        ));
+        assert!(empty_rewrite_is_noop(SnapshotUpdateKind::CopyOnWrite, true));
+        assert!(empty_rewrite_is_noop(
+            SnapshotUpdateKind::RewriteDataFiles,
+            false
+        ));
     }
 
-    impl std::fmt::Display for ConcurrentMetadataStore {
+    #[derive(Debug)]
+    enum MetadataWriteFault {
+        Conflict(Bytes),
+        LostAcknowledgement,
+    }
+
+    #[derive(Debug)]
+    struct FaultInjectingMetadataStore {
+        memory_store: Arc<object_store::memory::InMemory>,
+        fault: MetadataWriteFault,
+        fault_injected: AtomicBool,
+    }
+
+    impl std::fmt::Display for FaultInjectingMetadataStore {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "ConcurrentMetadataStore")
+            write!(f, "FaultInjectingMetadataStore")
         }
     }
 
     #[async_trait::async_trait]
-    impl ObjectStore for ConcurrentMetadataStore {
+    impl ObjectStore for FaultInjectingMetadataStore {
         async fn put_opts(
             &self,
             location: &Path,
@@ -1788,11 +1886,23 @@ mod tests {
             opts: PutOptions,
         ) -> object_store::Result<PutResult> {
             if location.as_ref().ends_with("metadata/v2.metadata.json")
-                && !self.conflict_injected.swap(true, Ordering::SeqCst)
+                && !self.fault_injected.swap(true, Ordering::SeqCst)
             {
-                self.memory_store
-                    .put(location, PutPayload::from(self.concurrent_metadata.clone()))
-                    .await?;
+                match &self.fault {
+                    MetadataWriteFault::Conflict(metadata) => {
+                        self.memory_store
+                            .put(location, PutPayload::from(metadata.clone()))
+                            .await?;
+                    }
+                    MetadataWriteFault::LostAcknowledgement => {
+                        self.memory_store.put_opts(location, payload, opts).await?;
+                        return Err(object_store::Error::Generic {
+                            store: "fault injection",
+                            source: std::io::Error::other("lost metadata write acknowledgement")
+                                .into(),
+                        });
+                    }
+                }
             }
             self.memory_store.put_opts(location, payload, opts).await
         }
@@ -1932,15 +2042,492 @@ mod tests {
     }
 
     #[test]
-    fn empty_predicate_overwrite_validates_expected_snapshot() {
+    fn copy_on_write_commit_accumulates_partition_removals() {
+        let mut accumulated = None;
+        let first = CommitMeta {
+            table_uri: "file:///tmp/cow/".to_string(),
+            row_count: 1,
+            removed_data_file_paths: vec!["first.parquet".to_string()],
+            skip_empty_commit: true,
+            ..Default::default()
+        };
+        let mut second = first.clone();
+        second.row_count = 2;
+        second.removed_data_file_paths = vec!["second.parquet".to_string()];
+        IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, first.clone())
+            .expect("first partition");
+        IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, second)
+            .expect("second partition");
+        let expected = CommitMeta {
+            row_count: 3,
+            removed_data_file_paths: vec![
+                "first.parquet".to_string(),
+                "second.parquet".to_string(),
+            ],
+            ..first.clone()
+        };
+        assert_eq!(accumulated, Some(expected));
+        let incompatible = CommitMeta {
+            skip_empty_commit: false,
+            ..first
+        };
+        assert!(
+            IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, incompatible).is_err()
+        );
+    }
+
+    #[test]
+    fn partition_snapshot_properties_must_match_even_for_empty_partitions() {
+        let first = CommitMeta {
+            row_count: 1,
+            snapshot_properties: std::collections::BTreeMap::from([(
+                "run-id".to_string(),
+                "first".to_string(),
+            )]),
+            ..Default::default()
+        };
+        let mut accumulated = Some(first.clone());
+        let empty = CommitMeta {
+            row_count: 0,
+            ..first.clone()
+        };
+        IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, empty)
+            .expect("matching empty partition");
+        assert_eq!(accumulated, Some(first.clone()));
+        for properties in [
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::from([("run-id".into(), "other".into())]),
+            std::collections::BTreeMap::from([("another-key".into(), "first".into())]),
+        ] {
+            let incompatible = CommitMeta {
+                row_count: 0,
+                snapshot_properties: properties,
+                ..first.clone()
+            };
+            assert!(
+                IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, incompatible)
+                    .is_err()
+            );
+            assert_eq!(accumulated, Some(first.clone()));
+        }
+    }
+
+    #[test]
+    fn commit_aggregates_action_summaries_before_comparing_metadata() -> Result<()> {
+        use crate::operation_metrics::{IcebergActionSummary, IcebergOperation};
+        let mut first_summary = IcebergActionSummary::new(IcebergOperation::Insert);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )?;
+        first_summary.add_batch(&batch, None)?;
+        let first = CommitMeta {
+            table_uri: "file:///summary/".to_string(),
+            action_summary: Some(first_summary.clone()),
+            ..Default::default()
+        };
+        let empty = CommitMeta {
+            action_summary: Some(IcebergActionSummary::new(IcebergOperation::Insert)),
+            ..first.clone()
+        };
+        let mut accumulated = None;
+        for partition in [first.clone(), empty, first.clone()] {
+            let encoded = crate::physical_plan::action_schema::encode_commit_meta(partition)?;
+            let (_, _, decoded) = decode_actions_and_meta_from_batch(&encoded)?;
+            for meta in decoded {
+                IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, meta)?;
+            }
+        }
+        assert_eq!(
+            accumulated
+                .as_ref()
+                .and_then(|meta| meta.action_summary.as_ref()),
+            Some(&first_summary.checked_add(&first_summary)?)
+        );
+        let different = CommitMeta {
+            action_summary: Some(IcebergActionSummary::new(IcebergOperation::Merge)),
+            ..first.clone()
+        };
+        assert!(IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, different).is_err());
+        let missing = CommitMeta {
+            action_summary: None,
+            ..first
+        };
+        assert!(IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, missing).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_annotations_coexist_with_action_metrics_across_bootstrap_and_append() {
+        use crate::operation_metrics::{IcebergActionSummary, IcebergOperation};
+
+        for existing_empty_table in [false, true] {
+            futures::executor::block_on(async {
+                let table_url = Url::parse("file:///tmp/annotated-metrics/").expect("table URL");
+                let memory = Arc::new(object_store::memory::InMemory::new());
+                let store: Arc<dyn ObjectStore> = memory.clone();
+                let store_ctx =
+                    StoreContext::new(store.clone(), &table_url).expect("store context");
+                let iceberg_schema = IcebergSchema::builder()
+                    .with_fields([Arc::new(NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Long),
+                    ))])
+                    .build()
+                    .expect("schema");
+                let table_properties = vec![
+                    ("format-version".to_string(), "2".to_string()),
+                    ("run-id".to_string(), "table-value".to_string()),
+                ];
+                if existing_empty_table {
+                    crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                        &table_url,
+                        &store_ctx,
+                        iceberg_schema.clone(),
+                        PartitionSpec::unpartitioned_spec(),
+                        &table_properties,
+                        NewTableMetadataStyle::Hadoop,
+                    )
+                    .await
+                    .expect("empty table metadata");
+                }
+                let context = SessionContext::new();
+                context.runtime_env().register_object_store(
+                    &Url::parse("file:///").expect("file store URL"),
+                    memory,
+                );
+                let mut previous_snapshot = None;
+                for write_index in 1..=2 {
+                    let snapshot_properties = if write_index == 1 {
+                        std::collections::BTreeMap::from([
+                            ("run-id".to_string(), "write-value".to_string()),
+                            ("empty".to_string(), String::new()),
+                            (
+                                "spark.insert.num-inserted-rows".to_string(),
+                                "999".to_string(),
+                            ),
+                        ])
+                    } else {
+                        Default::default()
+                    };
+                    let mut actions = Vec::new();
+                    for (partition, rows) in [1, 0, 2].into_iter().enumerate() {
+                        let batch = RecordBatch::try_new(
+                            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+                            vec![Arc::new(Int64Array::from(vec![1; rows]))],
+                        )
+                        .expect("writer input");
+                        let mut action_summary =
+                            IcebergActionSummary::new(IcebergOperation::Insert);
+                        action_summary
+                            .add_batch(&batch, None)
+                            .expect("action summary");
+                        if rows > 0 {
+                            let path = format!("{table_url}data/{write_index}-{partition}.parquet");
+                            actions.push(
+                                encode_add_data_files(vec![DataFile {
+                                    partition: vec![],
+                                    record_count: rows as u64,
+                                    ..partitioned_data_file(&path, 0, 0)
+                                }])
+                                .expect("data file action"),
+                            );
+                        }
+                        actions.push(
+                            encode_commit_meta(CommitMeta {
+                                table_uri: table_url.to_string(),
+                                row_count: rows as u64,
+                                action_summary: Some(action_summary),
+                                table_properties: table_properties.clone(),
+                                snapshot_properties: snapshot_properties.clone(),
+                                schema: Some(iceberg_schema.clone()),
+                                partition_spec: Some(PartitionSpec::unpartitioned_spec()),
+                                ..Default::default()
+                            })
+                            .expect("commit metadata action"),
+                        );
+                    }
+                    let input = MemorySourceConfig::try_new_exec(
+                        &[actions],
+                        iceberg_action_schema().expect("action schema"),
+                        None,
+                    )
+                    .expect("memory input");
+                    let commit = IcebergCommitExec::new(
+                        input,
+                        table_url.clone(),
+                        None,
+                        SnapshotUpdateKind::FastAppend,
+                    );
+                    let output = commit
+                        .execute(0, context.task_ctx())
+                        .expect("commit stream")
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .expect("commit");
+                    assert_eq!(output.len(), 1);
+                    assert_eq!(output[0].column(0).as_ref(), &Int64Array::from(vec![3]));
+                    let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                        .await
+                        .expect("metadata location");
+                    let bytes = load_metadata_file_bytes(&store, &location)
+                        .await
+                        .expect("metadata bytes");
+                    let metadata = TableMetadata::from_json(&bytes).expect("metadata");
+                    assert_eq!(
+                        metadata.properties,
+                        HashMap::from([("run-id".to_string(), "table-value".to_string()),])
+                    );
+                    let snapshot = metadata.current_snapshot().expect("current snapshot");
+                    assert_eq!(snapshot.summary().operation, Operation::Append);
+                    let properties = &snapshot.summary().additional_properties;
+                    assert_eq!(properties["spark.insert.num-inserted-rows"], "3");
+                    assert_eq!(properties["added-records"], "3");
+                    assert_eq!(properties["total-records"], (3 * write_index).to_string());
+                    assert_eq!(properties["added-data-files"], "2");
+                    assert_eq!(
+                        properties["total-data-files"],
+                        (2 * write_index).to_string()
+                    );
+                    assert_eq!(
+                        properties.get("run-id").map(String::as_str),
+                        (write_index == 1).then_some("write-value")
+                    );
+                    assert_eq!(
+                        properties.get("empty").map(String::as_str),
+                        (write_index == 1).then_some("")
+                    );
+                    if let Some(previous) = &previous_snapshot {
+                        assert!(metadata.snapshots.contains(previous));
+                    }
+                    previous_snapshot = Some(snapshot.clone());
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn empty_targeted_rewrite_validates_expected_snapshot_without_creating_artifacts() {
+        for (kind, skip_empty_commit) in [
+            (SnapshotUpdateKind::CopyOnWrite, false),
+            (SnapshotUpdateKind::CopyOnWrite, true),
+            (SnapshotUpdateKind::RewriteDataFiles, false),
+            (SnapshotUpdateKind::RewriteDataFiles, true),
+        ] {
+            futures::executor::block_on(async {
+                let table_url =
+                    Url::parse("file:///tmp/empty-predicate-overwrite/").expect("table URL");
+                let memory = Arc::new(object_store::memory::InMemory::new());
+                let store: Arc<dyn ObjectStore> = memory.clone();
+                let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+                let iceberg_schema = IcebergSchema::builder()
+                    .with_schema_id(1)
+                    .with_fields([Arc::new(NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Int),
+                    ))])
+                    .build()
+                    .expect("schema");
+                let table_properties = vec![("format-version".to_string(), "2".to_string())];
+                crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                    &table_url,
+                    &store_ctx,
+                    iceberg_schema,
+                    PartitionSpec::unpartitioned_spec(),
+                    &table_properties,
+                    NewTableMetadataStyle::Hadoop,
+                )
+                .await
+                .expect("bootstrap metadata");
+
+                let action_schema = iceberg_action_schema().expect("action schema");
+                let action_batch = encode_commit_meta(CommitMeta {
+                    table_uri: table_url.to_string(),
+                    row_count: 0,
+                    action_summary: None,
+                    removed_data_file_paths: vec![],
+                    skip_empty_commit,
+                    requirements: vec![],
+                    table_properties,
+                    snapshot_properties: Default::default(),
+                    lakehouse_table: None,
+                    schema: None,
+                    partition_spec: None,
+                })
+                .expect("commit metadata action");
+                let input = MemorySourceConfig::try_new_exec(
+                    &[vec![action_batch]],
+                    Arc::clone(&action_schema),
+                    None,
+                )
+                .expect("memory input");
+                let before_objects = store_ctx
+                    .prefixed
+                    .list(None)
+                    .map(|result| result.expect("list initial objects"))
+                    .collect::<Vec<_>>()
+                    .await;
+                let commit = IcebergCommitExec::new(input, table_url, None, kind)
+                    .with_expected_snapshot_id(Some(Some(99)));
+                let context = SessionContext::new();
+                context.runtime_env().register_object_store(
+                    &Url::parse("file:///").expect("file store URL"),
+                    memory,
+                );
+
+                let mut output = commit
+                    .execute(0, context.task_ctx())
+                    .expect("commit stream");
+                let error = output
+                    .next()
+                    .await
+                    .expect("commit result")
+                    .expect_err("stale empty overwrite must conflict");
+                assert!(error.to_string().contains("expected snapshot Some(99)"));
+                let after_objects = store_ctx
+                    .prefixed
+                    .list(None)
+                    .map(|result| result.expect("list remaining objects"))
+                    .collect::<Vec<_>>()
+                    .await;
+                assert_eq!(after_objects, before_objects);
+            });
+        }
+    }
+
+    #[test]
+    fn replayed_commit_keeps_files_published_by_the_previous_attempt() {
+        for lose_acknowledgement in [false, true] {
+            futures::executor::block_on(async {
+                let table_url = Url::parse("file:///tmp/replayed-commit/").expect("table URL");
+                let memory = Arc::new(object_store::memory::InMemory::new());
+                let store: Arc<dyn ObjectStore> = memory.clone();
+                let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+                let iceberg_schema = IcebergSchema::builder()
+                    .with_fields([Arc::new(NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Int),
+                    ))])
+                    .build()
+                    .expect("schema");
+                let table_properties = vec![("format-version".to_string(), "2".to_string())];
+                crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                    &table_url,
+                    &store_ctx,
+                    iceberg_schema,
+                    PartitionSpec::unpartitioned_spec(),
+                    &table_properties,
+                    NewTableMetadataStyle::Hadoop,
+                )
+                .await
+                .expect("bootstrap metadata");
+                let task_path = Path::from("data/task.parquet");
+                store_ctx
+                    .prefixed
+                    .put(&task_path, Bytes::from_static(b"task data").into())
+                    .await
+                    .expect("write task file");
+                let mut data_file = partitioned_data_file("data/task.parquet", 0, 0);
+                data_file.partition.clear();
+                let action_schema = iceberg_action_schema().expect("action schema");
+                let actions = datafusion::arrow::compute::concat_batches(
+                    &action_schema,
+                    &[
+                        encode_add_data_files(vec![data_file]).expect("add action"),
+                        encode_commit_meta(CommitMeta {
+                            table_uri: table_url.to_string(),
+                            row_count: 1,
+                            table_properties,
+                            ..Default::default()
+                        })
+                        .expect("commit metadata"),
+                    ],
+                )
+                .expect("writer actions");
+                let input = MemorySourceConfig::try_new_exec(&[vec![actions]], action_schema, None)
+                    .expect("replayable writer output");
+                let commit = IcebergCommitExec::new(
+                    input,
+                    table_url.clone(),
+                    None,
+                    SnapshotUpdateKind::CopyOnWrite,
+                )
+                .with_expected_snapshot_id(Some(None));
+                let context = SessionContext::new();
+                let publication_store: Arc<dyn ObjectStore> = if lose_acknowledgement {
+                    Arc::new(FaultInjectingMetadataStore {
+                        memory_store: memory.clone(),
+                        fault: MetadataWriteFault::LostAcknowledgement,
+                        fault_injected: AtomicBool::new(false),
+                    })
+                } else {
+                    memory.clone()
+                };
+                context.runtime_env().register_object_store(
+                    &Url::parse("file:///").expect("file store URL"),
+                    publication_store,
+                );
+                let result = commit
+                    .execute(0, context.task_ctx())
+                    .expect("first attempt")
+                    .try_collect::<Vec<_>>()
+                    .await;
+                let batches =
+                    result.expect("published first attempt, reconciled by exact readback");
+                assert_eq!(batches[0].num_rows(), 1);
+                store_ctx
+                    .prefixed
+                    .head(&task_path)
+                    .await
+                    .expect("publication errors must retain possibly committed task files");
+
+                let error = commit
+                    .execute(0, context.task_ctx())
+                    .expect("replayed attempt")
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect_err("replayed overwrite has a stale snapshot");
+                assert!(error.to_string().contains("expected snapshot None"));
+                store_ctx
+                    .prefixed
+                    .head(&task_path)
+                    .await
+                    .expect("a rejected retry must retain the published task file");
+                let store: Arc<dyn ObjectStore> = memory;
+                let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                    .await
+                    .expect("committed metadata location");
+                let bytes = load_metadata_file_bytes(&store, &location)
+                    .await
+                    .expect("committed metadata bytes");
+                let metadata = TableMetadata::from_json(&bytes).expect("committed metadata");
+                assert_eq!(metadata.snapshots.len(), 1);
+                let snapshot = &metadata.snapshots[0];
+                let manifests = load_manifest_list(&store_ctx, snapshot.manifest_list())
+                    .await
+                    .expect("committed manifest list");
+                let manifest = load_manifest(&store_ctx, &manifests.entries()[0].manifest_path)
+                    .await
+                    .expect("committed manifest");
+                assert_eq!(
+                    manifest.entries()[0].data_file.file_path,
+                    "data/task.parquet"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn v2_planned_rewrite_uses_commit_sequence_after_metadata_only_v3_upgrade() {
         futures::executor::block_on(async {
-            let table_url =
-                Url::parse("file:///tmp/empty-predicate-overwrite/").expect("table URL");
+            let table_url = Url::parse("file:///tmp/rewrite-format-upgrade/").expect("URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
             let store: Arc<dyn ObjectStore> = memory.clone();
-            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let store_ctx = StoreContext::new(store.clone(), &table_url).expect("store context");
             let iceberg_schema = IcebergSchema::builder()
-                .with_schema_id(1)
                 .with_fields([Arc::new(NestedField::required(
                     1,
                     "id",
@@ -1948,91 +2535,163 @@ mod tests {
                 ))])
                 .build()
                 .expect("schema");
-            let table_properties = vec![("format-version".to_string(), "2".to_string())];
             crate::operations::bootstrap::bootstrap_empty_table_metadata(
                 &table_url,
                 &store_ctx,
-                iceberg_schema,
+                iceberg_schema.clone(),
                 PartitionSpec::unpartitioned_spec(),
-                &table_properties,
+                &[("format-version".to_string(), "2".to_string())],
                 NewTableMetadataStyle::Hadoop,
             )
             .await
-            .expect("bootstrap metadata");
-
-            let action_schema = iceberg_action_schema().expect("action schema");
-            let action_batch = encode_commit_meta(CommitMeta {
-                table_uri: table_url.to_string(),
-                row_count: 0,
-                requirements: vec![],
-                table_properties,
-                lakehouse_table: None,
-                schema: None,
-                partition_spec: None,
-            })
-            .expect("commit metadata action");
-            let input = MemorySourceConfig::try_new_exec(
-                &[vec![action_batch]],
-                Arc::clone(&action_schema),
-                None,
-            )
-            .expect("memory input");
-            let commit =
-                IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::CopyOnWrite)
-                    .with_expected_snapshot_id(Some(Some(99)));
+            .expect("bootstrap V2");
+            let writer_input = |path: &str| {
+                let mut file = partitioned_data_file(path, 0, 0);
+                file.partition.clear();
+                let schema = iceberg_action_schema().expect("action schema");
+                let actions = datafusion::arrow::compute::concat_batches(
+                    &schema,
+                    &[
+                        encode_add_data_files(vec![file]).expect("file action"),
+                        encode_commit_meta(CommitMeta {
+                            table_uri: table_url.to_string(),
+                            row_count: 1,
+                            requirements: vec![TableRequirement::CurrentSchemaIdMatch {
+                                current_schema_id: iceberg_schema.schema_id(),
+                            }],
+                            ..Default::default()
+                        })
+                        .expect("commit metadata"),
+                    ],
+                )
+                .expect("actions");
+                MemorySourceConfig::try_new_exec(&[vec![actions]], schema, None)
+                    .expect("writer input")
+            };
             let context = SessionContext::new();
             context
                 .runtime_env()
-                .register_object_store(&Url::parse("file:///").expect("file store URL"), memory);
-
-            let mut output = commit
+                .register_object_store(&Url::parse("file:///").expect("store URL"), memory);
+            IcebergCommitExec::new(
+                writer_input("data/original.parquet"),
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::FastAppend,
+            )
+            .execute(0, context.task_ctx())
+            .expect("append stream")
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("append V2 snapshot");
+            let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                .await
+                .expect("V2 location");
+            let bytes = load_metadata_file_bytes(&store, &location)
+                .await
+                .expect("V2 bytes");
+            let before = TableMetadata::from_json(&bytes).expect("V2 metadata");
+            let starting = before.current_snapshot().expect("starting snapshot");
+            let output_schema = Arc::new(Schema::new(vec![
+                Field::new("rewritten_data_files_count", DataType::Int32, false),
+                Field::new("added_data_files_count", DataType::Int32, false),
+                Field::new("rewritten_bytes_count", DataType::Int64, false),
+                Field::new("failed_data_files_count", DataType::Int32, false),
+                Field::new("removed_delete_files_count", DataType::Int32, false),
+            ]));
+            let planned = IcebergCommitExec::new(
+                writer_input("data/replacement.parquet"),
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::RewriteDataFiles,
+            )
+            .with_expected_snapshot_id(Some(Some(starting.snapshot_id())))
+            .with_removed_data_file_paths(vec!["data/original.parquet".to_string()])
+            .with_rewrite_data_files_output(
+                output_schema,
+                1,
+                1,
+                Some(starting.sequence_number()),
+            );
+            // The worker output and sequence policy are pinned before this metadata-only upgrade.
+            let mut upgraded = before.clone();
+            upgraded.format_version = FormatVersion::V3;
+            upgraded.next_row_id = Some(0);
+            assert_eq!(upgraded.current_snapshot_id, before.current_snapshot_id);
+            assert_eq!(upgraded.current_schema_id, before.current_schema_id);
+            let next_version = metadata_file_version_from_path(&location).expect("version") + 1;
+            let publication = MetadataFileCommit::prepare(
+                &table_url,
+                &upgraded,
+                next_version,
+                MetadataFileStyle::Versioned(
+                    BaseMetadataCodec::capture(Some(&before)).expect("base codec"),
+                ),
+            )
+            .expect("upgrade metadata")
+            .write(&store_ctx)
+            .await
+            .expect("publish upgrade");
+            assert!(matches!(publication, MetadataWriteOutcome::Written));
+            let result = planned
                 .execute(0, context.task_ctx())
-                .expect("commit stream");
-            let error = output
-                .next()
+                .expect("rewrite stream")
+                .try_collect::<Vec<_>>()
                 .await
-                .expect("commit result")
-                .expect_err("stale empty overwrite must conflict");
-            assert!(error.to_string().contains("expected snapshot Some(99)"));
-        });
-    }
-
-    #[test]
-    fn cleanup_removes_absolute_and_relative_task_files() {
-        futures::executor::block_on(async {
-            let table_url = Url::parse("file:///tmp/table/").expect("table URL");
-            let memory = Arc::new(object_store::memory::InMemory::new());
-            let store: Arc<dyn object_store::ObjectStore> = memory.clone();
-            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
-            let absolute_path = object_store::path::Path::from("tmp/table/data/absolute.parquet");
-            let relative_path = object_store::path::Path::from("data/relative.parquet");
-            memory
-                .put(&absolute_path, Bytes::from_static(b"absolute").into())
+                .expect("commit planned V2 rewrite after upgrade");
+            assert_eq!(result[0].num_rows(), 1);
+            let location = crate::table::find_latest_metadata_file(&store, &table_url)
                 .await
-                .expect("write absolute task file");
-            store_ctx
-                .prefixed
-                .put(&relative_path, Bytes::from_static(b"relative").into())
+                .expect("rewrite location");
+            let bytes = load_metadata_file_bytes(&store, &location)
                 .await
-                .expect("write relative task file");
-
-            cleanup_uncommitted_task_files(
-                &store_ctx,
-                &[
-                    "file:///tmp/table/data/absolute.parquet".to_string(),
-                    "data/relative.parquet".to_string(),
+                .expect("rewrite bytes");
+            let after = TableMetadata::from_json(&bytes).expect("rewrite metadata");
+            let committed = after.current_snapshot().expect("rewrite snapshot");
+            assert_eq!(committed.sequence_number(), starting.sequence_number() + 1);
+            assert_eq!(after.format_version, FormatVersion::V3);
+            assert_eq!(after.next_row_id, Some(1));
+            let entries =
+                crate::table::files::collect_live_entries(&store_ctx, &after, 1, |entry| {
+                    Ok(Some(entry))
+                })
+                .await
+                .expect("resolved live entries");
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            assert_eq!(entry.data_file.file_path, "data/replacement.parquet");
+            assert_eq!(entry.sequence_number, Some(committed.sequence_number()));
+            assert_eq!(
+                entry.file_sequence_number,
+                Some(committed.sequence_number())
+            );
+            assert_eq!(entry.data_file.first_row_id, Some(0));
+            // A V2-planned writer emits no lineage columns: nulls inherit the assigned ID and new sequence.
+            let lineage_batch = RecordBatch::try_new(
+                Arc::new(Schema::new(crate::row_lineage::lineage_fields().to_vec())),
+                vec![
+                    Arc::new(Int64Array::from(vec![None::<i64>])),
+                    Arc::new(Int64Array::from(vec![None::<i64>])),
                 ],
             )
-            .await;
-
-            assert!(matches!(
-                memory.head(&absolute_path).await,
-                Err(object_store::Error::NotFound { .. })
-            ));
-            assert!(matches!(
-                store_ctx.prefixed.head(&relative_path).await,
-                Err(object_store::Error::NotFound { .. })
-            ));
+            .expect("null lineage batch");
+            let columns = crate::row_lineage::materialize_lineage(
+                &lineage_batch,
+                crate::row_lineage::RowLineage {
+                    first_row_id: entry.data_file.first_row_id,
+                    data_sequence_number: entry.sequence_number.expect("resolved sequence"),
+                },
+                &Int64Array::from(vec![0]),
+            )
+            .expect("inherited lineage");
+            assert_eq!(
+                columns[0].as_ref(),
+                &Int64Array::from(vec![0]) as &dyn datafusion::arrow::array::Array
+            );
+            assert_eq!(
+                columns[1].as_ref(),
+                &Int64Array::from(vec![committed.sequence_number()])
+                    as &dyn datafusion::arrow::array::Array
+            );
         });
     }
 
@@ -2148,8 +2807,15 @@ mod tests {
                     encode_commit_meta(CommitMeta {
                         table_uri: table_url.to_string(),
                         row_count: 1,
+                        action_summary: None,
+                        removed_data_file_paths: vec![],
+                        skip_empty_commit: false,
                         requirements: vec![],
                         table_properties,
+                        snapshot_properties: std::collections::BTreeMap::from([
+                            ("run-id".into(), "retry-value".into()),
+                            ("empty".into(), "".into()),
+                        ]),
                         lakehouse_table: None,
                         schema: None,
                         partition_spec: None,
@@ -2166,10 +2832,10 @@ mod tests {
             .expect("memory input");
             let commit =
                 IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::FastAppend);
-            let conflict_store = Arc::new(ConcurrentMetadataStore {
+            let conflict_store = Arc::new(FaultInjectingMetadataStore {
                 memory_store: Arc::clone(&memory),
-                concurrent_metadata: metadata_bytes,
-                conflict_injected: AtomicBool::new(false),
+                fault: MetadataWriteFault::Conflict(metadata_bytes),
+                fault_injected: AtomicBool::new(false),
             });
             let context = SessionContext::new();
             context.runtime_env().register_object_store(
@@ -2187,7 +2853,35 @@ mod tests {
                 .expect("commit must retry from the authoritative metadata listing");
 
             assert_eq!(batch.num_rows(), 1);
-            assert!(conflict_store.conflict_injected.load(Ordering::SeqCst));
+            assert!(conflict_store.fault_injected.load(Ordering::SeqCst));
+            let committed_bytes = store_ctx
+                .prefixed
+                .get(&Path::from("metadata/v3.metadata.json"))
+                .await
+                .expect("committed metadata")
+                .bytes()
+                .await
+                .expect("metadata bytes");
+            let committed = TableMetadata::from_json(&committed_bytes).expect("metadata JSON");
+            let summary = &committed
+                .current_snapshot()
+                .expect("current snapshot")
+                .summary
+                .additional_properties;
+            assert_eq!(
+                summary.get("run-id").map(String::as_str),
+                Some("retry-value")
+            );
+            assert_eq!(summary.get("empty").map(String::as_str), Some(""));
+            assert_eq!(summary.get("added-records").map(String::as_str), Some("1"));
+            assert_eq!(
+                committed
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.snapshot_id() == 17),
+                Some(&current_snapshot)
+            );
+            assert!(!committed.properties.contains_key("run-id"));
             let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
             let metadata_objects = memory
                 .list(Some(&metadata_prefix))

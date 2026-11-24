@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::str::Utf8Error;
 
@@ -25,8 +13,11 @@ use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use super::schema::{DataType, StructField};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150
 const INVALID: &AsciiSet = &CONTROLS
+    .add(b' ')
     .add(b'\\')
     .add(b'{')
     .add(b'^')
@@ -51,6 +42,39 @@ pub(crate) fn encode_path(path: &str) -> String {
 
 pub(crate) fn decode_path(path: &str) -> Result<String, Utf8Error> {
     Ok(percent_decode_str(path).decode_utf8()?.to_string())
+}
+// SPDX-SnippetEnd
+
+pub(crate) fn absolute_uri_parts(path: &str) -> Option<(&str, &str)> {
+    path.split_once(':').filter(|(scheme, rest)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest.starts_with('/')
+    })
+}
+
+/// Comparison key for stored data-file URIs, without decoding their contents.
+///
+/// Java URI equality ignores percent-escape hex case, but distinguishes literal
+/// Unicode (and unreserved ASCII) from escaped octets. This does not qualify
+/// absolute paths, normalize path segments, or change scheme/authority handling.
+pub(crate) fn path_comparison_key(path: &str) -> String {
+    let mut key = String::with_capacity(path.len());
+    let mut remaining = path;
+    while let Some(offset) = remaining.find('%') {
+        key.push_str(&remaining[..=offset]);
+        remaining = &remaining[offset + 1..];
+        if let Some(escape) = remaining.as_bytes().get(..2)
+            && escape.iter().all(u8::is_ascii_hexdigit)
+        {
+            key.push(char::from(escape[0].to_ascii_uppercase()));
+            key.push(char::from(escape[1].to_ascii_uppercase()));
+            remaining = &remaining[2..];
+        }
+    }
+    key.push_str(remaining);
+    key
 }
 
 pub(crate) mod serde_path {
@@ -148,11 +172,14 @@ fn arrow_field_contains_variant(field: &datafusion::arrow::datatypes::Field) -> 
     }
 }
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L149-L160>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L149-L160
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
 pub(crate) fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fields.any(|field| data_type_contains_timestampntz(field.data_type()))
 }
+// SPDX-SnippetEnd
 
 /// Checks if any field (including nested) in an Arrow schema contains a `timestamp_ntz` type.
 ///
@@ -185,6 +212,30 @@ mod tests {
 
     use super::*;
     use crate::spec::{MapType, StructType};
+
+    #[test]
+    fn path_keys_fold_only_percent_escape_hex_case() {
+        for (left, right) in [
+            ("caf%c3%a9.parquet", "caf%C3%A9.parquet"),
+            ("日本語/%2f%3a.parquet", "日本語/%2F%3A.parquet"),
+            ("p=a%252fb", "p=a%252fb"),
+        ] {
+            assert_eq!(path_comparison_key(left), path_comparison_key(right));
+        }
+        for (left, right) in [
+            ("café.parquet", "caf%C3%A9.parquet"),
+            ("a.parquet", "%61.parquet"),
+            ("p=a%252fb", "p=a%252Fb"),
+            ("a/b", "a%2Fb"),
+            ("A.parquet", "a.parquet"),
+            ("/table/a", "file:/table/a"),
+        ] {
+            assert_ne!(path_comparison_key(left), path_comparison_key(right));
+        }
+        for path in ["日本語", "%", "%a", "%aZ", "%%2g", "%é"] {
+            assert_eq!(path_comparison_key(path), path);
+        }
+    }
 
     fn arrow_timestamp_ntz() -> ArrowDataType {
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None)

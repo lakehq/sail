@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -98,6 +100,11 @@ impl FileSource for BinarySource {
 
     fn file_type(&self) -> &str {
         "binary"
+    }
+
+    fn supports_repartitioning(&self) -> bool {
+        // Each file is read whole into one row, so a byte-range split would duplicate the row.
+        false
     }
 }
 

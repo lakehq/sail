@@ -1,7 +1,7 @@
-import type { SphinxPageData } from "../../.vitepress/theme/utils/sphinx";
-import { sphinxPages } from "../../.vitepress/cache/sphinx-pages";
-import { requireSphinxPages } from "../../.vitepress/theme/utils/sphinx";
-import { PathLike, TreeNode } from "../../.vitepress/theme/utils/tree";
+import type { SphinxPageData } from "../../.vitepress/theme/utils/sphinx.ts";
+import { sphinxPages } from "../../.vitepress/cache/sphinx-pages.ts";
+import { requireSphinxPages } from "../../.vitepress/theme/utils/sphinx.ts";
+import { PathLike, TreeNode } from "../../.vitepress/theme/utils/tree.ts";
 
 /**
  * The base URL for the Sphinx documentation.

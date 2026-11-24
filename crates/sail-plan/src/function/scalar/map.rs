@@ -1,17 +1,24 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
+use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::map::map_entries::SparkMapEntries;
-use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
+use sail_function::scalar::map::map_entries::MapEntries;
+use sail_function::scalar::map::map_from::{MapFromArrays, MapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    coerce_timestamp_ntz_array_element, coerce_timestamp_ntz_values,
+};
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -30,20 +37,94 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .iter()
         .map(|[key, value]| (key.clone(), value.clone()))
         .unzip();
+    let (keys, values) = if input.function_context.plan_config.ansi_mode {
+        (
+            coerce_ansi_map_strings(keys, schema)?,
+            coerce_ansi_map_strings(values, schema)?,
+        )
+    } else {
+        (keys, values)
+    };
+    let timezone = &input.function_context.plan_config.session_timezone_label();
+    let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
+    let values = coerce_timestamp_ntz_values(values, schema, timezone)?;
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    let array = ScalarUDF::from(ArrayFromValues::new());
+    let keys = array.call(keys);
+    let values = array.call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
     cast_map_value_nullability(expr, schema, value_contains_null)
+}
+
+fn coerce_ansi_map_strings(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let types = arguments
+        .iter()
+        .map(|argument| argument.get_type(schema.as_ref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !types.iter().any(DataType::is_string) {
+        return Ok(arguments);
+    }
+    let target = types
+        .iter()
+        .try_fold(DataType::Null, |previous, data_type| {
+            ansi_map_common_type(&previous, data_type)
+        })
+        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
+    arguments
+        .into_iter()
+        .zip(types)
+        .map(|(argument, source)| {
+            if source == target {
+                return Ok(argument);
+            }
+            let converted = cast(argument, target.clone());
+            if source.is_string() && !target.is_binary() {
+                // Spark retains nullable metadata for string-to-atomic casts in ANSI mode.
+                Ok(when(lit(true), converted).end()?)
+            } else {
+                Ok(converted)
+            }
+        })
+        .collect()
+}
+
+fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -58,7 +139,7 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -74,7 +155,7 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let entries = cast_map_entries_value_nullability(entries, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let expr = F::udf(SparkMapFromEntries::new(last_value_wins))(ScalarFunctionInput {
+    let expr = F::udf(MapFromEntries::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![entries],
         function_context: input.function_context,
     })?;
@@ -83,7 +164,7 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn map_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let map = input.arguments.one()?;
-    Ok(ScalarUDF::from(SparkMapEntries::new()).call(vec![map]))
+    Ok(ScalarUDF::from(MapEntries::new()).call(vec![map]))
 }
 
 fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -220,7 +301,7 @@ fn with_nullable(field: &FieldRef, nullable: bool) -> FieldRef {
     Arc::new(field.as_ref().clone().with_nullable(nullable))
 }
 
-fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use datafusion_expr::Expr;
 
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -230,6 +311,11 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if input.arguments.is_empty() {
         return Ok(lit(ScalarValue::Null));
     }
+    input.arguments = coerce_timestamp_ntz_values(
+        input.arguments,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
 
     // Build the result expression
     let (keys, values) = input
@@ -247,7 +333,7 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let values = expr_fn::array_concat(values);
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
-    let result = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
+    let result = F::udf(MapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -273,8 +359,15 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
-    expr_fn::array_has(expr_fn::map_keys(map), key)
+fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, key) = input.arguments.two()?;
+    let (keys, key) = coerce_timestamp_ntz_array_element(
+        expr_fn::map_keys(map),
+        key,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
+    Ok(expr_fn::array_has(keys, key))
 }
 
 fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -299,7 +392,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("map", F::custom(map)),
         ("map_concat", F::custom(map_concat)),
-        ("map_contains_key", F::binary(map_contains_key)),
+        ("map_contains_key", F::custom(map_contains_key)),
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),

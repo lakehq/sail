@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common_datafusion::catalog::managed::{
     metadata_location_update, metadata_location_value, previous_metadata_location_update,

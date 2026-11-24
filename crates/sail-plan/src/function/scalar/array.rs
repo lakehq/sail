@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::functions::expr_fn::nvl;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -10,24 +12,30 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
-use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_compact::ArrayCompact;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
-use sail_function::scalar::array::array_position::SparkArrayPosition;
+use sail_function::scalar::array::array_min_max::{ArrayMax, ArrayMin};
+use sail_function::scalar::array::array_position::ArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
-use sail_function::scalar::array::spark_array::SparkArray;
-use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
-use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::array::sequence::{Sequence, SequenceLazy};
+use sail_function::scalar::array::shuffle::Shuffle;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::date::Date;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::string::btrim::BTrimFunc;
+use sail_python_udf::udf::expr_contains_python_udf;
 
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    coerce_timestamp_ntz_array_element, coerce_timestamp_ntz_arrays, with_timestamp_ntz_coercion,
+};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -56,7 +64,7 @@ fn array_repeat_with_nullable_element(
 }
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
-    ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
+    ScalarUDF::from(ArrayCompact::new()).call(vec![array])
 }
 
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -133,6 +141,12 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (array, element) = input.arguments.two()?;
+    let (array, element) = coerce_timestamp_ntz_array_element(
+        array,
+        element,
+        schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let appended = expr_fn::array_append(array_input, element);
     let output_type = with_list_value_nullability(&appended.get_type(schema.as_ref())?, true);
@@ -143,6 +157,12 @@ fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 fn array_prepend(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (array, element) = input.arguments.two()?;
+    let (array, element) = coerce_timestamp_ntz_array_element(
+        array,
+        element,
+        schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
     let array = cast_list_value_nullability(array, schema, true)?;
     Ok(when(
         array.clone().is_not_null(),
@@ -156,7 +176,7 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 }
 
 fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![
         expr_fn::array_has(array.clone(), element),
         when(array.is_not_null(), lit(false)).end()?,
     ]))
@@ -169,6 +189,12 @@ fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (array, position, value) = input.arguments.three()?;
+    let (array, value) = coerce_timestamp_ntz_array_element(
+        array,
+        value,
+        schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let output_type = array_update_output_type(&array_input, &value, schema)?;
     let array_input = cast(array_input, output_type.clone());
@@ -249,6 +275,12 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
+    let (left, right) = coerce_timestamp_ntz_arrays(
+        left,
+        right,
+        function_context.schema,
+        &function_context.plan_config.session_timezone_label(),
+    )?;
 
     let nullable_array_type =
         with_list_value_nullability(&left.get_type(function_context.schema.as_ref())?, true);
@@ -323,7 +355,7 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
 }
 
 fn sequence_trim_string(argument: expr::Expr) -> expr::Expr {
-    btrim(vec![
+    ScalarUDF::from(BTrimFunc::new()).call(vec![
         argument,
         lit(SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS),
     ])
@@ -352,13 +384,13 @@ fn sequence_cast(
             | DataType::UInt64,
         ) => cast(sequence_trim_string(argument), DataType::Int64),
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
-            ScalarUDF::from(SparkDate::new(false)).call(vec![sequence_trim_string(argument)])
+            ScalarUDF::from(Date::new(false)).call(vec![sequence_trim_string(argument)])
         }
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![sequence_trim_string(argument)]),
+        ) => ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?)
+            .call(vec![argument]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
@@ -381,7 +413,7 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let config = function_context.plan_config;
-    let udf = SparkSequence::new(Arc::clone(&config.session_timezone), config.ansi_mode);
+    let udf = Sequence::new(Arc::clone(&config.session_timezone), config.ansi_mode);
 
     let argument_types = arguments
         .iter()
@@ -420,7 +452,7 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     Ok(expr::Expr::HigherOrderFunction(
         expr::HigherOrderFunction::new(
-            Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(udf))),
+            Arc::new(HigherOrderUDF::new_from_impl(SequenceLazy::new(udf))),
             arguments,
         ),
     ))
@@ -498,37 +530,112 @@ fn make_nullable_array_type(data_type: &DataType) -> DataType {
     }
 }
 
+/// A function of an array and an element, which are cast to their common type when they mix
+/// TIMESTAMP_NTZ and TIMESTAMP values.
+fn with_array_element_timestamp_ntz_coercion<F>(
+    f: F,
+) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static
+where
+    F: Fn(expr::Expr, expr::Expr) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+{
+    move |input| {
+        let (array, element) = input.arguments.two()?;
+        let (array, element) = coerce_timestamp_ntz_array_element(
+            array,
+            element,
+            input.function_context.schema,
+            &input.function_context.plan_config.session_timezone_label(),
+        )?;
+        f(array, element)
+    }
+}
+
+/// A function of two arrays, which are cast to their common type when their elements mix
+/// TIMESTAMP_NTZ and TIMESTAMP values.
+fn with_arrays_timestamp_ntz_coercion<F>(
+    f: F,
+) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static
+where
+    F: Fn(expr::Expr, expr::Expr) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+{
+    move |input| {
+        let (left, right) = input.arguments.two()?;
+        let (left, right) = coerce_timestamp_ntz_arrays(
+            left,
+            right,
+            input.function_context.schema,
+            &input.function_context.plan_config.session_timezone_label(),
+        )?;
+        f(left, right)
+    }
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("array", F::udf(SparkArray::new())),
+        (
+            "array",
+            F::custom(with_timestamp_ntz_coercion(|arguments| {
+                ScalarUDF::from(ArrayFromValues::new()).call(arguments)
+            })),
+        ),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(array_contains)),
+        (
+            "array_contains",
+            F::custom(with_array_element_timestamp_ntz_coercion(array_contains)),
+        ),
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
-        ("array_except", F::binary(expr_fn::array_except)),
+        (
+            "array_except",
+            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
+                Ok(expr_fn::array_except(left, right))
+            })),
+        ),
         ("array_insert", F::custom(array_insert)),
-        ("array_intersect", F::udf(ArrayIntersect::new())),
+        (
+            "array_intersect",
+            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
+                Ok(ScalarUDF::from(ArrayIntersect::new()).call(vec![left, right]))
+            })),
+        ),
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
-        ("array_position", F::udf(SparkArrayPosition::new())),
+        (
+            "array_position",
+            F::custom(with_array_element_timestamp_ntz_coercion(
+                |array, element| {
+                    Ok(ScalarUDF::from(ArrayPosition::new()).call(vec![array, element]))
+                },
+            )),
+        ),
         ("array_prepend", F::custom(array_prepend)),
-        ("array_remove", F::binary(expr_fn::array_remove_all)),
+        (
+            "array_remove",
+            F::custom(with_array_element_timestamp_ntz_coercion(
+                |array, element| Ok(expr_fn::array_remove_all(array, element)),
+            )),
+        ),
         ("array_repeat", F::custom(array_repeat)),
         (
             "array_size",
             F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
         ),
-        ("array_union", F::binary(expr_fn::array_union)),
+        (
+            "array_union",
+            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
+                Ok(expr_fn::array_union(left, right))
+            })),
+        ),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::custom(sequence)),
-        ("shuffle", F::unary(array_fn::shuffle)),
+        ("shuffle", F::udf(Shuffle::new())),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),
     ]

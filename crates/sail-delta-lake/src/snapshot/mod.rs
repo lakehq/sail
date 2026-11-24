@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -190,6 +178,7 @@ impl DeltaSnapshot {
                 log_store,
                 replay_hint,
                 config.catalog_managed_commits.as_ref(),
+                config.require_transactions,
             )
             .await
             {
@@ -743,10 +732,20 @@ impl DeltaSnapshot {
     }
 
     pub fn transaction_version(&self, app_id: impl ToString) -> DeltaResult<Option<i64>> {
-        Ok(self
-            .app_txns
-            .get(&app_id.to_string())
-            .map(|txn| txn.version))
+        let Some(txn) = self.app_txns.get(&app_id.to_string()) else {
+            return Ok(None);
+        };
+        if let Some(duration) = self.table_properties().set_transaction_retention_duration {
+            let cutoff = crate::checkpoint::retention_cutoff_timestamp(
+                Utc::now().timestamp_millis(),
+                duration,
+                "delta.setTransactionRetentionDuration",
+            )?;
+            if txn.last_updated.is_none_or(|updated| updated <= cutoff) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(txn.version))
     }
 
     // ── Capability token verification ─────────────────────────────────────────
@@ -1230,6 +1229,56 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_exclude_all_null_bounds_using_the_correct_row_count() {
+        for (tight, null_count, deleted, expected_min, expected_max) in [
+            (true, 4, None, 5, 6),
+            (true, 2, Some(2), 5, 6),
+            (false, 4, Some(2), 5, 6),
+            (false, 2, Some(2), -999, 999),
+        ] {
+            let stats = serde_json::json!({
+                "numRecords": 4,
+                "tightBounds": tight,
+                "minValues": {"id": -999},
+                "maxValues": {"id": 999},
+                "nullCount": {"id": null_count},
+            })
+            .to_string();
+            let snapshot = test_snapshot_with_adds(
+                Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+                test_metadata_with_schema(
+                    StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap(),
+                )
+                .unwrap(),
+                Vec::new(),
+                vec![
+                    stats_add("nullable.parquet", Some(&stats), deleted),
+                    stats_add(
+                        "nonnull.parquet",
+                        Some(
+                            r#"{"numRecords":2,"minValues":{"id":5},"maxValues":{"id":6},"nullCount":{"id":0}}"#,
+                        ),
+                        None,
+                    ),
+                ],
+            );
+            let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+            let id = &statistics.column_statistics[0];
+            let bound = |value| {
+                let value = ScalarValue::Int64(Some(value));
+                if tight {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                }
+            };
+            assert_eq!(id.min_value, bound(expected_min));
+            assert_eq!(id.max_value, bound(expected_max));
+        }
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
     fn snapshot_statistics_ignore_fully_deleted_files() {
         let snapshot = test_snapshot_with_adds(
             Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
@@ -1398,6 +1447,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(metadata.metadata_file_count, 4);
+        assert_eq!(metadata.metadata_row_count, 17);
         assert_eq!(metadata.residual_file_indices, vec![2, 4]);
         assert_eq!(metadata.metadata_bytes, 40);
         assert_eq!(metadata.residual_bytes, 20);
@@ -1409,6 +1459,11 @@ mod tests {
         assert_eq!(metadata.rows[0].count, 13);
         assert_eq!(metadata.rows[1].group_values, vec![ScalarValue::Utf8(None)]);
         assert_eq!(metadata.rows[1].count, 4);
+
+        let count = snapshot.grouped_count_metadata(&[], 1).unwrap();
+        assert_eq!(count.rows[0].count, 27);
+        assert!(count.rows[0].group_values.is_empty());
+        assert!(count.residual_file_indices.is_empty());
     }
 
     #[test]

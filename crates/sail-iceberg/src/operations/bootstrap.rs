@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 /// Bootstrap helper for creating the first snapshot in a new or empty Iceberg table
 ///
@@ -18,13 +8,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
-use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
+use crate::operations::metadata_commit::{
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, previous_metadata_log_entry,
+};
 use crate::operations::{PreparedSnapshotCommit, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -32,10 +24,7 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{MAIN_BRANCH, SnapshotBuilder, SnapshotReference, SnapshotRetention};
 use crate::spec::{FormatVersion, SortOrder, TableMetadata};
-use crate::table::metadata_loader::{
-    encode_metadata_file, metadata_file_extension_from_properties, metadata_file_version_from_path,
-    write_version_hint,
-};
+use crate::table::metadata_loader::metadata_file_version_from_path;
 use crate::utils::WritePathMode;
 
 /// Strategy for persisting metadata during bootstrap
@@ -64,10 +53,7 @@ pub struct BootstrapResult {
 
 struct PreparedMetadataVersion {
     table_metadata: TableMetadata,
-    metadata_file: String,
-    version_hint: String,
-    metadata_path: object_store::path::Path,
-    metadata_bytes: Vec<u8>,
+    publication: MetadataFileCommit,
 }
 
 fn initial_metadata_version(metadata_style: NewTableMetadataStyle) -> i32 {
@@ -78,72 +64,91 @@ fn initial_metadata_version(metadata_style: NewTableMetadataStyle) -> i32 {
 }
 
 fn prepare_metadata_version(
+    table_url: &Url,
     table_metadata: TableMetadata,
     version: i32,
     metadata_style: NewTableMetadataStyle,
+    base_codec: BaseMetadataCodec,
 ) -> Result<PreparedMetadataVersion> {
-    let metadata_json = table_metadata
-        .to_json()
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let file_extension = metadata_file_extension_from_properties(&table_metadata.properties)?;
-    let (metadata_file, version_hint) = match metadata_style {
-        NewTableMetadataStyle::Hadoop => (
-            format!("metadata/v{version}{file_extension}"),
-            version.to_string(),
-        ),
-        NewTableMetadataStyle::Uuid => {
-            let file_name = format!("{version:05}-{}{}", uuid::Uuid::new_v4(), file_extension);
-            (format!("metadata/{file_name}"), file_name)
-        }
+    let style = match metadata_style {
+        NewTableMetadataStyle::Hadoop => MetadataFileStyle::Versioned(base_codec),
+        NewTableMetadataStyle::Uuid => MetadataFileStyle::Unique,
     };
-    let metadata_bytes = encode_metadata_file(&metadata_file, &metadata_json)
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let metadata_path = object_store::path::Path::from(metadata_file.as_str());
-
+    let publication = MetadataFileCommit::prepare(table_url, &table_metadata, version, style)?;
     Ok(PreparedMetadataVersion {
         table_metadata,
-        metadata_file,
-        version_hint,
-        metadata_path,
-        metadata_bytes,
+        publication,
     })
 }
 
 async fn publish_metadata_version(
     store_ctx: &StoreContext,
     prepared: PreparedMetadataVersion,
+    mut snapshot: Option<PreparedSnapshotCommit>,
 ) -> Result<BootstrapResult> {
     let PreparedMetadataVersion {
         table_metadata,
-        metadata_file,
-        version_hint,
-        metadata_path,
-        metadata_bytes,
+        publication,
     } = prepared;
-    store_ctx
-        .prefixed
-        .put(
-            &metadata_path,
-            object_store::PutPayload::from(Bytes::from(metadata_bytes)),
+    let conflict = || {
+        DataFusionError::Plan(
+            "Iceberg bootstrap conflict: metadata version already exists; replan the operation"
+                .into(),
         )
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    write_version_hint(&store_ctx.prefixed, &version_hint).await;
+    };
+    let preflight = match publication.replacement_version_exists(store_ctx).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(conflict()),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = preflight {
+        if let Some(snapshot) = snapshot {
+            snapshot.cleanup().await;
+        }
+        return Err(error);
+    }
+    if let Some(snapshot) = snapshot.as_mut() {
+        snapshot.publication_started();
+    }
+    // Do not retry with writer outputs prepared against a potentially replaced schema/spec.
+    match publication.write_replacement(store_ctx).await? {
+        MetadataWriteOutcome::Written => {
+            if let Some(snapshot) = snapshot {
+                snapshot.commit_succeeded();
+            }
+        }
+        MetadataWriteOutcome::Conflict => {
+            if let Some(mut snapshot) = snapshot {
+                snapshot.publication_did_not_happen();
+                snapshot.cleanup().await;
+            }
+            return Err(conflict());
+        }
+    }
+    publication.write_hint(store_ctx).await;
 
     Ok(BootstrapResult {
         table_metadata,
-        metadata_file,
+        metadata_file: publication.path().to_string(),
     })
 }
 
 async fn write_metadata_version(
+    table_url: &Url,
     store_ctx: &StoreContext,
     table_metadata: TableMetadata,
     version: i32,
     metadata_style: NewTableMetadataStyle,
+    base_codec: BaseMetadataCodec,
 ) -> Result<BootstrapResult> {
-    let prepared = prepare_metadata_version(table_metadata, version, metadata_style)?;
-    publish_metadata_version(store_ctx, prepared).await
+    let prepared = prepare_metadata_version(
+        table_url,
+        table_metadata,
+        version,
+        metadata_style,
+        base_codec,
+    )?;
+    publish_metadata_version(store_ctx, prepared, None).await
 }
 
 pub(crate) async fn prepare_bootstrap_snapshot(
@@ -198,6 +203,14 @@ pub(crate) async fn prepare_bootstrap_snapshot(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_snapshot_properties(commit_info.snapshot_properties.clone())
+    .with_action_summary_properties(
+        commit_info
+            .action_summary
+            .as_ref()
+            .map(|summary| summary.properties())
+            .unwrap_or_default(),
+    )
     .with_added_delete_files(commit_info.delete_files.clone())
     .with_partition_specs(table_metadata.partition_specs.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
@@ -282,12 +295,20 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_snapshot_properties(commit_info.snapshot_properties.clone())
+    .with_action_summary_properties(
+        commit_info
+            .action_summary
+            .as_ref()
+            .map(|summary| summary.properties())
+            .unwrap_or_default(),
+    )
     .with_added_delete_files(commit_info.delete_files.clone())
     .with_partition_specs(vec![partition_spec.clone()])
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
-    let mut prepared_snapshot = snapshot_producer
+    let prepared_snapshot = snapshot_producer
         .prepare(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)?;
@@ -354,9 +375,11 @@ pub async fn bootstrap_new_table_with_style(
     table_metadata.ensure_required_format_fields();
 
     let prepared_metadata = match prepare_metadata_version(
+        table_url,
         table_metadata,
         initial_metadata_version(metadata_style),
         metadata_style,
+        BaseMetadataCodec::capture(None)?,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -364,12 +387,7 @@ pub async fn bootstrap_new_table_with_style(
             return Err(error);
         }
     };
-    prepared_snapshot.publication_started();
-    let metadata_result = publish_metadata_version(store_ctx, prepared_metadata).await;
-    if metadata_result.is_ok() {
-        prepared_snapshot.commit_succeeded();
-    }
-    metadata_result
+    publish_metadata_version(store_ctx, prepared_metadata, Some(prepared_snapshot)).await
 }
 
 pub async fn bootstrap_empty_table_metadata(
@@ -413,10 +431,12 @@ pub async fn bootstrap_empty_table_metadata(
     table_metadata.ensure_required_format_fields();
 
     write_metadata_version(
+        table_url,
         store_ctx,
         table_metadata,
         initial_metadata_version(metadata_style),
         metadata_style,
+        BaseMetadataCodec::capture(None)?,
     )
     .await
 }
@@ -431,6 +451,11 @@ pub async fn replace_empty_table_metadata(
     latest_meta_path: &str,
     metadata_style: NewTableMetadataStyle,
 ) -> Result<BootstrapResult> {
+    let previous_entry = previous_metadata_log_entry(
+        table_url,
+        PreviousMetadataFile::ObjectPath(latest_meta_path),
+        previous_metadata.last_updated_ms,
+    )?;
     let (requested_format_version, table_properties) =
         crate::properties::metadata_properties_from_table_properties(table_properties)?;
     let format_version = previous_metadata
@@ -459,22 +484,29 @@ pub async fn replace_empty_table_metadata(
     replacement_metadata.location = table_url.to_string();
     replacement_metadata.last_updated_ms = commit_timestamp_ms;
     replacement_metadata.last_column_id = last_column_id;
-    replacement_metadata.schemas.push(iceberg_schema.clone());
+    if !replacement_metadata
+        .schemas
+        .iter()
+        .any(|schema| schema.schema_id() == iceberg_schema.schema_id())
+    {
+        replacement_metadata.schemas.push(iceberg_schema.clone());
+    }
     replacement_metadata.current_schema_id = iceberg_schema.schema_id();
-    replacement_metadata
+    if !replacement_metadata
         .partition_specs
-        .push(partition_spec.clone());
+        .iter()
+        .any(|spec| spec.spec_id() == partition_spec.spec_id())
+    {
+        replacement_metadata
+            .partition_specs
+            .push(partition_spec.clone());
+    }
     replacement_metadata.default_spec_id = partition_spec.spec_id();
     replacement_metadata.last_partition_id = last_partition_id;
     replacement_metadata.properties = table_properties;
     replacement_metadata.current_snapshot_id = Some(-1);
     replacement_metadata.next_row_id = next_row_id;
-    replacement_metadata
-        .metadata_log
-        .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: previous_metadata.last_updated_ms,
-            metadata_file: latest_meta_path.to_string(),
-        });
+    replacement_metadata.metadata_log.push(previous_entry);
     replacement_metadata.refs.remove(MAIN_BRANCH);
     if format_version >= FormatVersion::V2 {
         if !replacement_metadata
@@ -495,7 +527,15 @@ pub async fn replace_empty_table_metadata(
     let version = metadata_file_version_from_path(latest_meta_path)
         .map(|version| version + 1)
         .unwrap_or_else(|| replacement_metadata.metadata_log.len() as i32 + 1);
-    write_metadata_version(store_ctx, replacement_metadata, version, metadata_style).await
+    write_metadata_version(
+        table_url,
+        store_ctx,
+        replacement_metadata,
+        version,
+        metadata_style,
+        BaseMetadataCodec::capture(Some(previous_metadata))?,
+    )
+    .await
 }
 
 /// Bootstrap the first snapshot for an existing table that has no current snapshot
@@ -513,6 +553,15 @@ pub async fn bootstrap_first_snapshot(
     previous_metadata_file: Option<&str>,
     persist_strategy: PersistStrategy,
 ) -> Result<BootstrapResult> {
+    let base_codec = BaseMetadataCodec::capture(Some(&table_metadata))?;
+    let previous_entry = previous_metadata_log_entry(
+        table_url,
+        previous_metadata_file.map_or(
+            PreviousMetadataFile::ObjectPath(latest_meta_path),
+            PreviousMetadataFile::CatalogLocation,
+        ),
+        table_metadata.last_updated_ms,
+    )?;
     let iceberg_schema = table_metadata
         .current_schema()
         .cloned()
@@ -521,7 +570,7 @@ pub async fn bootstrap_first_snapshot(
         .format_version
         .max(format_version_for_schema(&iceberg_schema));
     table_metadata.format_version = format_version;
-    let mut prepared_snapshot =
+    let prepared_snapshot =
         prepare_bootstrap_snapshot(table_url, store_ctx, commit_info, &table_metadata).await?;
 
     let snapshot = match prepared_snapshot
@@ -541,7 +590,6 @@ pub async fn bootstrap_first_snapshot(
         }
     };
 
-    let previous_metadata_timestamp_ms = table_metadata.last_updated_ms;
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_metadata.current_snapshot_id = Some(snapshot.snapshot_id());
     table_metadata.snapshots.push(snapshot.clone());
@@ -549,14 +597,7 @@ pub async fn bootstrap_first_snapshot(
         timestamp_ms: commit_timestamp_ms,
         snapshot_id: snapshot.snapshot_id(),
     });
-    table_metadata
-        .metadata_log
-        .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: previous_metadata_timestamp_ms,
-            metadata_file: previous_metadata_file
-                .unwrap_or(latest_meta_path)
-                .to_string(),
-        });
+    table_metadata.metadata_log.push(previous_entry);
     table_metadata.last_sequence_number = snapshot.sequence_number();
     table_metadata.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {
@@ -582,20 +623,20 @@ pub async fn bootstrap_first_snapshot(
         PersistStrategy::NewVersion => NewTableMetadataStyle::Hadoop,
         PersistStrategy::NewUuidVersion => NewTableMetadataStyle::Uuid,
     };
-    let prepared_metadata = match prepare_metadata_version(table_metadata, version, metadata_style)
-    {
+    let prepared_metadata = match prepare_metadata_version(
+        table_url,
+        table_metadata,
+        version,
+        metadata_style,
+        base_codec,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             prepared_snapshot.cleanup().await;
             return Err(error);
         }
     };
-    prepared_snapshot.publication_started();
-    let metadata_result = publish_metadata_version(store_ctx, prepared_metadata).await;
-    if metadata_result.is_ok() {
-        prepared_snapshot.commit_succeeded();
-    }
-    metadata_result
+    publish_metadata_version(store_ctx, prepared_metadata, Some(prepared_snapshot)).await
 }
 
 #[cfg(test)]
@@ -603,12 +644,13 @@ pub async fn bootstrap_first_snapshot(
 mod tests {
     use std::ops::Range;
 
+    use bytes::Bytes;
     use futures::TryStreamExt;
     use futures::stream::BoxStream;
     use object_store::path::Path;
     use object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
 
     use super::*;
@@ -701,6 +743,97 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bootstrap_publication_errors_preserve_style_source_and_visibility() {
+        use std::sync::atomic::Ordering;
+
+        use sail_common_datafusion::error::CommitStateUnknownError;
+
+        use crate::io::test_store::{PutFault, TestStore, assert_commit_retryability};
+
+        for style in [NewTableMetadataStyle::Hadoop, NewTableMetadataStyle::Uuid] {
+            for fault in [PutFault::Reject, PutFault::LostAckUnreadable] {
+                let url = Url::parse("memory://bucket/bootstrap/").expect("URL");
+                let mut injected = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+                injected.fault = Some((".metadata.json".into(), fault));
+                let injected = Arc::new(injected);
+                let store = StoreContext::new(injected.clone(), &url).expect("store");
+                let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+                    "format-version": FormatVersion::V2,
+                    "location": url.as_str(),
+                    "table-uuid": "00000000-0000-0000-0000-000000000001",
+                    "last-updated-ms": 0, "last-column-id": 0,
+                    "schemas": [IcebergSchema::builder().build().expect("schema")],
+                    "current-schema-id": 0,
+                    "partition-specs": [PartitionSpec::unpartitioned_spec()]
+                }))
+                .expect("metadata");
+                let prepared = prepare_metadata_version(
+                    &url,
+                    metadata.clone(),
+                    1,
+                    style,
+                    BaseMetadataCodec::capture(None).expect("base codec"),
+                )
+                .expect("prepare");
+                let path = prepared.publication.path().clone();
+                let bytes = metadata.to_json().expect("metadata bytes");
+                let error = publish_metadata_version(&store, prepared, None)
+                    .await
+                    .expect_err("publication fault");
+                let hadoop = matches!(style, NewTableMetadataStyle::Hadoop);
+                assert_commit_retryability(&error, hadoop);
+                let source = match &error {
+                    DataFusionError::External(source) => Some(source),
+                    _ => None,
+                }
+                .expect("external error");
+                let original = if hadoop {
+                    std::error::Error::source(
+                        source
+                            .downcast_ref::<CommitStateUnknownError>()
+                            .expect("unknown state"),
+                    )
+                    .expect("original source")
+                } else {
+                    source.as_ref()
+                };
+                assert!(original.is::<object_store::Error>());
+                assert!(
+                    original
+                        .source()
+                        .expect("I/O source")
+                        .is::<std::io::Error>()
+                );
+                assert_eq!(injected.puts.load(Ordering::SeqCst), 1);
+                assert!(injected.deletes.lock().expect("deletes").is_empty());
+                let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
+                let objects = reader
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("objects");
+                if matches!(fault, PutFault::LostAckUnreadable) {
+                    assert_eq!(objects.len(), 1);
+                    assert_eq!(objects[0].location, path);
+                    let published = reader
+                        .prefixed
+                        .get(&path)
+                        .await
+                        .expect("metadata")
+                        .bytes()
+                        .await
+                        .expect("bytes");
+                    assert_eq!(published.as_ref(), bytes.as_slice());
+                    TableMetadata::from_json(&published).expect("readable metadata");
+                } else {
+                    assert!(objects.is_empty());
+                }
+            }
+        }
+    }
+
     #[test]
     fn bootstrap_metadata_ignores_version_hint_failure() {
         futures::executor::block_on(async {
@@ -769,7 +902,9 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                action_summary: None,
                 table_properties: vec![("format-version".to_string(), "2".to_string())],
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
                 schema: Some(schema),
@@ -799,6 +934,160 @@ mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn first_snapshot_publication_reconciles_faults_without_deleting_unknown_outputs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::Ordering;
+
+        use crate::operations::replacement_test_support::{ReplacementFault, ReplacementStore};
+
+        for style in [NewTableMetadataStyle::Hadoop, NewTableMetadataStyle::Uuid] {
+            for fault in [
+                ReplacementFault::LostAck,
+                ReplacementFault::PutThenAlreadyExists,
+                ReplacementFault::DifferentBytes,
+                ReplacementFault::Missing,
+                ReplacementFault::ConditionalConflict,
+                ReplacementFault::CompetingVersion,
+                ReplacementFault::ReadbackFailure,
+                ReplacementFault::PostflightList,
+            ] {
+                let url = Url::parse("memory:///table/")?;
+                let store = Arc::new(ReplacementStore::new(fault));
+                store.disabled.store(true, Ordering::SeqCst);
+                let context = StoreContext::new(store.clone(), &url)?;
+                let schema = IcebergSchema::builder()
+                    .with_fields([Arc::new(NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Int),
+                    ))])
+                    .build()?;
+                let base = bootstrap_empty_table_metadata(
+                    &url,
+                    &context,
+                    schema,
+                    PartitionSpec::unpartitioned_spec(),
+                    &[],
+                    style,
+                )
+                .await?;
+                let base_path = Path::from(base.metadata_file.as_str());
+                let base_bytes = context.prefixed.get(&base_path).await?.bytes().await?;
+                let hint_path = Path::from("metadata/version-hint.text");
+                let hint_before = context.prefixed.get(&hint_path).await?.bytes().await?;
+                let task_path = Path::from("data/task.parquet");
+                context
+                    .prefixed
+                    .put(&task_path, Bytes::from_static(b"task data").into())
+                    .await?;
+                let commit = IcebergCommitInfo {
+                    table_uri: url.to_string(),
+                    row_count: 1,
+                    data_files: vec![serde_json::from_value(serde_json::json!({
+                        "content": "DATA", "file_path": "memory:///table/data/task.parquet",
+                        "file_format": "PARQUET", "partition": [], "record_count": 1,
+                        "file_size_in_bytes": 9, "partition_spec_id": 0
+                    }))?],
+                    delete_files: vec![],
+                    manifest_path: String::new(),
+                    manifest_list_path: String::new(),
+                    updates: vec![],
+                    requirements: vec![],
+                    action_summary: None,
+                    table_properties: vec![],
+                    snapshot_properties: Default::default(),
+                    lakehouse_table: None,
+                    snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
+                    schema: None,
+                    partition_spec: None,
+                };
+                store.metadata_puts.store(0, Ordering::SeqCst);
+                store.disabled.store(false, Ordering::SeqCst);
+                let result = bootstrap_first_snapshot(
+                    &url,
+                    &context,
+                    &commit,
+                    base.table_metadata,
+                    &base.metadata_file,
+                    None,
+                    match style {
+                        NewTableMetadataStyle::Hadoop => PersistStrategy::NewVersion,
+                        NewTableMetadataStyle::Uuid => PersistStrategy::NewUuidVersion,
+                    },
+                )
+                .await;
+                let written = matches!(
+                    fault,
+                    ReplacementFault::LostAck | ReplacementFault::PutThenAlreadyExists
+                ) || (style == NewTableMetadataStyle::Uuid
+                    && matches!(
+                        fault,
+                        ReplacementFault::CompetingVersion | ReplacementFault::PostflightList
+                    ));
+                if written {
+                    let result = result?;
+                    let bytes = context
+                        .prefixed
+                        .get(&Path::from(result.metadata_file))
+                        .await?
+                        .bytes()
+                        .await?;
+                    let metadata = TableMetadata::from_json(&bytes)?;
+                    assert_eq!(
+                        serde_json::to_value(&metadata)?,
+                        serde_json::to_value(&result.table_metadata)?
+                    );
+                    let snapshot = metadata
+                        .current_snapshot()
+                        .ok_or("missing published snapshot")?;
+                    let manifests =
+                        crate::io::load_manifest_list(&context, snapshot.manifest_list()).await?;
+                    assert_eq!(manifests.entries().len(), 1);
+                    let manifest =
+                        crate::io::load_manifest(&context, &manifests.entries()[0].manifest_path)
+                            .await?;
+                    assert_eq!(
+                        manifest.entries()[0].data_file.file_path,
+                        "memory:///table/data/task.parquet"
+                    );
+                    assert_eq!(manifest.entries()[0].data_file.record_count, 1);
+                } else {
+                    let error = result
+                        .err()
+                        .ok_or("conflict or unknown outcome must not succeed")?;
+                    if matches!(fault, ReplacementFault::ConditionalConflict) {
+                        assert!(error.to_string().contains("replan"));
+                    }
+                    assert_eq!(
+                        context.prefixed.get(&hint_path).await?.bytes().await?,
+                        hint_before
+                    );
+                }
+                assert_eq!(
+                    context.prefixed.get(&base_path).await?.bytes().await?,
+                    base_bytes
+                );
+                context.prefixed.head(&task_path).await?;
+                let files = store.inner.list(None).try_collect::<Vec<_>>().await?;
+                let avro_count = files
+                    .iter()
+                    .filter(|file| file.location.as_ref().ends_with(".avro"))
+                    .count();
+                assert_eq!(
+                    avro_count,
+                    if matches!(fault, ReplacementFault::ConditionalConflict) {
+                        0
+                    } else {
+                        2
+                    },
+                    "only a definite conflict permits manifest cleanup: {style:?}, {fault:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn bootstrap_metadata_preparation_failure_cleans_snapshot_artifacts() {
         futures::executor::block_on(async {
@@ -825,6 +1114,7 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                action_summary: None,
                 table_properties: vec![
                     ("format-version".to_string(), "2".to_string()),
                     (
@@ -832,6 +1122,7 @@ mod tests {
                         "zstd".to_string(),
                     ),
                 ],
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
                 schema: Some(schema),
@@ -846,6 +1137,7 @@ mod tests {
             )
             .await
             .expect_err("unsupported metadata codec must fail before publication");
+            assert!(matches!(&error, DataFusionError::Plan(_)));
             assert!(
                 error
                     .to_string()

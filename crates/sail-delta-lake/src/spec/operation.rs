@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::collections::HashMap;
 
@@ -24,7 +12,9 @@ use serde_json::Value;
 use crate::spec::actions::CommitInfo;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs#L211-L518>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs#L211-L518
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MergePredicate {
@@ -63,6 +53,38 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    #[serde(rename_all = "camelCase")]
+    Clone {
+        source: String,
+        source_version: i64,
+        is_shallow: bool,
+    },
+    Optimize {
+        predicate: Option<String>,
+    },
+    VacuumStart {
+        retention_check_enabled: bool,
+        specified_retention_millis: Option<i64>,
+        default_retention_millis: i64,
+    },
+    VacuumEnd {},
+    Truncate {},
+    DynamicPartitionOverwrite {
+        partition_by: Option<Vec<String>>,
+    },
+    ReplaceColumns {
+        columns: Vec<Value>,
+    },
+    AddColumns {
+        columns: Vec<Value>,
+    },
+    DropColumns {
+        columns: Vec<String>,
+    },
+    RenameColumn {
+        old_column_path: String,
+        new_column_path: String,
+    },
     Create {
         mode: SaveMode,
         location: String,
@@ -106,6 +128,10 @@ pub enum DeltaOperation {
         properties: HashMap<String, String>,
     },
     #[serde(rename_all = "camelCase")]
+    DropConstraint {
+        name: String,
+        expr: Option<String>,
+    },
     AddConstraint {
         name: String,
         expr: String,
@@ -117,18 +143,29 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     AlterColumn {
         column: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
     },
 }
 
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::Clone { .. } => "CLONE",
+            Self::Optimize { .. } => "OPTIMIZE",
+            Self::VacuumStart { .. } => "VACUUM START",
+            Self::VacuumEnd { .. } => "VACUUM END",
+            Self::ReplaceColumns { .. } => "REPLACE COLUMNS",
+            Self::AddColumns { .. } => "ADD COLUMNS",
+            Self::DropColumns { .. } => "DROP COLUMNS",
+            Self::RenameColumn { .. } => "RENAME COLUMN",
             Self::Create {
                 mode: SaveMode::Overwrite,
                 ..
             } => "CREATE OR REPLACE TABLE",
             Self::Create { .. } => "CREATE TABLE",
-            Self::Write { .. } => "WRITE",
+            Self::Write { .. } | Self::DynamicPartitionOverwrite { .. } => "WRITE",
+            Self::Truncate {} => "TRUNCATE",
             Self::Delete { .. } => "DELETE",
             Self::Update { .. } => "UPDATE",
             Self::Merge { .. } => "MERGE",
@@ -136,6 +173,7 @@ impl DeltaOperation {
             Self::Restore { .. } => "RESTORE",
             Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
             Self::AddConstraint { .. } => "ADD CONSTRAINT",
+            Self::DropConstraint { .. } => "DROP CONSTRAINT",
             Self::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
             Self::AlterColumn { .. } => "CHANGE COLUMN",
         }
@@ -162,6 +200,68 @@ impl DeltaOperation {
 
         let mut parameters = HashMap::new();
         match self {
+            Self::Clone {
+                source,
+                source_version,
+                is_shallow,
+            } => {
+                insert_opt(&mut parameters, "source", Some(source));
+                insert_opt(&mut parameters, "sourceVersion", Some(source_version));
+                insert_opt(&mut parameters, "isShallow", Some(is_shallow));
+            }
+            Self::Optimize { predicate } => {
+                insert_json(
+                    &mut parameters,
+                    "predicate",
+                    &predicate.iter().collect::<Vec<_>>(),
+                )?;
+                insert_json(&mut parameters, "zOrderBy", &Vec::<String>::new())?;
+                insert_json(&mut parameters, "clusterBy", &Vec::<String>::new())?;
+                insert_opt(&mut parameters, "auto", Some(false));
+            }
+            Self::VacuumStart {
+                retention_check_enabled,
+                specified_retention_millis,
+                default_retention_millis,
+            } => {
+                insert_opt(
+                    &mut parameters,
+                    "retentionCheckEnabled",
+                    Some(retention_check_enabled),
+                );
+                insert_opt(
+                    &mut parameters,
+                    "specifiedRetentionMillis",
+                    *specified_retention_millis,
+                );
+                insert_opt(
+                    &mut parameters,
+                    "defaultRetentionMillis",
+                    Some(default_retention_millis),
+                );
+            }
+            Self::VacuumEnd {} => {
+                insert_opt(&mut parameters, "status", Some("COMPLETED"));
+            }
+            Self::DynamicPartitionOverwrite { partition_by } => {
+                insert_opt(&mut parameters, "mode", Some("Overwrite"));
+                if let Some(partitions) = partition_by {
+                    insert_json(&mut parameters, "partitionBy", partitions)?;
+                }
+            }
+            Self::ReplaceColumns { columns } | Self::AddColumns { columns } => {
+                insert_json(&mut parameters, "columns", columns)?;
+            }
+            Self::DropColumns { columns } => {
+                insert_json(&mut parameters, "columns", columns)?;
+            }
+            Self::RenameColumn {
+                old_column_path,
+                new_column_path,
+            } => {
+                insert_opt(&mut parameters, "oldColumnPath", Some(old_column_path));
+                insert_opt(&mut parameters, "newColumnPath", Some(new_column_path));
+            }
             Self::Create {
                 mode,
                 location,
@@ -211,13 +311,18 @@ impl DeltaOperation {
                     not_matched_by_source_predicates,
                 )?;
             }
-            Self::FileSystemCheck {} => {}
+            Self::Truncate {} | Self::FileSystemCheck {} => {}
             Self::Restore { version, datetime } => {
                 insert_opt(&mut parameters, "version", *version);
                 insert_opt(&mut parameters, "datetime", *datetime);
             }
             Self::SetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
+            }
+            Self::DropConstraint { name, expr } => {
+                insert_opt(&mut parameters, "name", Some(name));
+                insert_opt(&mut parameters, "expr", expr.as_deref());
+                insert_opt(&mut parameters, "existed", Some(expr.is_some()));
             }
             Self::AddConstraint { name, expr } => {
                 insert_opt(&mut parameters, "name", Some(name));
@@ -226,8 +331,9 @@ impl DeltaOperation {
             Self::UnsetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
             }
-            Self::AlterColumn { column } => {
+            Self::AlterColumn { column, position } => {
                 insert_json(&mut parameters, "column", column)?;
+                insert_opt(&mut parameters, "position", position.as_deref());
             }
         }
 
@@ -278,6 +384,7 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
+            Self::Clone { .. } | Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
             // UPDATE predicates are not yet evaluated against concurrent file additions, so
             // conservatively retain the full read set until predicate conflict checks are wired.
             Self::Update { .. } => true,
@@ -287,3 +394,4 @@ impl DeltaOperation {
         }
     }
 }
+// SPDX-SnippetEnd

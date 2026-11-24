@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -8,20 +10,20 @@ use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::misc::aes::{AESDecrypt, AESEncrypt, TryAESDecrypt, TryAESEncrypt};
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimate, HllUnion};
+use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
+use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_function::scalar::misc::raise_error::RaiseError;
-use sail_function::scalar::misc::spark_aes::{
-    SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
-};
-use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_function::scalar::misc::theta_sketch::{
-    ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
-    ThetaUnionFunction,
+    ThetaDifference, ThetaIntersection, ThetaSketchEstimate, ThetaUnion,
 };
-use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::scalar::misc::uuid::Uuid;
+use sail_function::scalar::misc::version::Version;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
@@ -90,6 +92,21 @@ fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .clone()))
 }
 
+fn input_file_name() -> expr::Expr {
+    // COALESCE gives the expression Spark's non-nullable string schema; it does not catch errors.
+    // RewriteInputFileMetadataFallback replaces the UDF with an empty string outside file scans
+    // before execution, since DataFusion's UDF cannot be evaluated directly.
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")])
+}
+
+fn input_file_block_start() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![])
+}
+
+fn input_file_block_length() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![])
+}
+
 fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -147,7 +164,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(ThetaUnion::new()).call(arguments))
 }
 
 fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -171,15 +188,15 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(HllUnion::new()).call(arguments))
 }
 
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("aes_decrypt", F::udf(SparkAESDecrypt::new())),
-        ("aes_encrypt", F::udf(SparkAESEncrypt::new())),
+        ("aes_decrypt", F::udf(AESDecrypt::new())),
+        ("aes_encrypt", F::udf(AESEncrypt::new())),
         ("assert_true", F::custom(assert_true)),
         ("bitmap_bit_position", F::custom(bitmap_bit_position)),
         ("bitmap_bucket_number", F::custom(bitmap_bucket_number)),
@@ -192,20 +209,11 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        (
-            "hll_sketch_estimate",
-            F::udf(HllSketchEstimateFunction::new()),
-        ),
+        ("hll_sketch_estimate", F::udf(HllSketchEstimate::new())),
         ("hll_union", F::custom(hll_union)),
-        ("theta_difference", F::udf(ThetaDifferenceFunction::new())),
-        (
-            "theta_intersection",
-            F::udf(ThetaIntersectionFunction::new()),
-        ),
-        (
-            "theta_sketch_estimate",
-            F::udf(ThetaSketchEstimateFunction::new()),
-        ),
+        ("theta_difference", F::udf(ThetaDifference::new())),
+        ("theta_intersection", F::udf(ThetaIntersection::new())),
+        ("theta_sketch_estimate", F::udf(ThetaSketchEstimate::new())),
         ("theta_union", F::custom(theta_union)),
         (
             "tuple_difference_double",
@@ -275,33 +283,28 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         (
             "input_file_block_length",
-            F::unknown("input_file_block_length"),
+            F::nullary(input_file_block_length),
         ),
-        (
-            "input_file_block_start",
-            F::unknown("input_file_block_start"),
-        ),
-        // TODO: Map this to DataFusion's file-name UDF after preserving Spark's empty-string
-        // behavior for non-file inputs and covering driver-to-worker file scans.
-        ("input_file_name", F::unknown("input_file_name")),
+        ("input_file_block_start", F::nullary(input_file_block_start)),
+        ("input_file_name", F::nullary(input_file_name)),
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",
-            F::udf(SparkMonotonicallyIncreasingId::new()),
+            F::udf(MonotonicallyIncreasingId::new()),
         ),
         ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),
         ("schema_of_avro", F::unknown("schema_of_avro")),
         ("session_user", F::custom(current_user)),
-        ("spark_partition_id", F::udf(SparkPartitionId::new())),
+        ("spark_partition_id", F::udf(PartitionId::new())),
         ("to_avro", F::unknown("to_avro")),
         ("to_protobuf", F::unknown("to_protobuf")),
-        ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
-        ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
+        ("try_aes_encrypt", F::udf(TryAESEncrypt::new())),
+        ("try_aes_decrypt", F::udf(TryAESDecrypt::new())),
         ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
         ("user", F::custom(current_user)),
-        ("uuid", F::nullary(expr_fn::uuid)),
-        ("version", F::udf(SparkVersion::new())),
+        ("uuid", F::udf(Uuid::new())),
+        ("version", F::udf(Version::new())),
     ]
 }

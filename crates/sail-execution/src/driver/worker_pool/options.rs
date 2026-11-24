@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! A dedicated module for worker pool options to ensure readonly access.
 use std::time::Duration;
 
@@ -10,6 +12,7 @@ use crate::shuffle::ShuffleBackendKind;
 #[readonly::make]
 pub struct WorkerPoolOptions {
     pub enable_tls: bool,
+    pub batch_size: usize,
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: u16,
@@ -20,6 +23,9 @@ pub struct WorkerPoolOptions {
     pub worker_heartbeat_timeout: Duration,
     pub worker_launch_timeout: Duration,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout: Duration,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
     pub shuffle_backend: ShuffleBackendKind,
@@ -29,6 +35,7 @@ impl From<&DriverOptions> for WorkerPoolOptions {
     fn from(options: &DriverOptions) -> Self {
         Self {
             enable_tls: options.enable_tls,
+            batch_size: options.batch_size,
             session_id: options.session_id.clone(),
             driver_id: options.driver_id,
             driver_server_port: options.driver_server_port,
@@ -39,6 +46,9 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             worker_heartbeat_timeout: options.worker_heartbeat_timeout,
             worker_launch_timeout: options.worker_launch_timeout,
             task_stream_buffer: options.task_stream_buffer,
+            task_stream_memory_limit: options.task_stream_memory_limit,
+            shuffle_write_buffer_size: options.shuffle_write_buffer_size,
+            task_stream_stall_timeout: options.task_stream_stall_timeout,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
             shuffle_backend: options.shuffle_backend.clone(),

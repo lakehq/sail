@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Error types for Python data source operations.
 //!
 //! Provides structured error types with context for debugging Python datasource issues.

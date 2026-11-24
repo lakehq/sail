@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::logical_plan::Extension;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, RowLevelWriteMode, UpdateInfo,
 };
@@ -17,6 +20,7 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
     let requirements = RowLevelEffectRequirements {
         touched_files: true,
         row_index_deletes: row_index_column.is_some(),
+        change_data: super::merge::change_data_enabled(&info.target_plan)?,
     };
     info.target_plan = Arc::new(ensure_row_level_metadata_columns(
         info.target_plan.as_ref().clone(),
@@ -24,12 +28,16 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         row_index_column,
     )?);
     Ok(LogicalPlan::Extension(Extension {
-        node: Arc::new(expand_update(
-            info,
-            mode,
-            requirements,
-            MERGE_FILE_COLUMN,
-            row_index_column,
-        )?),
+        node: Arc::new(
+            expand_update(
+                info,
+                mode,
+                requirements,
+                MERGE_FILE_COLUMN,
+                row_index_column,
+                &[],
+            )?
+            .with_output(CommandOutput::AffectedRows),
+        ),
     }))
 }

@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -28,13 +18,22 @@ const METADATA_COMPRESSION_NONE: &str = "none";
 const METADATA_COMPRESSION_GZIP: &str = "gzip";
 const VERSION_HINT_PATH: &str = "metadata/version-hint.text";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MetadataFileCodec {
     None,
     Gzip,
 }
 
 impl MetadataFileCodec {
+    pub(crate) fn from_properties(properties: &HashMap<String, String>) -> Result<Self> {
+        Self::from_property_value(
+            properties
+                .get(METADATA_COMPRESSION_PROPERTY)
+                .map(String::as_str)
+                .unwrap_or(METADATA_COMPRESSION_NONE),
+        )
+    }
+
     fn from_property_value(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             METADATA_COMPRESSION_NONE => Ok(Self::None),
@@ -43,7 +42,7 @@ impl MetadataFileCodec {
         }
     }
 
-    fn file_extension(self) -> &'static str {
+    pub(crate) fn file_extension(self) -> &'static str {
         match self {
             Self::None => ".metadata.json",
             Self::Gzip => ".gz.metadata.json",
@@ -100,6 +99,51 @@ pub(crate) fn metadata_location_to_object_path_string(metadata_location: &str) -
     Ok(metadata_location_to_object_path(metadata_location)?.to_string())
 }
 
+pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
+    if crate::utils::parse_absolute_url(metadata_file).is_some() {
+        return Ok(metadata_file.to_string());
+    }
+
+    let relative_metadata_file = relative_metadata_file(table_url, metadata_file)?;
+    Ok(table_url
+        .join(&relative_metadata_file)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .to_string())
+}
+
+fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String> {
+    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
+    let metadata_file = metadata_file.trim_start_matches('/');
+
+    if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
+        return Ok(relative.to_string());
+    }
+    if table_url.scheme() == "file"
+        && let Some(base_without_drive) = strip_windows_drive_prefix(&base_path)
+        && let Some(relative) = strip_path_prefix(metadata_file, base_without_drive)
+    {
+        return Ok(relative.to_string());
+    }
+    Ok(metadata_file.to_string())
+}
+
+fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return None;
+    }
+    path.strip_prefix(prefix)?.strip_prefix('/')
+}
+
+fn strip_windows_drive_prefix(path: &str) -> Option<&str> {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        Some(&path[3..])
+    } else {
+        None
+    }
+}
+
 fn metadata_file_codec_from_path(path: &str) -> Option<MetadataFileCodec> {
     path.rsplit('/')
         .next()
@@ -133,11 +177,7 @@ pub(crate) fn encode_metadata_file(path: &str, data: &[u8]) -> io::Result<Vec<u8
 pub(crate) fn metadata_file_extension_from_properties(
     properties: &HashMap<String, String>,
 ) -> Result<&'static str> {
-    let codec = properties
-        .get(METADATA_COMPRESSION_PROPERTY)
-        .map(String::as_str)
-        .unwrap_or(METADATA_COMPRESSION_NONE);
-    Ok(MetadataFileCodec::from_property_value(codec)?.file_extension())
+    Ok(MetadataFileCodec::from_properties(properties)?.file_extension())
 }
 
 /// Writes the non-authoritative Iceberg metadata version hint.
@@ -196,7 +236,7 @@ pub async fn find_latest_metadata_file(
             if let Some(filename) = path_str.split('/').next_back()
                 && let Some(metadata_file) = parse_metadata_file_name(filename)
             {
-                return Ok(Some((metadata_file.version, path_str, obj.last_modified)));
+                return Ok(Some((metadata_file.version, path_str)));
             }
             Ok(None)
         })
@@ -206,14 +246,19 @@ pub async fn find_latest_metadata_file(
     match metadata_files {
         Ok(mut files) => {
             log::trace!("find_latest_metadata_file: found files: {:?}", files);
-            files.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| left.2.cmp(&right.2))
-                    .then_with(|| left.1.cmp(&right.1))
-            });
+            files.sort();
+            // Neither modification time nor the advisory hint establishes commit authority.
+            // Leave ambiguous publications intact for explicit recovery, including old versions.
+            if let Some(pair) = files.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+                return plan_err!(
+                    "Ambiguous Iceberg metadata version {}: {} and {}; explicit recovery required",
+                    pair[0].0,
+                    pair[0].1,
+                    pair[1].1
+                );
+            }
 
-            if let Some((version, latest_file, _)) = files.last() {
+            if let Some((version, latest_file)) = files.last() {
                 log::trace!(
                     "find_latest_metadata_file: selected version {} path={}",
                     version,
@@ -234,15 +279,21 @@ pub async fn find_latest_metadata_file(
 mod tests {
     use std::collections::HashMap;
     use std::io::{self, Write};
+    use std::sync::Arc;
 
-    use datafusion::common::Result;
+    use bytes::Bytes;
+    use datafusion::common::{DataFusionError, Result};
     use flate2::Compression;
     use flate2::write::GzEncoder;
+    use object_store::memory::InMemory;
+    use object_store::path::Path as ObjectPath;
+    use object_store::{ObjectStore, ObjectStoreExt};
+    use url::Url;
 
     use super::{
         MetadataFileCodec, MetadataFileName, decode_metadata_file, encode_metadata_file,
-        metadata_file_extension_from_properties, metadata_location_to_object_path,
-        parse_metadata_file_name,
+        find_latest_metadata_file, metadata_file_extension_from_properties,
+        metadata_location_to_object_path, parse_metadata_file_name, table_metadata_location,
     };
 
     #[test]
@@ -312,6 +363,33 @@ mod tests {
     }
 
     #[test]
+    fn table_metadata_location_preserves_file_uri_drive() -> Result<()> {
+        let table_url =
+            Url::parse("file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/")
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(
+            table_metadata_location(&table_url, "metadata/v1.metadata.json")?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn decodes_gzip_metadata_files() -> io::Result<()> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(br#"{"format-version":2}"#)?;
@@ -369,5 +447,76 @@ mod tests {
             "zstd".to_string(),
         );
         assert!(metadata_file_extension_from_properties(&properties).is_err());
+    }
+
+    #[tokio::test]
+    async fn ambiguous_versions_require_explicit_recovery() -> Result<()> {
+        for alternate in [
+            "v1.gz.metadata.json",
+            "v1.metadata.json.gz",
+            "00001-other.metadata.json",
+        ] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            for file in [
+                "v1.metadata.json",
+                alternate,
+                "v2.metadata.json",
+                "version-hint.text",
+            ] {
+                store
+                    .put(
+                        &ObjectPath::from(format!("table/metadata/{file}")),
+                        Bytes::from_static(b"unchanged").into(),
+                    )
+                    .await?;
+            }
+            let url = Url::parse("memory:///table/")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            let error = find_latest_metadata_file(&store, &url)
+                .await
+                .err()
+                .ok_or_else(|| DataFusionError::Internal("ambiguous metadata accepted".into()))?;
+            assert!(
+                error.to_string().contains("explicit recovery required"),
+                "{error}"
+            );
+            assert_eq!(
+                store
+                    .get(&ObjectPath::from(format!("table/metadata/{alternate}")))
+                    .await?
+                    .bytes()
+                    .await?,
+                Bytes::from_static(b"unchanged")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stale_version_hint_does_not_select_stale_metadata() -> Result<()> {
+        futures::executor::block_on(async {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            for (path, value) in [
+                ("table/metadata/v1.metadata.json", b"v1".as_slice()),
+                ("table/metadata/v2.metadata.json", b"v2".as_slice()),
+                ("table/metadata/version-hint.text", b"1".as_slice()),
+            ] {
+                store
+                    .put(
+                        &ObjectPath::from(path),
+                        object_store::PutPayload::from(Bytes::copy_from_slice(value)),
+                    )
+                    .await
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            }
+            let table_url = Url::parse("memory:///table/")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+
+            assert_eq!(
+                find_latest_metadata_file(&store, &table_url).await?,
+                "table/metadata/v2.metadata.json"
+            );
+            Ok(())
+        })
     }
 }

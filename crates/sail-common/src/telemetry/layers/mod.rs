@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Layers for tracing gRPC clients and servers.
 //!
 //! This module is inspired by `fastrace-tonic` but we maintain our own implementation

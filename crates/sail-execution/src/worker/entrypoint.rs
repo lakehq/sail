@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;

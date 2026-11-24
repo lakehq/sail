@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::container::OrderedSeq;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{SliceInput, ValueInput};
@@ -304,7 +306,8 @@ where
         // When the parsers can parse the same prefix, more specific parsers must come before
         // more general parsers to avoid ambiguity.
         single_line_comment(),
-        multi_line_comment(),
+        // Hint delimiters are punctuation so SELECT can parse their contents.
+        multi_line_comment().and_is(just("/*+").not()),
         string(options),
         word(),
         whitespace(' ', |count| Token::Space { count }),

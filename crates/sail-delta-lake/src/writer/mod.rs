@@ -1,25 +1,11 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
-
-mod async_buffer;
+mod object_sink;
 mod partitioning;
 mod stats;
 pub(crate) mod variant_shredding;
@@ -27,20 +13,21 @@ pub(crate) mod variant_shredding;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use async_buffer::AsyncShareableBuffer;
-use bytes::Bytes;
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
+use object_sink::ParquetObjectSink;
+use object_store::ObjectStore;
+use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use partitioning::partition_ranges;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use stats::create_add;
 use uuid::Uuid;
 use variant_shredding::{
@@ -53,15 +40,10 @@ use crate::spec::{Add, ColumnName, DeltaError as DeltaTableError, DeltaResult};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
-    fn hive_partition_path(&self) -> String;
     fn hive_partition_segments(&self) -> Vec<String>;
 }
 
 impl PartitionsExt for IndexMap<String, ScalarValue> {
-    fn hive_partition_path(&self) -> String {
-        self.hive_partition_segments().join("/")
-    }
-
     fn hive_partition_segments(&self) -> Vec<String> {
         if self.is_empty() {
             return vec![];
@@ -118,6 +100,7 @@ impl WriterConfig {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
+                .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
                 .build()
         });
 
@@ -149,18 +132,19 @@ pub struct DeltaWriter {
     table_path: Path,
     /// Writer configuration
     config: WriterConfig,
-    /// Current active partition key (hive partition path)
-    current_partition_key: Option<String>,
+    /// Current active partition values in schema order
+    current_partition_key: Option<Vec<ScalarValue>>,
     /// Current active writer (at most one open writer per task)
     current_writer: Option<PartitionWriter>,
     /// Actions produced by completed partition writers
     completed_actions: Vec<Add>,
     /// Partition keys that have been closed (debug-only contract enforcement)
     #[cfg(debug_assertions)]
-    closed_partition_keys: std::collections::HashSet<String>,
+    closed_partition_keys: Option<HashSet<Vec<ScalarValue>>>,
 }
 
 impl DeltaWriter {
+    /// Require input grouped by partition across all batches.
     pub fn new(object_store: Arc<dyn ObjectStore>, table_path: Path, config: WriterConfig) -> Self {
         Self {
             object_store,
@@ -170,8 +154,25 @@ impl DeltaWriter {
             current_writer: None,
             completed_actions: Vec::new(),
             #[cfg(debug_assertions)]
-            closed_partition_keys: std::collections::HashSet::new(),
+            closed_partition_keys: Some(HashSet::new()),
         }
+    }
+
+    /// Accept partition revisits, as required by interleaved CDC pre/postimages.
+    /// Only one partition writer remains open: revisits create fresh files rather
+    /// than retaining a writer per partition or buffering the entire input.
+    pub fn new_unordered(
+        object_store: Arc<dyn ObjectStore>,
+        table_path: Path,
+        config: WriterConfig,
+    ) -> Self {
+        let writer = Self::new(object_store, table_path, config);
+        #[cfg(debug_assertions)]
+        let writer = Self {
+            closed_partition_keys: None,
+            ..writer
+        };
+        writer
     }
 
     /// Write a record batch to the appropriate partition
@@ -203,7 +204,8 @@ impl DeltaWriter {
                 continue;
             }
 
-            let partition_key = range.partition_values.hive_partition_path();
+            // Different partition values can share a Hive directory, including NULL and its marker.
+            let partition_key = range.partition_values.values().cloned().collect();
             self.switch_partition_if_needed(partition_key, range.partition_values)
                 .await?;
 
@@ -228,10 +230,10 @@ impl DeltaWriter {
 
     async fn switch_partition_if_needed(
         &mut self,
-        partition_key: String,
+        partition_key: Vec<ScalarValue>,
         partition_values: IndexMap<String, ScalarValue>,
     ) -> Result<(), DeltaTableError> {
-        if self.current_partition_key.as_deref() == Some(partition_key.as_str())
+        if self.current_partition_key.as_ref() == Some(&partition_key)
             && self.current_writer.is_some()
         {
             return Ok(());
@@ -244,7 +246,9 @@ impl DeltaWriter {
 
             if let Some(old_key) = self.current_partition_key.take() {
                 #[cfg(debug_assertions)]
-                self.closed_partition_keys.insert(old_key);
+                if let Some(keys) = self.closed_partition_keys.as_mut() {
+                    keys.insert(old_key);
+                }
                 #[cfg(not(debug_assertions))]
                 let _ = old_key;
             }
@@ -253,8 +257,11 @@ impl DeltaWriter {
         #[cfg(debug_assertions)]
         debug_assert!(
             self.config.partition_columns.is_empty()
-                || !self.closed_partition_keys.contains(&partition_key),
-            "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key}"
+                || self
+                    .closed_partition_keys
+                    .as_ref()
+                    .is_none_or(|keys| !keys.contains(&partition_key)),
+            "input violated partition grouping contract: partition key re-appeared after being closed: {partition_key:?}"
         );
 
         self.current_partition_key = Some(partition_key);
@@ -342,8 +349,8 @@ pub struct PartitionWriter {
     object_store: Arc<dyn ObjectStore>,
     writer_id: Uuid,
     config: PartitionWriterConfig,
-    buffer: Option<AsyncShareableBuffer>,
-    arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
+    current_path: Option<String>,
+    arrow_writer: Option<AsyncArrowWriter<ParquetObjectSink>>,
     physical_file_schema: ArrowSchemaRef,
     pending_batches: Vec<RecordBatch>,
     pending_rows: usize,
@@ -366,28 +373,13 @@ impl PartitionWriter {
         stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
         let physical_file_schema = config.file_schema.clone();
-        let (buffer, arrow_writer, variant_shredding_initialized) = if config
-            .variant_shredding
-            .enabled
-        {
-            (None, None, false)
-        } else {
-            let buffer = AsyncShareableBuffer::default();
-            let arrow_writer = AsyncArrowWriter::try_new(
-                buffer.clone(),
-                physical_file_schema.clone(),
-                Some(config.writer_properties.clone()),
-            )
-            .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
-            (Some(buffer), Some(arrow_writer), true)
-        };
-
-        Ok(Self {
+        let variant_shredding_initialized = !config.variant_shredding.enabled;
+        let mut writer = Self {
             object_store,
             writer_id: Uuid::new_v4(),
             config,
-            buffer,
-            arrow_writer,
+            current_path: None,
+            arrow_writer: None,
             physical_file_schema,
             pending_batches: Vec::new(),
             pending_rows: 0,
@@ -399,7 +391,11 @@ impl PartitionWriter {
             stats_columns,
             stats_excluded_columns,
             repeated_null_counts: HashMap::new(),
-        })
+        };
+        if variant_shredding_initialized {
+            writer.reset_writer()?;
+        }
+        Ok(writer)
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
@@ -437,7 +433,7 @@ impl PartitionWriter {
     }
 
     async fn write_physical_batch(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        if self.arrow_writer.is_none() && self.buffer.is_none() {
+        if self.arrow_writer.is_none() {
             self.physical_file_schema = batch.schema();
             self.reset_writer()?;
         }
@@ -462,17 +458,9 @@ impl PartitionWriter {
             self.accumulate_repeated_null_counts(&slice)?;
 
             // Check if need to flush after writing the slice
-            let buffer_len = if let Some(buffer) = self.buffer.as_ref() {
-                buffer.len().await
-            } else {
-                0
-            };
-            let in_progress_size = if let Some(writer) = self.arrow_writer.as_ref() {
-                writer.in_progress_size()
-            } else {
-                0
-            };
-            let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
+            let estimated_size = self.arrow_writer.as_ref().map_or(0, |writer| {
+                writer.bytes_written() as u64 + writer.in_progress_size() as u64
+            });
 
             if estimated_size >= self.config.target_file_size {
                 self.flush_open_writer().await?;
@@ -632,44 +620,31 @@ impl PartitionWriter {
     }
 
     async fn flush_open_writer(&mut self) -> Result<(), DeltaTableError> {
-        if self.arrow_writer.is_none() && self.buffer.is_none() {
+        if self.arrow_writer.is_none() {
             return Ok(());
         }
 
-        let writer = self
+        let mut writer = self
             .arrow_writer
             .take()
             .ok_or_else(|| DeltaTableError::generic("Arrow writer not available".to_string()))?;
-        let buffer = self
-            .buffer
+        let relative_path = self
+            .current_path
             .take()
-            .ok_or_else(|| DeltaTableError::generic("Buffer not available".to_string()))?;
+            .ok_or_else(|| DeltaTableError::generic("File path not available".to_string()))?;
 
-        let metadata = writer
-            .close()
-            .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
-
-        // Skip empty files
-        if metadata.file_metadata().num_rows() == 0 {
+        // Do not publish an empty object when closing a freshly reset writer.
+        if writer.in_progress_rows() == 0 && writer.flushed_row_groups().is_empty() {
             self.reset_writer()?;
             return Ok(());
         }
 
-        let buffer_data = match buffer.into_inner().await {
-            Some(buffer) => Bytes::from(buffer),
-            None => return Ok(()), // Nothing to write
-        };
-
-        // Generate file path, returning both relative and full paths
-        let (relative_path, full_path) = self.next_data_path();
-        let file_size = buffer_data.len() as i64;
-
-        // Write to object store
-        self.object_store
-            .put(&full_path, buffer_data.into())
+        let metadata = writer
+            .finish()
             .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
+        let file_size =
+            i64::try_from(writer.bytes_written()).map_err(DeltaTableError::generic_err)?;
 
         // Create Add action with statistics
         let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
@@ -742,14 +717,15 @@ impl PartitionWriter {
 
     /// Reset the writer for the next file
     fn reset_writer(&mut self) -> Result<(), DeltaTableError> {
-        let buffer = AsyncShareableBuffer::default();
+        let (relative_path, full_path) = self.next_data_path();
+        let output = ParquetObjectSink::new(BufWriter::new(self.object_store.clone(), full_path));
         let arrow_writer = AsyncArrowWriter::try_new(
-            buffer.clone(),
+            output,
             self.physical_file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
-        self.buffer = Some(buffer);
+        self.current_path = Some(relative_path);
         self.arrow_writer = Some(arrow_writer);
         self.repeated_null_counts.clear();
         Ok(())
@@ -798,9 +774,9 @@ mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
-    use object_store::ObjectStore;
     use object_store::memory::InMemory;
     use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use parquet_variant::{Variant, VariantMetadata};
     use parquet_variant_compute::json_to_variant;
     use parquet_variant_json::VariantToJson;
@@ -877,6 +853,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unordered_writer_reopens_partitions_with_exact_rows() -> Result<(), DeltaTableError> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        for across_batches in [false, true] {
+            let grouped = make_writer()?;
+            let store = grouped.object_store.clone();
+            let table_path = grouped.table_path.clone();
+            let mut writer =
+                DeltaWriter::new_unordered(store.clone(), table_path.clone(), grouped.config);
+            let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"])?;
+            if across_batches {
+                for i in 0..3 {
+                    writer.write(&batch.slice(i, 1)).await?;
+                }
+            } else {
+                writer.write(&batch).await?;
+            }
+            #[cfg(debug_assertions)]
+            assert!(writer.closed_partition_keys.is_none());
+            let adds = writer.close().await?;
+            assert_eq!(adds.len(), 3);
+            assert_eq!(
+                adds.iter()
+                    .map(|add| &add.path)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                3
+            );
+            let mut rows = Vec::new();
+            for add in adds {
+                let bytes = store
+                    .get(
+                        &Path::parse(format!("{table_path}/{}", add.path))
+                            .map_err(DeltaTableError::generic_err)?,
+                    )
+                    .await
+                    .map_err(DeltaTableError::generic_err)?
+                    .bytes()
+                    .await
+                    .map_err(DeltaTableError::generic_err)?;
+                let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                    .map_err(DeltaTableError::generic_err)?
+                    .build()
+                    .map_err(DeltaTableError::generic_err)?;
+                for batch in reader {
+                    let batch = batch.map_err(DeltaTableError::generic_err)?;
+                    let values = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .ok_or_else(|| DeltaTableError::generic("expected Int32 values"))?;
+                    for value in values.values() {
+                        rows.push((*value, add.partition_values["part"].clone()));
+                    }
+                }
+            }
+            rows.sort();
+            assert_eq!(
+                rows,
+                vec![
+                    (1, Some("a".into())),
+                    (2, Some("b".into())),
+                    (3, Some("a".into()))
+                ]
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn streaming_writer_splits_by_partition_ranges() -> Result<(), DeltaTableError> {
         let mut writer = make_writer()?;
         let batch = make_batch(vec![1, 2, 3, 4, 5], vec!["a", "a", "b", "b", "c"])?;
@@ -909,6 +955,60 @@ mod tests {
         let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
         assert!(paths.iter().any(|p| p.contains("part=a/")));
         assert!(paths.iter().any(|p| p.contains("part=b/")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streaming_writer_separates_partition_values_sharing_a_directory()
+    -> Result<(), DeltaTableError> {
+        let marker = "__HIVE_DEFAULT_PARTITION__";
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            ),
+            (
+                "part",
+                Arc::new(StringArray::from(vec![
+                    None,
+                    None,
+                    Some(marker),
+                    Some(marker),
+                ])) as ArrayRef,
+            ),
+        ])
+        .map_err(DeltaTableError::generic_err)?;
+        let config = WriterConfig::new(
+            batch.schema(),
+            vec!["part".to_string()],
+            vec!["part".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            32,
+            None,
+            Default::default(),
+            VariantShreddingConfig::default(),
+        );
+        let mut writer =
+            DeltaWriter::new(Arc::new(InMemory::new()), Path::from("delta_table"), config);
+        writer.write(&batch.slice(0, 2)).await?;
+        writer.write(&batch.slice(2, 2)).await?;
+        let adds = writer.close().await?;
+        assert_eq!(adds.len(), 2);
+        assert_eq!(adds[0].partition_values.get("part"), Some(&None));
+        assert_eq!(
+            adds[1].partition_values.get("part"),
+            Some(&Some(marker.to_string()))
+        );
+        for add in adds {
+            assert_eq!(
+                add.get_stats()
+                    .map_err(DeltaTableError::generic_err)?
+                    .map(|stats| stats.num_records),
+                Some(2)
+            );
+        }
         Ok(())
     }
 
@@ -984,8 +1084,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partition_path_with_percent_encoded_value_is_not_double_encoded()
-    -> Result<(), DeltaTableError> {
+    async fn partition_path_is_uri_encoded_once_at_action_creation() -> Result<(), DeltaTableError>
+    {
         use datafusion::arrow::datatypes::TimeUnit;
 
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1027,27 +1127,19 @@ mod tests {
         assert_eq!(adds.len(), 1);
         let path = &adds[0].path;
 
-        assert!(
-            path.contains("%20"),
-            "path should contain %20 (encoded space) in partition dir, got: {path}"
-        );
-        assert!(
-            !path.contains("%2520"),
-            "path must not contain double-encoded %2520: {path}"
-        );
-        assert!(
-            !path.contains("%253A"),
-            "path must not contain double-encoded %253A: {path}"
-        );
-
-        use crate::spec::utils::{decode_path, encode_path};
-        let encoded = encode_path(path);
-        #[expect(clippy::expect_used)]
-        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
-        assert_eq!(
-            decoded, *path,
-            "path should survive one encode/decode round-trip unchanged"
-        );
+        // Hive partition escaping is part of the physical filename. URI encoding
+        // escapes its percent signs once more, but action serialization must not.
+        assert!(path.contains("%2520"), "unexpected log URI: {path}");
+        assert!(path.contains("%253A"), "unexpected log URI: {path}");
+        let json = serde_json::to_value(&adds[0]).map_err(DeltaTableError::generic_err)?;
+        assert_eq!(json["path"].as_str(), Some(path.as_str()));
+        let decoded =
+            crate::spec::utils::decode_path(path).map_err(DeltaTableError::generic_err)?;
+        assert!(decoded.contains("%20"));
+        assert!(!decoded.contains("%2520"));
+        object_store
+            .head(&Path::parse(format!("{table_path}/{decoded}"))?)
+            .await?;
 
         Ok(())
     }

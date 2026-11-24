@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::HashSet;
 
@@ -35,6 +22,7 @@ pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
+pub(crate) mod deletion_vector;
 pub mod expressions;
 pub mod pruning;
 pub mod scan;
@@ -44,9 +32,9 @@ pub mod schema;
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
     PredicateProperties, collect_physical_columns, get_pushdown_filters,
+    physical_predicate_uses_struct_value, predicate_uses_struct_value,
     rewrite_predicate_for_column_mapping, simplify_expr,
 };
-pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 
@@ -239,12 +227,14 @@ impl DeltaScanConfigBuilder {
         Ok(DeltaScanConfig {
             file_column_name,
             row_index_column_name: None,
+            hash_partition_files: false,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
+            metadata_aggregate: None,
         })
     }
 }
@@ -256,6 +246,8 @@ pub struct DeltaScanConfig {
     pub file_column_name: Option<String>,
     /// Include the file-local row index for each record.
     pub row_index_column_name: Option<String>,
+    /// Require file metadata to be hash partitioned by its decoded path before scanning.
+    pub hash_partition_files: bool,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
@@ -269,4 +261,11 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Emit file-level group values and row-count weights for metadata aggregation.
+    pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaMetadataAggregateConfig {
+    pub group_columns: Vec<String>,
 }

@@ -1,19 +1,56 @@
-use std::collections::{HashMap, HashSet};
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
-use datafusion_expr::LogicalPlan;
+use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
+use datafusion_expr::{LogicalPlan, TableSource};
+use sail_catalog::lakehouse::LakehouseResolvedTable;
 use sail_common::spec;
+use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+use crate::shared_cte::CteDefinition;
+
+/// Identifies what a catalog table read scans.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct TableSourceKey {
+    pub catalog: Option<String>,
+    pub database: Vec<String>,
+    pub name: String,
+    pub format: String,
+    pub location: Option<String>,
+    pub properties: Vec<(String, String)>,
+    pub options: Vec<(String, String)>,
+    pub temporal_options: Vec<(String, String)>,
+}
+
+/// Identifies a catalog table lookup by the table reference as written and the
+/// format required by the read, if any.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct CatalogTableLookupKey {
+    pub reference: Vec<String>,
+    pub required_format: Option<String>,
+}
+
+struct SharedTableSource(Arc<dyn TableSource>);
+
+impl std::fmt::Debug for SharedTableSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedTableSource").finish_non_exhaustive()
+    }
+}
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
 pub(super) struct FieldInfo {
     /// The set of plan IDs, if any, that reference this field.
     plan_ids: HashSet<i64>,
+    /// Attribute identity, preserved by identity projections.
+    origin: usize,
     /// The user-facing name of the field.
     name: String,
     /// Whether this is a hidden field that should be excluded from the
@@ -28,8 +65,13 @@ impl FieldInfo {
         &self.name
     }
 
-    pub fn plan_ids(&self) -> Vec<i64> {
-        self.plan_ids.iter().copied().collect()
+    /// Returns the attribute identity, shared by the identity projections of the field.
+    pub fn origin(&self) -> usize {
+        self.origin
+    }
+
+    pub fn plan_ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.plan_ids.iter().copied()
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -55,8 +97,13 @@ pub(super) struct PlanResolverStateConfig {
 
 #[derive(Debug, Default)]
 pub(super) enum AggregateState {
+    Lateral {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `GROUP BY` clause is being resolved.
-    Grouping { projections: Vec<NamedExpr> },
+    Grouping {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `HAVING` clause is being resolved.
     Having {
         projections: Vec<NamedExpr>,
@@ -70,23 +117,40 @@ pub(super) enum AggregateState {
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
+    next_lateral_id: usize,
+    next_origin: usize,
+    /// Multipart relation names represented by opaque DataFusion qualifiers.
+    relation_names: HashMap<TableReference, Vec<String>>,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
+    /// An output schema of each DataFrame plan ID, for checking references against it.
+    plan_schemas: HashMap<i64, DFSchemaRef>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
+    /// The type-checking schema and ordered name-resolution schemas for expressions
+    /// that can recover missing inputs (e.g. a filter predicate).
+    missing_input_resolution: Option<MissingInputResolution>,
+    /// Outputs whose descendants cannot participate in missing-reference resolution.
+    missing_input_boundaries: MissingInputBoundaries,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
-    ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    ctes: HashMap<TableReference, Arc<CteInfo>>,
+    /// Output attributes of the CTE definitions referenced so far; later references renew them.
+    cte_reference_origins: HashSet<usize>,
+    /// The number of CTE definitions resolved so far.
+    next_cte_definition_index: usize,
+    /// The CTE definitions with references that are scans.
+    shared_cte_definitions: Vec<Arc<CteDefinition>>,
+    /// Output attributes of the parameter views referenced so far, including renewed ones.
+    parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
-    /// Named parameter values available for IDENTIFIER clause evaluation.
-    /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
-    /// can substitute placeholders before constant-folding them.
-    param_values: HashMap<String, ScalarValue>,
-    /// Positional parameter values available for IDENTIFIER clause evaluation.
-    /// Set alongside `param_values` when resolving a `WithParameters` query node.
+    /// Named parameter values available while resolving a `WithParameters` query node.
+    /// These provide placeholder types and support early `IDENTIFIER` evaluation.
+    param_values: std::collections::HashMap<String, ScalarValue>,
+    /// Positional parameter values available alongside `param_values`.
     positional_param_values: Vec<ScalarValue>,
     /// Stack of in-scope lambda parameter frames (innermost last).
     /// Each frame holds the declared parameter names of one enclosing lambda
@@ -94,8 +158,17 @@ pub(super) struct PlanResolverState {
     /// higher-order function provides it.
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
-    windows: HashMap<String, spec::Window>,
+    windows: std::collections::HashMap<String, spec::Window>,
+    /// The sources of the catalog tables read so far, shared by repeated references to
+    /// the same table within the query.
+    table_sources: HashMap<TableSourceKey, SharedTableSource>,
+    /// The successful catalog table lookups so far, shared by repeated references to
+    /// the same table within the query.
+    catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
 }
+
+/// A catalog table or view, with the lakehouse resolution of a catalog table.
+pub(super) type CatalogTableLookup = (TableStatus, Option<LakehouseResolvedTable>);
 
 impl Default for PlanResolverState {
     fn default() -> Self {
@@ -107,30 +180,112 @@ impl PlanResolverState {
     pub fn new() -> Self {
         Self {
             next_id: 0,
+            next_lateral_id: 0,
+            next_origin: 0,
+            relation_names: HashMap::new(),
             fields: HashMap::new(),
+            plan_schemas: HashMap::new(),
             outer_query_schema: None,
+            missing_input_resolution: None,
+            missing_input_boundaries: MissingInputBoundaries::default(),
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
+            cte_reference_origins: HashSet::new(),
+            next_cte_definition_index: 0,
+            shared_cte_definitions: Vec::new(),
+            parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
-            param_values: HashMap::new(),
+            param_values: std::collections::HashMap::new(),
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
-            windows: HashMap::new(),
+            windows: std::collections::HashMap::new(),
+            table_sources: HashMap::new(),
+            catalog_table_lookups: HashMap::new(),
         }
     }
 
-    fn next_field_id(&mut self) -> String {
+    pub fn register_relation_name(&mut self, name: Vec<String>) -> TableReference {
+        let reference = TableReference::bare(format!("#relation:{}", uuid::Uuid::new_v4()));
+        self.relation_names.insert(reference.clone(), name);
+        reference
+    }
+
+    pub fn relation_name<'a>(&'a self, reference: &'a TableReference) -> Vec<&'a str> {
+        if let Some(name) = self.relation_names.get(reference) {
+            return name.iter().map(String::as_str).collect();
+        }
+        match reference {
+            TableReference::Bare { table } => vec![table],
+            TableReference::Partial { schema, table } => vec![schema, table],
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => vec![catalog, schema, table],
+        }
+    }
+
+    pub fn is_multipart_relation(&self, reference: &TableReference) -> bool {
+        self.relation_names.contains_key(reference)
+    }
+
+    pub fn next_field_id(&mut self) -> String {
         let id = self.next_id;
         self.next_id += 1;
         format!("#{id}")
     }
 
+    /// Reserve a typed lateral binding without consuming output field IDs.
+    /// Most select lists never use these bindings, so keep their namespace separate.
+    pub fn register_lateral_field(&mut self, source: Option<&str>) -> PlanResult<String> {
+        let (origin, plan_ids) = match source {
+            Some(source) => {
+                let info = self.get_field_info(source)?;
+                (info.origin, info.plan_ids.clone())
+            }
+            None => (self.next_origin(), HashSet::new()),
+        };
+        let field_id = format!("#lateral{}", self.next_lateral_id);
+        self.next_lateral_id += 1;
+        self.fields.insert(
+            field_id.clone(),
+            FieldInfo {
+                plan_ids,
+                origin,
+                name: String::new(),
+                // Temporary bindings must not participate in wildcard expansion.
+                hidden: true,
+            },
+        );
+        Ok(field_id)
+    }
+
+    /// Returns a new attribute identity.
+    pub fn next_origin(&mut self) -> usize {
+        let origin = self.next_origin;
+        self.next_origin += 1;
+        origin
+    }
+
     fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
+        let origin = self.next_origin();
+        self.register_field_with_origin(name.into(), hidden, origin, HashSet::new())
+    }
+
+    /// Registers a field of the attribute identity and returns its generated field ID.
+    pub fn register_field_with_origin(
+        &mut self,
+        name: String,
+        hidden: bool,
+        origin: usize,
+        plan_ids: HashSet<i64>,
+    ) -> String {
         let field_id = self.next_field_id();
         let info = FieldInfo {
-            plan_ids: HashSet::new(),
-            name: name.into(),
+            plan_ids,
+            origin,
+            name,
             hidden,
         };
         self.fields.insert(field_id.clone(), info);
@@ -150,11 +305,20 @@ impl PlanResolverState {
         self.register_field_info(name, true)
     }
 
-    /// Sets the display name of an already-registered field. Used to give a
-    /// materialized column (e.g. an unnested `window` column) a referenceable name.
+    /// Sets the display name of a materialized field, registering an internal field
+    /// when it becomes referenceable (e.g. an unnested `window` grouping column).
     pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
+        let name = name.into();
         if let Some(info) = self.fields.get_mut(field_id) {
-            info.name = name.into();
+            info.name = name;
+        } else {
+            let info = FieldInfo {
+                plan_ids: HashSet::new(),
+                origin: self.next_origin(),
+                name,
+                hidden: false,
+            };
+            self.fields.insert(field_id.to_string(), info);
         }
     }
 
@@ -184,6 +348,15 @@ impl PlanResolverState {
             .collect()
     }
 
+    pub fn clear_field_plan_ids(&mut self, field_id: &str) -> PlanResult<()> {
+        let field_info = self
+            .fields
+            .get_mut(field_id)
+            .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
+        field_info.plan_ids.clear();
+        Ok(())
+    }
+
     pub fn register_plan_id_for_field(&mut self, field_id: &str, plan_id: i64) -> PlanResult<()> {
         let field_info = self
             .fields
@@ -191,6 +364,21 @@ impl PlanResolverState {
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))?;
         field_info.plan_ids.insert(plan_id);
         Ok(())
+    }
+
+    pub fn register_plan_schema(&mut self, schema: &DFSchemaRef, plan_id: i64) -> PlanResult<()> {
+        // Every instance has the same output names. Keep one to resolve roots against.
+        self.plan_schemas
+            .entry(plan_id)
+            .or_insert_with(|| Arc::clone(schema));
+        for field in schema.fields() {
+            self.register_plan_id_for_field(field.name(), plan_id)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_plan_schema(&self, plan_id: i64) -> Option<&DFSchemaRef> {
+        self.plan_schemas.get(&plan_id)
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {
@@ -201,6 +389,49 @@ impl PlanResolverState {
 
     pub fn get_outer_query_schema(&self) -> Option<&DFSchemaRef> {
         self.outer_query_schema.as_ref()
+    }
+
+    /// Returns the missing-input resolution whose type-checking schema is `schema`.
+    pub fn missing_input(&self, schema: &DFSchemaRef) -> Option<&MissingInputResolution> {
+        self.missing_input_resolution
+            .as_ref()
+            .filter(|input| input.applies_to(schema))
+    }
+
+    pub fn missing_input_mut(
+        &mut self,
+        schema: &DFSchemaRef,
+    ) -> Option<&mut MissingInputResolution> {
+        self.missing_input_resolution
+            .as_mut()
+            .filter(|input| input.applies_to(schema))
+    }
+
+    /// Returns the registered missing-input boundaries.
+    pub fn missing_input_boundaries(&self) -> &MissingInputBoundaries {
+        &self.missing_input_boundaries
+    }
+
+    pub fn register_missing_input_boundary(&mut self, plan: &LogicalPlan) {
+        self.missing_input_boundaries.register(plan);
+    }
+
+    pub fn enter_missing_input_scope(
+        &mut self,
+        resolution: MissingInputResolution,
+    ) -> MissingInputScope<'_> {
+        let previous = self.missing_input_resolution.replace(resolution);
+        MissingInputScope {
+            state: self,
+            previous,
+        }
+    }
+
+    pub fn get_lateral_projections(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Lateral { projections } => projections,
+            _ => &[],
+        }
     }
 
     pub fn get_projections_for_grouping(&self) -> &[NamedExpr] {
@@ -236,12 +467,84 @@ impl PlanResolverState {
         CteScope::new(self)
     }
 
-    pub fn get_cte(&self, table_ref: &TableReference) -> Option<&LogicalPlan> {
-        self.ctes.get(table_ref).map(|cte| cte.as_ref())
+    pub fn get_cte(&self, table_ref: &TableReference) -> Option<Arc<CteInfo>> {
+        self.ctes.get(table_ref).cloned()
     }
 
-    pub fn insert_cte(&mut self, table_ref: TableReference, plan: LogicalPlan) {
-        self.ctes.insert(table_ref, Arc::new(plan));
+    pub fn insert_cte(
+        &mut self,
+        table_ref: TableReference,
+        plan: LogicalPlan,
+        kind: CteKind,
+    ) -> PlanResult<()> {
+        let cte = CteInfo::try_new(plan, kind, self)?;
+        self.ctes.insert(table_ref, Arc::new(cte));
+        Ok(())
+    }
+
+    pub fn insert_cte_info(&mut self, table_ref: TableReference, cte: CteInfo) {
+        self.ctes.insert(table_ref, Arc::new(cte));
+    }
+
+    pub fn next_cte_definition_index(&mut self) -> usize {
+        let index = self.next_cte_definition_index;
+        self.next_cte_definition_index += 1;
+        index
+    }
+
+    pub fn register_shared_cte_definition(&mut self, definition: Arc<CteDefinition>) {
+        self.shared_cte_definitions.push(definition);
+    }
+
+    pub fn shared_cte_definitions(&self) -> &[Arc<CteDefinition>] {
+        &self.shared_cte_definitions
+    }
+
+    pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
+        self.ctes.values()
+    }
+
+    pub fn get_table_source(&self, key: &TableSourceKey) -> Option<Arc<dyn TableSource>> {
+        self.table_sources
+            .get(key)
+            .map(|source| Arc::clone(&source.0))
+    }
+
+    pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
+        self.table_sources.insert(key, SharedTableSource(source));
+    }
+
+    pub fn get_catalog_table_lookup(
+        &self,
+        key: &CatalogTableLookupKey,
+    ) -> Option<CatalogTableLookup> {
+        self.catalog_table_lookups.get(key).cloned()
+    }
+
+    pub fn insert_catalog_table_lookup(
+        &mut self,
+        key: CatalogTableLookupKey,
+        lookup: CatalogTableLookup,
+    ) {
+        self.catalog_table_lookups.insert(key, lookup);
+    }
+
+    /// Returns the output attributes of the CTE definitions referenced so far.
+    pub fn cte_reference_origins_mut(&mut self) -> &mut HashSet<usize> {
+        &mut self.cte_reference_origins
+    }
+
+    /// Returns the output attributes of the parameter views referenced so far,
+    /// including renewed ones.
+    pub fn parameter_view_origins_mut(&mut self) -> &mut HashSet<usize> {
+        &mut self.parameter_view_origins
+    }
+
+    /// Registers a field of the same attribute as the source field.
+    pub fn register_identity_field(&mut self, name: String, source: &str) -> PlanResult<String> {
+        let source = self.get_field_info(source)?;
+        let (origin, plan_ids) = (source.origin, source.plan_ids.clone());
+        Ok(self.register_field_with_origin(name, false, origin, plan_ids))
     }
 
     /// Returns a subquery reference plan from state by plan_id.
@@ -268,8 +571,8 @@ impl PlanResolverState {
 
     pub fn set_windows(
         &mut self,
-        windows: HashMap<String, spec::Window>,
-    ) -> HashMap<String, spec::Window> {
+        windows: std::collections::HashMap<String, spec::Window>,
+    ) -> std::collections::HashMap<String, spec::Window> {
         std::mem::replace(&mut self.windows, windows)
     }
 
@@ -329,11 +632,25 @@ impl PlanResolverState {
         !self.lambda_param_scopes.is_empty()
     }
 
+    /// Replaces the parameters in the plan by the parameter values in scope.
+    pub fn bind_param_values(&self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+        let plan = if self.positional_param_values.is_empty() {
+            plan
+        } else {
+            plan.with_param_values(ParamValues::from(self.positional_param_values.clone()))?
+        };
+        if self.param_values.is_empty() {
+            Ok(plan)
+        } else {
+            Ok(plan.with_param_values(ParamValues::from(self.param_values.clone()))?)
+        }
+    }
+
     /// Enters a scope where named and positional parameter values are set.
     /// The previous parameter values are restored when the scope is dropped.
     pub fn enter_param_values_scope(
         &mut self,
-        named: HashMap<String, ScalarValue>,
+        named: std::collections::HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> ParamValuesScope<'_> {
         ParamValuesScope::new(self, named, positional)
@@ -343,14 +660,14 @@ impl PlanResolverState {
 /// Scope for parameter values used by IDENTIFIER clause evaluation.
 pub(crate) struct ParamValuesScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_param_values: HashMap<String, ScalarValue>,
+    previous_param_values: std::collections::HashMap<String, ScalarValue>,
     previous_positional_param_values: Vec<ScalarValue>,
 }
 
 impl<'a> ParamValuesScope<'a> {
     fn new(
         state: &'a mut PlanResolverState,
-        named: HashMap<String, ScalarValue>,
+        named: std::collections::HashMap<String, ScalarValue>,
         positional: Vec<ScalarValue>,
     ) -> Self {
         let previous_param_values = std::mem::replace(&mut state.param_values, named);
@@ -376,17 +693,42 @@ impl Drop for ParamValuesScope<'_> {
     }
 }
 
+pub(crate) struct MissingInputScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous: Option<MissingInputResolution>,
+}
+
+impl MissingInputScope<'_> {
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for MissingInputScope<'_> {
+    fn drop(&mut self) {
+        self.state.missing_input_resolution = self.previous.take();
+    }
+}
+
 pub(crate) struct QueryScope<'a> {
     state: &'a mut PlanResolverState,
     previous_outer_query_schema: Option<DFSchemaRef>,
+    previous_aggregate_state: AggregateState,
 }
 
 impl<'a> QueryScope<'a> {
     fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
+        // Subqueries cannot recover missing local inputs solely for correlation.
+        // TODO: Resolve the filter's local references before its subqueries so that
+        // directly recovered inputs become visible to correlation in either order.
+        let schema = PlanResolver::local_schema(&schema, state);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
+        // Select aliases and grouping bindings belong to their own query scope.
+        let previous_aggregate_state = std::mem::take(&mut state.aggregate_state);
         Self {
             state,
             previous_outer_query_schema,
+            previous_aggregate_state,
         }
     }
 
@@ -398,6 +740,7 @@ impl<'a> QueryScope<'a> {
 impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+        self.state.aggregate_state = std::mem::take(&mut self.previous_aggregate_state);
     }
 }
 
@@ -429,7 +772,7 @@ impl Drop for AggregateScope<'_> {
 
 pub(crate) struct CteScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    previous_ctes: HashMap<TableReference, Arc<CteInfo>>,
 }
 
 impl<'a> CteScope<'a> {

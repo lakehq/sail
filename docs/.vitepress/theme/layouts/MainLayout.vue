@@ -12,16 +12,6 @@
           theme.externalLinkIcon && 'external-link-icon-enabled',
         ]"
       >
-        <div v-if="!isDevGuide" class="info custom-block !pt-2 !pb-2">
-          <p>
-            <span class="mr-1">&#127873;</span
-            ><span class="font-semibold">Using Sail?</span> Tell us your story
-            and
-            <a href="https://lakesail.com/share-story" target="_blank"
-              >get free merch</a
-            >!
-          </p>
-        </div>
         <div
           v-if="version !== 'latest' && !isDevGuide"
           class="warning custom-block !pt-2 !pb-2"

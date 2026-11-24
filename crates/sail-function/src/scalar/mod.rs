@@ -1,26 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array;
-pub mod array_struct_field;
 pub mod collection;
+pub mod conditional;
+pub mod conversion;
+pub mod correlation_cast;
 pub mod csv;
 pub mod datetime;
-pub mod drop_struct_field;
 pub mod explode;
 pub mod geo;
 pub mod hash;
+pub mod jev;
 pub mod json;
 pub mod map;
 pub mod math;
 pub mod misc;
+pub mod mixed_numeric;
 pub mod multi_expr;
+pub mod normalize_float_keys;
 pub mod predicate;
-pub mod spark_cast_string_to_int32;
-pub mod spark_struct_rename;
-pub mod spark_to_string;
 pub mod string;
-pub mod struct_function;
+pub mod r#struct;
 pub mod table_input;
-pub mod update_struct_field;
 pub mod url;
+mod utils;
 pub mod variant;
 pub mod vector;
 pub mod xml;

@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,10 +10,9 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{Column as PhysicalColumn, lit};
 
 mod action_schema;
@@ -31,8 +20,11 @@ mod commit_exec;
 pub mod discovery_exec;
 mod dv_writer_exec;
 mod log_replay_exec;
+mod merge_change_data;
 mod meta_adds;
 mod metadata_stats_exec;
+mod path_decode;
+mod path_key;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod write_context;
@@ -47,10 +39,15 @@ pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use dv_writer_exec::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
-    DeletionVectorWriterExec,
 };
 pub use log_replay_exec::{DeltaLogReplayExec, DeltaLogReplayMode};
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
+pub use path_decode::DeltaDecodePath;
+pub use path_key::DeltaPathKey;
+
+pub use crate::procedure::{
+    DeltaMaintenanceExec, DeltaMaintenancePredicate, DeltaOptimizePlan, DeltaOptimizeRewriteExec,
+};
 pub mod planner;
 pub use planner::{
     DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext, plan_delete, plan_delete_mor,
@@ -169,46 +166,6 @@ pub fn create_sort(
     };
 
     Ok(sort_exec)
-}
-
-/// Create a `RepartitionExec` instance for Delta Lake data repartitioning.
-pub fn create_repartition(
-    input: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
-    num_partitions: usize,
-) -> Result<Arc<RepartitionExec>> {
-    let num_partitions = num_partitions.max(1);
-    let partitioning = if partition_columns.is_empty() {
-        // No partition columns, ensure some parallelism
-        Partitioning::RoundRobinBatch(num_partitions)
-    } else {
-        // Since create_projection moves partition columns to the end, we can rely on their positions.
-        let schema = input.schema();
-        let num_cols = schema.fields().len();
-        let num_part_cols = partition_columns.len();
-
-        // TODO: Investigate repartitioning behavior for "bucketing" with overlapping partition columns
-        // Current implementation may not handle the desired output structure where multiple writers
-        // can create files within the same partition directory. For example:
-        // year=2024/
-        //     part-00000.parquet (created by writer 1)
-        //     part-00001.parquet (created by writer 2)
-        //     part-00002.parquet (created by writer 3)
-        //     part-00003.parquet (created by writer 4)
-        // year=2025/
-        //     part-00000.parquet (created by writer 1)
-        //     part-00001.parquet (created by writer 2)
-        //     part-00002.parquet (created by writer 3)
-        //     part-00003.parquet (created by writer 4)
-        let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = (num_cols - num_part_cols..num_cols)
-            .zip(partition_columns.iter())
-            .map(|(idx, name)| Arc::new(PhysicalColumn::new(name, idx)) as Arc<dyn PhysicalExpr>)
-            .collect();
-
-        Partitioning::Hash(partition_exprs, num_partitions)
-    };
-
-    Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {

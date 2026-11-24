@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_build_scripts::data_source::options::build_data_source_options;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

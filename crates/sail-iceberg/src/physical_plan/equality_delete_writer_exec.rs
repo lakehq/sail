@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,6 +20,7 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
 use futures::stream::once;
 use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use url::Url;
 
 use crate::datasource::type_converter::iceberg_field_to_arrow;
@@ -238,7 +241,10 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                     None => writer.insert(
                         ArrowParquetWriter::try_new(
                             delete_spec.arrow_schema.as_ref(),
-                            WriterProperties::default(),
+                            WriterProperties::builder()
+                                .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+                                .build(),
+                            Vec::new(),
                         )
                         .map_err(DataFusionError::Execution)?,
                     ),
@@ -266,8 +272,12 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
+                action_summary: None,
+                removed_data_file_paths: vec![],
+                skip_empty_commit: false,
                 requirements,
                 table_properties: writer_config.table_properties().to_vec(),
+                snapshot_properties: Default::default(),
                 lakehouse_table,
                 schema: None,
                 partition_spec: None,

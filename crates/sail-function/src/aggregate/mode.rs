@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs
+
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
 use datafusion::arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
 };
@@ -23,7 +25,7 @@ use datafusion::scalar::ScalarValue;
 
 use super::utils::get_scalar_value;
 
-/// The `ModeFunction` calculates the mode (most frequent value) from a set of values.
+/// The `Mode` calculates the mode (most frequent value) from a set of values.
 ///
 /// - Null values are ignored during the calculation.
 /// - If multiple values have the same frequency, the MAX value with the highest frequency is returned.
@@ -33,25 +35,25 @@ use super::utils::get_scalar_value;
 ///   resolver into the `"lowest"` (ascending) / `"highest"` (descending) tie-break
 ///   sentinels as the second argument; see [`TieBreak`].
 #[derive(PartialEq, Eq, Hash)]
-pub struct ModeFunction {
+pub struct Mode {
     signature: Signature,
 }
 
-impl Debug for ModeFunction {
+impl Debug for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModeFunction")
+        f.debug_struct("Mode")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for ModeFunction {
+impl Default for Mode {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ModeFunction {
+impl Mode {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
@@ -59,7 +61,7 @@ impl ModeFunction {
     }
 }
 
-impl AggregateUDFImpl for ModeFunction {
+impl AggregateUDFImpl for Mode {
     fn name(&self) -> &str {
         "mode"
     }
@@ -236,7 +238,9 @@ fn resolve_tie_break(args: &AccumulatorArgs) -> Result<TieBreak> {
     }
 }
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs#L31-L256
 #[derive(Debug)]
 pub struct PrimitiveModeAccumulator<T>
 where
@@ -510,8 +514,11 @@ where
         Ok(())
     }
 }
+// SPDX-SnippetEnd
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs#L31-L155
 #[derive(Debug)]
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
@@ -651,7 +658,11 @@ impl Accumulator for BytesModeAccumulator {
         Ok(())
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs#L157-L302
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -804,3 +815,4 @@ mod tests {
         Ok(())
     }
 }
+// SPDX-SnippetEnd

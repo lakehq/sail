@@ -1,0 +1,107 @@
+# serializer version: 1
+---
+name: "test_repeated_scalar_subqueries_over_one_delta_table_version_share_one_result[-100]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as channel, #8@1 as total]
+      ScalarSubqueryExec: subqueries=1
+        UnionExec
+          ProjectionExec: expr=[store as #7, sum(f.#3)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#3)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#3)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #3]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[catalog as #7, sum(f.#12)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#12)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#12)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #12]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[web as #7, sum(f.#21)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#21)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#21)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #21]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[w@0 as #6]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
+---
+name: "test_repeated_scalar_subqueries_over_one_delta_table_version_share_one_result[VERSION AS OF 1-25]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as channel, #8@1 as total]
+      ScalarSubqueryExec: subqueries=1
+        UnionExec
+          ProjectionExec: expr=[store as #7, sum(f.#3)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#3)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#3)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #3]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[catalog as #7, sum(f.#12)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#12)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#12)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #12]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[web as #7, sum(f.#21)@0 as #8]
+            AggregateExec: mode=Final, gby=[], aggr=[sum(f.#21)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(f.#21)]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[column2@0 as #21]
+                      FilterExec: column1@0 = scalar_subquery(<pending>), projection=[column2@1]
+                        DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[w@0 as #6]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
+---
+name: "test_scalar_subqueries_over_different_delta_table_versions_are_not_shared[VERSION AS OF 1--2-3]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as a, #7@1 as b]
+      ScalarSubqueryExec: subqueries=2
+        ProjectionExec: expr=[scalar_subquery(<pending>) as #6, scalar_subquery(<pending>) as #7]
+          PlaceholderRowExec
+        ProjectionExec: expr=[w@0 as #2]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
+        ProjectionExec: expr=[w@0 as #5]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
+---
+name: "test_scalar_subqueries_over_different_delta_table_versions_are_not_shared[VERSION AS OF 1-VERSION AS OF 2-2-3]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as a, #7@1 as b]
+      ScalarSubqueryExec: subqueries=2
+        ProjectionExec: expr=[scalar_subquery(<pending>) as #6, scalar_subquery(<pending>) as #7]
+          PlaceholderRowExec
+        ProjectionExec: expr=[w@0 as #2]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
+        ProjectionExec: expr=[w@0 as #5]
+          FilterExec: d@0 = 2000-01-08, projection=[w@1]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[<tmp>/delta_scalar_sharing/part-<id>.snappy.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08 AND d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1 AND d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]

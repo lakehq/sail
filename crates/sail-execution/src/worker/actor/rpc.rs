@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
@@ -8,7 +10,9 @@ use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskStreamKey;
+use crate::id::TaskStreamKeySet;
+use crate::rpc::server_options;
+use crate::shuffle::ShuffleCompression;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
@@ -22,14 +26,14 @@ struct WorkerTaskStreamFetcher {
 }
 
 #[async_trait]
-impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
+impl TaskStreamFetcher<TaskStreamKeySet> for WorkerTaskStreamFetcher {
     async fn fetch(
         &self,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let message = TaskRunnerMessage::FetchLocalStream {
-            key,
+        let message = TaskRunnerMessage::FetchLocalStreams {
+            keys,
             result: sender,
         };
         self.handle
@@ -45,6 +49,7 @@ impl WorkerActor {
         task_runner: ActorHandle<TaskRunnerActor>,
         context: std::sync::Arc<datafusion::execution::TaskContext>,
         addr: impl ToSocketAddrs,
+        compression: ShuffleCompression,
     ) -> ExecutionResult<()> {
         let listener = TcpListener::bind(addr).await?;
         let port = listener.local_addr()?.port();
@@ -58,10 +63,12 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server =
-            TaskStreamFlightServer::<TaskStreamKey>::new(Box::new(WorkerTaskStreamFetcher {
+        let flight_server = TaskStreamFlightServer::<TaskStreamKeySet>::new(
+            Box::new(WorkerTaskStreamFetcher {
                 handle: task_runner,
-            }));
+            }),
+            compression,
+        );
         let flight_service = FlightServiceServer::new(flight_server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
@@ -73,7 +80,7 @@ impl WorkerActor {
             .send(WorkerMessage::ServerReady { port, signal: tx })
             .await?;
 
-        ServerBuilder::new("sail_worker", Default::default())
+        ServerBuilder::new("sail_worker", server_options())
             .add_service(service, Some(crate::worker::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)

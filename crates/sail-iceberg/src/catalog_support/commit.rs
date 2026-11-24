@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::{DataFusionError, Result, plan_err};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{LakehouseCommitOutcome, LakehouseCommitRequest};
@@ -11,7 +13,6 @@ use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableKind, TableStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use url::Url;
 
 use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
@@ -155,6 +156,40 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         }
     }
 
+    pub(crate) async fn load_expiration_table(
+        context: &C,
+        catalog_table: &[String],
+    ) -> Result<sail_catalog::lakehouse::LakehouseResolvedTable> {
+        use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
+        use sail_common_datafusion::catalog::{LakehouseFormat, LakehouseOperation};
+        let manager = context.extension::<CatalogManager>()?;
+        let resolved = manager
+            .resolve_lakehouse_table(
+                catalog_table,
+                ResolveLakehouseTableRequest {
+                    catalog_table: catalog_table.to_vec(),
+                    operation: LakehouseOperation::Maintenance,
+                    requested_format: Some(LakehouseFormat::Iceberg),
+                    options: vec![],
+                },
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let supported = match resolved.execution.commit {
+            CommitAuthority::Filesystem => {
+                !catalog_managed_iceberg_from_properties(&resolved.status.display_properties)
+            }
+            CommitAuthority::IcebergRestCommit => true,
+            _ => false,
+        };
+        if !supported || resolved.execution.format != LakehouseFormat::Iceberg {
+            return plan_err!(
+                "expire_snapshots supports only filesystem-authoritative tables and Iceberg REST catalogs; pointer-authoritative registrations (including Glue and HMS) are unsupported"
+            );
+        }
+        Ok(resolved)
+    }
+
     pub(crate) async fn load_metadata_location(
         context: &C,
         catalog_table: &[String],
@@ -206,7 +241,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
                     Ok(CatalogCommitOutcome::Conflict)
                 }
                 LakehouseCommitOutcome::StateUnknown { message } => Err(DataFusionError::External(
-                    Box::new(CatalogError::CommitStateUnknown(message)),
+                    Box::new(CatalogError::CommitStateUnknown(message.into())),
                 )),
                 LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::External(
                     Box::new(CatalogError::CommitRejected(message)),
@@ -231,24 +266,56 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         new_metadata_location: &str,
     ) -> Result<()> {
         let manager = self.context.extension::<CatalogManager>()?;
-        let metadata_location_key = existing_metadata_location_key(existing_properties)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
-        let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
-        if let Some(previous_metadata_location) = previous_metadata_location {
-            properties.push((
-                PREVIOUS_METADATA_LOCATION_KEY.to_string(),
-                previous_metadata_location.to_string(),
-            ));
-        }
         manager
             .alter_table(
                 self.catalog_table,
-                AlterTableOptions::SetTableProperties { properties },
+                metadata_location_update_options(
+                    existing_properties,
+                    previous_metadata_location,
+                    new_metadata_location,
+                ),
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
+
+    pub(crate) async fn update_metadata_location_with_alter(
+        &self,
+        existing_properties: &[(String, String)],
+        previous_metadata_location: &str,
+        new_metadata_location: &str,
+        changes: Vec<AlterTableOptions>,
+    ) -> Result<()> {
+        let manager = self.context.extension::<CatalogManager>()?;
+        let mut options = vec![metadata_location_update_options(
+            existing_properties,
+            Some(previous_metadata_location),
+            new_metadata_location,
+        )];
+        options.extend(changes);
+        manager
+            .alter_table_atomically(self.catalog_table, options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn metadata_location_update_options(
+    existing_properties: &[(String, String)],
+    previous_metadata_location: Option<&str>,
+    new_metadata_location: &str,
+) -> AlterTableOptions {
+    let metadata_location_key = existing_metadata_location_key(existing_properties)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
+    let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
+    if let Some(previous_metadata_location) = previous_metadata_location {
+        properties.push((
+            PREVIOUS_METADATA_LOCATION_KEY.to_string(),
+            previous_metadata_location.to_string(),
+        ));
+    }
+    AlterTableOptions::SetTableProperties { properties }
 }
 
 pub(crate) fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
@@ -285,16 +352,6 @@ pub(crate) fn catalog_requirements(
             requirements.push(TableRequirement::UuidMatch { uuid });
         }
     requirements
-}
-
-pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if crate::utils::parse_absolute_url(metadata_file).is_some() {
-        return Ok(metadata_file.to_string());
-    }
-    Ok(table_url
-        .join(metadata_file)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .to_string())
 }
 
 #[cfg(test)]

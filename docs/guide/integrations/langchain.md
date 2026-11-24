@@ -31,18 +31,18 @@ uv add "langchain-sail[spark]" langchain langchain-openai
 
 :::
 
-The `spark` extra installs `pyspark-client==4.2.0` without the JVM components included in the full PySpark distribution.
+The `spark` extra installs `pyspark-client` without the JVM components included in the full PySpark distribution.
 
 Applications that require the full PySpark distribution should install it separately instead of using the `spark` extra.
 
 ::: code-group
 
 ```bash [pip]
-pip install langchain-sail "pyspark[connect]==4.2.0" langchain langchain-openai
+pip install langchain-sail "pyspark[connect]==4.2.1" langchain langchain-openai
 ```
 
 ```bash [uv]
-uv add langchain-sail "pyspark[connect]==4.2.0" langchain langchain-openai
+uv add langchain-sail "pyspark[connect]==4.2.1" langchain langchain-openai
 ```
 
 :::
@@ -259,7 +259,7 @@ Output:
 
 ## Using the Toolkit with an Agent
 
-LangChain's `create_agent()` API combines the model, tools, and a system prompt.
+The LangChain `create_agent()` API combines the model, tools, and a system prompt.
 The prompt requires the agent to inspect available data and construct read-only queries.
 
 ```python
@@ -309,7 +309,7 @@ Output:
 Alice has placed the most orders, with 2 orders.
 ```
 
-`create_sail_sql_agent()` remains available for applications that use LangChain's classic `AgentExecutor` API.
+`create_sail_sql_agent()` remains available for applications that use the classic `AgentExecutor` API in LangChain.
 Use `create_agent()` for new applications.
 
 ## Safety Considerations

@@ -1,11 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
+use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
 use sail_common_datafusion::formatter::{
     Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
     DurationNanosecondFormatter, DurationSecondFormatter, IntervalDayTimeFormatter,
@@ -32,6 +35,14 @@ impl SparkPlanFormatter {
 }
 
 impl PlanFormatter for SparkPlanFormatter {
+    fn field_to_simple_string(&self, field: &Field) -> Result<String> {
+        if sail_common_datafusion::uuid::is_uuid_field(field) {
+            Ok("uuid".to_string())
+        } else {
+            self.data_type_to_simple_string(field.data_type())
+        }
+    }
+
     fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
         match data_type {
             DataType::Null => Ok("void".to_string()),
@@ -83,10 +94,9 @@ impl PlanFormatter for SparkPlanFormatter {
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field)
             | DataType::ListView(field)
-            | DataType::LargeListView(field) => Ok(format!(
-                "array<{}>",
-                self.data_type_to_simple_string(field.data_type())?
-            )),
+            | DataType::LargeListView(field) => {
+                Ok(format!("array<{}>", self.field_to_simple_string(field)?))
+            }
             DataType::Struct(fields) => {
                 let fields = fields
                     .iter()
@@ -94,7 +104,7 @@ impl PlanFormatter for SparkPlanFormatter {
                         Ok(format!(
                             "{}:{}",
                             field.name(),
-                            self.data_type_to_simple_string(field.data_type())?
+                            self.field_to_simple_string(field)?
                         ))
                     })
                     .collect::<Result<Vec<String>>>()?;
@@ -109,8 +119,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 };
                 Ok(format!(
                     "map<{},{}>",
-                    self.data_type_to_simple_string(key_field.data_type())?,
-                    self.data_type_to_simple_string(value_field.data_type())?
+                    self.field_to_simple_string(key_field)?,
+                    self.field_to_simple_string(value_field)?
                 ))
             }
             DataType::Union(_union_fields, _union_mode) => {
@@ -185,25 +195,15 @@ impl PlanFormatter for SparkPlanFormatter {
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float16(value) => match value {
-                Some(value) => {
-                    let value = f16::to_f32(*value);
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(value).to_string())
-                }
+                Some(value) => Ok(spark_f32_to_string(f16::to_f32(*value))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float32(value) => match value {
-                Some(value) => {
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(*value).to_string())
-                }
+                Some(value) => Ok(spark_f32_to_string(*value)),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Float64(value) => match value {
-                Some(value) => {
-                    let mut buffer = ryu::Buffer::new();
-                    Ok(buffer.format(*value).to_string())
-                }
+                Some(value) => Ok(spark_f64_to_string(*value)),
                 None => Ok("NULL".to_string()),
             },
             // For timestamp values with no time zone, we use UTC as the time zone for formatting.
@@ -494,6 +494,12 @@ impl PlanFormatter for SparkPlanFormatter {
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             // Spark always names the time window column `window`.
             "window" => Ok("window".to_string()),
+            // Spark does not show the seed of `uuid` and `shuffle`.
+            "uuid" => Ok("uuid()".to_string()),
+            "shuffle" => {
+                let (array, _) = arguments.at_least_one()?;
+                Ok(format!("shuffle({array})"))
+            }
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {
@@ -573,8 +579,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
-            | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "schema_of_xml" | "to_csv"
+            | "to_json" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
@@ -601,8 +607,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }
@@ -615,8 +621,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = arguments
                     .iter()
                     .map(|arg| {
-                        if arg.starts_with("(- ") && arg.ends_with(")") {
-                            format!("-{}", &arg[3..arg.len() - 1])
+                        if let Some(inner) = arg.strip_circumfix("(- ", ')') {
+                            format!("-{inner}")
                         } else {
                             arg.to_string()
                         }
@@ -789,6 +795,44 @@ mod tests {
     use crate::error::PlanResult;
 
     #[test]
+    fn uuid_target_type_names_include_nested_fields() -> PlanResult<()> {
+        let formatter = SparkPlanFormatter;
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_extension_type(arrow_schema::extension::Uuid);
+        assert_eq!(formatter.field_to_simple_string(&uuid)?, "uuid");
+        assert_eq!(
+            formatter.data_type_to_simple_string(uuid.data_type())?,
+            "binary"
+        );
+        let nested = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        uuid.clone().with_name("key").with_nullable(false),
+                        Field::new(
+                            "value",
+                            DataType::List(Arc::new(Field::new_list_field(
+                                DataType::Struct(vec![uuid].into()),
+                                true,
+                            ))),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        assert_eq!(
+            formatter.data_type_to_simple_string(&nested)?,
+            "map<uuid,array<struct<u:uuid>>>"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_literal_to_string() -> PlanResult<()> {
         let formatter = SparkPlanFormatter;
         let to_string = |literal| formatter.literal_to_string(&literal, "UTC");
@@ -805,6 +849,8 @@ mod tests {
         assert_eq!(to_string(ScalarValue::Int64(Some(-40)))?, "-40");
         assert_eq!(to_string(ScalarValue::Float32(Some(1.0)))?, "1.0");
         assert_eq!(to_string(ScalarValue::Float64(Some(-0.1)))?, "-0.1");
+        assert_eq!(to_string(ScalarValue::Float64(Some(1e18)))?, "1.0E18");
+        assert_eq!(to_string(ScalarValue::Float64(Some(1e-7)))?, "1.0E-7");
         assert_eq!(to_string(ScalarValue::Decimal128(Some(123), 3, 0))?, "123",);
         assert_eq!(
             to_string(ScalarValue::Decimal128(Some(-123), 3, 0))?,

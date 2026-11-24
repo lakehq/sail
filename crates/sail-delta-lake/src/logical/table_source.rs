@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -8,6 +10,8 @@ use sail_common_datafusion::datasource::MergeCapableSource;
 use crate::DeltaResult;
 use crate::datasource::{DeltaScanConfig, df_logical_schema, get_pushdown_filters};
 use crate::delta_log::LogStoreRef;
+use crate::schema::attach_column_mapping_metadata;
+use crate::spec::ColumnMappingMode;
 use crate::table::DeltaSnapshot;
 
 #[derive(Clone, Default)]
@@ -43,6 +47,20 @@ pub struct DeltaTableSource {
     pub(crate) storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DeltaMetadataAggregateSource {
+    pub table: DeltaTableSource,
+    pub filters: Vec<Expr>,
+    pub group_columns: Vec<String>,
+    pub schema: SchemaRef,
+}
+
+impl TableSource for DeltaMetadataAggregateSource {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 impl std::fmt::Debug for DeltaTableSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeltaTableSource")
@@ -66,9 +84,18 @@ impl DeltaTableSource {
     pub fn try_new(
         snapshot: Arc<DeltaSnapshot>,
         log_store: LogStoreRef,
-        config: DeltaScanConfig,
+        mut config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
         snapshot.ensure_data_read_supported()?;
+        // Logical and physical scans must expose the same column mapping metadata.
+        if let Some(requested) = config.schema.as_ref()
+            && snapshot.effective_column_mapping_mode() != ColumnMappingMode::None
+        {
+            config.schema = Some(Arc::new(attach_column_mapping_metadata(
+                requested.as_ref(),
+                snapshot.schema(),
+            )));
+        }
         let schema = df_logical_schema(
             snapshot.as_ref(),
             &config.file_column_name,

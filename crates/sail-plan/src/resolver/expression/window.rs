@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -17,7 +19,9 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_udaf::{
+    PySparkAggregateMode, PySparkGroupAggKind, PySparkGroupAggregateUDF,
+};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -225,6 +229,7 @@ impl PlanResolver<'_> {
                         };
                         let udaf = PySparkGroupAggregateUDF::new(
                             kind,
+                            PySparkAggregateMode::Window,
                             get_udf_name(&function_name, &payload),
                             payload,
                             deterministic,
@@ -321,6 +326,7 @@ impl PlanResolver<'_> {
         };
         let new_udaf = PySparkGroupAggregateUDF::new(
             kind,
+            PySparkAggregateMode::Window,
             get_udf_name(function_name, &payload),
             payload,
             udaf.deterministic(),

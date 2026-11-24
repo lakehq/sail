@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
-use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::data_type::parse_data_type;
 use sail_sql_analyzer::expression::{
     from_ast_expression, from_ast_object_name, from_ast_qualified_wildcard,
 };
 use sail_sql_analyzer::parser::{
-    parse_data_type, parse_expression, parse_named_expression, parse_object_name,
-    parse_qualified_wildcard,
+    parse_expression, parse_named_expression, parse_object_name, parse_qualified_wildcard,
 };
 use sail_sql_analyzer::query::from_ast_named_expression;
 
@@ -123,12 +124,12 @@ impl TryFrom<Expression> for spec::Expr {
                 let cast_to_type = cast_to_type.required("cast type")?;
                 let cast_to_type = match cast_to_type {
                     CastToType::Type(x) => x.try_into()?,
-                    CastToType::TypeStr(s) => from_ast_data_type(parse_data_type(s.as_str())?)?,
+                    CastToType::TypeStr(s) => parse_data_type(s.as_str())?,
                 };
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
-                    rename: false,
+                    naming: spec::CastNaming::Cast,
                     is_try: matches!(EvalMode::try_from(eval_mode), Ok(EvalMode::Try)),
                 })
             }

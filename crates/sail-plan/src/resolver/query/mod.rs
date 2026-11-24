@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
@@ -23,6 +25,7 @@ mod lateral;
 mod lateral_join;
 mod limit;
 mod misc;
+mod missing_input;
 mod na;
 mod pivoting;
 mod project;
@@ -39,6 +42,9 @@ mod udtf;
 mod values;
 mod window;
 mod with_relations;
+
+pub(super) use cte::{CteInfo, CteKind};
+pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
 
 impl PlanResolver<'_> {
     /// Resolve query plan.
@@ -58,7 +64,7 @@ impl PlanResolver<'_> {
     /// Resolve query plan.
     /// The resolved plan may contain hidden fields.
     /// If the hidden fields cannot be handled,
-    /// [`Self::resolve_query_plan`] should be used instead,
+    /// [`Self::resolve_query_plan`] should be used instead.
     #[async_recursion]
     async fn resolve_query_plan_with_hidden_fields(
         &self,
@@ -130,7 +136,8 @@ impl PlanResolver<'_> {
                 self.apply_table_sample(plan, sample, state).await?
             }
             QueryNode::Deduplicate(deduplicate) => {
-                self.resolve_query_deduplicate(deduplicate, state).await?
+                self.resolve_query_deduplicate(deduplicate, plan_id.is_some(), state)
+                    .await?
             }
             QueryNode::Range(range) => self.resolve_query_range(range, state).await?,
             QueryNode::SubqueryAlias {
@@ -450,9 +457,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<()> {
         if let Some(plan_id) = plan_id {
-            for field in plan.schema().fields() {
-                state.register_plan_id_for_field(field.name(), plan_id)?;
-            }
+            state.register_plan_schema(plan.schema(), plan_id)?;
         }
         Ok(())
     }

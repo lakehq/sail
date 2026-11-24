@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
@@ -132,8 +134,7 @@ pub struct LakehouseCommitRequest {
 }
 
 // TODO: Expand this with typed success payloads, retry/reconcile hints, and
-// cleanup policy before wiring providers that can return commit-state-unknown
-// after side effects. Keep REST requirements/updates, metadata-location CAS,
+// cleanup policy. Keep REST requirements/updates, metadata-location CAS,
 // Delta ratification, and provider-native update outcomes distinct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCommitOutcome {
@@ -357,7 +358,8 @@ fn resolved_lakehouse_authority(
 ) -> LakehouseAuthority {
     match format {
         LakehouseFormat::Delta
-            if is_unity_delta_table(properties)
+            if lifecycle == TableLifecycle::Managed
+                && is_unity_delta_table(properties)
                 && (capabilities.contains(&LakehouseCapability::CatalogCommit)
                     || capabilities.contains(&LakehouseCapability::DeltaRatifiedCommits)) =>
         {

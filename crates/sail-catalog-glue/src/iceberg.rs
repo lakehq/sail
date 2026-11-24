@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Iceberg table creation logic for AWS Glue Data Catalog.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use aws_sdk_glue::Client;
 use aws_sdk_glue::types::{
@@ -20,7 +22,7 @@ use sail_common_datafusion::catalog::iceberg::{
 };
 
 use crate::GlueCatalogProvider;
-use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
+use crate::data_type::{arrow_field_to_iceberg_type, arrow_to_glue_type};
 
 /// Default Iceberg table spec version for new tables (v2 is the modern standard).
 const DEFAULT_ICEBERG_FORMAT_VERSION: &str = "2";
@@ -55,6 +57,18 @@ pub(crate) async fn create_iceberg_table(
     let database_name = GlueCatalogProvider::database_name(database)?;
 
     let options = validate_iceberg_options(options)?;
+
+    if sail_common_datafusion::catalog::managed::metadata_location_value(
+        options
+            .properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .is_some()
+    {
+        return create_iceberg_table_via_table_input(provider, client, database, table, options)
+            .await;
+    }
 
     let iceberg_schema = build_iceberg_schema(&options.columns)?;
     let partition_spec = build_iceberg_partition_spec(&options.partition_by, &options.columns)?;
@@ -140,31 +154,22 @@ async fn create_iceberg_table_via_table_input(
     options: ValidatedIcebergOptions,
 ) -> CatalogResult<TableStatus> {
     let database_name = GlueCatalogProvider::database_name(database)?;
-    let partition_columns: Vec<String> = options
-        .partition_by
-        .iter()
-        .filter(|field| matches!(field.transform, None | Some(PartitionTransform::Identity)))
-        .map(|field| field.column.clone())
-        .collect();
-    let partition_set: HashSet<_> = partition_columns
-        .iter()
-        .map(|column| column.to_ascii_lowercase())
-        .collect();
     let mut regular_columns = Vec::new();
-    let mut glue_partition_columns = Vec::new();
     for column in options.columns {
         let glue_type = arrow_to_glue_type(&column.data_type)?;
         let glue_column = aws_sdk_glue::types::Column::builder()
             .name(&column.name)
             .r#type(glue_type)
             .set_comment(column.comment.clone())
+            .set_parameters(
+                column
+                    .default
+                    .as_ref()
+                    .map(|value| HashMap::from([("CURRENT_DEFAULT".to_string(), value.clone())])),
+            )
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build column: {e}")))?;
-        if partition_set.contains(&column.name.to_ascii_lowercase()) {
-            glue_partition_columns.push(glue_column);
-        } else {
-            regular_columns.push(glue_column);
-        }
+        regular_columns.push(glue_column);
     }
 
     let format = HiveStorageFormat::parquet();
@@ -192,7 +197,7 @@ async fn create_iceberg_table_via_table_input(
         .name(table)
         .table_type("EXTERNAL_TABLE")
         .storage_descriptor(storage_descriptor)
-        .set_partition_keys(Some(glue_partition_columns))
+        .set_partition_keys(Some(Vec::new()))
         .set_parameters(Some(parameters))
         .build()
         .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build table input: {e}")))?;
@@ -322,7 +327,15 @@ fn build_iceberg_schema(columns: &[CreateTableColumnOptions]) -> CatalogResult<I
         .iter()
         .enumerate()
         .map(|(idx, col)| {
-            let type_doc = arrow_to_iceberg_type(&col.data_type)?;
+            let field =
+                arrow::datatypes::Field::new(&col.name, col.data_type.clone(), col.nullable)
+                    .with_metadata(
+                        col.metadata
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
+            let type_doc = arrow_field_to_iceberg_type(&field)?;
             let mut builder = IcebergStructField::builder()
                 .id((idx + 1) as i32)
                 .name(&col.name)

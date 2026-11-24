@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::path::PathBuf;
 
 use prost_build::Config;
@@ -90,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
-        .skip_debug(&["sail.worker.RunTaskRequest"])
+        .skip_debug(&["sail.worker.RunTaskBatchRequest"])
         .with_service()
         .build()?;
     Ok(())

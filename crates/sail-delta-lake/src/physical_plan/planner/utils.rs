@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -16,8 +6,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
-use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
+use datafusion::logical_expr::{Expr, ScalarUDF};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -30,6 +20,7 @@ use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
@@ -42,7 +33,7 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
+    DeltaPathKey, DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
@@ -108,6 +99,12 @@ fn action_replay_key_expr(
     let path = Expr::Cast(Cast::new(
         Box::new(struct_field_expr(action_expr.clone(), FIELD_NAME_PATH)),
         DataType::Utf8,
+    ));
+    // Normalize the comparison key before partitioning, sorting, or hashing.
+    // The Add payload below continues to carry its original URI spelling.
+    let path = Expr::ScalarFunction(ScalarFunction::new_udf(
+        Arc::new(ScalarUDF::from(DeltaPathKey::default())),
+        vec![path],
     ));
     let path_bytes = Expr::ScalarFunction(ScalarFunction::new_udf(
         datafusion::functions::string::octet_length(),
@@ -277,6 +274,30 @@ fn replay_output_schema(
     Arc::new(Schema::new(fields))
 }
 
+/// Build the input of a `DeltaWriterExec`: group table partitions within each writer task.
+///
+/// Writer parallelism follows the input plan. `DeltaWriterExec` reports that it does not benefit
+/// from input partitioning, so no partitions are manufactured for it, and no partition key
+/// sharding is imposed either: several tasks may write into the same table partition directory
+/// (file names are unique per writer). This can produce one final partial file per task for every
+/// table partition the task touches.
+///
+/// `create_sort` locates partition columns positionally, assuming `create_projection` has already
+/// moved them to the end of the schema, so the projection must stay ahead of the sort. With no
+/// partition columns and no user sort order both layers degrade to an identity projection and a
+/// sort on a literal, so they are skipped instead.
+pub fn prepare_delta_writer_input(
+    input: Arc<dyn ExecutionPlan>,
+    partition_columns: &[String],
+    sort_order: Option<LexRequirement>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if partition_columns.is_empty() && sort_order.is_none() {
+        return Ok(input);
+    }
+    let plan = create_projection(input, partition_columns.to_vec())?;
+    Ok(create_sort(plan, partition_columns.to_vec(), sort_order)?)
+}
+
 pub fn build_standard_write_layers(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
@@ -284,10 +305,7 @@ pub fn build_standard_write_layers(
     sort_order: Option<LexRequirement>,
     original_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let target_partitions = ctx.session().config().target_partitions().max(1);
-    let plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
-    let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
+    let plan = prepare_delta_writer_input(Arc::clone(&input), ctx.partition_columns(), sort_order)?;
 
     let writer_schema = plan.schema();
     let write_context = ctx.prepare_write_context(&writer_schema, sink_mode, None)?;
@@ -309,17 +327,20 @@ pub fn build_standard_write_layers(
     // DeltaCommitExec is single-partition; gather writer partitions first.
     let writer: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer));
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        writer,
-        ctx.table_url().clone(),
-        ctx.partition_columns().to_vec(),
-        ctx.table_exists(),
-        original_schema,
-        sink_mode.clone(),
-        ctx.options().user_metadata.clone(),
-        write_context.commit_context.clone(),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            writer,
+            ctx.table_url().clone(),
+            ctx.partition_columns().to_vec(),
+            ctx.table_exists(),
+            original_schema,
+            sink_mode.clone(),
+            ctx.options().user_metadata.clone(),
+            write_context.commit_context.clone(),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }
 
 pub fn align_schemas_for_union(
@@ -545,7 +566,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![add_key, remove_key],
     )))?;
 
@@ -591,7 +612,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![size_expr_i64, lit_i64(0)],
     )))?;
 
@@ -600,7 +621,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let mod_time_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![mod_time_expr_i64, lit_i64(0)],
     )))?;
 
@@ -807,8 +828,59 @@ async fn build_log_replay_pipeline_with_files(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::physical_plan::ExecutionPlanProperties;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+
     use super::*;
+
+    fn input_with_partitions(partitions: usize) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, false),
+            Field::new("day", DataType::Utf8, false),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(partitions)).unwrap(),
+        )
+    }
+
+    #[test]
+    fn partitioned_writer_input_groups_table_partitions_per_task() {
+        let input = input_with_partitions(10);
+        let plan = prepare_delta_writer_input(input, &["day".to_string()], None).unwrap();
+
+        // Writer parallelism follows the input plan, and each task sorts its own partition so
+        // that `DeltaWriter` sees table partitions grouped.
+        assert_eq!(plan.output_partitioning().partition_count(), 10);
+        let sort = plan.downcast_ref::<SortExec>().unwrap();
+        assert!(sort.preserve_partitioning());
+
+        // The projection moves partition columns to the end, which `create_sort` relies on.
+        let projection = sort.input().downcast_ref::<ProjectionExec>().unwrap();
+        assert_eq!(
+            projection.schema().field(1).name(),
+            &"day".to_string(),
+            "partition columns must be projected to the end of the schema"
+        );
+        assert_eq!(
+            projection.input().output_partitioning().partition_count(),
+            10
+        );
+    }
+
+    #[test]
+    fn unpartitioned_writer_input_skips_identity_projection_and_literal_sort() {
+        let plan = prepare_delta_writer_input(input_with_partitions(10), &[], None).unwrap();
+
+        assert!(plan.downcast_ref::<SortExec>().is_none());
+        assert!(plan.downcast_ref::<ProjectionExec>().is_none());
+        assert_eq!(plan.output_partitioning().partition_count(), 10);
+    }
 
     #[test]
     fn selects_replay_pipeline_mode_for_strategy_and_checkpoint_presence() {

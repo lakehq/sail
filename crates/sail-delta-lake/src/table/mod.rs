@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -35,9 +22,10 @@ use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus, identity_partition_fields,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::LakeSourceMetadata;
 use url::Url;
 
 use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
@@ -56,8 +44,9 @@ use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_ver
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
+    attach_column_mapping_metadata, metadata_for_create_with_struct_type, normalize_delta_schema,
+    protocol_for_create, schema_has_column_defaults, schema_has_generated_columns,
+    schema_has_identity_columns,
 };
 pub use crate::snapshot::DeltaSnapshot;
 use crate::snapshot::{
@@ -65,10 +54,11 @@ use crate::snapshot::{
     catalog_managed_commit_file_name,
 };
 use crate::spec::{
-    CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol,
-    SaveMode, StructType, TableFeature, contains_timestampntz_arrow, contains_variant_arrow,
+    ColumnMappingMode, CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation,
+    DeltaResult, Protocol, SaveMode, StructType, TableFeature, contains_timestampntz_arrow,
+    contains_variant_arrow,
 };
-use crate::transaction::CommitBuilder;
+use crate::transaction::{CommitBuilder, CommitProperties};
 
 /// In memory representation of a Delta Table
 ///
@@ -279,8 +269,20 @@ pub async fn create_delta_source(
     let storage_access = lakehouse_table
         .as_ref()
         .and_then(|table| table.storage_access.clone());
+    let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
+
+    if read_options.read_change_feed {
+        let mut source = crate::change_data_feed::ChangeDataFeedSource::try_new(
+            snapshot,
+            log_store,
+            &read_options,
+        )
+        .await?;
+        source.storage_access = storage_access;
+        return Ok(Arc::new(source));
+    }
     let mut source = DeltaTableSource::try_new(snapshot, log_store, scan_config)?;
     source.storage_access = storage_access;
     Ok(Arc::new(source))
@@ -294,44 +296,95 @@ pub async fn infer_delta_logical_schema(
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<SchemaRef> {
-    let (schema, _) =
+    let metadata =
         infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-    Ok(schema)
+    Ok(metadata.schema)
 }
 
-/// Infers the Delta logical schema and table configuration for planning.
+/// Infers the Delta logical schema, partitioning, and table configuration for planning.
 pub async fn infer_delta_logical_metadata(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
-) -> Result<(SchemaRef, Vec<(String, String)>)> {
-    let (snapshot, _log_store, scan_config) =
+) -> Result<LakeSourceMetadata> {
+    let read_options = options.clone();
+    let (snapshot, log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
 
-    let schema = df_logical_schema(
-        snapshot.as_ref(),
-        &scan_config.file_column_name,
-        &scan_config.row_index_column_name,
-        &scan_config.commit_version_column_name,
-        &scan_config.commit_timestamp_column_name,
-        scan_config.schema,
-    )?;
+    let schema = if read_options.read_change_feed {
+        use datafusion::logical_expr::TableSource;
+        crate::change_data_feed::ChangeDataFeedSource::try_new(
+            snapshot.clone(),
+            log_store,
+            &read_options,
+        )
+        .await?
+        .schema()
+    } else {
+        df_logical_schema(
+            snapshot.as_ref(),
+            &scan_config.file_column_name,
+            &scan_config.row_index_column_name,
+            &scan_config.commit_version_column_name,
+            &scan_config.commit_timestamp_column_name,
+            scan_config.schema,
+        )?
+    };
     let properties = snapshot
         .metadata()
         .configuration()
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    Ok((schema, properties))
+    Ok(LakeSourceMetadata {
+        schema,
+        properties,
+        partition_by: Some(identity_partition_fields(
+            snapshot.metadata().partition_columns(),
+        )),
+    })
+}
+
+pub(crate) async fn delta_table_properties(
+    ctx: &dyn Session,
+    table_url: Url,
+    options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
+) -> Result<Vec<(String, String)>> {
+    let (snapshot, _, _) =
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
+    let mut properties = snapshot.metadata().configuration().clone();
+    properties.remove("path");
+    let protocol = snapshot.protocol();
+    properties.insert(
+        "delta.minReaderVersion".to_string(),
+        protocol.min_reader_version().to_string(),
+    );
+    properties.insert(
+        "delta.minWriterVersion".to_string(),
+        protocol.min_writer_version().to_string(),
+    );
+    for feature in protocol
+        .reader_features()
+        .unwrap_or_default()
+        .iter()
+        .chain(protocol.writer_features().unwrap_or_default())
+    {
+        properties.insert(
+            format!("delta.feature.{}", feature.as_str()),
+            "supported".to_string(),
+        );
+    }
+    Ok(properties.into_iter().collect())
 }
 
 fn delta_read_snapshot_config(
     metadata_only: bool,
     options: &DeltaReadOptions,
 ) -> DeltaSnapshotConfig {
-    if metadata_only || options.metadata_as_data_read {
+    if metadata_only || options.metadata_as_data_read || options.read_change_feed {
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
@@ -485,7 +538,7 @@ fn catalog_managed_bootstrap_actions(
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
     if let Some(comment) = comment {
-        metadata = metadata.with_description(comment);
+        metadata = metadata.with_description(Some(comment));
     }
     let metadata = metadata_with_catalog_managed(metadata, &table_id);
     let operation = DeltaOperation::Create {
@@ -517,7 +570,8 @@ where
         return Ok(false);
     };
     let (actions, operation) = catalog_managed_bootstrap_actions(info, table_url)?;
-    CommitBuilder::default()
+    let commit_properties = CommitProperties::from_session_config(&ctx.session_config())?;
+    CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .build(None, log_store, operation)
         .await
@@ -748,7 +802,7 @@ where
     }
 }
 
-async fn load_delta_read_state(
+pub(crate) async fn load_delta_read_state(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
@@ -798,12 +852,22 @@ async fn load_delta_read_state(
     let scan_config = DeltaScanConfig {
         file_column_name: None,
         row_index_column_name: None,
+        hash_partition_files: false,
         wrap_partition_values: false,
         enable_parquet_pushdown: true,
         schema: match schema {
             Some(ref s) if s.fields().is_empty() => None,
             Some(s) if reads_catalog_table => {
-                Some(Arc::new(refresh_catalog_delta_schema(s, snapshot.schema())))
+                let refreshed = refresh_catalog_delta_schema(s, snapshot.schema());
+                // The catalog schema does not carry Delta column mapping metadata, but the
+                // physical scan attaches it, so the logical schema must carry it as well.
+                let refreshed =
+                    if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
+                        refreshed
+                    } else {
+                        attach_column_mapping_metadata(&refreshed, snapshot.schema())
+                    };
+                Some(Arc::new(refreshed))
             }
             Some(s) => Some(Arc::new(s)),
             None => None,
@@ -811,6 +875,7 @@ async fn load_delta_read_state(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
+        metadata_aggregate: None,
     };
 
     Ok((snapshot, log_store, scan_config))
@@ -872,16 +937,48 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
         ),
         (DataType::Map(catalog_entries, sorted), DataType::Map(snapshot_entries, _)) => {
             DataType::Map(
-                Arc::new(refresh_catalog_delta_field(
+                Arc::new(refresh_catalog_delta_map_entries(
                     catalog_entries,
                     snapshot_entries,
                 )),
                 *sorted,
             )
         }
-        _ => catalog_field.data_type().clone(),
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => catalog_field.data_type().clone(),
+        _ => snapshot_field.data_type().clone(),
     };
-    catalog_field.clone().with_data_type(data_type)
+    catalog_field
+        .clone()
+        .with_name(snapshot_field.name())
+        .with_data_type(data_type)
+        .with_nullable(snapshot_field.is_nullable())
+}
+
+/// Refreshes map entries by position, since the catalog and the Delta log may name
+/// the entries, key, and value fields differently. The Delta log names are kept
+/// because the Parquet files are read with them.
+fn refresh_catalog_delta_map_entries(catalog_entries: &Field, snapshot_entries: &Field) -> Field {
+    match (catalog_entries.data_type(), snapshot_entries.data_type()) {
+        (DataType::Struct(catalog_fields), DataType::Struct(snapshot_fields))
+            if catalog_fields.len() == 2 && snapshot_fields.len() == 2 =>
+        {
+            let fields = catalog_fields
+                .iter()
+                .zip(snapshot_fields.iter())
+                .map(|(catalog_child, snapshot_child)| {
+                    Arc::new(
+                        refresh_catalog_delta_field(catalog_child, snapshot_child)
+                            .with_name(snapshot_child.name())
+                            .with_nullable(snapshot_child.is_nullable()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            snapshot_entries
+                .clone()
+                .with_data_type(DataType::Struct(fields.into()))
+        }
+        _ => snapshot_entries.clone(),
+    }
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
@@ -973,7 +1070,7 @@ async fn find_version_for_timestamp(
     }
 }
 
-fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
+pub(crate) fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
     let rfc3339_result = DateTime::parse_from_rfc3339(timestamp);
     if let Ok(datetime) = rfc3339_result {
         return Ok(datetime.with_timezone(&Utc));
@@ -1008,12 +1105,16 @@ fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 
     use super::{
         effective_catalog_commit_end_version, next_catalog_commit_start_version,
         refresh_catalog_delta_schema,
     };
+    use crate::schema::attach_column_mapping_metadata;
 
     #[test]
     fn catalog_schema_refresh_appends_snapshot_fields_without_replacing_existing_types() {
@@ -1034,6 +1135,58 @@ mod tests {
         assert_eq!(refreshed.fields().len(), 2);
         assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
         assert_eq!(refreshed.field(1).name(), "extra");
+    }
+
+    #[test]
+    fn catalog_schema_refresh_uses_snapshot_nullability_recursively() {
+        let schema = |nullable, timestamp: DataType, source: &str| {
+            let metadata = HashMap::from([("source".to_string(), source.to_string())]);
+            let field = |name, data_type| {
+                Field::new(name, data_type, nullable).with_metadata(metadata.clone())
+            };
+            let element = Arc::new(field("element", timestamp));
+            let nested =
+                DataType::Struct(vec![field("items", DataType::List(element.clone()))].into());
+            Schema::new_with_metadata(
+                vec![
+                    field("scalar", DataType::Int32),
+                    field("payload", nested.clone()),
+                    field(
+                        "list",
+                        DataType::List(Arc::new(field("element", nested.clone()))),
+                    ),
+                    field("large_list", DataType::LargeList(element.clone())),
+                    field("fixed_list", DataType::FixedSizeList(element, 2)),
+                    field(
+                        "map",
+                        DataType::Map(
+                            Arc::new(Field::new(
+                                "entries",
+                                DataType::Struct(
+                                    vec![
+                                        field("key", DataType::Utf8).with_nullable(false),
+                                        field("value", nested),
+                                    ]
+                                    .into(),
+                                ),
+                                false,
+                            )),
+                            false,
+                        ),
+                    ),
+                ],
+                metadata,
+            )
+        };
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        for nullable in [false, true] {
+            let catalog = schema(!nullable, catalog_timestamp.clone(), "catalog");
+            let snapshot = schema(nullable, snapshot_timestamp.clone(), "snapshot");
+            let expected = schema(nullable, catalog_timestamp.clone(), "catalog");
+
+            assert_eq!(refresh_catalog_delta_schema(catalog, &snapshot), expected);
+        }
     }
 
     #[test]
@@ -1069,6 +1222,120 @@ mod tests {
                 ]
                 .into()
             )
+        );
+    }
+
+    #[test]
+    fn catalog_schema_refresh_canonicalizes_mapped_fields() {
+        let mapped = |name: &str, physical: &str, id: u32, data_type: DataType| {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([
+                ("delta.columnMapping.id".to_string(), id.to_string()),
+                (
+                    "delta.columnMapping.physicalName".to_string(),
+                    physical.to_string(),
+                ),
+            ]))
+        };
+        let snapshot_schema = Schema::new(vec![
+            mapped("EventID", "col-id", 1, DataType::Int32),
+            mapped(
+                "Payload",
+                "col-payload",
+                2,
+                DataType::Struct(vec![mapped("Amount", "col-amount", 3, DataType::Int32)].into()),
+            ),
+        ]);
+        let catalog_schema = Schema::new(vec![
+            Field::new("eventid", DataType::Int32, true),
+            Field::new(
+                "payload",
+                DataType::Struct(vec![Field::new("amount", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+        let refreshed = attach_column_mapping_metadata(&refreshed, &snapshot_schema);
+
+        assert_eq!(refreshed, snapshot_schema);
+    }
+
+    #[test]
+    fn catalog_schema_refresh_uses_snapshot_map_entry_names() {
+        let catalog_map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let snapshot_map = DataType::Map(
+            Arc::new(Field::new(
+                "key_value",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        let catalog_schema = Schema::new(vec![Field::new("properties", catalog_map, true)]);
+        let snapshot_schema =
+            Schema::new(vec![Field::new("properties", snapshot_map.clone(), true)]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(refreshed.fields().len(), 1);
+        assert_eq!(refreshed.field(0).data_type(), &snapshot_map);
+    }
+
+    #[test]
+    fn catalog_schema_refresh_keeps_catalog_map_value_types() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let map_type = |entries: &str, key: &str, value: &str, value_type: DataType| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    entries,
+                    DataType::Struct(
+                        vec![
+                            Field::new(key, DataType::Utf8, false),
+                            Field::new(value, value_type, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        let catalog_schema = Schema::new(vec![Field::new(
+            "events",
+            map_type("entries", "keys", "values", catalog_timestamp.clone()),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![Field::new(
+            "events",
+            map_type("key_value", "key", "value", snapshot_timestamp),
+            true,
+        )]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(
+            refreshed.field(0).data_type(),
+            &map_type("key_value", "key", "value", catalog_timestamp)
         );
     }
 

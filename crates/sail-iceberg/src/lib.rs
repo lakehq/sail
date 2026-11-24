@@ -1,27 +1,24 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod catalog_support;
 pub mod datasource;
+pub mod ddl;
+mod equality_schema;
 pub mod error;
 pub mod io;
 pub mod lake_source;
 pub mod logical;
+pub(crate) mod metadata_relation;
+pub mod operation_metrics;
 pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
+mod procedure;
 pub(crate) mod properties;
 pub(crate) mod row_level_metadata;
+mod row_lineage;
+mod schema_defaults;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;

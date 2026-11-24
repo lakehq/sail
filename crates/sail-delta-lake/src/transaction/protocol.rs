@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/protocol.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/protocol.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -53,7 +40,6 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    #[expect(unused)]
     pub fn check_append_only(&self, snapshot: &DeltaSnapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
@@ -422,7 +408,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     // writer_features.insert(TableFeature::DomainMetadata);
     writer_features.insert(TableFeature::ColumnMapping);
     writer_features.insert(TableFeature::DeletionVectors);
-    // writer_features.insert(TableFeature::ChangeDataFeed);
+    writer_features.insert(TableFeature::ChangeDataFeed);
     // FIXME: implement delta.invariants
     writer_features.insert(TableFeature::Invariants);
     writer_features.insert(TableFeature::CheckConstraints);
@@ -597,8 +583,7 @@ mod tests {
     //
     // These tests verify that the protocol checker does NOT expand implied feature
     // sets for legacy writer versions. A table at writer version 5 implies support
-    // for ChangeDataFeed, but if CDF is not enabled the write should succeed even
-    // though sail does not implement CDF writes. See lakehq/sail#2041.
+    // for ChangeDataFeed; activation is checked against the table metadata.
 
     #[test]
     fn global_checker_accepts_legacy_writer_v5_without_explicit_features() {
@@ -649,9 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_rejects_v7_with_unsupported_change_data_feed_feature() {
-        // Writer v7 with explicit changeDataFeed writer feature should still be
-        // rejected, since sail does not implement CDF writes.
+    fn global_checker_accepts_v7_change_data_feed_feature() {
         let protocol = Protocol::new(
             3,
             7,
@@ -661,13 +644,7 @@ mod tests {
                 TableFeature::ChangeDataFeed,
             ]),
         );
-
-        let err = INSTANCE.can_write_to_protocol(&protocol).unwrap_err();
-        assert!(matches!(
-            err,
-            TransactionError::UnsupportedTableFeatures(features)
-                if features.contains(&TableFeature::ChangeDataFeed)
-        ));
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
     }
 
     #[test]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -7,7 +9,8 @@ use datafusion_common::{DFSchema, JoinType, ScalarValue};
 use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, build_join_schema, lit};
 use sail_common::spec;
-use sail_common_datafusion::column_features::ColumnFeatures;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+use sail_common_datafusion::column_features::{ColumnFeatureKey, ColumnFeatures};
 use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
@@ -20,6 +23,7 @@ use sail_logical_plan::merge::{
 use sail_logical_plan::row_level::{
     StructFieldAlignment, align_row_level_value, evolve_row_level_field,
 };
+use sail_sql_analyzer::expression::expr_with_default_column_values;
 
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -79,15 +83,6 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
-        if target_schema.fields().iter().any(|field| {
-            ColumnFeatures::from_map(field.metadata())
-                .identity()
-                .is_some()
-        }) {
-            return Err(PlanError::unsupported(
-                "MERGE INTO tables with Delta identity columns is not yet supported",
-            ));
-        }
 
         // Capture the user-facing field names before further resolution pollutes the state.
         let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
@@ -95,12 +90,8 @@ impl PlanResolver<'_> {
 
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
-        for field in target_schema.fields() {
-            state.register_plan_id_for_field(field.name(), MERGE_TARGET_DEFAULT_PLAN_ID)?;
-        }
-        for field in source_schema.fields() {
-            state.register_plan_id_for_field(field.name(), MERGE_SOURCE_DEFAULT_PLAN_ID)?;
-        }
+        state.register_plan_schema(target_schema, MERGE_TARGET_DEFAULT_PLAN_ID)?;
+        state.register_plan_schema(source_schema, MERGE_SOURCE_DEFAULT_PLAN_ID)?;
 
         let merge_schema = Arc::new(build_join_schema(
             target_schema,
@@ -137,6 +128,15 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
+        let identity_columns = self.validate_merge_identity_columns(
+            target_schema,
+            &resolved_target_field_names,
+            &resolved_source_field_names,
+            &matched_clauses,
+            &not_matched_by_source,
+            &not_matched_by_target,
+            with_schema_evolution,
+        )?;
         let generated_column_exprs = self
             .resolve_delta_merge_generated_column_exprs(
                 target_schema,
@@ -190,6 +190,7 @@ impl PlanResolver<'_> {
             target: target_metadata,
             with_schema_evolution,
             case_sensitive: self.config.case_sensitive,
+            session_timezone: Arc::clone(&self.config.session_timezone),
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
             resolved_target_field_names,
@@ -203,6 +204,7 @@ impl PlanResolver<'_> {
             residual_predicates,
             target_only_predicates,
             generated_column_exprs,
+            identity_columns,
             default_column_exprs,
             check_constraint_exprs,
         };
@@ -453,7 +455,9 @@ impl PlanResolver<'_> {
                 source_schema,
                 self.config.case_sensitive,
             );
-            let resolved_value = self.resolve_expression(value, merge_schema, state).await?;
+            let resolved_value = self
+                .resolve_merge_assignment_value(value, merge_schema, state)
+                .await?;
             out.push(MergeAssignment {
                 column: resolved_column,
                 value: resolved_value,
@@ -502,9 +506,41 @@ impl PlanResolver<'_> {
                 source_schema,
                 self.config.case_sensitive,
             );
-            out.push(self.resolve_expression(value, merge_schema, state).await?);
+            out.push(
+                self.resolve_merge_assignment_value(value, merge_schema, state)
+                    .await?,
+            );
         }
         Ok(out)
+    }
+
+    async fn resolve_merge_assignment_value(
+        &self,
+        value: spec::Expr,
+        schema: &datafusion_common::DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        // Ordinary resolution (including lambda scope) takes precedence over DEFAULT.
+        // Schema disambiguation has already bound real columns to their plan IDs.
+        match self.resolve_expression(value.clone(), schema, state).await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let fallback = expr_with_default_column_values(value);
+                let Ok(fallback) = self.resolve_expression(fallback, schema, state).await else {
+                    // Preserve errors for ambiguous, qualified, or plan-bound references.
+                    return Err(error);
+                };
+                if Self::is_default_column_value_expr(&fallback) {
+                    Ok(fallback)
+                } else if Self::expr_contains_default_column_value(&fallback)? {
+                    Err(PlanError::invalid(
+                        "DEFAULT must be a standalone MERGE assignment value",
+                    ))
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     async fn resolve_merge_column(
@@ -562,7 +598,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn merge_name_key(&self, name: &str) -> String {
+    pub(in crate::resolver) fn merge_name_key(&self, name: &str) -> String {
         if self.config.case_sensitive {
             name.to_string()
         } else {
@@ -576,6 +612,114 @@ impl PlanResolver<'_> {
         } else {
             left.eq_ignore_ascii_case(right)
         }
+    }
+
+    fn validate_merge_identity_columns(
+        &self,
+        target_schema: &datafusion_common::DFSchemaRef,
+        target_names: &[String],
+        source_names: &[String],
+        matched: &[MergeMatchedClause],
+        target_only: &[MergeNotMatchedBySourceClause],
+        inserts: &[MergeNotMatchedByTargetClause],
+        with_schema_evolution: bool,
+    ) -> PlanResult<Vec<(String, CatalogTableColumnIdentity)>> {
+        let mut identities = Vec::new();
+        for (field, name) in target_schema.fields().iter().zip(target_names) {
+            let features = ColumnFeatures::from_field(field);
+            let has_identity = [
+                ColumnFeatureKey::IdentityStart,
+                ColumnFeatureKey::IdentityStep,
+                ColumnFeatureKey::IdentityAllowExplicitInsert,
+                ColumnFeatureKey::IdentityHighWaterMark,
+            ]
+            .into_iter()
+            .any(|key| features.raw(key).is_some());
+            if !has_identity {
+                continue;
+            }
+            let identity = features.identity().ok_or_else(|| {
+                PlanError::invalid(format!("Invalid identity metadata for `{name}`"))
+            })?;
+            if field.data_type() != &DataType::Int64 || identity.step == 0 {
+                return Err(PlanError::invalid(format!(
+                    "Identity column `{name}` requires BIGINT and a nonzero step"
+                )));
+            }
+            if features
+                .raw(ColumnFeatureKey::IdentityHighWaterMark)
+                .is_some()
+                && identity.high_water_mark.is_none()
+            {
+                return Err(PlanError::invalid(format!(
+                    "Invalid identity watermark for `{name}`"
+                )));
+            }
+            if let Some(hwm) = identity.high_water_mark {
+                let offset = i128::from(hwm) - i128::from(identity.start);
+                if offset % i128::from(identity.step) != 0 || offset / i128::from(identity.step) < 0
+                {
+                    return Err(PlanError::invalid(format!(
+                        "Invalid identity watermark for `{name}`"
+                    )));
+                }
+            }
+            let source_supplies_identity = source_names
+                .iter()
+                .any(|source| self.merge_names_equal(source, name));
+            let assigns_identity = |assignments: &[MergeAssignment]| {
+                assignments
+                    .iter()
+                    .any(|assignment| assignment.column == *field.name())
+            };
+            if matched.iter().any(|clause| match &clause.action {
+                MergeMatchedAction::UpdateAll => !with_schema_evolution || source_supplies_identity,
+                MergeMatchedAction::UpdateSet(assignments) => assigns_identity(assignments),
+                MergeMatchedAction::Delete => false,
+            }) || target_only.iter().any(|clause| match &clause.action {
+                MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
+                    assigns_identity(assignments)
+                }
+                MergeNotMatchedBySourceAction::Delete => false,
+            }) {
+                return Err(PlanError::invalid(format!(
+                    "MERGE UPDATE cannot assign Delta identity column `{name}`"
+                )));
+            }
+            for clause in inserts {
+                let supplied = match &clause.action {
+                    MergeNotMatchedByTargetAction::InsertAll => {
+                        if !source_supplies_identity && !with_schema_evolution {
+                            return Err(PlanError::unsupported(
+                                "MERGE INSERT * omitting identity columns is not supported; use named columns or schema evolution",
+                            ));
+                        }
+                        source_supplies_identity
+                    }
+                    MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
+                        if let Some(index) =
+                            columns.iter().position(|column| column == field.name())
+                        {
+                            if Self::expr_contains_default_column_value(&values[index])? {
+                                return Err(PlanError::unsupported(
+                                    "MERGE DEFAULT for an identity column is not supported; omit the column",
+                                ));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if supplied && !identity.allow_explicit_insert {
+                    return Err(PlanError::invalid(format!(
+                        "Providing values for GENERATED ALWAYS AS IDENTITY column `{name}` is not supported"
+                    )));
+                }
+            }
+            identities.push((field.name().clone(), identity));
+        }
+        Ok(identities)
     }
 
     fn validate_merge_star_columns(
@@ -644,6 +788,10 @@ impl PlanResolver<'_> {
         let empty_schema = Arc::new(DFSchema::empty());
         let mut defaults = Vec::new();
         for (field, target_name) in target_schema.fields().iter().zip(target_names) {
+            if let Some(default) = ColumnFeatures::from_field(field).current_default_value()? {
+                defaults.push((target_name.clone(), lit(default)));
+                continue;
+            }
             let Some(default) = ColumnFeatures::from_field(field).current_default() else {
                 continue;
             };
@@ -856,6 +1004,7 @@ impl PlanResolver<'_> {
             target_field.data_type(),
             self.config.case_sensitive,
             StructFieldAlignment::Exact,
+            &self.config.session_timezone_label(),
         )?;
         Ok(())
     }
@@ -1382,7 +1531,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
         Expr::Cast {
             expr,
             cast_to_type,
-            rename,
+            naming,
             is_try,
         } => Expr::Cast {
             expr: Box::new(merge_disambiguate_unqualified_plan_ids(
@@ -1393,7 +1542,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 case_sensitive,
             )),
             cast_to_type,
-            rename,
+            naming,
             is_try,
         },
         Expr::UnresolvedRegex {

@@ -1,1 +1,0 @@
-# Delta Lake tests package

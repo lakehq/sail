@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """JDBC data source for Sail, backed by connectorX.
 
 Supports ``spark.read.format("jdbc")`` and ``spark.read.jdbc()`` with options
@@ -349,6 +351,7 @@ class JdbcDataSource(DataSource):
             raise ValueError(msg)
         dbtable = dbtable or None
         query = opts.get("query") or None
+        query = query.strip().rstrip(";") if query is not None else None
 
         if dbtable and query:
             msg = "Options 'dbtable' and 'query' are mutually exclusive. Specify only one."

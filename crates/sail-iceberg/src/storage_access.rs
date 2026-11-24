@@ -25,6 +25,8 @@ pub(crate) fn bind_scan_storage(
         .transform_up(|node| {
             if node.is::<DataSourceExec>()
                 || node.is::<IcebergDeleteApplyExec>()
+                || node.is::<crate::physical_plan::IcebergMetadataRelationExec>()
+                || node.is::<crate::physical_plan::IcebergMetadataScanExec>()
                 || node.is::<IcebergDiscoveryExec>()
                 || node.is::<IcebergManifestScanExec>()
                 || node.is::<IcebergMergeMetadataExec>()

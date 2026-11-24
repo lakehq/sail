@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::io::BufReader;
 use std::sync::Arc;
 
 use bytes::Buf;
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::JsonSource;
@@ -14,7 +16,9 @@ use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{
+    NanosecondTimestamps, infer_listing_compression, try_merge_normalized,
+};
 use crate::options::r#gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
@@ -40,6 +44,9 @@ impl ReadFormat for JsonReadFormat {
         Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
@@ -88,8 +95,21 @@ impl ReadFormat for JsonReadFormat {
             }
         }
 
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        // Spark's JSON reader behaves like its CSV reader: with `inferTimestamp`
+        // it infers a timestamp from a string and truncates to microseconds.
+        // Nothing observable depends on this today, because `arrow-json` never
+        // infers a timestamp from a string, so this path cannot produce one; the
+        // policy is stated so that the day it can, it matches Spark rather than
+        // inheriting Parquet's.
+        let schema = try_merge_normalized(schemas, NanosecondTimestamps::WidenToMicrosecond)?;
+        let schema = if self.options.drop_field_if_all_null {
+            drop_all_null_fields(schema)
+        } else {
+            schema
+        };
+        Ok(Arc::new(schema))
     }
+    // SPDX-SnippetEnd
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
@@ -122,6 +142,45 @@ impl ReadFormat for JsonReadFormat {
     }
 }
 
+/// Removes fields whose inferred JSON type contains no concrete value.
+fn drop_all_null_fields(schema: Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .filter_map(|field| canonicalize_inferred_field(field))
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+/// Canonicalizes one field using Spark's `dropFieldIfAllNull` behavior.
+fn canonicalize_inferred_field(field: &Field) -> Option<Field> {
+    let data_type = match field.data_type() {
+        DataType::Null => return None,
+        DataType::List(element) => {
+            let element = canonicalize_inferred_field(element)?;
+            DataType::List(Arc::new(element))
+        }
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .filter_map(|field| canonicalize_inferred_field(field))
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                return None;
+            }
+            DataType::Struct(fields.into())
+        }
+        data_type => data_type.clone(),
+    };
+    Some(
+        Field::new(field.name(), data_type, field.is_nullable())
+            .with_metadata(field.metadata().clone()),
+    )
+}
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
 /// A tuple of (Schema, records_consumed) where records_consumed is the number of records that were
 /// processed for schema inference.
 fn infer_schema_from_json_array<R: std::io::Read>(
@@ -140,3 +199,4 @@ fn infer_schema_from_json_array<R: std::io::Read>(
     }))?;
     Ok((schema, count))
 }
+// SPDX-SnippetEnd

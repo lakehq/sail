@@ -1,5 +1,6 @@
--- SQLBench-DS query 90 derived from TPC-DS query 90 under the terms of the TPC Fair Use Policy.
--- TPC-DS queries are Copyright 2021 Transaction Processing Performance Council.
+-- SPDX-FileComment: SQLBench-DS query 90 derived from TPC-DS query 90 under the terms of the TPC Fair Use Policy.
+-- SPDX-FileCopyrightText: Copyright 2021 Transaction Processing Performance Council
+
 -- This query was generated at scale factor 1.
 select
   CASE WHEN pmc = 0 THEN null ELSE cast(amc as decimal(15, 4)) / cast(pmc as decimal(15, 4)) END am_pm_ratio

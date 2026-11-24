@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use pyo3::{Py, PyAny, Python};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
-use crate::error::PyUdfResult;
+use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
@@ -20,13 +22,14 @@ pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
     ScalarPandas,
+    // Extracted into partition stream execution during analysis.
     ScalarPandasIter,
     // Spark 4.0 Arrow-native scalar UDF types
     ScalarArrow,
     ScalarArrowIter,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkUDF {
     signature: Signature,
     kind: PySparkUdfKind,
@@ -68,6 +71,15 @@ impl PySparkUDF {
         }
     }
 
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
+        }
+    }
+
     pub fn kind(&self) -> PySparkUdfKind {
         self.kind
     }
@@ -102,7 +114,9 @@ impl PySparkUDF {
                 PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandasIter => {
-                    PySpark::scalar_pandas_iter_udf(py, udf, &self.config)?
+                    return Err(PyUdfError::internal(
+                        "scalar iterator UDF requires partition stream execution",
+                    ));
                 }
                 // Arrow-native: no Pandas conversion, pass Arrow arrays directly
                 PySparkUdfKind::ScalarArrow => PySpark::scalar_arrow_udf(py, udf, &self.config)?,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
@@ -12,8 +14,12 @@ use sail_logical_plan::row_level::RowLevelWriteNode;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::lake_source::{DeltaWriteNode, plan_delta_write};
-use crate::logical::table_source::{DeltaFileSelection, DeltaTableSource};
-use crate::physical::scan_planner::{DeltaFileSource, plan_delta_scan};
+use crate::logical::table_source::{
+    DeltaFileSelection, DeltaMetadataAggregateSource, DeltaTableSource,
+};
+use crate::physical::scan_planner::{
+    DeltaFileSource, plan_delta_metadata_aggregate, plan_delta_scan,
+};
 use crate::physical_plan::planner::create_row_level_write_physical_plan;
 
 /// Physical planner for logical Delta table scans.
@@ -31,6 +37,37 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node
+            .as_any()
+            .downcast_ref::<crate::procedure::DeltaMaintenanceNode>()
+        {
+            let predicate = node
+                .predicate
+                .as_ref()
+                .map(|predicate| {
+                    Ok::<_, datafusion_common::DataFusionError>(
+                        crate::procedure::DeltaMaintenancePredicate {
+                            schema: predicate.schema.clone(),
+                            expr: session.create_physical_expr(
+                                predicate.expr.clone(),
+                                &datafusion_common::DFSchema::try_from(predicate.schema.clone())?,
+                            )?,
+                        },
+                    )
+                })
+                .transpose()?;
+            let exec = if node.call.invocation.procedure.name == "optimize" {
+                crate::procedure::optimize::plan(session, node, predicate).await?
+            } else {
+                crate::procedure::DeltaMaintenanceExec::try_new(
+                    node.call.clone(),
+                    node.options.clone(),
+                    predicate,
+                )?
+            };
+            return Ok(Some(Arc::new(exec)));
+        }
+
         if let Some(node) = node.as_any().downcast_ref::<DeltaWriteNode>() {
             let [logical_input] = logical_inputs else {
                 return datafusion_common::internal_err!(
@@ -81,62 +118,74 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
-            return Ok(None);
-        };
-
-        let storage_session = source
-            .storage_access
-            .as_deref()
+        let cdf = scan
+            .source
+            .downcast_ref::<crate::change_data_feed::ChangeDataFeedSource>();
+        let aggregate = scan.source.downcast_ref::<DeltaMetadataAggregateSource>();
+        let source = scan.source.downcast_ref::<DeltaTableSource>();
+        let access = cdf
+            .and_then(|s| s.storage_access.as_deref())
+            .or_else(|| aggregate.and_then(|s| s.table.storage_access.as_deref()))
+            .or_else(|| source.and_then(|s| s.storage_access.as_deref()));
+        let scoped = access
             .map(|spec| sail_object_store::access::storage_session(session, spec))
             .transpose()?;
-        let session: &dyn Session = storage_session
+        let session = scoped
             .as_ref()
-            .map(|session| session as &dyn Session)
+            .map(|s| s as &dyn Session)
             .unwrap_or(session);
-        let snapshot = source.snapshot();
-        let log_store = source.log_store();
-        let config = source.config();
-        let filters = unnormalize_cols(scan.filters.clone());
-        let projection = scan.projection.clone();
-        let file_source = match (
-            snapshot.load_config().require_files,
-            source.file_selection(),
-        ) {
-            (true, DeltaFileSelection::Snapshot) => DeltaFileSource::Eager(snapshot.shared_adds()),
-            (true, DeltaFileSelection::Selected(indices)) => {
-                let files = indices
-                    .iter()
-                    .map(|&index| {
-                        snapshot.adds().get(index).cloned().ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(format!(
-                                "Delta file selection index {index} is out of range"
-                            ))
+        let plan = if let Some(cdf) = cdf {
+            cdf.scan(session, scan.projection.as_deref()).await?
+        } else if let Some(aggregate) = aggregate {
+            plan_delta_metadata_aggregate(session, aggregate).await?
+        } else if let Some(source) = source {
+            let snapshot = source.snapshot();
+            let log_store = source.log_store();
+            let config = source.config();
+            let filters = unnormalize_cols(scan.filters.clone());
+            let projection = scan.projection.clone();
+            let file_source = match (
+                snapshot.load_config().require_files,
+                source.file_selection(),
+            ) {
+                (true, DeltaFileSelection::Snapshot) => {
+                    DeltaFileSource::Eager(snapshot.shared_adds())
+                }
+                (true, DeltaFileSelection::Selected(indices)) => {
+                    let files = indices
+                        .iter()
+                        .map(|&index| {
+                            snapshot.adds().get(index).cloned().ok_or_else(|| {
+                                datafusion_common::DataFusionError::Internal(format!(
+                                    "Delta file selection index {index} is out of range"
+                                ))
+                            })
                         })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                DeltaFileSource::Eager(Arc::new(files))
-            }
-            (false, DeltaFileSelection::Snapshot) => DeltaFileSource::Replay,
-            (false, DeltaFileSelection::Selected(_)) => {
-                return datafusion_common::internal_err!(
-                    "Delta file selection cannot be planned from a metadata-only snapshot"
-                );
-            }
+                        .collect::<Result<Vec<_>>>()?;
+                    DeltaFileSource::Eager(Arc::new(files))
+                }
+                (false, DeltaFileSelection::Snapshot) => DeltaFileSource::Replay,
+                (false, DeltaFileSelection::Selected(_)) => {
+                    return datafusion_common::internal_err!(
+                        "Delta file selection cannot be planned from a metadata-only snapshot"
+                    );
+                }
+            };
+            plan_delta_scan(
+                session,
+                snapshot,
+                log_store,
+                config,
+                file_source,
+                projection.as_ref(),
+                &filters,
+                scan.fetch,
+            )
+            .await?
+        } else {
+            return Ok(None);
         };
-        let plan = plan_delta_scan(
-            session,
-            snapshot,
-            log_store,
-            config,
-            file_source,
-            projection.as_ref(),
-            &filters,
-            scan.fetch,
-        )
-        .await?;
-
-        let plan = match source.storage_access.as_deref() {
+        let plan = match access {
             Some(spec) => {
                 crate::storage_access::bind_storage(plan, spec, session.runtime_env(), &[])?
             }

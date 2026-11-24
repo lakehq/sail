@@ -5,7 +5,7 @@ import glob from "fast-glob";
 import matter from "gray-matter";
 import { normalizePath } from "vite";
 
-import { PageLink } from "./link";
+import { PageLink } from "./link.ts";
 
 /**
  * Load the Markdown pages matching the pattern.

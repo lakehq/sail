@@ -1,0 +1,421 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::Session;
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource,
+};
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::datasource::table_schema::TableSchema;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion_common::stats::Precision;
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
+use datafusion_datasource::file::FileSource;
+use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
+use sail_common_datafusion::schema_evolution::{
+    FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
+    encode_field_default,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::datasource::scan::IcebergScan;
+use crate::datasource::type_converter::{iceberg_field_id, iceberg_type_to_arrow};
+use crate::spec::{DataFile, PartitionSpec, Transform};
+use crate::utils::conversions::to_scalar;
+
+/// Consumed during scan construction; defaults travel to workers in field metadata.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct IdentityPartitionDefaults(BTreeMap<i32, String>);
+
+impl IdentityPartitionDefaults {
+    pub(crate) fn from_file(
+        file: &DataFile,
+        specs: &[PartitionSpec],
+        schema: &crate::spec::Schema,
+    ) -> Result<Self> {
+        let spec = specs
+            .iter()
+            .find(|spec| spec.spec_id() == file.partition_spec_id)
+            .ok_or_else(|| {
+                plan_datafusion_err!("Unknown Iceberg partition spec {}", file.partition_spec_id)
+            })?;
+        let mut defaults = BTreeMap::new();
+        for (index, partition_field) in spec.fields().iter().enumerate() {
+            if partition_field.transform != Transform::Identity {
+                continue;
+            }
+            let Some(field) = schema.field_by_id(partition_field.source_id) else {
+                continue;
+            };
+            let value = file.partition.get(index).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "Missing Iceberg partition value for {}",
+                    partition_field.name
+                )
+            })?;
+            let scalar = match value {
+                Some(value) => to_scalar(value, &field.field_type)?,
+                None => ScalarValue::try_new_null(&iceberg_type_to_arrow(&field.field_type)?)?,
+            };
+            defaults.insert(field.id, encode_field_default(&scalar)?);
+        }
+        Ok(Self(defaults))
+    }
+
+    fn field(&self, field: &Field) -> Result<Field> {
+        let mut field = field.clone();
+        if let DataType::Struct(fields) = field.data_type() {
+            let fields = fields
+                .iter()
+                .map(|field| self.field(field).map(Arc::new))
+                .collect::<Result<Vec<_>>>()?;
+            field = field.with_data_type(DataType::Struct(fields.into()));
+        }
+        if let Some(id) = iceberg_field_id(&field)?
+            && let Some(value) = self.0.get(&id)
+        {
+            let mut metadata = field.metadata().clone();
+            metadata.insert(FIELD_DEFAULT_METADATA_KEY.to_string(), value.clone());
+            field.set_metadata(metadata);
+        }
+        Ok(field)
+    }
+
+    fn schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new_with_metadata(
+            schema
+                .fields()
+                .iter()
+                .map(|field| self.field(field))
+                .collect::<Result<Vec<_>>>()?,
+            schema.metadata().clone(),
+        )))
+    }
+}
+
+pub(super) async fn create_data_scan(
+    session: &dyn Session,
+    mut config: FileScanConfig,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let parquet = config.file_source.downcast_ref::<ParquetSource>();
+    // Explicit partitioning or preserved order prevents row-group repartitioning, so leave
+    // footer reads to execution. Row-level delete scans set these flags and may be discarded
+    // when the planner chooses a metadata-only delete, which must not read Parquet files.
+    // Eager footer reads can fail on missing or inaccessible files before the planner
+    // can choose a metadata-only delete.
+    // WARNING: Do not remove this guard; eager footer reads will break metadata-only deletes
+    // when data files are unavailable.
+    if config.output_partitioning.is_none()
+        && !config.preserve_order
+        && let Some(parquet) = parquet
+    {
+        let store = session
+            .runtime_env()
+            .object_store(&config.object_store_url)?;
+        let metadata_cache = scoped_file_metadata_cache(
+            session
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+            &config.object_store_url,
+            session.session_id(),
+        );
+        config.file_groups = load_parquet_scan_metadata(
+            config.file_groups,
+            &store,
+            &metadata_cache,
+            parquet.table_parquet_options().global.metadata_size_hint,
+            session
+                .config_options()
+                .execution
+                .meta_fetch_concurrency
+                .into(),
+        )
+        .await?;
+    }
+    create_data_scan_with_partition_defaults(config)
+}
+
+pub(crate) fn create_data_scan_with_partition_defaults(
+    mut config: FileScanConfig,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut groups = BTreeMap::<IdentityPartitionDefaults, Vec<FileGroup>>::new();
+    for group in &config.file_groups {
+        let mut files = BTreeMap::<IdentityPartitionDefaults, Vec<_>>::new();
+        for file in group.files() {
+            let defaults = file
+                .extensions
+                .get::<IdentityPartitionDefaults>()
+                .cloned()
+                .unwrap_or_default();
+            let mut file = file.clone();
+            // Partition defaults are consumed here; retain only the row-group planning metadata.
+            let metadata = file.extensions.get_arc::<ParquetScanMetadata>();
+            file.extensions = Default::default();
+            if let Some(metadata) = metadata {
+                file.extensions.insert_arc(metadata);
+            }
+            files.entry(defaults).or_default().push(file);
+        }
+        for (defaults, files) in files {
+            groups
+                .entry(defaults)
+                .or_default()
+                .push(FileGroup::from(files));
+        }
+    }
+    fn needs_default(field: &Field, defaults: &IdentityPartitionDefaults) -> bool {
+        iceberg_field_id(field)
+            .ok()
+            .flatten()
+            .is_some_and(|id| defaults.0.contains_key(&id))
+            || matches!(field.data_type(), DataType::Struct(fields) if fields.iter().any(|field| needs_default(field, defaults)))
+    }
+    let projected = config.projected_schema()?;
+    let parquet_filter = config
+        .file_source
+        .downcast_ref::<ParquetSource>()
+        .and_then(|source| source.filter());
+    if groups.keys().all(|defaults| defaults.0.is_empty())
+        || (parquet_filter.is_none()
+            && groups.keys().all(|defaults| {
+                !projected
+                    .fields()
+                    .iter()
+                    .any(|field| needs_default(field, defaults))
+            }))
+    {
+        for group in &mut config.file_groups {
+            let statistics = group.file_statistics(None).cloned().map(Arc::new);
+            let mut cleaned_group = FileGroup::from(
+                group
+                    .files()
+                    .iter()
+                    .cloned()
+                    .map(|mut file| {
+                        let metadata = file.extensions.get_arc::<ParquetScanMetadata>();
+                        file.extensions = Default::default();
+                        if let Some(metadata) = metadata {
+                            file.extensions.insert_arc(metadata);
+                        }
+                        file
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            if let Some(statistics) = statistics {
+                cleaned_group = cleaned_group.with_statistics(statistics);
+            }
+            *group = cleaned_group;
+        }
+        return Ok(DataSourceExec::from_data_source(config));
+    }
+
+    let target = config.projected_schema()?;
+    let original_source = config.file_source.clone();
+    let mut scans = Vec::with_capacity(groups.len());
+    for (defaults, file_groups) in groups {
+        let table_schema =
+            TableSchema::builder(defaults.schema(original_source.table_schema().file_schema())?)
+                .with_table_partition_cols(
+                    original_source
+                        .table_schema()
+                        .table_partition_cols()
+                        .to_vec(),
+                )
+                .with_virtual_columns(original_source.table_schema().virtual_columns().clone())
+                .build();
+        // Preserve whole-file partitions without advertising compatible hash
+        // partitioning: interleaving these scans would reset file-local row offsets.
+        let partitioning = config
+            .output_partitioning
+            .as_ref()
+            .map(|_| Partitioning::UnknownPartitioning(file_groups.len()));
+        let source: Arc<dyn FileSource> =
+            if let Some(parquet) = original_source.downcast_ref::<ParquetSource>() {
+                let mut source = ParquetSource::new(table_schema)
+                    .with_table_parquet_options(parquet.table_parquet_options().clone());
+                if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
+                    source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
+                }
+                if let Some(predicate) = parquet.filter() {
+                    source = source.with_predicate(predicate);
+                }
+                match parquet.projection() {
+                    Some(projection) => {
+                        source.try_pushdown_projection(projection)?.ok_or_else(|| {
+                            internal_datafusion_err!("Cannot project Iceberg Parquet scan")
+                        })?
+                    }
+                    None => Arc::new(source),
+                }
+            } else if let Some(imported) =
+                original_source.downcast_ref::<super::imported_source::IcebergImportedFileSource>()
+            {
+                imported.with_schema(table_schema)?
+            } else {
+                return Err(internal_datafusion_err!("Unsupported Iceberg file source"));
+            };
+        let unknown =
+            datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
+        let mut statistics = sail_common_datafusion::statistics::aggregate_statistics(
+            source.table_schema().table_schema(),
+            file_groups
+                .iter()
+                .flat_map(|group| group.files())
+                .map(|file| file.statistics.as_deref().unwrap_or(&unknown)),
+        );
+        // These statistics replace the ones the scan narrowed to its projection.
+        let projection = source
+            .projection()
+            .map(|projection| projection.column_indices());
+        if let Some(byte_size) = IcebergScan::projected_byte_size(&statistics, projection.as_ref())
+        {
+            statistics.total_byte_size = Precision::Inexact(byte_size);
+        }
+        let scan = FileScanConfigBuilder::from(config.clone())
+            .with_source(source)
+            .with_file_groups(file_groups)
+            .with_statistics(statistics)
+            .with_output_partitioning(partitioning)
+            .build();
+        let scan_schema = scan.projected_schema()?;
+        let expressions = target
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let column = if scan_schema.field(index).data_type() == field.data_type() {
+                    column
+                } else {
+                    Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
+                        column,
+                        scan_schema.fields()[index].clone(),
+                        field.clone(),
+                        None,
+                        StructFieldMatching::FieldId,
+                    ))
+                };
+                (column, field.name().clone())
+            })
+            .collect::<Vec<_>>();
+        scans.push(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            expressions,
+            DataSourceExec::from_data_source(scan),
+            &target,
+        )?) as Arc<dyn ExecutionPlan>);
+    }
+    let scan = if scans.len() == 1 {
+        scans.remove(0)
+    } else {
+        UnionExec::try_new(scans)?
+    };
+    Ok(match config.limit {
+        Some(limit) => Arc::new(datafusion::physical_plan::limit::GlobalLimitExec::new(
+            scan,
+            0,
+            Some(limit),
+        )),
+        None => scan,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+    use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_datasource::PartitionedFile;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
+    use parquet::arrow::ArrowWriter;
+
+    use super::*;
+    use crate::datasource::data_file_last_modified;
+
+    fn parquet_file(column: &str) -> Result<Vec<u8>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None)?;
+        writer.write(&batch)?;
+        Ok(writer.into_inner()?)
+    }
+
+    #[tokio::test]
+    async fn sessions_sharing_the_footer_cache_read_their_own_memory_files() -> Result<()> {
+        // Each session has its own in-memory store, so a file at the same path and size in
+        // another session must not reuse the cached footer, even with a fixed last_modified.
+        let shared =
+            CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
+        let url = ObjectStoreUrl::parse("memory://")?;
+        let path = Path::from("warehouse/table/data/file.parquet");
+        let files = [parquet_file("a")?, parquet_file("b")?];
+        assert_eq!(files[0].len(), files[1].len());
+
+        for (file, column) in files.into_iter().zip(["a", "b"]) {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let size = file.len() as u64;
+            store.put(&path, PutPayload::from(file)).await?;
+            let runtime = RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    CacheManagerConfig::default()
+                        .with_file_metadata_cache(Some(Arc::clone(&shared))),
+                )
+                .build_arc()?;
+            runtime.register_object_store(url.as_ref(), Arc::clone(&store));
+            let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+            let state = ctx.state();
+
+            let schema = Arc::new(Schema::new(vec![Field::new(column, DataType::Int32, true)]));
+            let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+                store,
+                scoped_file_metadata_cache(
+                    state.runtime_env().cache_manager.get_file_metadata_cache(),
+                    &url,
+                    state.session_id(),
+                ),
+            ));
+            let source = ParquetSource::new(TableSchema::from(schema))
+                .with_parquet_file_reader_factory(reader_factory);
+            let file = PartitionedFile::new_from_meta(ObjectMeta {
+                location: path.clone(),
+                last_modified: data_file_last_modified(Some(1)),
+                size,
+                e_tag: None,
+                version: None,
+            });
+            let config = FileScanConfigBuilder::new(url.clone(), Arc::new(source))
+                .with_file_group(FileGroup::new(vec![file]))
+                .build();
+
+            let scan = create_data_scan(&state, config).await?;
+            let batches = collect(scan, state.task_ctx()).await?;
+            let values = batches
+                .iter()
+                .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().iter())
+                .collect::<Vec<_>>();
+            assert_eq!(values, vec![Some(1), Some(2), Some(3)], "column {column}");
+        }
+        // Execution reuses the footer read at planning in the same session, and sessions do not
+        // share it.
+        assert_eq!(shared.len(), 2);
+        Ok(())
+    }
+}

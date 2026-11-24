@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -10,23 +12,23 @@ use datafusion::logical_expr::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
-use crate::hll_sketch::{
+use crate::utils::hll_sketch::{
     DEFAULT_LG_CONFIG_K, empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes,
     union_hll_sketches, update_hll_sketch_from_array, validate_lg_config_k,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllSketchAggFunction {
+pub struct HllSketchAgg {
     signature: Signature,
 }
 
-impl Default for HllSketchAggFunction {
+impl Default for HllSketchAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllSketchAggFunction {
+impl HllSketchAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -37,7 +39,7 @@ impl HllSketchAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllSketchAggFunction {
+impl AggregateUDFImpl for HllSketchAgg {
     fn name(&self) -> &str {
         "hll_sketch_agg"
     }
@@ -53,7 +55,7 @@ impl AggregateUDFImpl for HllSketchAggFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let lg_config_k = resolve_lg_config_k(&acc_args, 1, "hll_sketch_agg")?;
-        Ok(Box::new(HllSketchAggAccumulator::new(lg_config_k)))
+        Ok(Box::new(HllSketchAggAccumulator::new(lg_config_k)?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -69,17 +71,17 @@ impl AggregateUDFImpl for HllSketchAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllUnionAggFunction {
+pub struct HllUnionAgg {
     signature: Signature,
 }
 
-impl Default for HllUnionAggFunction {
+impl Default for HllUnionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllUnionAggFunction {
+impl HllUnionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -90,7 +92,7 @@ impl HllUnionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for HllUnionAggFunction {
+impl AggregateUDFImpl for HllUnionAgg {
     fn name(&self) -> &str {
         "hll_union_agg"
     }
@@ -131,11 +133,11 @@ struct HllSketchAggAccumulator {
 }
 
 impl HllSketchAggAccumulator {
-    fn new(lg_config_k: u8) -> Self {
-        Self {
-            sketch: new_hll_sketch(lg_config_k),
+    fn new(lg_config_k: u8) -> Result<Self> {
+        Ok(Self {
+            sketch: new_hll_sketch(lg_config_k)?,
             merged: None,
-        }
+        })
     }
 
     fn update_bytes(&self) -> Vec<u8> {
@@ -227,8 +229,11 @@ impl HllUnionAggAccumulator {
         Ok(())
     }
 
-    fn evaluate_bytes(&self) -> Vec<u8> {
-        self.sketch.clone().unwrap_or_else(empty_hll_union_bytes)
+    fn evaluate_bytes(&self) -> Result<Vec<u8>> {
+        match &self.sketch {
+            Some(sketch) => Ok(sketch.clone()),
+            None => empty_hll_union_bytes(),
+        }
     }
 }
 
@@ -246,7 +251,7 @@ impl Accumulator for HllUnionAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Binary(Some(self.evaluate_bytes())))
+        Ok(ScalarValue::Binary(Some(self.evaluate_bytes()?)))
     }
 
     fn size(&self) -> usize {

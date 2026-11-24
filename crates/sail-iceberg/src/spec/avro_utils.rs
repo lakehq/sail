@@ -1,23 +1,96 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
-use apache_avro::Schema as AvroSchema;
-use apache_avro::schema::{RecordField as AvroRecordField, RecordFieldOrder, UnionSchema};
+use std::collections::HashMap;
+use std::io::Write;
+
+use apache_avro::schema::{RecordField as AvroRecordField, UnionSchema};
+use apache_avro::types::Value as AvroValue;
+use apache_avro::{AvroResult, Schema as AvroSchema, Writer as AvroWriter};
 use serde_json::{Number, Value as JsonValue};
 
 /// Avro custom attribute used to annotate Iceberg field ids.
 pub const FIELD_ID_ATTR: &str = "field-id";
 /// Avro custom attribute used to retain an Iceberg field's original name.
 pub const ICEBERG_FIELD_NAME_ATTR: &str = "iceberg-field-name";
+
+/// Create an uncompressed Avro writer with an explicit codec in the header.
+pub(crate) fn create_avro_writer<W: Write>(
+    schema: &AvroSchema,
+    writer: W,
+) -> AvroResult<AvroWriter<'_, W>> {
+    // Avro 0.22 omits the null codec, but PyIceberg treats a missing codec as
+    // its default Iceberg compression (gzip) rather than uncompressed Avro.
+    AvroWriter::builder()
+        .schema(schema)
+        .writer(writer)
+        .user_metadata(HashMap::from([(
+            "avro.codec".to_string(),
+            AvroValue::Bytes(b"null".to_vec()),
+        )]))
+        .build()
+}
+
+/// Limits encoded writes, not allocations made by serializers before writing.
+pub(crate) struct LimitedWriter<W> {
+    inner: W,
+    remaining: usize,
+}
+
+impl<W> LimitedWriter<W> {
+    pub(crate) fn new(inner: W, limit: usize) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+
+    pub(crate) fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(std::io::Error::other("Manifest output byte limit exceeded"));
+        }
+        let written = self.inner.write(bytes)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Check a record before Avro buffers its complete encoding internally.
+pub(crate) fn check_avro_record_size(
+    schema: &AvroSchema,
+    value: &AvroValue,
+    limit: usize,
+) -> AvroResult<()> {
+    if limit != usize::MAX {
+        apache_avro::writer::datum::GenericDatumWriter::builder(schema)
+            .build()?
+            .write_value_ref(&mut LimitedWriter::new(std::io::sink(), limit), value)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn append_avro_with_limit<W: Write, T: serde::Serialize>(
+    writer: &mut AvroWriter<'_, W>,
+    schema: &AvroSchema,
+    value: T,
+    limit: usize,
+) -> AvroResult<usize> {
+    if limit != usize::MAX {
+        apache_avro::writer::datum::GenericDatumWriter::builder(schema)
+            .build()?
+            .write_ser(&mut LimitedWriter::new(std::io::sink(), limit), &value)?;
+    }
+    writer.append_ser(value)
+}
 
 /// Convert an Iceberg field name to a valid Avro field name.
 pub(crate) fn avro_compatible_name(name: &str) -> String {
@@ -45,6 +118,9 @@ pub(crate) fn avro_compatible_name(name: &str) -> String {
 
 /// Wrap a schema in an optional (null-union) Avro schema.
 pub fn optional(schema: AvroSchema) -> AvroSchema {
+    if schema == AvroSchema::Null {
+        return schema;
+    }
     #[expect(clippy::unwrap_used)]
     AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
 }
@@ -70,9 +146,7 @@ pub fn record_field(
         name: avro_name.clone(),
         doc: None,
         default,
-        aliases: None,
-        order: RecordFieldOrder::Ignore,
-        position: 0,
+        aliases: Vec::new(),
         schema,
         custom_attributes: Default::default(),
     };

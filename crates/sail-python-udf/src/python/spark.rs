@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::ffi::CString;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -5,6 +7,7 @@ use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
 use pyo3::{Bound, Py, PyAny, PyResult, Python, intern};
 
+use crate::buffer::PyPassthroughBuffer;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
 use crate::python::py_init_object;
@@ -78,12 +81,21 @@ impl PySpark {
     pub fn scalar_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
+        passthrough_columns: usize,
+        output_name: &str,
         config: &PySparkUdfConfig,
+        buffer: PyPassthroughBuffer,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasIterUdf"),
-            (udf, config.clone()),
+            (
+                udf,
+                passthrough_columns,
+                output_name,
+                config.clone(),
+                buffer,
+            ),
         )
     }
 

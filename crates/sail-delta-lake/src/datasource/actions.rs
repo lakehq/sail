@@ -1,20 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use chrono::TimeZone;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -23,7 +12,6 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion_common::extensions::Extensions;
 use object_store::ObjectMeta;
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 use crate::conversion::parse_optional_partition_value;
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
@@ -31,6 +19,7 @@ use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
+    location: object_store::path::Path,
     partition_columns: &[PhysicalPartitionColumn],
     schema: &ArrowSchema,
 ) -> DeltaResult<PartitionedFile> {
@@ -62,12 +51,13 @@ pub fn partitioned_file_from_action(
             ))
         })?;
 
-    let object_meta: ObjectMeta = action.try_into()?;
-
     Ok(PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
-            ..object_meta
+            location,
+            size: action.size as u64,
+            e_tag: None,
+            version: None,
         },
         partition_values,
         extensions: Extensions::default(),
@@ -125,8 +115,13 @@ mod tests {
         };
 
         #[expect(clippy::expect_used)]
-        let file = partitioned_file_from_action(&action, &partition_columns, &schema)
-            .expect("partition values should parse");
+        let file = partitioned_file_from_action(
+            &action,
+            object_store::path::Path::from(action.path.as_str()),
+            &partition_columns,
+            &schema,
+        )
+        .expect("partition values should parse");
 
         assert_eq!(
             file.partition_values,

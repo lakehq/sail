@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 
 use aws_config::BehaviorVersion;
@@ -5,14 +7,15 @@ use aws_credential_types::Credentials;
 use aws_sdk_glue::Client;
 use aws_sdk_glue::config::Region;
 use aws_sdk_glue::types::{
-    StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
+    Partition, StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace,
+    AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode,
+    Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -155,15 +158,7 @@ impl GlueCatalogProvider {
         } else if let Some(provider) = table_provider_format(table.parameters()) {
             provider
         } else {
-            HiveDetectedFormat::detect(
-                storage
-                    .and_then(|sd| sd.serde_info())
-                    .and_then(|si| si.serialization_library()),
-                storage.and_then(|sd| sd.input_format()),
-                storage.and_then(|sd| sd.output_format()),
-            )
-            .as_str()
-            .to_string()
+            hive_storage_format(storage)
         };
 
         // Extract columns from storage descriptor
@@ -176,11 +171,15 @@ impl GlueCatalogProvider {
                 let type_str = col.r#type()?;
                 let data_type = glue_type_to_arrow(type_str).ok()?;
                 Some(TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable: true, // Glue doesn't track nullability
                     comment: col.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: col
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: false,
@@ -203,11 +202,15 @@ impl GlueCatalogProvider {
                 && let Ok(data_type) = glue_type_to_arrow(type_str)
             {
                 columns.push(TableColumnStatus {
+                    metadata: Default::default(),
                     name: pk.name().to_string(),
                     data_type,
                     nullable: true,
                     comment: pk.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: pk
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: true,
@@ -250,10 +253,16 @@ impl GlueCatalogProvider {
         let view_name = table.name().to_string();
         let comment = table.description().map(|s| s.to_string());
 
+        // Glue Data Catalog views keep their SQL in `ViewDefinition`. Views created
+        // by Athena, Hive or Spark (for example on EMR or in Glue ETL jobs) only
+        // set the table-level `ViewOriginalText`, so fall back to it.
         let definition = table
             .view_definition()
             .and_then(|vd| vd.representations().first())
             .and_then(|rep| rep.view_original_text())
+            .filter(|text| !text.is_empty())
+            .or_else(|| table.view_original_text())
+            .filter(|text| !text.is_empty())
             .ok_or_else(|| CatalogError::External("View has no definition".to_string()))?
             .to_string();
 
@@ -267,11 +276,15 @@ impl GlueCatalogProvider {
                 let type_str = col.r#type()?;
                 let data_type = glue_type_to_arrow(type_str).ok()?;
                 Some(TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable: true,
                     comment: col.comment().map(|s| s.to_string()),
-                    default: None,
+                    default: col
+                        .parameters()
+                        .and_then(|p| p.get("CURRENT_DEFAULT"))
+                        .cloned(),
                     generated_always_as: None,
                     identity: None,
                     is_partition: false,
@@ -384,6 +397,29 @@ impl GlueCatalogProvider {
         builder
             .build()
             .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build view input: {e}")))
+    }
+}
+
+fn hive_storage_format(storage: Option<&StorageDescriptor>) -> String {
+    HiveDetectedFormat::detect(
+        storage
+            .and_then(|sd| sd.serde_info())
+            .and_then(|si| si.serialization_library()),
+        storage.and_then(|sd| sd.input_format()),
+        storage.and_then(|sd| sd.output_format()),
+    )
+    .as_str()
+    .to_string()
+}
+
+fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
+    CatalogFilePartition {
+        format: hive_storage_format(partition.storage_descriptor()),
+        location: partition
+            .storage_descriptor
+            .and_then(|sd| sd.location)
+            .map(sail_catalog::hive_format::file_source_location),
+        values: partition.values.unwrap_or_default(),
     }
 }
 
@@ -603,10 +639,7 @@ impl CatalogProvider for GlueCatalogProvider {
         } else {
             hive::validate_hive_create_table_options(options)?;
         }
-        if self.has_custom_endpoint()
-            && options.format.eq_ignore_ascii_case("iceberg")
-            && !options.is_write_precondition
-        {
+        if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
             Ok(CreateTableMetadataRequirement::LakeSource {
                 mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             })
@@ -617,6 +650,77 @@ impl CatalogProvider for GlueCatalogProvider {
         } else {
             Ok(CreateTableMetadataRequirement::None)
         }
+    }
+
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        if partition_values.is_empty() {
+            return Ok(None);
+        }
+        let client = self.get_client().await?;
+        let database = Self::database_name(database)?;
+        if let Some(values) = partition_values.iter().cloned().collect::<Option<Vec<_>>>() {
+            let response = client
+                .get_partition()
+                .set_catalog_id(self.catalog_id())
+                .database_name(database)
+                .table_name(table)
+                .set_partition_values(Some(values))
+                .send()
+                .await;
+            return match response {
+                Ok(page) => {
+                    let partition = page.partition.ok_or_else(|| {
+                        CatalogError::External("Empty Glue partition response".into())
+                    })?;
+                    Ok(Some(vec![registered_file_partition(partition)]))
+                }
+                Err(error)
+                    if error
+                        .as_service_error()
+                        .is_some_and(|e| e.is_entity_not_found_exception()) =>
+                {
+                    Ok(Some(vec![]))
+                }
+                Err(error) => Err(CatalogError::External(format!(
+                    "Failed to get Glue partition: {error}"
+                ))),
+            };
+        }
+        let mut pages = client
+            .get_partitions()
+            .set_catalog_id(self.catalog_id())
+            .database_name(database)
+            .table_name(table)
+            .exclude_column_schema(true)
+            .into_paginator()
+            .send();
+        let mut partitions = Vec::new();
+        while let Some(page) =
+            pages.next().await.transpose().map_err(|e| {
+                CatalogError::External(format!("Failed to list Glue partitions: {e}"))
+            })?
+        {
+            for partition in page.partitions.unwrap_or_default() {
+                if partition.values().len() != partition_values.len() {
+                    return Err(CatalogError::InvalidArgument(
+                        "Glue partition value count does not match its columns".into(),
+                    ));
+                }
+                if partition_values
+                    .iter()
+                    .zip(partition.values())
+                    .all(|(key, value)| key.as_ref().is_none_or(|v| v == value))
+                {
+                    partitions.push(registered_file_partition(partition));
+                }
+            }
+        }
+        Ok(Some(partitions))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -744,6 +848,31 @@ impl CatalogProvider for GlueCatalogProvider {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()> {
+        self.alter_table_atomically(database, table, vec![options])
+            .await
+    }
+
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        match options {
+            AlterTableOptions::AlterColumnType {
+                name, data_type, ..
+            } => {
+                managed_table::validate_column_path(name)?;
+                arrow_to_glue_type(data_type).map(|_| ())
+            }
+            AlterTableOptions::AlterColumnDefault { name, .. } => {
+                managed_table::validate_column_path(name)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
         let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
         let result = client
@@ -773,9 +902,15 @@ impl CatalogProvider for GlueCatalogProvider {
         };
 
         let parameters = table_value.parameters().cloned().unwrap_or_default();
-        let parameters =
-            managed_table::apply_alter_table_options(&database_name, table, parameters, options)?;
-        let table_input = Self::table_input_with_parameters(&table_value, parameters)?;
+        let mut table_input = Self::table_input_with_parameters(&table_value, parameters)?;
+        for options in options {
+            managed_table::apply_alter_table_input(
+                &database_name,
+                table,
+                &mut table_input,
+                options,
+            )?;
+        }
         let mut update_table = client
             .update_table()
             .set_catalog_id(self.catalog_id())
@@ -1030,5 +1165,91 @@ mod tests {
             panic!("expected table");
         };
         assert_eq!(format, "delta");
+    }
+
+    fn view_column() -> aws_sdk_glue::types::Column {
+        aws_sdk_glue::types::Column::builder()
+            .name("id")
+            .r#type("int")
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn view_to_status_reads_view_original_text_for_hive_views() {
+        // Views created by Spark or Hive (for example on EMR or Glue ETL) keep
+        // their SQL in ViewOriginalText and have no ViewDefinition.
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("hive_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_original_text("SELECT 1 AS id")
+            .view_expanded_text("SELECT 1 AS `id`")
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        let status = provider
+            .view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::View { definition, .. } = status.kind else {
+            panic!("expected view");
+        };
+        assert_eq!(definition, "SELECT 1 AS id");
+    }
+
+    #[test]
+    fn view_to_status_falls_back_when_view_definition_text_is_empty() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("hive_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_definition(
+                aws_sdk_glue::types::ViewDefinition::builder()
+                    .representations(
+                        aws_sdk_glue::types::ViewRepresentation::builder()
+                            .view_original_text("")
+                            .build(),
+                    )
+                    .build(),
+            )
+            .view_original_text("SELECT 1 AS id")
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        let status = provider
+            .view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::View { definition, .. } = status.kind else {
+            panic!("expected view");
+        };
+        assert_eq!(definition, "SELECT 1 AS id");
+    }
+
+    #[test]
+    fn view_to_status_accepts_athena_views() {
+        // Views created in Amazon Athena store a base64-encoded Presto view in
+        // ViewOriginalText and have no ViewDefinition.
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("athena_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_original_text(
+                "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCAxIEFTIGlkIiwiY2F0YWxvZyI6ImF3c2RhdGFjYXRhbG9nIiwic2NoZW1hIjoic2FsZXMiLCJjb2x1bW5zIjpbeyJuYW1lIjoiaWQiLCJ0eXBlIjoiaW50ZWdlciJ9XX0= */",
+            )
+            .view_expanded_text("/* Presto View */")
+            .set_parameters(Some(HashMap::from([(
+                "presto_view".to_string(),
+                "true".to_string(),
+            )])))
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        if let Err(e) = provider.view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+        {
+            panic!("Athena view should be readable: {e}");
+        }
     }
 }

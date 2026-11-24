@@ -1,4 +1,6 @@
-/// [Credit]: <https://github.com/apache/arrow-rs/blob/master/arrow-cast/src/display.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/arrow-rs/blob/ffd216d57469a33303c0d2ec9b974fd25cc0e0f9/arrow-cast/src/display.rs
+
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
@@ -21,7 +23,6 @@ use datafusion::arrow::temporal_conversions::{
     duration_us_to_duration, time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
     try_duration_ms_to_duration, try_duration_s_to_duration,
 };
-use lexical_core::FormattedSize;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
 
@@ -80,6 +81,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// Time zone for timestamp with timezone arrays, instead of the array's own time zone
+    timezone: Option<&'a str>,
 }
 
 impl Default for FormatOptions<'_> {
@@ -99,6 +102,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: TimeFormat::Spark,
             time_format: TimeFormat::Spark,
             duration_format: DurationFormat::Spark,
+            timezone: None,
         }
     }
 
@@ -160,6 +164,12 @@ impl<'a> FormatOptions<'a> {
             duration_format,
             ..self
         }
+    }
+
+    /// Overrides the time zone used for [`DataType::Timestamp`] columns with a timezone,
+    /// such as Spark's session time zone
+    pub const fn with_timezone(self, timezone: Option<&'a str>) -> Self {
+        Self { timezone, ..self }
     }
 }
 
@@ -481,34 +491,31 @@ macro_rules! primitive_display {
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let mut buffer = [0u8; <$t as ArrowPrimitiveType>::Native::FORMATTED_SIZE];
-                // SAFETY:
-                // buffer is T::FORMATTED_SIZE
-                let b = lexical_core::write(value, &mut buffer);
-                // Lexical core produces valid UTF-8
-                let s = unsafe { std::str::from_utf8_unchecked(b) };
-                f.write_str(s)?;
+                let mut buffer = core::fmt::NumBuffer::new();
+                f.write_str(value.format_into(&mut buffer))?;
                 Ok(())
             }
         })+
     };
 }
 
+/// Formats a `f64` with the notation used by Java `Double.toString` and Spark casts.
+pub fn spark_f64_to_string(value: f64) -> String {
+    crate::java_float::format_f64(value)
+}
+
+/// Formats an `f32` with the notation used by Java `Float.toString` and Spark casts.
+pub fn spark_f32_to_string(value: f32) -> String {
+    crate::java_float::format_f32(value)
+}
+
 macro_rules! primitive_display_float {
-    ($($t:ty),+) => {
+    ($($t:ty => $formatter:ident),+) => {
         $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let mut buffer = ryu::Buffer::new();
-                if value.is_infinite() {
-                    if !value.is_sign_positive() {
-                        f.write_str("-")?;
-                    }
-                    f.write_str("Infinity")?;
-                } else {
-                    f.write_str(buffer.format(value))?;
-                }
+                f.write_str(&$formatter(value))?;
                 Ok(())
             }
         })+
@@ -517,7 +524,10 @@ macro_rules! primitive_display_float {
 
 primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
-primitive_display_float!(Float32Type, Float64Type);
+primitive_display_float!(
+    Float32Type => spark_f32_to_string,
+    Float64Type => spark_f64_to_string
+);
 
 impl DisplayIndex for &PrimitiveArray<Float16Type> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -560,9 +570,10 @@ macro_rules! timestamp_display {
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => {
-                        Ok((Some(tz.parse()?), options.timestamp_tz_format))
-                    }
+                    DataType::Timestamp(_, Some(tz)) => Ok((
+                        Some(options.timezone.unwrap_or(tz).parse()?),
+                        options.timestamp_tz_format,
+                    )),
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }
@@ -1026,6 +1037,43 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
+    }
+
+    #[test]
+    fn test_spark_float_to_string() {
+        assert_eq!(spark_f64_to_string(1e18), "1.0E18");
+        assert_eq!(spark_f64_to_string(1e-7), "1.0E-7");
+        assert_eq!(spark_f64_to_string(f64::from_bits(1)), "4.9E-324");
+        assert_eq!(spark_f64_to_string(-f64::from_bits(1)), "-4.9E-324");
+        assert_eq!(spark_f64_to_string(-0.0), "-0.0");
+        assert_eq!(spark_f32_to_string(10_000_000.0), "1.0E7");
+        assert_eq!(spark_f32_to_string(f32::from_bits(1)), "1.4E-45");
+        assert_eq!(spark_f32_to_string(-f32::from_bits(1)), "-1.4E-45");
+        assert_eq!(spark_f32_to_string(-0.0), "-0.0");
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0x43d0_0000_0000_0000)),
+            "4.6116860184273879E18"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc36c_415f_f381_377c)),
+            "-6.3625437687430112E16"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc395_327f_1b7a_a2d1)),
+            "-3.8185574490758867E17"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xd75b_54b0)),
+            "-2.41156777E14"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0x4d32_a0e4)),
+            "1.87305536E8"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xddbd_6f50)),
+            "-1.70627712E18"
+        );
     }
 
     #[expect(clippy::unwrap_used)]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -20,6 +22,7 @@ use crate::executor::{
     Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, ExecutorOutputStream,
     to_arrow_batch,
 };
+use crate::service::config_manager::handle_sql_config;
 use crate::session::SparkSession;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
@@ -38,14 +41,21 @@ use crate::streaming::timeout_millis;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
+    server_side_session_id: String,
     operation_id: String,
     inner: ExecutorOutputStream,
 }
 
 impl ExecutePlanResponseStream {
-    pub fn new(session_id: String, operation_id: String, inner: ExecutorOutputStream) -> Self {
+    pub fn new(
+        session_id: String,
+        server_side_session_id: String,
+        operation_id: String,
+        inner: ExecutorOutputStream,
+    ) -> Self {
         Self {
             session_id,
+            server_side_session_id,
             operation_id,
             inner,
         }
@@ -64,7 +74,9 @@ impl Stream for ExecutePlanResponseStream {
                 let item = item.map_err(Status::from)?;
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
-                response.server_side_session_id.clone_from(&self.session_id);
+                response
+                    .server_side_session_id
+                    .clone_from(&self.server_side_session_id);
                 response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
@@ -120,7 +132,13 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let plan = if let Some(batch) = handle_sql_config(ctx, &plan).await? {
+        ctx.read_batch(batch)?.create_physical_plan().await?
+    } else {
+        resolve_and_execute_plan(ctx, spark.plan_config()?, plan)
+            .await?
+            .0
+    };
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
@@ -136,6 +154,7 @@ async fn handle_execute_plan(
     spark.add_executor(executor)?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         rx,
     ))
@@ -254,13 +273,21 @@ pub(crate) async fn handle_execute_sql_command(
                 relation: Some(relation),
             }));
             let mut output = vec![ExecutorOutput::new(result)];
-            if metadata.reattachable {
+            let operation_id = metadata.operation_id.clone();
+            let rx: ExecutorOutputStream = if metadata.reattachable {
                 output.push(ExecutorOutput::complete());
-            }
+                let executor = Executor::completed(metadata, output);
+                let rx = executor.start()?;
+                spark.add_executor(executor)?;
+                rx
+            } else {
+                Box::pin(stream::iter(output.into_iter().map(Ok)))
+            };
             Ok(ExecutePlanResponseStream::new(
                 spark.session_id().to_string(),
-                metadata.operation_id,
-                Box::pin(stream::iter(output.into_iter().map(Ok))),
+                spark.server_session_id().to_string(),
+                operation_id,
+                rx,
             ))
         }
     }
@@ -294,6 +321,7 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -395,6 +423,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -478,6 +507,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -558,6 +588,7 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
         .into_iter();
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
@@ -621,6 +652,7 @@ pub(crate) async fn handle_reattach_execute(
     let rx = executor.start()?;
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         operation_id,
         rx,
     ))
@@ -702,6 +734,7 @@ pub(crate) async fn handle_execute_register_datasource(
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
+        spark.server_session_id().to_string(),
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))

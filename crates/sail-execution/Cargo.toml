@@ -1,7 +1,13 @@
 [package]
 name = "sail-execution"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -9,6 +15,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-cache = { path = "../sail-cache" }
 sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
 sail-python-udf = { path = "../sail-python-udf" }
@@ -31,6 +38,11 @@ tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
+hyper = { workspace = true }
+http-body-util = { workspace = true }
+hyper-util = { workspace = true }
+hyper-rustls = { workspace = true }
+rustls = { workspace = true }
 prost = { workspace = true }
 opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
@@ -38,6 +50,7 @@ datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
 object_store = { workspace = true }
 arrow-flight = { workspace = true }
+arrow-select = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -51,7 +64,11 @@ readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
+libc = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
 tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+h2 = { workspace = true }

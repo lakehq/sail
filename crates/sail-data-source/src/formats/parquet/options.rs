@@ -1,10 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 use datafusion::catalog::Session;
 use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
-use datafusion_common::config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions};
+use datafusion_common::config::{
+    MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+};
 use datafusion_common::parquet_config::DFParquetWriterVersion;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::session::config::SessionConfigService;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
@@ -27,6 +33,7 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
+            merge_schema: Some(None),
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -34,11 +41,13 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
             metadata_size_hint: Some(self.global.metadata_size_hint),
             pushdown_filters: Some(self.global.pushdown_filters),
             reorder_filters: Some(self.global.reorder_filters),
+            force_filter_selections: Some(self.global.force_filter_selections),
             schema_force_view_types: Some(self.global.schema_force_view_types),
             binary_as_string: Some(self.global.binary_as_string),
             coerce_int96: self.global.coerce_int96.map(Some),
             bloom_filter_on_read: Some(self.global.bloom_filter_on_read),
             max_predicate_cache_size: Some(self.global.max_predicate_cache_size),
+            max_in_list_size: Some(self.global.max_in_list_size),
             path_glob_filter: None,
         })
     }
@@ -47,17 +56,20 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 impl ParquetReadOptions {
     pub fn into_table_options(self) -> TableParquetOptions {
         let ParquetReadOptions {
+            merge_schema: _,
             enable_page_index,
             pruning,
             skip_metadata,
             metadata_size_hint,
             pushdown_filters,
             reorder_filters,
+            force_filter_selections,
             schema_force_view_types,
             binary_as_string,
             coerce_int96,
             bloom_filter_on_read,
             max_predicate_cache_size,
+            max_in_list_size,
             path_glob_filter: _,
         } = self;
         let global = ParquetOptions {
@@ -67,11 +79,15 @@ impl ParquetReadOptions {
             metadata_size_hint,
             pushdown_filters,
             reorder_filters,
+            force_filter_selections,
             schema_force_view_types,
             binary_as_string,
+            // Spark reads INT96 as `TimestampType`, which stores UTC instants.
+            coerce_int96_tz: coerce_int96.as_ref().map(|_| "UTC".to_string()),
             coerce_int96,
             bloom_filter_on_read,
             max_predicate_cache_size,
+            max_in_list_size,
             ..ParquetOptions::default()
         };
         TableParquetOptions {
@@ -93,6 +109,7 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             dictionary_page_size_limit: Some(self.global.dictionary_page_size_limit),
             statistics_enabled: Some(self.global.statistics_enabled.clone()),
             max_row_group_size: Some(self.global.max_row_group_size),
+            max_row_group_bytes: Some(self.global.max_row_group_bytes.map(|v| v.get())),
             column_index_truncate_length: Some(self.global.column_index_truncate_length),
             statistics_truncate_length: Some(self.global.statistics_truncate_length),
             data_page_row_count_limit: Some(self.global.data_page_row_count_limit),
@@ -133,6 +150,7 @@ impl ParquetWriteOptions {
             dictionary_page_size_limit,
             statistics_enabled,
             max_row_group_size,
+            max_row_group_bytes,
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
@@ -231,6 +249,15 @@ impl ParquetWriteOptions {
         } else {
             None
         };
+        // `parse_optional_non_zero_usize` maps `0` to `None`, so the value is never zero here.
+        let max_row_group_bytes = max_row_group_bytes
+            .map(MaxRowGroupBytes::try_new)
+            .transpose()
+            .map_err(|e| DataSourceError::InvalidOption {
+                key: "max_row_group_bytes".to_string(),
+                value: "0".to_string(),
+                cause: Some(e.to_string()),
+            })?;
         // When the FPP or NDV is set, the parquet writer will enable bloom filter implicitly.
         // This is not desired since we want those values to take effect only when the bloom filter
         // is explicitly enabled on write.
@@ -245,11 +272,13 @@ impl ParquetWriteOptions {
             write_batch_size,
             writer_version,
             skip_arrow_metadata,
+            created_by: SAIL_PARQUET_CREATED_BY.to_string(),
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
             max_row_group_size,
+            max_row_group_bytes,
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
@@ -283,6 +312,13 @@ impl ResolveOptions for ParquetReadOptions {
                 .parquet
                 .build_partial_options()?,
         );
+        // Preserve the ordinary listing sample when neither the session nor the reader sets mergeSchema.
+        let key = "spark.sql.parquet.mergeSchema";
+        if let Some(service) = ctx.config().get_extension::<SessionConfigService>()
+            && let Some(value) = service.get_options_with_prefix(key)?.get(key)
+        {
+            partial.merge_schema = Some(Some(crate::options::parsers::parse_bool(key, value)?));
+        }
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -310,7 +346,9 @@ mod tests {
     use std::str::FromStr;
 
     use datafusion::prelude::SessionContext;
+    use datafusion_common::config::MaxRowGroupBytes;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
+    use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
@@ -332,6 +370,8 @@ mod tests {
             ("coerce_int96", "ms"),
             ("bloom_filter_on_read", "true"),
             ("max_predicate_cache_size", "0"),
+            ("force_filter_selections", "true"),
+            ("max_in_list_size", "100"),
         ]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
@@ -348,6 +388,8 @@ mod tests {
         assert!(options.global.bloom_filter_on_read);
         // max_predicate_cache_size uses parse_optional_usize: "0" = Some(0)
         assert_eq!(options.global.max_predicate_cache_size, Some(0));
+        assert!(options.global.force_filter_selections);
+        assert_eq!(options.global.max_in_list_size, 100);
 
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
@@ -426,6 +468,7 @@ mod tests {
             ("content_defined_chunking_min_chunk_size", "4096"),
             ("content_defined_chunking_max_chunk_size", "8192"),
             ("content_defined_chunking_norm_level", "-1"),
+            ("max_row_group_bytes", "65536"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
@@ -463,11 +506,17 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -1);
+        assert_eq!(options.global.created_by, SAIL_PARQUET_CREATED_BY);
+        assert_eq!(
+            options.global.max_row_group_bytes.map(|v| v.get()),
+            Some(65536)
+        );
 
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
+            ("max_row_group_bytes", "0"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
@@ -476,6 +525,59 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
         assert_eq!(options.global.encoding, None);
+        assert_eq!(options.global.max_row_group_bytes, None);
+
+        // bloom_filter_ndv = "0" leaves the NDV unset so the Parquet writer derives it
+        // from the maximum row group size
+        let kv = option_list(&[("bloom_filter_on_write", "true"), ("bloom_filter_ndv", "0")]);
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert!(options.global.bloom_filter_on_write);
+        assert_eq!(options.global.bloom_filter_ndv, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parquet_writer_bloom_filter_ndv() -> datafusion_common::Result<()> {
+        use datafusion::parquet::file::properties::WriterPropertiesBuilder;
+        use datafusion::parquet::schema::types::ColumnPath;
+
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let writer_ndv = |kv: &[(&str, &str)]| -> datafusion_common::Result<Option<u64>> {
+            // The Arrow schema is only embedded by the file sink, which this test bypasses.
+            let base = option_list(&[("skip_arrow_metadata", "true")]);
+            let options = ParquetWriteOptions::resolve(&state, vec![base, option_list(kv)])
+                .map_err(datafusion_common::DataFusionError::from)?
+                .into_table_options()
+                .map_err(datafusion_common::DataFusionError::from)?;
+            let props = WriterPropertiesBuilder::try_from(&options)?.build();
+            Ok(props
+                .bloom_filter_properties(&ColumnPath::from("c"))
+                .map(|p| p.ndv()))
+        };
+
+        // Without an explicit NDV, the writer sizes the bloom filter for the row group size.
+        assert_eq!(
+            writer_ndv(&[
+                ("bloom_filter_on_write", "true"),
+                ("bloom_filter_ndv", "0"),
+                ("max_row_group_size", "10000"),
+            ])?,
+            Some(10000)
+        );
+        // An explicit NDV takes precedence over the row group size.
+        assert_eq!(
+            writer_ndv(&[
+                ("bloom_filter_on_write", "true"),
+                ("bloom_filter_ndv", "500"),
+                ("max_row_group_size", "10000"),
+            ])?,
+            Some(500)
+        );
 
         Ok(())
     }
@@ -544,6 +646,13 @@ mod tests {
             .parquet
             .content_defined_chunking
             .norm_level = -2;
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .max_row_group_bytes = Some(MaxRowGroupBytes::try_new(4096)?);
         let state = ctx.state();
 
         let kv = option_list(&[]);
@@ -559,6 +668,10 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -2);
+        assert_eq!(
+            options.global.max_row_group_bytes.map(|v| v.get()),
+            Some(4096)
+        );
 
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),

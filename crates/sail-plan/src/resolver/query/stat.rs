@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -7,17 +9,21 @@ use datafusion::functions_aggregate::approx_median::approx_median_udaf;
 use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
-use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
+    AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and,
+    col, expr, lit, or, try_cast,
 };
+use rand::{RngExt, rng};
 use sail_common::spec;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::utils::partition_random::PartitionSeed;
+use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -36,7 +42,18 @@ impl PlanResolver<'_> {
             input.schema().columns()
         } else {
             self.resolve_columns(input.schema(), &columns, state)?
-        };
+        }
+        .into_iter()
+        .filter(|column| {
+            input.schema().field_from_column(column).is_ok_and(|field| {
+                field.data_type().is_numeric()
+                    || matches!(
+                        field.data_type(),
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                    )
+            })
+        })
+        .collect();
         let statistics: HashSet<String> = if statistics.is_empty() {
             HashSet::from([
                 "count".to_string(),
@@ -78,12 +95,22 @@ impl PlanResolver<'_> {
                 // but Spark's `summary` preserves the input column's integer type for
                 // percentile rows, so we cast back when the source is integer.
                 let percentile_cast = original_dtype.is_integer().then(|| original_dtype.clone());
-                if field.data_type().is_numeric() {
+                let numeric_expr = if original_dtype.is_numeric() {
+                    Some(Expr::Column(column.clone()))
+                } else if matches!(
+                    original_dtype,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    Some(try_cast(Expr::Column(column.clone()), DataType::Float64))
+                } else {
+                    None
+                };
+                if let Some(numeric_expr) = numeric_expr {
                     if statistics.contains("mean") {
                         let mean = Expr::AggregateFunction(expr::AggregateFunction {
                             func: avg_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -97,7 +124,7 @@ impl PlanResolver<'_> {
                         let stddev = Expr::AggregateFunction(expr::AggregateFunction {
                             func: stddev_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -112,7 +139,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_expr.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.25_f64)), None),
                                 ],
                                 distinct: false,
@@ -135,7 +162,7 @@ impl PlanResolver<'_> {
                         let percentile_50_expr = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_median_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -157,7 +184,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_expr.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.75_f64)), None),
                                 ],
                                 distinct: false,
@@ -181,7 +208,7 @@ impl PlanResolver<'_> {
 
             if statistics.contains("min") {
                 let min = Expr::AggregateFunction(expr::AggregateFunction {
-                    func: min_udaf(),
+                    func: Arc::new(AggregateUDF::from(Min::new())),
                     params: AggregateFunctionParams {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
@@ -196,7 +223,7 @@ impl PlanResolver<'_> {
 
             if statistics.contains("max") {
                 let max = Expr::AggregateFunction(expr::AggregateFunction {
-                    func: max_udaf(),
+                    func: Arc::new(AggregateUDF::from(Max::new())),
                     params: AggregateFunctionParams {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
@@ -210,9 +237,13 @@ impl PlanResolver<'_> {
             }
         }
 
-        let stats_plan = LogicalPlanBuilder::from(input)
-            .aggregate(Vec::<Expr>::new(), all_aggregates)?
-            .build()?;
+        let stats_plan = if all_aggregates.is_empty() {
+            LogicalPlanBuilder::empty(true).build()?
+        } else {
+            LogicalPlanBuilder::from(input)
+                .aggregate(Vec::<Expr>::new(), all_aggregates)?
+                .build()?
+        };
 
         let summary_alias = state.register_field_name("summary");
         let create_stat_row =
@@ -235,6 +266,10 @@ impl PlanResolver<'_> {
         let mut union_plan = None;
         for stat_type in statistics {
             let stat_type = stat_type.as_str();
+            let is_supported_statistic = matches!(
+                stat_type,
+                "count" | "mean" | "stddev" | "min" | "25%" | "50%" | "75%" | "max"
+            );
             let mut stats_by_column = Vec::new();
             for column in &columns {
                 let column_name = column.name().to_string();
@@ -293,7 +328,7 @@ impl PlanResolver<'_> {
                 }
             }
 
-            if !stats_by_column.is_empty() {
+            if is_supported_statistic {
                 let stat_row = create_stat_row(stat_type, stats_by_column)?;
                 union_plan = Some(match union_plan {
                     Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
@@ -351,12 +386,7 @@ impl PlanResolver<'_> {
             .distinct()?
             .build()?;
         // TODO: This can be expensive for large input datasets
-        let distinct_values_batches = self
-            .ctx
-            .execute_logical_plan(distinct_values)
-            .await?
-            .collect()
-            .await?;
+        let distinct_values_batches = self.execute_auxiliary_plan(distinct_values).await?;
 
         let mut unique_values: Vec<(String, String)> = vec![];
         for batch in distinct_values_batches {
@@ -564,18 +594,26 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(Expr::Column)
             .collect();
-        let rand_column_name: String = state.register_hidden_field_name("rand_value");
-
+        // Like Spark's `rand(seed)` in the filter, the random column is not referenceable.
+        let rand_column_name: String = state.next_field_id();
+        // Like Spark, a random seed is used if no seed is given.
+        let seed = seed.unwrap_or_else(|| rng().random::<i64>());
         let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
-        })
-        .alias(&rand_column_name);
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+            args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+        });
+        // The samples depend on the order of the input rows, which must be kept.
+        let (input, _, _) = Self::require_input_sort_inner(input)?;
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(SeededRandomNode::try_new(
+                Arc::new(input),
+                vec![SeededRandomColumn {
+                    name: rand_column_name.clone(),
+                    expr: rand_expr,
+                    seed: PartitionSeed::Offset,
+                }],
+            )?),
+        });
 
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
@@ -590,6 +628,7 @@ impl PlanResolver<'_> {
         let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
         Ok(LogicalPlanBuilder::from(plan_with_rand)
             .filter(final_expr)?
+            .project(init_exprs)?
             .build()?)
     }
 }

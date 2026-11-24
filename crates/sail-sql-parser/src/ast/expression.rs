@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, MapExtra, ValueInput};
@@ -224,7 +226,15 @@ pub enum AtomExpr {
         RightParenthesis,
     ),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
-    Wildcard(operator::Asterisk),
+    Wildcard(
+        operator::Asterisk,
+        Option<(
+            crate::ast::keywords::Except,
+            LeftParenthesis,
+            Sequence<Ident, Comma>,
+            RightParenthesis,
+        )>,
+    ),
     StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),

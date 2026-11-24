@@ -1,0 +1,790 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use datafusion::arrow::array::{Array, Int64Array, StringArray};
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
+use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::{
+    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+};
+use sail_catalog::manager::CatalogManager;
+use sail_common::spec;
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, LakehouseTableBinding,
+    TableKind,
+};
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakeprocedure::{
+    LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
+    LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedurePlanningTarget,
+    LakeProcedureProvider, LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget,
+    LakeProcedureValue,
+};
+use sail_common_datafusion::literal::LiteralEvaluator;
+use uuid::Uuid;
+
+use crate::error::{PlanError, PlanResult};
+use crate::procedure::LakeProcedureNode;
+use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
+
+struct ResolvedLakeProcedure {
+    catalog: String,
+    namespace: Vec<String>,
+    lake_source: String,
+    provider: Arc<dyn LakeProcedureProvider>,
+    procedure: LakeProcedure,
+}
+
+impl PlanResolver<'_> {
+    pub(super) async fn resolve_command_call_procedure(
+        &self,
+        procedure_name: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let procedure_parts = procedure_name
+            .parts()
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>();
+        let (procedure_catalog, procedure_namespace, procedure_leaf) = match procedure_parts
+            .as_slice()
+        {
+            [namespace, procedure] => (None, *namespace, *procedure),
+            [catalog, namespace, procedure] => (Some(*catalog), *namespace, *procedure),
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "procedure name must be <namespace>.<procedure> or <catalog>.<namespace>.<procedure>: {}",
+                    procedure_parts.join(".")
+                )));
+            }
+        };
+
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let procedure_catalog = manager.resolve_catalog_reference(procedure_catalog)?;
+        let procedure_namespace = vec![procedure_namespace.to_string()];
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let mut resolved_procedure = None;
+        for (lake_source_name, lake_source) in registry.lake_sources()? {
+            let Some(provider) = lake_source.procedure_provider() else {
+                continue;
+            };
+            match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {
+                LakeProcedureResolution::Supported(procedure) => {
+                    resolved_procedure = Some((lake_source_name, provider, procedure));
+                    break;
+                }
+                LakeProcedureResolution::Unsupported { reason } => {
+                    return Err(PlanError::unsupported(reason));
+                }
+                LakeProcedureResolution::Unrecognized => {}
+            }
+        }
+        let Some((lake_source_name, provider, procedure)) = resolved_procedure else {
+            return Err(PlanError::analysis(format!(
+                "Procedure not found: {}",
+                procedure_parts.join(".")
+            )));
+        };
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog: procedure_catalog.to_string(),
+                namespace: procedure_namespace,
+                lake_source: lake_source_name,
+                provider,
+                procedure,
+            },
+            arguments,
+            named_arguments,
+            state,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_command_call_table_procedure(
+        &self,
+        format: String,
+        procedure_name: String,
+        target: spec::LakehouseCommandTarget,
+        arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let table = match target {
+            spec::LakehouseCommandTarget::Table(table) => table,
+            spec::LakehouseCommandTarget::Path(path) => {
+                // Resolve explicit paths before using the shared procedure target routing.
+                let url = sail_data_source::resolve_table_url(path)?;
+                spec::ObjectName::from([format.clone(), url.as_str().to_string()])
+            }
+        };
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let parts: Vec<String> = table.into();
+        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && is_procedure_path(path));
+        let catalog = if is_path {
+            manager.resolve_catalog_reference(None)?.to_string()
+        } else {
+            // Resolve views before the procedure's table-only lookup, including
+            // temporary views shadowing catalog tables.
+            let status = manager.get_table_or_view(&parts).await?;
+            if !matches!(status.kind, TableKind::Table { .. }) {
+                return Err(PlanError::invalid(format!(
+                    "Lakehouse procedure '{procedure_name}' requires a table, but '{}' is a view",
+                    parts.join(".")
+                )));
+            }
+            manager
+                .resolve_table_reference_with_default_catalog(
+                    &manager.resolve_catalog_reference(None)?,
+                    &parts,
+                )?
+                .catalog()
+                .to_string()
+        };
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let provider = registry
+            .get_lake_source(&format)?
+            .procedure_provider()
+            .ok_or_else(|| {
+                PlanError::unsupported(format!(
+                    "Lake source '{format}' does not provide procedures"
+                ))
+            })?;
+        let procedure = match provider.get_procedure(&procedure_name) {
+            LakeProcedureResolution::Supported(procedure) => procedure,
+            LakeProcedureResolution::Unsupported { reason } => {
+                return Err(PlanError::unsupported(reason));
+            }
+            LakeProcedureResolution::Unrecognized => {
+                return Err(PlanError::analysis(format!(
+                    "Procedure not found: {format}.{procedure_name}"
+                )));
+            }
+        };
+        let table = parts
+            .iter()
+            .map(|part| format!("`{}`", part.replace('`', "``")))
+            .collect::<Vec<_>>()
+            .join(".");
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog,
+                namespace: vec![format.clone()],
+                lake_source: format,
+                provider,
+                procedure,
+            },
+            vec![spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(table),
+            })],
+            arguments,
+            state,
+        )
+        .await
+    }
+
+    async fn plan_lake_procedure(
+        &self,
+        resolved: ResolvedLakeProcedure,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let ResolvedLakeProcedure {
+            catalog: procedure_catalog,
+            namespace: procedure_namespace,
+            lake_source: lake_source_name,
+            provider,
+            procedure,
+        } = resolved;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        procedure.validate()?;
+
+        let bound = bind_procedure_arguments(
+            &procedure,
+            arguments,
+            named_arguments
+                .into_iter()
+                .map(|(name, value)| (name.as_ref().to_string(), value))
+                .collect(),
+        )?;
+        let mut values = Vec::with_capacity(bound.len());
+        for (parameter, argument) in procedure.parameters.iter().zip(bound) {
+            values.push(match argument {
+                Some(argument) => {
+                    self.evaluate_procedure_argument(argument, parameter.data_type, state)
+                        .await?
+                }
+                None => LakeProcedureValue::Null,
+            });
+        }
+        let invocation = LakeProcedureInvocation {
+            arguments: values,
+            procedure,
+        };
+        let (target, mut planning_target) = match &invocation.procedure.target {
+            LakeProcedureTarget::Catalog => (
+                None,
+                LakeProcedurePlanningTarget::Catalog {
+                    catalog: procedure_catalog.to_string(),
+                },
+            ),
+            LakeProcedureTarget::Table { parameter }
+            | LakeProcedureTarget::TableOrPath { parameter } => {
+                let Some(LakeProcedureValue::Utf8(table_name)) = invocation.argument(parameter)
+                else {
+                    return Err(PlanError::invalid(format!(
+                        "Procedure target argument '{parameter}' must be a non-null string"
+                    )));
+                };
+                let table_ast = sail_sql_analyzer::parser::parse_object_name(table_name)?;
+                let table_name = sail_sql_analyzer::expression::from_ast_object_name(table_ast)?;
+                let table_reference: Vec<String> = table_name.into();
+                if matches!(
+                    invocation.procedure.target,
+                    LakeProcedureTarget::TableOrPath { .. }
+                ) && let [format, path] = table_reference.as_slice()
+                    && format.eq_ignore_ascii_case(&lake_source_name)
+                    && is_procedure_path(path)
+                {
+                    let info = procedure_path_source(path.clone());
+                    (
+                        Some(LakeProcedureTableTarget::Path {
+                            location: path.clone(),
+                        }),
+                        LakeProcedurePlanningTarget::Table {
+                            info: Box::new(info),
+                            predicates: vec![],
+                        },
+                    )
+                } else {
+                    let resolved_table = manager.resolve_table_reference_with_default_catalog(
+                        &procedure_catalog,
+                        &table_reference,
+                    )?;
+                    if !resolved_table
+                        .catalog()
+                        .eq_ignore_ascii_case(&procedure_catalog)
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "Cannot run procedure from catalog '{procedure_catalog}' against table '{}' in catalog '{}'",
+                            table_reference.join("."),
+                            resolved_table.catalog()
+                        )));
+                    }
+                    let table_status = manager.get_table_by_reference(&resolved_table).await?;
+                    let TableKind::Table {
+                        location,
+                        format,
+                        properties,
+                        ..
+                    } = &table_status.kind
+                    else {
+                        return Err(PlanError::invalid(format!(
+                            "Lakehouse procedure target is not a table: {}",
+                            table_name_for_display(&table_status)
+                        )));
+                    };
+                    if !format.eq_ignore_ascii_case(&lake_source_name) {
+                        return Err(PlanError::invalid(format!(
+                            "Procedure '{}' is provided by lake source '{lake_source_name}' and cannot target table '{}' with format '{format}'",
+                            invocation.procedure.name,
+                            table_name_for_display(&table_status)
+                        )));
+                    }
+                    let mut canonical_table = vec![resolved_table.catalog().to_string()];
+                    canonical_table.extend(table_status.database.iter().cloned());
+                    canonical_table.push(table_status.name.clone());
+                    let planning = resolve_procedure_table_planning(
+                        manager.as_ref(),
+                        &canonical_table,
+                        format,
+                        invocation.procedure.access,
+                    )
+                    .await?;
+                    (
+                        Some(LakeProcedureTableTarget::Table {
+                            binding: Box::new(LakehouseTableBinding::from_execution(
+                                &planning.binding,
+                            )),
+                        }),
+                        LakeProcedurePlanningTarget::Table {
+                            info: Box::new(SourceInfo {
+                                paths: location.iter().cloned().collect(),
+                                lakehouse_table: Some(planning.access),
+                                schema: None,
+                                constraints: Default::default(),
+                                partition_by: vec![],
+                                bucket_by: None,
+                                sort_order: vec![],
+                                options: vec![OptionLayer::TablePropertyList {
+                                    items: properties.clone(),
+                                }],
+                                read_case_sensitive: true,
+                            }),
+                            predicates: vec![],
+                        },
+                    )
+                }
+            }
+        };
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId(Uuid::new_v4().to_string()),
+            catalog: procedure_catalog.to_string(),
+            namespace: procedure_namespace,
+            lake_source: lake_source_name,
+            target,
+            invocation,
+        };
+        if let LakeProcedurePlanningTarget::Table { info, predicates } = &mut planning_target {
+            info.options.push(OptionLayer::OptionList {
+                items: self.config.lakehouse_options.clone(),
+            });
+            for parameter in &call.invocation.procedure.parameters {
+                if parameter.data_type != LakeProcedureDataType::SqlPredicate {
+                    continue;
+                }
+                let Some(LakeProcedureValue::Utf8(sql)) = call.invocation.argument(&parameter.name)
+                else {
+                    continue;
+                };
+                let metadata = registry
+                    .get_lake_source(&call.lake_source)?
+                    .infer_metadata(&self.ctx.state(), *info.clone())
+                    .await?;
+                let names = state.register_fields(metadata.schema.fields());
+                let schema = Arc::new(DFSchema::try_from(
+                    sail_common_datafusion::rename::schema::rename_schema(
+                        &metadata.schema,
+                        &names,
+                    )?,
+                )?);
+                let ast = sail_sql_analyzer::parser::parse_expression(sql)?;
+                let expr = self
+                    .resolve_expression(
+                        sail_sql_analyzer::expression::from_ast_expression(ast)?,
+                        &schema,
+                        state,
+                    )
+                    .await?;
+                let plan = datafusion_expr::LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(
+                    datafusion_expr::EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    },
+                ))
+                .filter(expr)?
+                .build()?;
+                let session = self.ctx.state();
+                let analyzed = session.analyzer().execute_and_check(
+                    plan,
+                    session.config_options().as_ref(),
+                    |_, _| {},
+                )?;
+                let LogicalPlan::Filter(filter) = analyzed else {
+                    return Err(PlanError::invalid("Invalid procedure predicate"));
+                };
+                use datafusion_common::tree_node::{Transformed, TreeNode};
+                let expr = filter
+                    .predicate
+                    .transform(|expr| {
+                        if let datafusion_expr::Expr::Column(column) = &expr
+                            && let Some(index) = names.iter().position(|name| name == &column.name)
+                        {
+                            return Ok(Transformed::yes(datafusion_expr::Expr::Column(
+                                datafusion_common::Column::from_name(
+                                    metadata.schema.field(index).name(),
+                                ),
+                            )));
+                        }
+                        Ok(Transformed::no(expr))
+                    })?
+                    .data;
+                if expr.is_volatile() {
+                    return Err(PlanError::invalid(
+                        "Procedure predicates must be deterministic",
+                    ));
+                }
+                predicates.push(
+                    sail_common_datafusion::lakeprocedure::LakeProcedurePredicate {
+                        name: parameter.name.clone(),
+                        expr,
+                        schema: metadata.schema,
+                    },
+                );
+            }
+        }
+        let session = self.ctx.state();
+        let plan = provider
+            .plan_procedure(&session, planning_target, &call)
+            .await?;
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(LakeProcedureNode::try_new(
+                call,
+                plan.implementation,
+                plan.root_placement,
+            )?),
+        }))
+    }
+
+    async fn evaluate_procedure_argument(
+        &self,
+        argument: spec::Expr,
+        data_type: LakeProcedureDataType,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LakeProcedureValue> {
+        let schema = Arc::new(DFSchema::empty());
+        if data_type == LakeProcedureDataType::Boolean {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            validate_procedure_boolean_argument_type(&expression.get_type(&schema)?)?;
+        }
+        if data_type == LakeProcedureDataType::Int64Array {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            if !matches!(
+                expression.get_type(&schema)?,
+                DataType::Null
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+            ) {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be an array",
+                ));
+            }
+        }
+        let target = match data_type {
+            LakeProcedureDataType::Boolean => spec::DataType::Boolean,
+            LakeProcedureDataType::Int32 => spec::DataType::Int32,
+            LakeProcedureDataType::Int64 => spec::DataType::Int64,
+            LakeProcedureDataType::Utf8 | LakeProcedureDataType::SqlPredicate => {
+                spec::DataType::Utf8
+            }
+            LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
+                time_unit: spec::TimeUnit::Microsecond,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
+            },
+            LakeProcedureDataType::Int64Array => spec::DataType::List {
+                data_type: Box::new(spec::DataType::Int64),
+                nullable: true,
+            },
+            LakeProcedureDataType::StringMap => spec::DataType::Map {
+                key_type: Box::new(spec::DataType::Utf8),
+                value_type: Box::new(spec::DataType::Utf8),
+                value_type_nullable: true,
+                keys_sorted: false,
+            },
+        };
+        let expression = self
+            .resolve_expression(
+                spec::Expr::Cast {
+                    expr: Box::new(argument),
+                    cast_to_type: target,
+                    naming: spec::CastNaming::Cast,
+                    is_try: false,
+                },
+                &schema,
+                state,
+            )
+            .await?;
+        let value = LiteralEvaluator::new()
+            .evaluate(&expression)
+            .map_err(|error| {
+                PlanError::invalid(format!(
+                    "Procedure arguments must be foldable constants: {error}"
+                ))
+            })?;
+        scalar_to_procedure_value(value)
+    }
+}
+
+fn validate_procedure_boolean_argument_type(source: &DataType) -> PlanResult<()> {
+    // Spark's ProcedureArgumentCoercion permits implicit casts, not every explicit CAST.
+    // Check the expression type before folding: even CAST(NULL AS INT) is not BOOLEAN.
+    // Explicit Boolean casts and Boolean-valued expressions remain valid arguments.
+    if source.is_numeric() {
+        return Err(PlanError::invalid(format!(
+            "Procedure argument cannot be implicitly cast from {source} to Boolean"
+        )));
+    }
+    Ok(())
+}
+
+struct ProcedureTablePlanning {
+    binding: LakehouseExecutionContext,
+    access: LakehouseExecutionContext,
+}
+
+async fn resolve_procedure_table_planning(
+    manager: &CatalogManager,
+    table: &[String],
+    format: &str,
+    access: LakeProcedureAccess,
+) -> PlanResult<ProcedureTablePlanning> {
+    let resolved = manager
+        .resolve_lakehouse_table(
+            table,
+            ResolveLakehouseTableRequest {
+                catalog_table: table.to_vec(),
+                operation: LakehouseOperation::Maintenance,
+                requested_format: Some(LakehouseFormat::from_format_name(format)),
+                options: vec![],
+            },
+        )
+        .await?;
+    let binding = resolved.execution;
+    let access = match manager
+        .begin_table_access(
+            table,
+            BeginTableAccessRequest {
+                context: binding.clone(),
+                purpose: procedure_access_purpose(access),
+            },
+        )
+        .await
+    {
+        Ok(session) => session.context,
+        Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
+            binding.clone()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(ProcedureTablePlanning { binding, access })
+}
+
+fn procedure_access_purpose(access: LakeProcedureAccess) -> TableAccessPurpose {
+    match access {
+        LakeProcedureAccess::MetadataRead => TableAccessPurpose::MetadataRead,
+        LakeProcedureAccess::MetadataCommit => TableAccessPurpose::Commit,
+    }
+}
+
+fn bind_procedure_arguments(
+    procedure: &LakeProcedure,
+    positional: Vec<spec::Expr>,
+    named: Vec<(String, spec::Expr)>,
+) -> PlanResult<Vec<Option<spec::Expr>>> {
+    if positional.len() > procedure.parameters.len() {
+        return Err(PlanError::invalid(format!(
+            "Too many arguments for procedure '{}': expected at most {}, got {}",
+            procedure.name,
+            procedure.parameters.len(),
+            positional.len()
+        )));
+    }
+    let mut values = vec![None; procedure.parameters.len()];
+    for (index, value) in positional.into_iter().enumerate() {
+        values[index] = Some(value);
+    }
+    for (name, value) in named {
+        let index = procedure
+            .parameters
+            .iter()
+            .position(|parameter| parameter.name.eq_ignore_ascii_case(&name))
+            .ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "Unknown argument '{name}' for procedure '{}'",
+                    procedure.name
+                ))
+            })?;
+        if values[index].is_some() {
+            return Err(PlanError::invalid(format!(
+                "Duplicate argument '{}' for procedure '{}'",
+                procedure.parameters[index].name, procedure.name
+            )));
+        }
+        values[index] = Some(value);
+    }
+
+    procedure
+        .parameters
+        .iter()
+        .zip(values)
+        .map(|(parameter, value)| match value {
+            Some(value) => Ok(Some(value)),
+            None if parameter.required => Err(PlanError::missing(format!(
+                "Missing required argument '{}' for procedure '{}'",
+                parameter.name, procedure.name
+            ))),
+            None => Ok(None),
+        })
+        .collect()
+}
+
+fn scalar_to_procedure_value(value: ScalarValue) -> PlanResult<LakeProcedureValue> {
+    if value.is_null() {
+        return Ok(LakeProcedureValue::Null);
+    }
+    match value {
+        value @ ScalarValue::Map(_) => scalar_to_string_map(&value),
+        ScalarValue::List(array) => {
+            if array.len() != 1 {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be scalar",
+                ));
+            }
+            let values = array.value(0);
+            let values = values
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| PlanError::invalid("Procedure array elements must be longs"))?;
+            Ok(LakeProcedureValue::Int64Array(values.iter().collect()))
+        }
+        ScalarValue::Boolean(Some(value)) => Ok(LakeProcedureValue::Boolean(value)),
+        ScalarValue::Int32(Some(value)) => Ok(LakeProcedureValue::Int32(value)),
+        ScalarValue::Int64(Some(value)) => Ok(LakeProcedureValue::Int64(value)),
+        ScalarValue::Utf8(Some(value)) => Ok(LakeProcedureValue::Utf8(value)),
+        ScalarValue::TimestampMicrosecond(Some(value), _) => {
+            Ok(LakeProcedureValue::TimestampMicros(value))
+        }
+        value => Err(PlanError::invalid(format!(
+            "Unsupported procedure argument value after cast: {value:?}"
+        ))),
+    }
+}
+
+fn scalar_to_string_map(value: &ScalarValue) -> PlanResult<LakeProcedureValue> {
+    let ScalarValue::Map(array) = value else {
+        return Err(PlanError::invalid(format!(
+            "Cannot cast procedure argument {value:?} to map<string,string>"
+        )));
+    };
+    let mut rows = array.iter();
+    let row = rows.next().ok_or_else(|| {
+        PlanError::invalid("Procedure map argument must contain exactly one scalar value")
+    })?;
+    if rows.next().is_some() {
+        return Err(PlanError::invalid(
+            "Procedure map argument must contain exactly one scalar value",
+        ));
+    }
+    let Some(entries) = row else {
+        return Ok(LakeProcedureValue::Null);
+    };
+    let [keys, values] = entries.columns() else {
+        return Err(PlanError::invalid(
+            "Procedure map argument must contain key and value columns",
+        ));
+    };
+    let keys = keys
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| PlanError::invalid("Procedure map keys must be strings"))?;
+    let values = values
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| PlanError::invalid("Procedure map values must be strings"))?;
+    let mut result = BTreeMap::new();
+    for index in 0..keys.len() {
+        if keys.is_null(index) || values.is_null(index) {
+            return Err(PlanError::invalid(
+                "Procedure map keys and values must not be null",
+            ));
+        }
+        let key = keys.value(index).to_string();
+        if result
+            .insert(key.clone(), values.value(index).to_string())
+            .is_some()
+        {
+            return Err(PlanError::invalid(format!(
+                "Procedure map argument contains duplicate key '{key}'"
+            )));
+        }
+    }
+    Ok(LakeProcedureValue::StringMap(result))
+}
+
+fn table_name_for_display(status: &sail_common_datafusion::catalog::TableStatus) -> String {
+    status
+        .catalog
+        .iter()
+        .chain(status.database.iter())
+        .chain(std::iter::once(&status.name))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn is_procedure_path(path: &str) -> bool {
+    Path::new(path).is_absolute() || path.starts_with('/') || path.contains(":/")
+}
+
+fn procedure_path_source(path: String) -> SourceInfo {
+    SourceInfo {
+        paths: vec![path],
+        lakehouse_table: None,
+        schema: None,
+        constraints: Default::default(),
+        partition_by: vec![],
+        bucket_by: None,
+        sort_order: vec![],
+        options: vec![],
+        read_case_sensitive: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procedure_long_arrays_preserve_null_elements_and_empty_arrays() {
+        use datafusion::arrow::array::ListArray;
+        use datafusion::arrow::datatypes::Int64Type;
+        for values in [vec![], vec![Some(1), None, Some(i64::MAX), Some(1)]] {
+            let array = ListArray::from_iter_primitive::<Int64Type, _, _>([Some(values.clone())]);
+            let result = scalar_to_procedure_value(ScalarValue::List(Arc::new(array)));
+            assert!(
+                matches!(result, Ok(LakeProcedureValue::Int64Array(actual)) if actual == values)
+            );
+        }
+    }
+
+    #[test]
+    fn procedure_booleans_reject_numeric_implicit_casts() {
+        for source in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal256(40, 2),
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_err(),
+                "{source}"
+            );
+        }
+        // Preserve the existing valid inputs and string-conversion behavior.
+        for source in [
+            DataType::Boolean,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_ok(),
+                "{source}"
+            );
+        }
+    }
+}

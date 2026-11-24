@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 
 import pyarrow as pa
@@ -5,8 +7,7 @@ import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
-from pysail.testing.spark.steps.plan import normalize_plan_text
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.plan import normalize_plan_text
 
 _CLICKBENCH_SCHEMA = pa.schema(
     [
@@ -185,7 +186,6 @@ def data(spark, tmp_path_factory):
         pq.write_table(file_table, tmp_dir / f"hits-{file_index:02}.parquet")
 
     df = spark.read.parquet(str(tmp_dir))
-    df = df.withColumn("EventTime", F.col("EventTime").cast("timestamp"))
     df = df.withColumn("EventDate", F.col("EventDate").cast("int").cast("date"))
     df.createOrReplaceTempView("hits")
     yield
@@ -201,7 +201,7 @@ def queries():
 
 # ClickBench query ID is zero-based.
 @pytest.mark.parametrize("q", list(range(43)), ids=[f"{x:02}" for x in range(43)])
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_clickbench_query_plan(spark, q, queries, snapshot):
     sql = queries[q]

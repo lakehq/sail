@@ -1,19 +1,40 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array;
 pub mod catalog;
+pub mod column_change;
 pub mod column_features;
+pub mod command;
+pub mod data_type;
 pub mod datasource;
 pub mod display;
 pub mod error;
 pub mod extension;
+pub mod float_semantics;
 pub mod formatter;
+pub mod input_file;
+mod java_float;
+pub mod lakeprocedure;
+pub mod lakerelation;
 pub mod lakesource;
 pub mod literal;
 pub mod logical_expr;
 pub mod logical_rewriter;
+pub mod metadata;
+pub mod metadata_aggregate;
+pub mod min_max;
+pub mod parquet_schema;
 pub mod rename;
+pub mod scan;
+pub mod schema;
 pub mod schema_evolution;
 pub mod session;
+pub mod statistics;
 pub mod streaming;
+pub mod type_coercion;
 pub mod udf;
 pub mod utils;
+pub mod uuid;
 pub mod variant;
+
+pub const OPTIMIZER_CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";

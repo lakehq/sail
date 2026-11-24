@@ -1,7 +1,13 @@
 [package]
 name = "sail-common"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -37,3 +43,5 @@ tonic-health = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true }
 pin-project-lite = { workspace = true }
+icu_casemap = { workspace = true }
+regex = { workspace = true }

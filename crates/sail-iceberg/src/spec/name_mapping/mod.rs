@@ -1,21 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-// [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/name_mapping/mod.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/name_mapping/mod.rs
+// SPDX-FileAttributionText: Notice: https://github.com/apache/iceberg-rust/blob/dc349284a4204c1a56af47fb3177ace6f9e899a0/NOTICE
 
 use std::sync::Arc;
 
@@ -37,6 +23,34 @@ impl NameMapping {
     /// Returns mapped fields
     pub fn fields(&self) -> &[MappedField] {
         &self.0
+    }
+
+    pub fn field_names(&self) -> Result<std::collections::HashMap<i32, Vec<String>>, String> {
+        fn visit<'a>(
+            fields: impl Iterator<Item = &'a MappedField>,
+            names: &mut std::collections::HashMap<i32, Vec<String>>,
+        ) -> Result<(), String> {
+            let mut siblings = std::collections::HashSet::new();
+            for field in fields {
+                for name in &field.names {
+                    if !siblings.insert(name) {
+                        return Err(format!("Ambiguous Iceberg name mapping for '{name}'"));
+                    }
+                }
+                if let Some(id) = field.field_id
+                    && (id <= 0 || names.insert(id, field.names.clone()).is_some())
+                {
+                    return Err(format!(
+                        "Invalid or duplicate Iceberg name mapping field ID {id}"
+                    ));
+                }
+                visit(field.fields.iter().map(Arc::as_ref), names)?;
+            }
+            Ok(())
+        }
+        let mut names = std::collections::HashMap::new();
+        visit(self.0.iter(), &mut names)?;
+        Ok(names)
     }
 }
 

@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
@@ -17,20 +18,37 @@ use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
-use datafusion::physical_optimizer::window_topn::WindowTopN;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
+use crate::filter_pushdown::PostFilterPushdown;
+use crate::input_file_name::{
+    PushDownInputFileMetadata, PushDownStreamedJoinInputFileMetadata,
+    RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
+};
 use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::JoinReorderOptions;
-use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+pub use crate::join_reorder::{JoinReorderOptions, SharedCteRestrictions};
+use crate::offset::OffsetSafeRequirements;
+use crate::partition_sensitive::KeepPartitionSensitiveInputs;
+use crate::projection_pushdown::ContextSafeProjectionPushdown;
+use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
+use crate::window_topn::WindowTopN;
 
 mod barrier;
 mod collect_left;
+mod correlation_cast;
 mod explicit_repartition;
+mod filter_pushdown;
+mod input_file_name;
 mod join_reorder;
+mod mixed_numeric;
+mod offset;
+mod partition_sensitive;
 mod projection_pushdown;
+mod scan_partitions;
+mod select_semi_join_build_side;
+mod window_topn;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -44,31 +62,41 @@ pub fn get_physical_optimizers(
     let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
 
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
+    // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
+    // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
+    rules.push(Arc::new(SelectSemiJoinBuildSide));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
+    rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));
-    // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
-    // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
-    // Revisit the opt-in default when that trade-off is addressed.
+    // WindowTopN checks DataFusion's `enable_window_topn` option.
     rules.push(Arc::new(WindowTopN::new()));
-    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(WrapInputFileMetadataSource::new()));
+    rules.push(Arc::new(PushDownInputFileMetadata::new()));
+    rules.push(Arc::new(OffsetSafeRequirements));
+    rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(Arc::new(LimitPushPastWindows::new()));
     rules.push(Arc::new(HashJoinBuffering::new()));
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(TopKRepartition::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
-    rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    rules.push(Arc::new(PostFilterPushdown));
+    rules.push(Arc::new(PushDownStreamedJoinInputFileMetadata));
+    rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
+    // Explicit repartitions are rewritten to round-robin repartitions afterwards, and they
+    // define the partitions that partition-sensitive operators keep.
+    rules.push(Arc::new(KeepPartitionSensitiveInputs));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
@@ -85,20 +113,35 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers(Default::default());
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =
             datafusion_optimizers.iter().map(|opt| opt.name()).collect();
-        let actual_datafusion_optimizer_names: Vec<&str> = optimizers
-            .iter()
-            .map(|opt| opt.name())
-            .filter(|name| datafusion_optimizer_names.contains(name))
-            .collect();
-        assert_eq!(
-            datafusion_optimizer_names, actual_datafusion_optimizer_names,
-            "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
-        );
+        // `JoinReorder` and `JoinSelection` estimate cardinality from the `FilterExec` above
+        // a scan, which `FilterPushdown` removes when the source applies the predicate exactly
+        // (e.g. Parquet with `pushdown_filters`). Enabling join reorder must not move it earlier.
+        for enable_join_reorder in [false, true] {
+            let optimizers = get_physical_optimizers(PhysicalOptimizerOptions {
+                enable_join_reorder,
+                ..Default::default()
+            });
+            let names: Vec<_> = optimizers.iter().map(|rule| rule.name()).collect();
+            assert!(names.windows(3).any(|rules| rules
+                == [
+                    PostFilterPushdown.name(),
+                    PushDownStreamedJoinInputFileMetadata.name(),
+                    RewriteInputFileMetadataFallback::new().name(),
+                ]));
+            let actual_datafusion_optimizer_names: Vec<&str> = optimizers
+                .iter()
+                .map(|opt| opt.name())
+                .filter(|name| datafusion_optimizer_names.contains(name))
+                .collect();
+            assert_eq!(
+                datafusion_optimizer_names, actual_datafusion_optimizer_names,
+                "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order (enable_join_reorder = {enable_join_reorder})"
+            );
+        }
 
         Ok(())
     }

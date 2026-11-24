@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::Result;
@@ -10,6 +12,7 @@ use datafusion_datasource_avro::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
 
 #[derive(Debug, Default, Clone)]
 pub struct AvroReadFormat;
@@ -24,6 +27,9 @@ impl ReadFormat for AvroReadFormat {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-avro/src/file_format.rs
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
@@ -47,8 +53,12 @@ impl ReadFormat for AvroReadFormat {
                 schemas.push(schema);
             }
         }
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(try_merge_normalized(
+            schemas,
+            NanosecondTimestamps::Report,
+        )?))
     }
+    // SPDX-SnippetEnd
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let source = AvroSource::new(input.schema);

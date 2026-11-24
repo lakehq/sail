@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::metrics::{MetricsRecordingContext, MetricsRecordingStream, StatementType};
+use crate::session::FlightSession;
 use crate::state::{QueryHandle, SailFlightSqlState};
 
 pub struct SailFlightSqlService {
@@ -104,13 +107,33 @@ impl FlightSqlService for SailFlightSqlService {
         };
 
         let ctx = self.get_session_context().await?;
-        let (plan, _) = resolve_and_execute_plan(&ctx, self.config.clone(), plan)
+        // Flight has no Spark session time zone: it is the DataFusion time zone, which
+        // `SET timezone` sets, so that the resolver and the optimizer cannot disagree on it.
+        let time_zone = ctx
+            .state_ref()
+            .read()
+            .config()
+            .options()
+            .execution
+            .time_zone
+            .clone();
+        let config = match time_zone {
+            Some(time_zone) => Arc::new(PlanConfig {
+                session_timezone: time_zone.into(),
+                ..(*self.config).clone()
+            }),
+            None => self.config.clone(),
+        };
+        let (plan, _) = resolve_and_execute_plan(&ctx, config, plan)
             .await
             .map_err(|e| Status::internal(format!("plan error: {e}")))?;
         let schema = plan.schema();
         let service = ctx
             .extension::<JobService>()
             .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
+        let session = ctx
+            .extension::<FlightSession>()
+            .map_err(|e| Status::internal(format!("session not found: {e}")))?;
         let stream = service
             .runner()
             .execute(&ctx, plan)
@@ -122,7 +145,7 @@ impl FlightSqlService for SailFlightSqlService {
                 stream,
                 m.clone(),
                 MetricsRecordingContext {
-                    session_id: Self::DEFAULT_SESSION_ID.to_string(),
+                    session_id: session.session_id.clone(),
                     statement_type,
                 },
             ))

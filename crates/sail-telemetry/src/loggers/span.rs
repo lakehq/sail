@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use fastrace::Event;
 use fastrace::local::LocalSpan;
 use log::{Log, Metadata, Record};

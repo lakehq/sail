@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod parsers;
 
 use datafusion::catalog::Session;
@@ -14,6 +16,14 @@ pub mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/options/json.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
+}
+
+/// The mode for dealing with corrupt records during parsing, as Spark's `ParseMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseMode {
+    Permissive,
+    DropMalformed,
+    FailFast,
 }
 
 /// A trait for resolving concrete options.

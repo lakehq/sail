@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Python bindings for PySail.
 //!
 //! This module allows Python to interact with the Sail computation engine
@@ -10,6 +12,10 @@ mod globals;
 mod spark;
 
 use pyo3::prelude::*;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: sail_mimalloc::MiMalloc = sail_mimalloc::MiMalloc;
 
 /// Creates the `_native` Python module.
 /// Registers the version constant, the `main` function,

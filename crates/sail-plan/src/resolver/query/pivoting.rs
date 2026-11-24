@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -14,7 +16,7 @@ use sail_common::spec;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -22,6 +24,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::SeededRandomRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
@@ -224,7 +227,7 @@ impl PlanResolver<'_> {
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
             .limit(0, Some(max_pivot_values.saturating_add(1)))?
             .build()?;
-        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let batches = self.execute_auxiliary_plan(plan).await?;
         let mut values = Vec::new();
         for batch in &batches {
             let column = batch.column(0);
@@ -405,7 +408,7 @@ impl PlanResolver<'_> {
         let structs = values
             .into_iter()
             .map(|(value, name)| {
-                ScalarUDF::from(StructFunction::new(vec![
+                ScalarUDF::from(StructFromFields::new(vec![
                     variable_column_name.to_string(),
                     value_column_name.to_string(),
                 ]))
@@ -432,15 +435,16 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
 
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        let plan = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        // Spark's Expand cannot expose input columns removed by UNPIVOT.
+        state.register_missing_input_boundary(&plan);
+        Ok(plan)
     }
 }
 
@@ -459,7 +463,7 @@ fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
 }
 
 fn make_pivot_struct(exprs: Vec<expr::Expr>) -> expr::Expr {
-    ScalarUDF::from(StructFunction::new(
+    ScalarUDF::from(StructFromFields::new(
         (0..exprs.len()).map(|i| format!("col{}", i + 1)).collect(),
     ))
     .call(exprs)

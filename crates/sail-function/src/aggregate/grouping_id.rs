@@ -1,28 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, not_impl_err};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+};
 
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct GroupingIdFunction {
+pub struct GroupingId {
     signature: Signature,
 }
 
-impl Default for GroupingIdFunction {
+impl Default for GroupingId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GroupingIdFunction {
+impl GroupingId {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
         }
     }
 }
 
-impl AggregateUDFImpl for GroupingIdFunction {
+impl AggregateUDFImpl for GroupingId {
     fn name(&self) -> &str {
         "grouping_id"
     }

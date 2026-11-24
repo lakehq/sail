@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
@@ -16,6 +17,10 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
+use crate::physical_plan::{
+    IcebergFileTasksExec, IcebergProcedureExec, IcebergRewriteExec, IcebergScanByDataFilesExec,
+};
+use crate::procedure::{IcebergProcedureNode, RewriteDataFilesRunNode, RewriteDataFilesScanNode};
 
 pub struct IcebergPhysicalPlanner;
 
@@ -30,6 +35,63 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node.as_any().downcast_ref::<IcebergProcedureNode>() {
+            let procedure = if let Some(rewrite_data_files) = node.rewrite_data_files() {
+                let [input] = physical_inputs else {
+                    return datafusion_common::internal_err!(
+                        "rewrite_data_files requires exactly one physical input"
+                    );
+                };
+                IcebergProcedureExec::try_new_rewrite_data_files(
+                    node.call().clone(),
+                    Arc::clone(input),
+                    rewrite_data_files.clone(),
+                )?
+            } else {
+                if !physical_inputs.is_empty() {
+                    return datafusion_common::internal_err!(
+                        "leaf Iceberg procedure cannot have physical inputs"
+                    );
+                }
+                IcebergProcedureExec::try_new(node.call().clone(), node.planned_table().cloned())?
+            };
+            return Ok(Some(Arc::new(procedure)));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<RewriteDataFilesRunNode>() {
+            let [input] = physical_inputs else {
+                return datafusion_common::internal_err!(
+                    "Iceberg rewrite runner requires one input"
+                );
+            };
+            return Ok(Some(Arc::new(IcebergRewriteExec::try_new(
+                input.clone(),
+                node.assignments.clone(),
+            )?)));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<RewriteDataFilesScanNode>() {
+            if !physical_inputs.is_empty() {
+                return datafusion_common::internal_err!(
+                    "IcebergRewriteDataFilesScan does not accept physical inputs"
+                );
+            }
+            let schema = node.arrow_schema();
+            let files: Arc<dyn ExecutionPlan> =
+                Arc::new(IcebergFileTasksExec::try_new(node.groups().to_vec())?);
+            return Ok(Some(Arc::new(
+                IcebergScanByDataFilesExec::new(
+                    files,
+                    node.table_url().to_string(),
+                    schema,
+                    None,
+                    None,
+                    None,
+                )?
+                .preserve_file_groups(),
+            )));
+        }
+
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {
             let [logical_input] = logical_inputs else {
                 return datafusion_common::internal_err!(
@@ -83,11 +145,29 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() else {
             return Ok(None);
         };
+        let spec = source.scan().storage_access.as_deref();
+        let scoped = spec
+            .map(|s| sail_object_store::access::storage_session(session, s))
+            .transpose()?;
+        let session = scoped
+            .as_ref()
+            .map(|s| s as &dyn Session)
+            .unwrap_or(session);
         let filters = unnormalize_cols(scan.filters.clone());
         let plan = source
-            .provider()
-            .scan(session, scan.projection.as_ref(), &filters, scan.fetch)
+            .scan()
+            .create_physical_plan(
+                session,
+                scan.projection.as_ref(),
+                &filters,
+                scan.fetch,
+                source.prepared(&filters, scan.fetch),
+            )
             .await?;
+        let plan = match spec {
+            Some(s) => crate::storage_access::bind_scan_storage(plan, s, session.runtime_env())?,
+            None => plan,
+        };
         Ok(Some(plan))
     }
 }

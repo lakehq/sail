@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -19,7 +21,7 @@ use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKeySet, WorkerId};
 use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -76,6 +78,7 @@ impl WorkerPool {
         let _guard = span.set_local_parent();
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            batch_size: self.options.batch_size,
             session_id: self.options.session_id.clone(),
             driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
@@ -86,6 +89,9 @@ impl WorkerPool {
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,
+            task_stream_memory_limit: self.options.task_stream_memory_limit,
+            shuffle_write_buffer_size: self.options.shuffle_write_buffer_size,
+            task_stream_stall_timeout: self.options.task_stream_stall_timeout,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
             shuffle_backend: self.options.shuffle_backend.clone(),
@@ -319,74 +325,61 @@ impl WorkerPool {
         }
     }
 
-    /// Dispatches a task to a specific worker by sending the task definition over gRPC.
-    pub fn run_task(
+    /// Dispatches tasks from one stage and region to a worker as one request.
+    pub fn run_task_batch(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
-        key: TaskKey,
-        definition: TaskDefinition,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
+        definition: Arc<TaskDefinition>,
     ) {
         let running_workers = self.list_running_workers();
-        let Some(worker) = self.workers.get_mut(&worker_id) else {
-            let message = format!("worker {} not found", worker_id);
-            let cause = CommonErrorCause::Internal(message.clone());
-            ctx.send(DriverMessage::UpdateTask {
-                key,
-                status: TaskStatus::Failed,
-                message: Some(message),
-                cause: Some(cause),
-                sequence: None,
-            });
-            return;
+        let prepare = || -> ExecutionResult<_> {
+            let worker = self.workers.get_mut(&worker_id).ok_or_else(|| {
+                ExecutionError::InvalidArgument(format!("worker {worker_id} not found"))
+            })?;
+            Self::track_worker_activity(ctx, worker_id, worker, &self.options)?;
+            let client = Self::get_client_set(worker_id, worker, &self.options)?.core;
+            let peers = running_workers
+                .into_iter()
+                .filter(|x| !worker.peers.contains(&x.worker_id))
+                .collect();
+            Ok((client, peers))
         };
-        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
-            let message = format!(
-                "cannot assign {} to worker {} that is not running: {e}",
-                TaskKeyDisplay(&key),
-                worker_id
-            );
-            let cause = CommonErrorCause::Internal(message.clone());
-            ctx.send(DriverMessage::UpdateTask {
-                key,
-                status: TaskStatus::Failed,
-                message: Some(message),
-                cause: Some(cause),
-                sequence: None,
-            });
-            return;
-        }
-        let client = match Self::get_client_set(worker_id, worker, &self.options) {
-            Ok(client) => client.core,
-            Err(e) => {
-                let message = format!("failed to get worker {} client: {e}", worker_id);
-                let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
-                ctx.send(DriverMessage::UpdateTask {
-                    key,
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause: Some(cause),
-                    sequence: None,
-                });
+        let (client, peers) = match prepare() {
+            Ok(value) => value,
+            Err(error) => {
+                for task in tasks {
+                    ctx.send(DriverMessage::UpdateTask {
+                        key: task.task_key(job_id, stage),
+                        status: TaskStatus::Failed,
+                        message: Some(format!("failed to dispatch task batch: {error}")),
+                        cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                        sequence: None,
+                    });
+                }
                 return;
             }
         };
-        let peers = running_workers
-            .into_iter()
-            .filter(|x| !worker.peers.contains(&x.worker_id))
-            .collect();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client.run_task(key.clone(), definition, peers).await {
-                let _ = handle
-                    .send(DriverMessage::UpdateTask {
-                        key,
-                        status: TaskStatus::Failed,
-                        message: Some(format!("failed to run task via the worker client: {e}")),
-                        cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                        sequence: None,
-                    })
-                    .await;
+            if let Err(error) = client
+                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                .await
+            {
+                for task in tasks {
+                    let _ = handle
+                        .send(DriverMessage::UpdateTask {
+                            key: task.task_key(job_id, stage),
+                            status: TaskStatus::Failed,
+                            message: Some(format!("failed to run task batch: {error}")),
+                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                            sequence: None,
+                        })
+                        .await;
+                }
             }
         });
     }
@@ -421,11 +414,11 @@ impl WorkerPool {
         });
     }
 
-    pub fn fetch_task_stream(
+    pub fn fetch_task_streams(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
-        key: &TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
     ) -> ExecutionResult<TaskStreamSource> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
@@ -442,10 +435,17 @@ impl WorkerPool {
                 )));
             }
         };
-        let key = key.clone();
+        if keys.release {
+            // A reader that releases the streams does not read the source that it
+            // gets, so the request is sent here and not when the source is read.
+            ctx.spawn(async move {
+                let _ = client.fetch_task_streams(keys, schema).await;
+            });
+            return Ok(Box::pin(futures::stream::empty()));
+        }
         let stream = futures::stream::once(async move {
             client
-                .fetch_task_stream(key, schema.clone())
+                .fetch_task_streams(keys, schema.clone())
                 .await
                 .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })
@@ -464,10 +464,14 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
-            debug!("clean up job: worker {worker_id} was already inactive: {e}");
+        if !matches!(worker.state, WorkerState::Running { .. }) {
+            debug!("clean up job: worker {worker_id} was already inactive");
             return;
         }
+        // Cleanup is not new work: preserve the activity timestamp so broadcasts do not
+        // postpone existing idle probes. Schedule another probe in case an earlier one
+        // ran while the worker still owned streams that this cleanup releases.
+        Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
         Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
@@ -485,6 +489,13 @@ impl WorkerPool {
                         enable_tls: options.enable_tls,
                         host: host.clone(),
                         port: *port,
+                        flight_connection_count: options.shuffle_backend.flight_connection_count(),
+                        flight_initial_stream_window_size: options
+                            .shuffle_backend
+                            .flight_initial_stream_window_size(),
+                        flight_initial_connection_window_size: options
+                            .shuffle_backend
+                            .flight_initial_connection_window_size(),
                     };
                     WorkerClientSet::new(options)
                 });

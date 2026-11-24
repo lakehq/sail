@@ -1,12 +1,16 @@
-use std::collections::HashMap;
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
+use sail_common_datafusion::session::config::SessionConfigProvider;
 use sail_plan::config::PlanConfig;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
@@ -21,12 +25,16 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    /// The Sail `parquet.binary_as_string` option, which applies while
+    /// `spark.sql.parquet.binaryAsString` is not set in the session.
+    pub parquet_binary_as_string: bool,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
+    server_session_id: String,
     session_id: String,
     user_id: String,
     options: SparkSessionOptions,
@@ -36,6 +44,7 @@ pub(crate) struct SparkSession {
 impl Debug for SparkSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SparkSession")
+            .field("server_session_id", &self.server_session_id)
             .field("session_id", &self.session_id)
             .field("user_id", &self.user_id)
             .field("options", &self.options)
@@ -49,13 +58,42 @@ impl SessionExtension for SparkSession {
     }
 }
 
+impl SessionConfigProvider for SparkSession {
+    fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(keys
+            .iter()
+            .map(|key| state.config.get_option(key).map(str::to_owned))
+            .collect())
+    }
+
+    fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(state
+            .config
+            .get_all(Some(prefix))
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .into_iter()
+            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
+            .collect())
+    }
+}
+
 impl SparkSession {
     pub(crate) fn try_new(
+        server_session_id: String,
         session_id: String,
         user_id: String,
         options: SparkSessionOptions,
     ) -> SparkResult<Self> {
         let extension = Self {
+            server_session_id,
             session_id,
             user_id,
             options,
@@ -66,6 +104,10 @@ impl SparkSession {
             value: Some(get_system_timezone()?),
         }])?;
         Ok(extension)
+    }
+
+    pub(crate) fn server_session_id(&self) -> &str {
+        &self.server_session_id
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -127,6 +169,15 @@ impl SparkSession {
         Ok(kv)
     }
 
+    /// Returns the value set in the session, ignoring the default of the configuration entry.
+    pub(crate) fn get_config_if_set(&self, key: &str) -> SparkResult<Option<String>> {
+        let state = self.state.lock()?;
+        Ok(state
+            .config
+            .get_with_default(key, None)
+            .map(|x| x.to_string()))
+    }
+
     pub(crate) fn set_config(&self, kv: Vec<ConfigKeyValue>) -> SparkResult<()> {
         let mut state = self.state.lock()?;
         for ConfigKeyValue { key, value } in kv {
@@ -152,6 +203,26 @@ impl SparkSession {
     pub(crate) fn get_all_config(&self, prefix: Option<&str>) -> SparkResult<Vec<ConfigKeyValue>> {
         let state = self.state.lock()?;
         state.config.get_all(prefix)
+    }
+
+    pub(crate) fn add_native_config_key(&self, key: String) -> SparkResult<()> {
+        self.state.lock()?.native_config_keys.insert(key);
+        Ok(())
+    }
+
+    pub(crate) fn remove_native_config_key(&self, key: &str) -> SparkResult<()> {
+        self.state.lock()?.native_config_keys.remove(key);
+        Ok(())
+    }
+
+    pub(crate) fn native_config_keys(&self) -> SparkResult<Vec<String>> {
+        Ok(self
+            .state
+            .lock()?
+            .native_config_keys
+            .iter()
+            .cloned()
+            .collect())
     }
 
     pub(crate) fn get_config_warnings(&self, kv: &[ConfigKeyValue]) -> SparkResult<Vec<String>> {
@@ -307,6 +378,7 @@ impl SparkSession {
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
+    native_config_keys: BTreeSet<String>,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
 }
@@ -315,6 +387,7 @@ impl SparkSessionState {
     fn try_new() -> SparkResult<Self> {
         Ok(Self {
             config: SparkRuntimeConfig::try_new()?,
+            native_config_keys: BTreeSet::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         })

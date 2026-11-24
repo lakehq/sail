@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::io::Read;
 use std::sync::Arc;
@@ -159,6 +161,11 @@ impl FileSource for TextSource {
 
     fn file_type(&self) -> &str {
         "text"
+    }
+
+    fn supports_repartitioning(&self) -> bool {
+        // A whole-text row must cover the entire file, so the file cannot be split.
+        !self.whole_text
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {

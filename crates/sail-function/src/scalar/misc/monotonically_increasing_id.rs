@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, exec_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -10,17 +12,17 @@ use datafusion_expr_common::signature::{Signature, Volatility};
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#monotonically_increasing_id>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkMonotonicallyIncreasingId {
+pub struct MonotonicallyIncreasingId {
     signature: Signature,
 }
 
-impl Default for SparkMonotonicallyIncreasingId {
+impl Default for MonotonicallyIncreasingId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkMonotonicallyIncreasingId {
+impl MonotonicallyIncreasingId {
     pub fn new() -> Self {
         Self {
             signature: Signature::nullary(Volatility::Volatile),
@@ -28,7 +30,7 @@ impl SparkMonotonicallyIncreasingId {
     }
 }
 
-impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
+impl ScalarUDFImpl for MonotonicallyIncreasingId {
     fn name(&self) -> &str {
         "monotonically_increasing_id"
     }

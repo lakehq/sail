@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use async_recursion::async_recursion;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
@@ -27,6 +29,7 @@ impl PlanResolver<'_> {
                 (plan, None)
             }
         };
+        let plan = Self::scan_shared_cte_definitions(plan, state, false)?;
         let options = ExplainOptions::from_mode(mode);
         let explain = explain_string_from_logical_plan(self.ctx, plan, fields, options).await?;
         let plan =

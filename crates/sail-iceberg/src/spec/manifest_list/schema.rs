@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
 
@@ -20,7 +10,7 @@ use serde_json::{Number, Value as JsonValue};
 use crate::spec::avro_utils::record_field;
 
 fn partitions_field() -> AvroRecordField {
-    // element record for partitions: field_summary
+    // Iceberg names nested records by field ID, including list element records.
     let fields = vec![
         record_field("contains_null", AvroSchema::Boolean, 509, true),
         record_field("contains_nan", AvroSchema::Boolean, 518, false),
@@ -36,7 +26,7 @@ fn partitions_field() -> AvroRecordField {
 
     let element_record = AvroSchema::Record(RecordSchema {
         #[expect(clippy::unwrap_used)]
-        name: Name::new("field_summary").unwrap_or_else(|_| Name::new("field_summary").unwrap()),
+        name: Name::new("r508").unwrap_or_else(|_| Name::new("r508").unwrap()),
         aliases: None,
         doc: None,
         fields,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::fmt::Display;
 
@@ -42,7 +44,7 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         _ => return write!(f, "?"),
     };
     match kind {
-        Kind::Null(_) => write!(f, "null"),
+        Kind::Null(_) => write!(f, "void"),
         Kind::Binary(_) => write!(f, "binary"),
         Kind::Boolean(_) => write!(f, "boolean"),
         Kind::Byte(_) => write!(f, "byte"),
@@ -72,13 +74,23 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         Kind::Date(_) => write!(f, "date"),
         Kind::Timestamp(_) => write!(f, "timestamp"),
         Kind::TimestampNtz(_) => write!(f, "timestamp_ntz"),
+        Kind::TimestampNtzNanos(timestamp) => {
+            write!(f, "timestamp_ntz({})", timestamp.precision.unwrap_or(9))
+        }
+        Kind::TimestampLtzNanos(timestamp) => {
+            write!(f, "timestamp_ltz({})", timestamp.precision.unwrap_or(9))
+        }
         Kind::CalendarInterval(_) => write!(f, "interval"),
         Kind::YearMonthInterval(interval) => match (interval.start_field, interval.end_field) {
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_year_month_interval_field(f, start)?;
-                write!(f, " to ")?;
-                format_year_month_interval_field(f, end)
+                if start != end {
+                    write!(f, " to ")?;
+                    format_year_month_interval_field(f, end)?;
+                }
+
+                Ok(())
             }
             (Some(start), None) => {
                 write!(f, "interval ")?;
@@ -94,8 +106,12 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_day_time_interval_field(f, start)?;
-                write!(f, " to ")?;
-                format_day_time_interval_field(f, end)
+                if start != end {
+                    write!(f, " to ")?;
+                    format_day_time_interval_field(f, end)?;
+                }
+
+                Ok(())
             }
             (Some(start), None) => {
                 write!(f, "interval ")?;
@@ -386,6 +402,9 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             }
             None => buf.push_str("TIME"),
         },
+        Kind::TimestampNtzNanos(_) | Kind::TimestampLtzNanos(_) => {
+            return Err(SparkError::unsupported("nanosecond timestamp type"));
+        }
     }
     Ok(())
 }

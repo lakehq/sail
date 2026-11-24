@@ -79,6 +79,10 @@ rank: 1
 
 <FunctionSupportTable :data="data['scalar/variant']" />
 
+## Vector
+
+<FunctionSupportTable :data="data['scalar/vector']" />
+
 ## XML
 
 <FunctionSupportTable :data="data['scalar/xml']" />

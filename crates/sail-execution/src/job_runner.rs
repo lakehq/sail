@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -49,7 +51,15 @@ impl Default for LocalJobRunner {
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, ShuffleBackendKind::Flight)
+        explain_job_graph(
+            plan,
+            ShuffleBackendKind::Flight {
+                compression: crate::shuffle::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            },
+        )
     }
 
     async fn execute(

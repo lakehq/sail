@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::logical_plan::Extension;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{DeleteInfo, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN};
 use sail_logical_plan::row_level::{
-    RowLevelWriteNode, rewrite_row_level_target_condition, validate_row_level_internal_columns,
+    RowLevelEffectPlans, RowLevelWriteNode, rewrite_row_level_target_condition,
+    validate_row_level_internal_columns,
 };
 
 pub fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
@@ -21,7 +25,14 @@ pub fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         info.target_plan.schema(),
         &info.resolved_target_field_names,
     )?;
-    let node = RowLevelWriteNode::new_delete(info.target_plan, mode, condition, info.target);
+    let node = RowLevelWriteNode::new_delete(
+        info.target_plan,
+        mode,
+        RowLevelEffectPlans::default(),
+        condition,
+        info.target,
+    )
+    .with_output(CommandOutput::AffectedRows);
     Ok(LogicalPlan::Extension(Extension {
         node: std::sync::Arc::new(node),
     }))

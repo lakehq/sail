@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use crate::checkpoint::inspect_checkpoint_main_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
@@ -52,7 +42,8 @@ pub async fn list_log_segment_files(
     let store = log_store.object_store(None);
     let offset_version = read_last_checkpoint_version_from_store(store.clone())
         .await
-        .map(|v| v.min(max_version).saturating_sub(1))
+        .filter(|v| *v >= 0 && *v <= max_version)
+        .map(|v| v.saturating_sub(1).max(0))
         .unwrap_or(0);
 
     let (_, checkpoint_meta, commit_metas, compaction_metas) =
@@ -61,14 +52,19 @@ pub async fn list_log_segment_files(
     let mut checkpoint_files: Vec<String> = Vec::new();
     let mut sidecar_files: Vec<String> = Vec::new();
 
-    if let Some(meta) = checkpoint_meta {
-        let filename = meta.location.filename().unwrap_or_default().to_string();
-        checkpoint_files.push(filename.clone());
+    if let Some(checkpoint) = checkpoint_meta {
+        let checkpoint_metas = checkpoint.into_files();
+        for meta in &checkpoint_metas {
+            checkpoint_files.push(meta.location.filename().unwrap_or_default().to_string());
+        }
 
-        // Classic-named checkpoints may also follow the V2 format and refer to sidecars.
-        let sidecars = inspect_checkpoint_main_file(store, meta).await?;
-        for sidecar in sidecars {
-            sidecar_files.push(sidecar_log_path(&sidecar.path));
+        // Multi-part checkpoints are always V1. Single-file classic or UUID-named checkpoints may
+        // follow the V2 format and refer to sidecars.
+        if let [checkpoint_meta] = checkpoint_metas.as_slice() {
+            let sidecars = inspect_checkpoint_main_file(store, checkpoint_meta.clone()).await?;
+            for sidecar in sidecars {
+                sidecar_files.push(sidecar_log_path(&sidecar.path));
+            }
         }
     }
 

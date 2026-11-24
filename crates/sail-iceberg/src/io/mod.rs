@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -17,7 +7,14 @@ use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use url::Url;
 
-use crate::spec::{FormatVersion, Manifest, ManifestList};
+use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
+use crate::spec::{
+    FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec,
+};
+
+pub(crate) mod deletion_vector;
+#[cfg(test)]
+pub(crate) mod test_store;
 
 #[derive(Clone)]
 pub struct StoreContext {
@@ -66,8 +63,8 @@ impl StoreContext {
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
         self.validate_location(raw)?;
-        if let Some(url) = crate::utils::parse_absolute_url(raw) {
-            return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
+        if crate::utils::parse_absolute_url(raw).is_some() {
+            return Ok((&self.base, self.resolve_to_absolute_path(raw)?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw.strip_prefix('/').unwrap_or(raw);
@@ -82,6 +79,27 @@ impl StoreContext {
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
         self.validate_location(raw_path)?;
         if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
+            // Hadoop Path strings in manifests contain literal object keys, including
+            // spaces and Hive percent escapes. URL parsing would re-encode them.
+            if let Some((_, rest)) = raw_path.split_once(':') {
+                let path = match rest.strip_prefix("//") {
+                    Some(authority_path) => authority_path.split_once('/').map(|(_, path)| path),
+                    None => rest.strip_prefix('/'),
+                };
+                if let Some(path) = path {
+                    #[cfg(windows)]
+                    if url.scheme() == "file" {
+                        let path = url::Url::parse(&raw_path.replace('%', "%25"))
+                            .map_err(|e| DataFusionError::Plan(e.to_string()))?
+                            .to_file_path()
+                            .map_err(|_| {
+                                DataFusionError::Plan(format!("Invalid file path: {raw_path}"))
+                            })?;
+                        return Ok(ObjectPath::from_absolute_path(path)?);
+                    }
+                    return Ok(ObjectPath::parse(path)?);
+                }
+            }
             return crate::utils::url_to_object_path(&url);
         }
 
@@ -102,6 +120,14 @@ pub async fn load_manifest_list(
     store_ctx: &StoreContext,
     manifest_list_str: &str,
 ) -> Result<ManifestList, DataFusionError> {
+    load_manifest_list_with_version(store_ctx, manifest_list_str, FormatVersion::V3).await
+}
+
+pub async fn load_manifest_list_with_version(
+    store_ctx: &StoreContext,
+    manifest_list_str: &str,
+    format_version: FormatVersion,
+) -> Result<ManifestList, DataFusionError> {
     let (store_ref, path) = store_ctx.resolve(manifest_list_str)?;
     let bytes = store_ref
         .get(&path)
@@ -110,7 +136,7 @@ pub async fn load_manifest_list(
         .bytes()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ManifestList::parse_with_version(&bytes, FormatVersion::V2).map_err(DataFusionError::Execution)
+    ManifestList::parse_with_version(&bytes, format_version).map_err(DataFusionError::Execution)
 }
 
 pub async fn load_manifest(
@@ -126,6 +152,65 @@ pub async fn load_manifest(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
+}
+
+/// Build a [`DeleteFileIndex`] scoped to the current snapshot.
+pub(crate) async fn load_delete_file_index(
+    partition_specs: &[PartitionSpec],
+    format_version: FormatVersion,
+    store_ctx: &StoreContext,
+    manifest_list: &ManifestList,
+) -> datafusion_common::Result<DeleteFileIndex> {
+    let spec_map: std::collections::HashMap<i32, PartitionSpec> = partition_specs
+        .iter()
+        .map(|s| (s.spec_id(), s.clone()))
+        .collect();
+
+    let mut index = DeleteFileIndex::new();
+    for manifest_file in manifest_list
+        .entries()
+        .iter()
+        .filter(|mf| mf.content == ManifestContentType::Deletes)
+    {
+        let manifest_path_str = manifest_file.manifest_path.as_str();
+        let manifest = load_manifest(store_ctx, manifest_path_str).await?;
+        let partition_spec_id = manifest_file.partition_spec_id;
+        let is_unpartitioned = spec_map
+            .get(&partition_spec_id)
+            .map(|s| s.is_unpartitioned())
+            .unwrap_or(false);
+        let parent_seq = manifest_file.sequence_number;
+
+        for entry_ref in manifest.entries().iter() {
+            let entry = entry_ref.as_ref();
+            if !matches!(
+                entry.status,
+                ManifestStatus::Added | ManifestStatus::Existing
+            ) {
+                continue;
+            }
+            let mut df = entry.data_file.clone();
+            df.partition_spec_id = partition_spec_id;
+            let seq = entry.sequence_number.unwrap_or(parent_seq);
+            let file_ref = DeleteFileRef {
+                data_file: df,
+                data_sequence_number: seq,
+                partition_spec_id,
+                is_unpartitioned_spec: is_unpartitioned,
+            };
+            if file_ref.is_deletion_vector() && format_version != FormatVersion::V3 {
+                return datafusion_common::plan_err!(
+                    "Iceberg deletion vectors require format-version 3"
+                );
+            }
+            index.insert(file_ref).map_err(|e| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to index Iceberg delete file: {e}"
+                ))
+            })?;
+        }
+    }
+    Ok(index)
 }
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion_expr::{Expr, LogicalPlan, Projection};
@@ -14,6 +16,7 @@ use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::SeededRandomRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
@@ -129,6 +132,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;

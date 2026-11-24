@@ -1,12 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use rand::{RngExt, rng};
 
-use super::xorshift::SparkXorShiftRandom;
+use super::utils::xorshift::XorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -41,6 +45,10 @@ impl ScalarUDFImpl for Random {
         Ok(DataType::Float64)
     }
 
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Float64, false)))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args, number_rows, ..
@@ -61,12 +69,11 @@ impl ScalarUDFImpl for Random {
                 let seed = match scalar {
                     ScalarValue::Int64(Some(value)) => *value,
                     ScalarValue::UInt64(Some(value)) => *value as i64,
-                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(number_rows);
-                    }
+                    // A null seed is zero, as in Spark.
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => 0,
                     _ => return exec_err!("`random` expects an integer seed, got {scalar}"),
                 };
-                let mut rng = SparkXorShiftRandom::new(seed);
+                let mut rng = XorShiftRandom::new(seed);
                 let values = std::iter::repeat_with(|| rng.next_double()).take(number_rows);
                 let array = Float64Array::from_iter_values(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))
