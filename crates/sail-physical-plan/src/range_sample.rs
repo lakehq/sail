@@ -4,11 +4,12 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{AsArray, BooleanArray, RecordBatch, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, AsArray, BooleanArray, RecordBatch, UInt64Array};
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::compute::{filter_record_batch, interleave_record_batch, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type};
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr, SplitPoint};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -142,12 +143,14 @@ impl ExecutionPlan for RangePartitionSampleExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let reservation = MemoryConsumer::new(format!("RangePartitionSampleExec[{partition}]"))
+            .register(context.memory_pool());
         let input = self.input.execute(partition, context)?;
         let sample_size = self.sample_size;
         let schema = Arc::clone(&self.schema);
         let output = futures::stream::once(sample_partition(
             input,
-            sample_size,
+            Reservoir::new(sample_size, partition as u64, reservation),
             partition,
             Arc::clone(&schema),
         ))
@@ -159,11 +162,10 @@ impl ExecutionPlan for RangePartitionSampleExec {
 /// Reservoir sampling (Algorithm R) over one input partition.
 async fn sample_partition(
     mut input: SendableRecordBatchStream,
-    sample_size: usize,
+    mut reservoir: Reservoir,
     partition: usize,
     schema: SchemaRef,
 ) -> Result<Option<RecordBatch>> {
-    let mut reservoir = Reservoir::new(sample_size, partition as u64);
     while let Some(batch) = input.next().await {
         reservoir.insert(&batch?)?;
     }
@@ -350,6 +352,10 @@ pub(crate) fn resample_partition(
 /// Every stored batch is compacted, so the sample never holds the buffers of an
 /// input batch. The rows that are no longer in the sample are dropped when the
 /// stored rows exceed twice the sample size.
+///
+/// The stored batches and the slots are reserved in the memory pool before they are
+/// kept, so a sample of wide keys fails instead of going over the pool. The
+/// reservation ends when the sample is emitted.
 struct Reservoir {
     sample_size: usize,
     /// The seed only needs to keep the sample the same across runs on the same input.
@@ -360,20 +366,43 @@ struct Reservoir {
     batches: Vec<RecordBatch>,
     /// The number of rows in `batches`.
     stored_rows: usize,
+    /// The memory size of `batches`.
+    stored_bytes: usize,
     /// For each slot of the sample, the stored batch and the row in it.
     slots: Vec<(usize, usize)>,
+    /// The memory of `batches` and `slots`.
+    reservation: MemoryReservation,
 }
 
 impl Reservoir {
-    fn new(sample_size: usize, seed: u64) -> Self {
+    fn new(sample_size: usize, seed: u64, reservation: MemoryReservation) -> Self {
         Self {
             sample_size,
             rng: StdRng::seed_from_u64(seed),
             count: 0,
             batches: vec![],
             stored_rows: 0,
+            stored_bytes: 0,
             slots: vec![],
+            reservation,
         }
+    }
+
+    /// Sets the reservation to stored batches of `stored_bytes` bytes and `slots` slots.
+    fn reserve(&self, stored_bytes: usize, slots: usize) -> Result<()> {
+        self.reservation
+            .try_resize(stored_bytes + slots * size_of::<(usize, usize)>())
+    }
+
+    /// Makes room for one more slot. The slots grow by doubling, up to the sample size.
+    fn reserve_slot(&mut self) -> Result<()> {
+        if self.slots.len() < self.slots.capacity() {
+            return Ok(());
+        }
+        let capacity = (2 * self.slots.capacity()).max(16).min(self.sample_size);
+        self.reserve(self.stored_bytes, capacity)?;
+        self.slots.reserve_exact(capacity - self.slots.len());
+        self.reserve(self.stored_bytes, self.slots.capacity())
     }
 
     fn insert(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -383,6 +412,7 @@ impl Reservoir {
         for row in 0..batch.num_rows() {
             self.count += 1;
             let slot = if self.slots.len() < self.sample_size {
+                self.reserve_slot()?;
                 self.slots.push((next, 0));
                 self.slots.len() - 1
             } else {
@@ -397,9 +427,12 @@ impl Reservoir {
         if picked.is_empty() {
             return Ok(());
         }
-        let picked = take_record_batch(batch, &UInt64Array::from(picked))?;
+        let picked = compact_record_batch(take_record_batch(batch, &UInt64Array::from(picked))?)?;
+        let bytes = picked.get_array_memory_size();
+        self.reserve(self.stored_bytes + bytes, self.slots.capacity())?;
+        self.stored_bytes += bytes;
         self.stored_rows += picked.num_rows();
-        self.batches.push(compact_record_batch(picked)?);
+        self.batches.push(picked);
         if self.stored_rows > 2 * self.sample_size {
             self.compact()?;
         }
@@ -408,12 +441,20 @@ impl Reservoir {
 
     /// Keeps only the rows in the sample, in one batch in slot order.
     fn compact(&mut self) -> Result<()> {
-        let batches = self.batches.iter().collect::<Vec<_>>();
-        let sample = compact_record_batch(interleave_record_batch(&batches, &self.slots)?)?;
+        let sample = {
+            let batches = self.batches.iter().collect::<Vec<_>>();
+            compact_record_batch(interleave_record_batch(&batches, &self.slots)?)?
+        };
+        let bytes = sample.get_array_memory_size();
+        // The stored batches are still alive, so the sample is reserved on top of them.
+        self.reserve(self.stored_bytes + bytes, self.slots.capacity())?;
         self.stored_rows = sample.num_rows();
+        self.stored_bytes = bytes;
         self.batches = vec![sample];
-        self.slots = (0..self.stored_rows).map(|row| (0, row)).collect();
-        Ok(())
+        for (row, slot) in self.slots.iter_mut().enumerate() {
+            *slot = (0, row);
+        }
+        self.reserve(self.stored_bytes, self.slots.capacity())
     }
 
     /// Returns the sample in slot order, or `None` if no row was seen.
@@ -447,45 +488,38 @@ pub type RangeCandidate = (Vec<ScalarValue>, f32);
 /// by the total number of input rows. A partition with more rows than its first sample
 /// can cover at that fraction is imbalanced: Spark drops its first sample and samples
 /// its rows again with probability `fraction` (see [`RangePartitionResampleExec`]).
+///
+/// The candidates are reserved in the memory pool before they are kept, and so is
+/// each sample batch while its keys are read. The reservation counts each candidate
+/// and the values of its key, but not the spare capacity of the vectors.
 #[derive(Debug)]
 pub struct RangeSketch {
     candidates: Vec<RangeCandidate>,
     fraction: f64,
     imbalanced_partitions: Vec<usize>,
     resampled: bool,
+    reservation: MemoryReservation,
 }
 
 impl RangeSketch {
-    pub fn try_new(
-        batches: &[RecordBatch],
+    pub async fn try_new(
+        mut sample: SendableRecordBatchStream,
         num_keys: usize,
         sample_size: f64,
         partition_sample_size: usize,
+        pool: &Arc<dyn MemoryPool>,
     ) -> Result<Self> {
+        let reservation = MemoryConsumer::new("RangeSketch").register(pool);
         // Step 1: group the sampled keys by input partition, with the number of rows
         // the partition read.
         let mut partitions: BTreeMap<u64, (u64, Vec<Vec<ScalarValue>>)> = BTreeMap::new();
-        for batch in batches {
-            if batch.num_columns() != num_keys + 2 {
-                return internal_err!(
-                    "range partition sample has {} columns, expected {} keys and 2 more",
-                    batch.num_columns(),
-                    num_keys
-                );
-            }
-            let [partition, count] = [num_keys, num_keys + 1].map(|i| {
-                batch
-                    .column(i)
-                    .as_primitive_opt::<UInt64Type>()
-                    .ok_or_else(|| {
-                        internal_datafusion_err!("range partition sample column {i} must be UInt64")
-                    })
-            });
-            let (partition, count) = (partition?, count?);
+        while let Some(batch) = sample.next().await {
+            let batch = batch?;
+            let (partition, count) = partition_columns(&batch, num_keys)?;
+            let _batch = reserve_batch(&reservation, &batch)?;
             for row in 0..batch.num_rows() {
-                let key = (0..num_keys)
-                    .map(|column| ScalarValue::try_from_array(batch.column(column), row))
-                    .collect::<Result<Vec<_>>>()?;
+                let key = row_key(&batch.columns()[..num_keys], row)?;
+                reservation.try_grow(candidate_size(&key))?;
                 let entry = partitions
                     .entry(partition.value(row))
                     .or_insert_with(|| (count.value(row), vec![]));
@@ -494,14 +528,15 @@ impl RangeSketch {
         }
         // Step 2: split the partitions into balanced and imbalanced ones, as in Spark.
         let total = partitions.values().map(|(count, _)| *count).sum::<u64>();
-        let fraction = (sample_size / total.max(1) as f64).min(1.0);
+        let fraction = sample_fraction(total, sample_size);
         let mut candidates = vec![];
         let mut imbalanced_partitions = vec![];
         for (partition, (count, keys)) in partitions {
-            if fraction * count as f64 > partition_sample_size as f64 {
-                let partition =
-                    usize::try_from(partition).map_err(|e| internal_datafusion_err!("{e}"))?;
-                imbalanced_partitions.push(partition);
+            if is_imbalanced(fraction, count, partition_sample_size) {
+                imbalanced_partitions.push(partition_index(partition)?);
+                let bytes = keys.iter().map(|key| candidate_size(key)).sum();
+                drop(keys);
+                reservation.shrink(bytes);
             } else {
                 // Spark computes the weight in double precision and keeps it as a float.
                 let weight = (count as f64 / keys.len() as f64) as f32;
@@ -513,6 +548,7 @@ impl RangeSketch {
             fraction,
             imbalanced_partitions,
             resampled: false,
+            reservation,
         })
     }
 
@@ -528,15 +564,14 @@ impl RangeSketch {
 
     /// Adds the keys that [`RangePartitionResampleExec`] sampled again from the
     /// imbalanced partitions. Each key stands for `1 / fraction` input rows.
-    pub fn add_resample(&mut self, batches: &[RecordBatch]) -> Result<()> {
+    pub async fn add_resample(&mut self, mut resample: SendableRecordBatchStream) -> Result<()> {
         let weight = (1.0 / self.fraction) as f32;
-        for batch in batches {
+        while let Some(batch) = resample.next().await {
+            let batch = batch?;
+            let _batch = reserve_batch(&self.reservation, &batch)?;
             for row in 0..batch.num_rows() {
-                let key = batch
-                    .columns()
-                    .iter()
-                    .map(|column| ScalarValue::try_from_array(column, row))
-                    .collect::<Result<Vec<_>>>()?;
+                let key = row_key(batch.columns(), row)?;
+                self.reservation.try_grow(candidate_size(&key))?;
                 self.candidates.push((key, weight));
             }
         }
@@ -557,6 +592,92 @@ impl RangeSketch {
         }
         range_split_points(self.candidates, sort_options, partitions)
     }
+}
+
+/// The fraction and the imbalanced partitions of [`RangeSketch`] for the same sample,
+/// without keeping the sampled keys.
+pub async fn range_sample_imbalance(
+    mut sample: SendableRecordBatchStream,
+    num_keys: usize,
+    sample_size: f64,
+    partition_sample_size: usize,
+    pool: &Arc<dyn MemoryPool>,
+) -> Result<(f64, Vec<usize>)> {
+    let reservation = MemoryConsumer::new("RangeSampleImbalance").register(pool);
+    let mut counts: BTreeMap<u64, u64> = BTreeMap::new();
+    while let Some(batch) = sample.next().await {
+        let batch = batch?;
+        let (partition, count) = partition_columns(&batch, num_keys)?;
+        let _batch = reserve_batch(&reservation, &batch)?;
+        for (partition, count) in partition.values().iter().zip(count.values()) {
+            counts.entry(*partition).or_insert(*count);
+        }
+    }
+    let fraction = sample_fraction(counts.values().sum(), sample_size);
+    let partitions = counts
+        .into_iter()
+        .filter(|(_, count)| is_imbalanced(fraction, *count, partition_sample_size))
+        .map(|(partition, _)| partition_index(partition))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((fraction, partitions))
+}
+
+/// The input partition and the number of rows it read, for each row of the output of
+/// [`RangePartitionSampleExec`].
+fn partition_columns(batch: &RecordBatch, num_keys: usize) -> Result<(&UInt64Array, &UInt64Array)> {
+    if batch.num_columns() != num_keys + 2 {
+        return internal_err!(
+            "range partition sample has {} columns, expected {} keys and 2 more",
+            batch.num_columns(),
+            num_keys
+        );
+    }
+    let [partition, count] = [num_keys, num_keys + 1].map(|i| {
+        batch
+            .column(i)
+            .as_primitive_opt::<UInt64Type>()
+            .ok_or_else(|| {
+                internal_datafusion_err!("range partition sample column {i} must be UInt64")
+            })
+    });
+    Ok((partition?, count?))
+}
+
+/// The fraction of the input rows that the sample should have.
+fn sample_fraction(total: u64, sample_size: f64) -> f64 {
+    (sample_size / total.max(1) as f64).min(1.0)
+}
+
+/// Whether the first sample of a partition is too small for its rows at `fraction`.
+fn is_imbalanced(fraction: f64, count: u64, partition_sample_size: usize) -> bool {
+    fraction * count as f64 > partition_sample_size as f64
+}
+
+fn partition_index(partition: u64) -> Result<usize> {
+    usize::try_from(partition).map_err(|e| internal_datafusion_err!("{e}"))
+}
+
+/// Reserves the memory of a sample batch while its keys are read.
+fn reserve_batch(
+    reservation: &MemoryReservation,
+    batch: &RecordBatch,
+) -> Result<MemoryReservation> {
+    let batch_reservation = reservation.new_empty();
+    batch_reservation.try_grow(batch.get_array_memory_size())?;
+    Ok(batch_reservation)
+}
+
+/// The range key in the given row of the key columns.
+fn row_key(columns: &[ArrayRef], row: usize) -> Result<Vec<ScalarValue>> {
+    columns
+        .iter()
+        .map(|column| ScalarValue::try_from_array(column, row))
+        .collect()
+}
+
+/// The memory of a candidate: its slot in a vector and the values of its key.
+fn candidate_size(key: &[ScalarValue]) -> usize {
+    size_of::<RangeCandidate>() + key.iter().map(ScalarValue::size).sum::<usize>()
 }
 
 /// Picks range split points from weighted candidates, like
@@ -661,10 +782,13 @@ pub fn range_split_points(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use datafusion::arrow::array::{Array, Float64Array, StringViewArray};
+    use datafusion::arrow::array::{Array, Float64Array, StringArray, StringViewArray};
     use datafusion::arrow::datatypes::Float64Type;
+    use datafusion::execution::memory_pool::{GreedyMemoryPool, UnboundedMemoryPool};
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     use datafusion::physical_plan::test::TestMemoryExec;
     use datafusion::prelude::SessionContext;
+    use datafusion_common::DataFusionError;
 
     use super::*;
 
@@ -807,15 +931,36 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn test_sketch_weights_balanced_partitions_by_rows_read() {
+    fn stream(batches: Vec<RecordBatch>) -> SendableRecordBatchStream {
+        let schema = batches[0].schema();
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(batches.into_iter().map(Ok)),
+        ))
+    }
+
+    fn unbounded_pool() -> Arc<dyn MemoryPool> {
+        Arc::new(UnboundedMemoryPool::default())
+    }
+
+    async fn sketch(
+        batches: Vec<RecordBatch>,
+        sample_size: f64,
+        partition_sample_size: usize,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<RangeSketch> {
+        RangeSketch::try_new(stream(batches), 1, sample_size, partition_sample_size, pool).await
+    }
+
+    #[tokio::test]
+    async fn test_sketch_weights_balanced_partitions_by_rows_read() {
         // 20 rows in total for a sample of 10, so each partition is sampled at half.
         // Each partition kept 2 keys, which its budget of 2 covers.
-        let batches = [
+        let batches = vec![
             partition_sample(0, 4, vec![1, 2]),
             partition_sample(3, 16, vec![3, 4]),
         ];
-        let sketch = RangeSketch::try_new(&batches, 1, 10.0, 8).unwrap();
+        let sketch = sketch(batches, 10.0, 8, &unbounded_pool()).await.unwrap();
         assert_eq!(sketch.fraction(), 0.5);
         assert!(sketch.imbalanced_partitions().is_empty());
         let weights = sketch
@@ -826,21 +971,32 @@ mod tests {
         assert_eq!(weights, vec![2.0, 2.0, 8.0, 8.0]);
     }
 
-    #[test]
-    fn test_sketch_samples_imbalanced_partitions_again() {
+    #[tokio::test]
+    async fn test_sketch_samples_imbalanced_partitions_again() {
         // The only nonempty partition read 1,000,000 rows but kept 1 key. At the fraction
         // 40 / 1,000,000 it should give 40 keys, more than its budget of 1.
-        let batches = [partition_sample(7, 1_000_000, vec![5])];
-        let mut sketch = RangeSketch::try_new(&batches, 1, 40.0, 1).unwrap();
+        let batches = || vec![partition_sample(7, 1_000_000, vec![5])];
+        let pool = unbounded_pool();
+        let mut sketch = sketch(batches(), 40.0, 1, &pool).await.unwrap();
         assert_eq!(sketch.imbalanced_partitions(), &[7]);
         assert!(sketch.candidates.is_empty());
+        assert_eq!(
+            range_sample_imbalance(stream(batches()), 1, 40.0, 1, &pool)
+                .await
+                .unwrap(),
+            (sketch.fraction(), vec![7])
+        );
         assert!(
-            RangeSketch::try_new(&batches, 1, 40.0, 1)
+            self::sketch(batches(), 40.0, 1, &pool)
+                .await
                 .unwrap()
                 .split_points(&[ASC], 2)
                 .is_err()
         );
-        sketch.add_resample(&[key_batch(vec![1, 2, 3, 4])]).unwrap();
+        sketch
+            .add_resample(stream(vec![key_batch(vec![1, 2, 3, 4])]))
+            .await
+            .unwrap();
         let weights = sketch
             .candidates
             .iter()
@@ -1035,5 +1191,120 @@ mod tests {
             held_bytes <= kept_bytes,
             "holds {held_bytes} bytes of strings for {kept_bytes} bytes of kept keys"
         );
+    }
+
+    /// 2,000 keys of 8 KiB each, about 16 MiB, in batches of 100 rows.
+    fn wide_keys() -> Vec<RecordBatch> {
+        (0..20)
+            .map(|b| {
+                let keys = (0..100).map(|r| format!("{:x<8192}", b * 100 + r));
+                RecordBatch::try_new(
+                    key_schema(DataType::Utf8),
+                    vec![Arc::new(StringArray::from_iter_values(keys))],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    /// The output of the first sample for the keys of [`wide_keys`] in one partition.
+    fn wide_sample() -> Vec<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new(PARTITION_COLUMN, DataType::UInt64, false),
+            Field::new(COUNT_COLUMN, DataType::UInt64, false),
+        ]));
+        wide_keys()
+            .into_iter()
+            .map(|batch| {
+                let rows = batch.num_rows();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::clone(batch.column(0)),
+                        Arc::new(UInt64Array::from(vec![0; rows])),
+                        Arc::new(UInt64Array::from(vec![2_000; rows])),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    const SMALL_POOL: usize = 4 * 1024 * 1024;
+    const LARGE_POOL: usize = 256 * 1024 * 1024;
+
+    async fn run_sample_in_pool(pool: &Arc<dyn MemoryPool>) -> Result<Vec<RecordBatch>> {
+        let input = TestMemoryExec::try_new_exec(&[wide_keys()], key_schema(DataType::Utf8), None)?;
+        // Every key fits in the reservoir, as for 24 partitions with Spark's defaults.
+        let exec = Arc::new(RangePartitionSampleExec::try_new(input, 7_200)?);
+        let context = Arc::new(
+            TaskContext::default().with_runtime(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(Arc::clone(pool))
+                    .build_arc()?,
+            ),
+        );
+        exec.execute(0, context)?.try_collect::<Vec<_>>().await
+    }
+
+    #[tokio::test]
+    async fn test_sample_fails_when_the_pool_cannot_hold_the_reservoir() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(SMALL_POOL));
+        let error = run_sample_in_pool(&pool).await.unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "{error}"
+        );
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sample_reservation_ends_with_the_sample() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(LARGE_POOL));
+        let output = run_sample_in_pool(&pool).await.unwrap();
+        assert_eq!(output[0].num_rows(), 2_000);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sketch_fails_when_the_pool_cannot_hold_the_candidates() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(SMALL_POOL));
+        let error = sketch(wide_sample(), 2_400.0, 7_200, &pool)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "{error}"
+        );
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sketch_reserves_the_candidates_until_the_split_points() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(LARGE_POOL));
+        let sketch = sketch(wide_sample(), 2_400.0, 7_200, &pool).await.unwrap();
+        assert_eq!(sketch.candidates.len(), 2_000);
+        assert!(pool.reserved() >= 2_000 * 8_192, "{}", pool.reserved());
+        let split_points = sketch.split_points(&[ASC], 24).unwrap();
+        assert_eq!(split_points.len(), 23);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_resample_reserves_its_keys() {
+        // The first sample keeps 1 key of a partition that read 2,000 rows, so the
+        // partition is sampled again and its wide keys go to the candidates.
+        let batches = vec![partition_sample(0, 2_000, vec![1])];
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(SMALL_POOL));
+        let mut sketch = sketch(batches, 2_400.0, 1, &pool).await.unwrap();
+        assert_eq!(sketch.imbalanced_partitions(), &[0]);
+        let error = sketch.add_resample(stream(wide_keys())).await.unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "{error}"
+        );
+        drop(sketch);
+        assert_eq!(pool.reserved(), 0);
     }
 }

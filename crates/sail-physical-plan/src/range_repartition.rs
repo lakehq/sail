@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
     LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
@@ -20,7 +20,7 @@ use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, apply_expression_roots, collect,
+    PlanProperties, apply_expression_roots, execute_stream,
 };
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::TryStreamExt;
@@ -71,13 +71,19 @@ impl RangeSample {
     }
 
     /// The candidates for split points from the output of the first sample.
-    pub fn sketch(&self, batches: &[RecordBatch]) -> Result<RangeSketch> {
+    pub async fn sketch(
+        &self,
+        sample: SendableRecordBatchStream,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<RangeSketch> {
         RangeSketch::try_new(
-            batches,
+            sample,
             self.sort_options.len(),
             self.sample_size,
             self.plan.sample_size(),
+            pool,
         )
+        .await
     }
 
     /// The plan that samples the imbalanced partitions of the sketch again, if any.
@@ -122,10 +128,13 @@ impl RangeSample {
     }
 
     async fn run(&self, context: Arc<TaskContext>) -> Result<Vec<SplitPoint>> {
-        let batches = collect(self.plan(), Arc::clone(&context)).await?;
-        let mut sketch = self.sketch(&batches)?;
+        let pool = context.memory_pool();
+        let sample = execute_stream(self.plan(), Arc::clone(&context))?;
+        let mut sketch = self.sketch(sample, pool).await?;
         if let Some(resample) = self.resample_plan(&sketch)? {
-            sketch.add_resample(&collect(resample, context).await?)?;
+            sketch
+                .add_resample(execute_stream(resample, Arc::clone(&context))?)
+                .await?;
         }
         sketch.split_points(&self.sort_options, self.num_partitions)
     }
@@ -397,7 +406,7 @@ async fn repartition_by_sample(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use datafusion::arrow::array::{AsArray, Int64Array};
+    use datafusion::arrow::array::{AsArray, Int64Array, RecordBatch};
     use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{AcrossPartitions, ConstExpr, EquivalenceProperties};

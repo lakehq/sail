@@ -15,6 +15,7 @@ use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt64Array, new_empty_arr
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
     EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint,
@@ -24,12 +25,12 @@ use datafusion::physical_plan::repartition::RangeExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, apply_expression_roots, collect,
+    PlanProperties, apply_expression_roots, collect, execute_stream,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use futures::{StreamExt, TryStreamExt};
 
-use crate::range_sample::{RangeSketch, resample_partition};
+use crate::range_sample::{RangeSketch, range_sample_imbalance, resample_partition};
 
 /// The column of [`RangeChannelExec`] with the output channel of each row.
 pub const CHANNEL_COLUMN: &str = "__channel";
@@ -49,13 +50,35 @@ pub struct RangeSampleOptions {
 
 impl RangeSampleOptions {
     /// The candidates for split points from the output of the first sample.
-    fn sketch(&self, batches: &[RecordBatch]) -> Result<RangeSketch> {
+    async fn sketch(
+        &self,
+        sample: SendableRecordBatchStream,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<RangeSketch> {
         RangeSketch::try_new(
-            batches,
+            sample,
             self.sort_options.len(),
             self.sample_size,
             self.partition_sample_size,
+            pool,
         )
+        .await
+    }
+
+    /// The fraction and the imbalanced partitions from the output of the first sample.
+    async fn imbalance(
+        &self,
+        sample: SendableRecordBatchStream,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<(f64, Vec<usize>)> {
+        range_sample_imbalance(
+            sample,
+            self.sort_options.len(),
+            self.sample_size,
+            self.partition_sample_size,
+            pool,
+        )
+        .await
     }
 
     /// Checks that the plan emits the output of the first sample: the range keys, the
@@ -204,12 +227,13 @@ impl ExecutionPlan for RangeSplitPointsExec {
         let schema = self.schema();
         let output_schema = Arc::clone(&schema);
         let output = futures::stream::once(async move {
-            let mut sketch = options.sketch(&collect(sample, Arc::clone(&context)).await?)?;
+            let pool = context.memory_pool();
+            let sample = execute_stream(sample, Arc::clone(&context))?;
+            let mut sketch = options.sketch(sample, pool).await?;
             // The resample is empty unless the first sample has imbalanced partitions.
-            let resample = collect(resample, context).await?;
-            if !sketch.imbalanced_partitions().is_empty() {
-                sketch.add_resample(&resample)?;
-            }
+            sketch
+                .add_resample(execute_stream(resample, Arc::clone(&context))?)
+                .await?;
             let split_points =
                 sketch.split_points(&options.sort_options, options.num_partitions)?;
             split_points_batch(&split_points, schema)
@@ -337,8 +361,8 @@ impl ExecutionPlan for RangeResampleExec {
         let options = self.options.clone();
         let schema = self.schema();
         let output = futures::stream::once(async move {
-            let sketch = options.sketch(&collect(sample, Arc::clone(&context)).await?)?;
-            let imbalanced = sketch.imbalanced_partitions();
+            let sample = execute_stream(sample, Arc::clone(&context))?;
+            let (fraction, imbalanced) = options.imbalance(sample, context.memory_pool()).await?;
             if imbalanced.is_empty() {
                 let empty: SendableRecordBatchStream =
                     Box::pin(EmptyRecordBatchStream::new(input.schema()));
@@ -347,7 +371,7 @@ impl ExecutionPlan for RangeResampleExec {
             Ok(resample_partition(
                 input.execute(partition, context)?,
                 partition,
-                sketch.fraction(),
+                fraction,
                 imbalanced.contains(&partition),
             ))
         })
@@ -702,8 +726,13 @@ mod tests {
         };
         let ctx = SessionContext::new();
 
+        let task = ctx.task_ctx();
         let mut sketch = options
-            .sketch(&collect(sample(), ctx.task_ctx()).await.unwrap())
+            .sketch(
+                execute_stream(sample(), Arc::clone(&task)).unwrap(),
+                task.memory_pool(),
+            )
+            .await
             .unwrap();
         let resampled = !sketch.imbalanced_partitions().is_empty();
         if resampled {
@@ -713,8 +742,8 @@ mod tests {
                 sketch.imbalanced_partitions().to_vec(),
             )
             .unwrap();
-            let batches = collect(Arc::new(resample), ctx.task_ctx()).await.unwrap();
-            sketch.add_resample(&batches).unwrap();
+            let resample = execute_stream(Arc::new(resample), Arc::clone(&task)).unwrap();
+            sketch.add_resample(resample).await.unwrap();
         }
         let local = sketch
             .split_points(&options.sort_options, options.num_partitions)
