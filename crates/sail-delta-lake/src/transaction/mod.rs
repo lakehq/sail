@@ -740,6 +740,30 @@ async fn previous_effective_commit_timestamp(
     .map(Some)
 }
 
+/// Returns the actions of an attempt to commit the actions at the version, on top of the
+/// read snapshot, which is the latest snapshot of the table.
+async fn finalize_attempt(
+    log_store: &LogStoreRef,
+    actions: &[CommitAction],
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    version: i64,
+    operation: &DeltaOperation,
+) -> DeltaResult<Vec<CommitAction>> {
+    let previous_commit_timestamp =
+        previous_effective_commit_timestamp(log_store, read_snapshot).await?;
+    let mut finalized_actions = finalize_attempt_actions(
+        actions,
+        read_snapshot,
+        version,
+        previous_commit_timestamp,
+        Utc::now().timestamp_millis(),
+    )?;
+    row_tracking::assign_row_tracking(&mut finalized_actions, read_snapshot, version, operation)?;
+    clustering::finalize_clustering(&mut finalized_actions, read_snapshot, operation)?;
+    validate_effective_commit_target(read_snapshot, &finalized_actions, operation)?;
+    Ok(finalized_actions)
+}
+
 fn finalized_commit_info(actions: &mut [CommitAction]) -> &mut crate::spec::CommitInfo {
     match actions.first_mut() {
         Some(CommitAction::CommitInfo(info)) => info,
@@ -1511,32 +1535,14 @@ impl std::future::IntoFuture for PreparedCommit {
                         "version {version} of a catalog-managed Delta table must be committed to the catalog"
                     )));
                 }
-                let previous_commit_timestamp =
-                    previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
-                        .await?;
-                let mut finalized_actions = finalize_attempt_actions(
+                let finalized_actions = finalize_attempt(
+                    &this.log_store,
                     &local_actions,
                     read_snapshot.as_ref(),
                     version,
-                    previous_commit_timestamp,
-                    Utc::now().timestamp_millis(),
-                )?;
-                row_tracking::assign_row_tracking(
-                    &mut finalized_actions,
-                    read_snapshot.as_ref(),
-                    version,
                     &this.data.operation,
-                )?;
-                clustering::finalize_clustering(
-                    &mut finalized_actions,
-                    read_snapshot.as_ref(),
-                    &this.data.operation,
-                )?;
-                validate_effective_commit_target(
-                    read_snapshot.as_ref(),
-                    &finalized_actions,
-                    &this.data.operation,
-                )?;
+                )
+                .await?;
                 let commit_or_bytes =
                     prepare_commit_or_bytes(&this.log_store, this.operation_id, &finalized_actions)
                         .await?;
@@ -1634,32 +1640,14 @@ impl PreparedCommit {
             };
 
             let version = latest_version.map(|v| v + 1).unwrap_or(0);
-            let previous_commit_timestamp =
-                previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
-                    .await?;
-            let mut finalized_actions = finalize_attempt_actions(
+            let mut finalized_actions = finalize_attempt(
+                &this.log_store,
                 &local_actions,
                 read_snapshot.as_ref(),
                 version,
-                previous_commit_timestamp,
-                Utc::now().timestamp_millis(),
-            )?;
-            row_tracking::assign_row_tracking(
-                &mut finalized_actions,
-                read_snapshot.as_ref(),
-                version,
                 &this.data.operation,
-            )?;
-            clustering::finalize_clustering(
-                &mut finalized_actions,
-                read_snapshot.as_ref(),
-                &this.data.operation,
-            )?;
-            validate_effective_commit_target(
-                read_snapshot.as_ref(),
-                &finalized_actions,
-                &this.data.operation,
-            )?;
+            )
+            .await?;
 
             let txn_id = Uuid::new_v4().to_string();
             let in_commit_timestamp = {
