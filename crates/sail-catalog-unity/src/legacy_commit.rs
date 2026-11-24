@@ -5,8 +5,9 @@
 
 use std::collections::HashSet;
 
-use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::delta::DeltaMetadataInfo;
+
+use crate::data_type::flatten_spark_field_metadata;
 
 type JsonObject = serde_json::Map<String, serde_json::Value>;
 
@@ -142,7 +143,7 @@ fn struct_field_type_json(field: &Field) -> Result<serde_json::Value, String> {
         "name": field.name,
         "type": spark_data_type_json(field.data_type)?,
         "nullable": field.nullable,
-        "metadata": field_metadata(field.metadata)?,
+        "metadata": flatten_spark_field_metadata(field.metadata)?,
     }))
 }
 
@@ -334,29 +335,6 @@ fn complex_type(data_type: &serde_json::Value) -> Result<ComplexType<'_>, String
         }),
         _ => Err(invalid()),
     }
-}
-
-/// Returns the metadata of a field, where the entries of the Spark field metadata are
-/// entries of the field metadata rather than the JSON object under a single key.
-fn field_metadata(metadata: &JsonObject) -> Result<serde_json::Value, String> {
-    let mut out = match metadata.get(SPARK_METADATA_JSON_KEY) {
-        Some(serde_json::Value::String(value)) => serde_json::from_str(value)
-            .map_err(|e| format!("{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}"))?,
-        Some(value) => value.clone(),
-        None => serde_json::Value::Object(JsonObject::new()),
-    };
-    let serde_json::Value::Object(out) = &mut out else {
-        return Err(format!(
-            "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {out:?}",
-        ));
-    };
-    for (key, value) in metadata {
-        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
-            continue;
-        }
-        out.entry(key.clone()).or_insert_with(|| value.clone());
-    }
-    Ok(serde_json::Value::Object(std::mem::take(out)))
 }
 
 #[cfg(test)]

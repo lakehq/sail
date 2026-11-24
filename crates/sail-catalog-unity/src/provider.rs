@@ -19,7 +19,6 @@ use sail_catalog::provider::{
     LakeSourceCreateMetadataMode, Namespace, PartitionTransform, StagedTableCreate,
 };
 use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
-use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaCatalogCommit,
     DeltaCatalogManaged, DeltaCatalogState, DeltaCommitActions, DeltaCreatedVersion,
@@ -33,7 +32,8 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::data_type::{
-    data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
+    data_type_to_unity_type, flatten_spark_field_metadata, unity_struct_field_type_json,
+    unity_type_to_data_type,
 };
 use crate::r#gen::ApiClient;
 use crate::legacy_commit::legacy_commit_metadata;
@@ -2203,19 +2203,8 @@ fn delta_update_table_request(
         (None, _) => {}
     }
     if let Some(protocol) = protocol.filter(|protocol| base_protocol.as_ref() != Some(protocol)) {
-        let DeltaProtocolInfo {
-            min_reader_version,
-            min_writer_version,
-            reader_features,
-            writer_features,
-        } = protocol;
         updates.push(delta_gen::DeltaTableUpdate::SetProtocol {
-            protocol: Box::new(delta_gen::DeltaProtocol {
-                min_reader_version,
-                min_writer_version,
-                reader_features,
-                writer_features,
-            }),
+            protocol: Box::new(delta_protocol(protocol)),
         });
     }
     delta_domain_metadata_updates(&domain_metadata, &mut updates)?;
@@ -2232,17 +2221,12 @@ fn delta_metadata_updates(
     metadata: &DeltaMetadataInfo,
     updates: &mut Vec<delta_gen::DeltaTableUpdate>,
 ) -> CatalogResult<()> {
-    let schema = |metadata: &DeltaMetadataInfo| {
-        serde_json::from_str::<serde_json::Value>(&metadata.schema_string).map_err(|_| {
-            CatalogError::InvalidArgument(
-                "Invalid Delta commit payload: missing schema".to_string(),
-            )
-        })
-    };
-    let new_schema = schema(metadata)?;
-    if schema(base)? != new_schema {
+    let invalid =
+        |e: String| CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"));
+    let new_schema = delta_schema(metadata).map_err(invalid)?;
+    if delta_schema(base).map_err(invalid)? != new_schema {
         updates.push(delta_gen::DeltaTableUpdate::SetColumns {
-            columns: Box::new(delta_schema_to_wire_type(&new_schema)),
+            columns: Box::new(delta_schema_to_wire_type(&new_schema).map_err(invalid)?),
         });
     }
     if base.partition_columns != metadata.partition_columns {
@@ -2371,13 +2355,14 @@ fn delta_create_table_request(
         row_id_high_water_mark,
         clustering_columns,
     } = create_commit;
-    let schema: serde_json::Value = serde_json::from_str(&metadata.schema_string).map_err(|e| {
+    let invalid = |e: String| {
         CatalogError::Internal(format!(
-            "Invalid Delta table version 0 for Unity Catalog: invalid schema: {e}"
+            "Invalid Delta table version 0 for Unity Catalog: {e}"
         ))
-    })?;
+    };
+    let schema = delta_schema(metadata).map_err(invalid)?;
     Ok(delta_gen::DeltaCreateTableRequest {
-        columns: Box::new(delta_schema_to_wire_type(&schema)),
+        columns: Box::new(delta_schema_to_wire_type(&schema).map_err(invalid)?),
         comment: metadata.description.clone().or(comment),
         // The catalog keeps the row tracking domain of the table, which version 0 has when
         // it adds data to a table with row tracking, and the clustering domain, which
@@ -2406,89 +2391,87 @@ fn delta_create_table_request(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        protocol: Box::new(delta_gen::DeltaProtocol {
-            min_reader_version: protocol.min_reader_version,
-            min_writer_version: protocol.min_writer_version,
-            reader_features: protocol.reader_features.clone(),
-            writer_features: protocol.writer_features.clone(),
-        }),
+        protocol: Box::new(delta_protocol(protocol.clone())),
         table_type: Box::new(delta_gen::DeltaTableType::Managed),
         uniform: None,
     })
 }
 
-/// Converts a data type in the schema of the Delta log to its form in the Delta REST API,
-/// where the properties of array types and map types are named differently.
-fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> serde_json::Value {
-    let Some(object) = data_type.as_object() else {
-        return data_type.clone();
-    };
-    let convert = |key: &str| delta_schema_to_wire_type(&data_type[key]);
-    match object.get("type").and_then(serde_json::Value::as_str) {
-        Some("struct") => {
-            let fields = object
-                .get("fields")
-                .and_then(serde_json::Value::as_array)
-                .map(|fields| {
-                    fields
-                        .iter()
-                        .map(|field| {
-                            let mut field = field.clone();
-                            if let Some(field) = field.as_object_mut() {
-                                if let Some(data_type) = field.get_mut("type") {
-                                    *data_type = delta_schema_to_wire_type(data_type);
-                                }
-                                let metadata = field
-                                    .entry("metadata")
-                                    .or_insert_with(|| serde_json::json!({}));
-                                delta_field_metadata_to_wire(metadata);
-                            }
-                            field
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            serde_json::json!({ "type": "struct", "fields": fields })
-        }
-        Some("array") => serde_json::json!({
-            "type": "array",
-            "element-type": convert("elementType"),
-            "contains-null": data_type["containsNull"],
-        }),
-        Some("map") => serde_json::json!({
-            "type": "map",
-            "key-type": convert("keyType"),
-            "value-type": convert("valueType"),
-            "value-contains-null": data_type["valueContainsNull"],
-        }),
-        _ => data_type.clone(),
+/// Returns the protocol of a Delta table in the form of the Delta REST API.
+fn delta_protocol(protocol: DeltaProtocolInfo) -> delta_gen::DeltaProtocol {
+    let DeltaProtocolInfo {
+        min_reader_version,
+        min_writer_version,
+        reader_features,
+        writer_features,
+    } = protocol;
+    delta_gen::DeltaProtocol {
+        min_reader_version,
+        min_writer_version,
+        reader_features,
+        writer_features,
     }
 }
 
-/// Converts the metadata of a field in the schema of the Delta log to the metadata of
-/// the field in the catalog, where the entries of the Spark field metadata are entries
-/// of the field metadata rather than the JSON object under a single key.
-/// This is how the metadata is sent to the servers without the Delta REST API as well.
-fn delta_field_metadata_to_wire(metadata: &mut serde_json::Value) {
-    let Some(object) = metadata.as_object_mut() else {
-        return;
+/// Returns the schema of a metadata action of the Delta log.
+fn delta_schema(metadata: &DeltaMetadataInfo) -> Result<serde_json::Value, String> {
+    serde_json::from_str(&metadata.schema_string).map_err(|e| format!("invalid schema: {e}"))
+}
+
+/// Converts a data type in the schema of the Delta log to its form in the Delta REST API,
+/// where the properties of array types and map types are named differently, and the
+/// entries of the Spark field metadata are entries of the field metadata rather than the
+/// JSON object under a single key. This is how the field metadata is sent to the servers
+/// without the Delta REST API as well.
+fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let Some(object) = data_type.as_object() else {
+        return Ok(data_type.clone());
     };
-    let spark = match object.get(SPARK_METADATA_JSON_KEY) {
-        Some(serde_json::Value::Object(spark)) => spark.clone(),
-        Some(serde_json::Value::String(spark)) => {
-            match serde_json::from_str::<serde_json::Value>(spark) {
-                Ok(serde_json::Value::Object(spark)) => spark,
-                _ => return,
+    let convert = |key: &str| delta_schema_to_wire_type(&data_type[key]);
+    Ok(
+        match object.get("type").and_then(serde_json::Value::as_str) {
+            Some("struct") => {
+                let fields = object
+                    .get("fields")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .map(|field| {
+                                let mut field = field.clone();
+                                if let Some(field) = field.as_object_mut() {
+                                    if let Some(data_type) = field.get_mut("type") {
+                                        *data_type = delta_schema_to_wire_type(data_type)?;
+                                    }
+                                    let metadata = field
+                                        .entry("metadata")
+                                        .or_insert_with(|| serde_json::json!({}));
+                                    if let Some(object) = metadata.as_object_mut() {
+                                        *object = flatten_spark_field_metadata(object)?;
+                                    }
+                                }
+                                Ok(field)
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                serde_json::json!({ "type": "struct", "fields": fields })
             }
-        }
-        Some(_) => return,
-        None => serde_json::Map::new(),
-    };
-    object.remove(SPARK_METADATA_JSON_KEY);
-    object.remove(SAIL_SPARK_UDT_METADATA_KEY);
-    for (key, value) in spark {
-        object.insert(key, value);
-    }
+            Some("array") => serde_json::json!({
+                "type": "array",
+                "element-type": convert("elementType")?,
+                "contains-null": data_type["containsNull"],
+            }),
+            Some("map") => serde_json::json!({
+                "type": "map",
+                "key-type": convert("keyType")?,
+                "value-type": convert("valueType")?,
+                "value-contains-null": data_type["valueContainsNull"],
+            }),
+            _ => data_type.clone(),
+        },
+    )
 }
 
 /// Returns the storage location in the form used to compare locations.
@@ -5229,7 +5212,7 @@ mod tests {
             ]
         });
         assert_eq!(
-            delta_schema_to_wire_type(&schema),
+            delta_schema_to_wire_type(&schema).unwrap(),
             serde_json::json!({
                 "type": "struct",
                 "fields": [
@@ -5262,6 +5245,80 @@ mod tests {
         );
     }
 
+    /// The Spark field metadata that cannot be sent as entries of the field metadata is an
+    /// error, as it is for the legacy API, so the keys that only Sail uses are never sent.
+    #[test]
+    fn test_delta_schema_to_wire_type_invalid_spark_field_metadata() {
+        for (metadata, expected) in [
+            (
+                serde_json::json!({"SPARK::metadata::json": "{"}),
+                "contains invalid JSON",
+            ),
+            (
+                serde_json::json!({"SPARK::metadata::json": "[]"}),
+                "must contain a JSON object",
+            ),
+            (
+                serde_json::json!({"SPARK::metadata::json": 1}),
+                "must contain a JSON object",
+            ),
+        ] {
+            let field = serde_json::json!({
+                "name": "c",
+                "type": "long",
+                "nullable": true,
+                "metadata": metadata,
+            });
+            let nested = serde_json::json!({
+                "type": "struct",
+                "fields": [{
+                    "name": "items",
+                    "type": {
+                        "type": "array",
+                        "elementType": {"type": "struct", "fields": [field]},
+                        "containsNull": true
+                    },
+                    "nullable": true,
+                    "metadata": {}
+                }]
+            });
+            let result = delta_schema_to_wire_type(&nested);
+            assert!(
+                matches!(&result, Err(error) if error.contains(expected)),
+                "{result:?}"
+            );
+            let metadata = |schema: &serde_json::Value| DeltaMetadataInfo {
+                schema_string: schema.to_string(),
+                partition_columns: vec![],
+                configuration: Default::default(),
+                description: None,
+            };
+            let result = delta_metadata_updates(
+                &metadata(&serde_json::json!({"type": "struct", "fields": []})),
+                &metadata(&nested),
+                &mut vec![],
+            );
+            assert!(
+                matches!(&result, Err(CatalogError::InvalidArgument(error))
+                    if error.starts_with("Invalid Delta commit payload: ")
+                        && error.contains(expected)),
+                "{result:?}"
+            );
+        }
+        let invalid = DeltaMetadataInfo {
+            schema_string: "{".to_string(),
+            partition_columns: vec![],
+            configuration: Default::default(),
+            description: None,
+        };
+        let result = delta_metadata_updates(&invalid, &invalid, &mut vec![]);
+        assert!(
+            matches!(&result, Err(CatalogError::InvalidArgument(error))
+                if error.starts_with("Invalid Delta commit payload: invalid schema: ")),
+            "{result:?}"
+        );
+    }
+
     /// Each type of a column in the Delta log has its form in the Delta REST API, where the
     /// properties of array types and map types are named differently at any depth.
     #[test]
@@ -5286,7 +5343,11 @@ mod tests {
             "variant",
         ] {
             let schema = struct_of(vec![field("c", serde_json::json!(primitive))]);
-            assert_eq!(delta_schema_to_wire_type(&schema), schema, "{primitive}");
+            assert_eq!(
+                delta_schema_to_wire_type(&schema).unwrap(),
+                schema,
+                "{primitive}"
+            );
         }
 
         let schema = struct_of(vec![
@@ -5336,7 +5397,7 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            delta_schema_to_wire_type(&schema),
+            delta_schema_to_wire_type(&schema).unwrap(),
             struct_of(vec![
                 field(
                     "m",

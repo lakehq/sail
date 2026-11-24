@@ -54,33 +54,39 @@ fn spark_struct_field_json(field: &Field, variant_type: bool) -> CatalogResult<s
 fn spark_field_metadata_json(
     metadata: &HashMap<String, String>,
 ) -> CatalogResult<serde_json::Value> {
-    let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
-        match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(serde_json::Value::Object(object)) => object,
-            Ok(other) => {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
-                )));
-            }
-            Err(e) => {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
-                )));
-            }
-        }
-    } else {
-        serde_json::Map::new()
-    };
+    let metadata = metadata
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    flatten_spark_field_metadata(&metadata)
+        .map(serde_json::Value::Object)
+        .map_err(CatalogError::InvalidArgument)
+}
 
+/// Returns the metadata of a field in the catalog, where the entries of the Spark field
+/// metadata are entries of the field metadata rather than the JSON object under a single
+/// key. The keys that only Sail uses are not part of it.
+pub(crate) fn flatten_spark_field_metadata(
+    metadata: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut out = match metadata.get(SPARK_METADATA_JSON_KEY) {
+        Some(serde_json::Value::String(value)) => serde_json::from_str(value)
+            .map_err(|e| format!("{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}"))?,
+        Some(value) => value.clone(),
+        None => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    let serde_json::Value::Object(out) = &mut out else {
+        return Err(format!(
+            "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {out:?}",
+        ));
+    };
     for (key, value) in metadata {
         if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
             continue;
         }
-        out.entry(key.clone())
-            .or_insert_with(|| serde_json::Value::String(value.clone()));
+        out.entry(key.clone()).or_insert_with(|| value.clone());
     }
-
-    Ok(serde_json::Value::Object(out))
+    Ok(std::mem::take(out))
 }
 
 fn spark_data_type_json(
