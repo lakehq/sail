@@ -14,6 +14,15 @@ use crate::spec::protocol::TableFeature;
 
 pub type DeltaResult<T> = Result<T, DeltaError>;
 
+/// Returns the names of the table features as the Delta protocol declares them.
+fn table_feature_names(features: &[TableFeature]) -> String {
+    features
+        .iter()
+        .map(TableFeature::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Conflict during commit due to concurrent changes.
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
@@ -96,7 +105,7 @@ pub enum TransactionError {
     )]
     DeltaTableAppendOnly,
 
-    #[error("Unsupported table features required: {0:?}")]
+    #[error("Unsupported table features required: [{}]", table_feature_names(.0))]
     UnsupportedTableFeatures(Vec<TableFeature>),
 
     #[error("Invalid Delta protocol: {0}")]

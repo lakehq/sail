@@ -6,6 +6,7 @@
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::str::FromStr;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
@@ -15,7 +16,7 @@ use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider,
     ImdsManagedIdentityOAuthProvider, WorkloadIdentityOAuthProvider, WorkspaceOAuthProvider,
 };
-use crate::provider::DEFAULT_URI;
+use crate::provider::{DEFAULT_URI, WORKSPACE_API_PATH};
 use crate::token::TokenCache;
 
 pub enum UnityCatalogConfigKey {
@@ -118,6 +119,14 @@ pub enum UnityCatalogConfigKey {
     /// Supported keys:
     /// - `unity_allow_http_url`
     AllowHttpUrl,
+
+    /// The value of the `User-Agent` header of the requests to the catalog
+    /// and of the requests for an access token
+    ///
+    /// Supported keys:
+    /// - `unity_user_agent`
+    /// - `user_agent`
+    UserAgent,
 }
 
 impl FromStr for UnityCatalogConfigKey {
@@ -177,6 +186,9 @@ impl FromStr for UnityCatalogConfigKey {
             | "unity_allow_http_url"
             | "uc_allow_http_url"
             | "databricks_allow_http_url" => Ok(UnityCatalogConfigKey::AllowHttpUrl),
+            "user_agent" | "unity_user_agent" | "uc_user_agent" | "databricks_user_agent" => {
+                Ok(UnityCatalogConfigKey::UserAgent)
+            }
             _ => Err(CatalogError::InvalidArgument(format!(
                 "Unknown UnityCatalogConfigKey: {s}",
             ))),
@@ -199,6 +211,7 @@ impl AsRef<str> for UnityCatalogConfigKey {
             UnityCatalogConfigKey::MsiResourceId => "unity_msi_resource_id",
             UnityCatalogConfigKey::ObjectId => "unity_object_id",
             UnityCatalogConfigKey::UseAzureCli => "unity_use_azure_cli",
+            UnityCatalogConfigKey::UserAgent => "unity_user_agent",
             UnityCatalogConfigKey::Token => "databricks_token",
             UnityCatalogConfigKey::WorkspaceUrl => "unity_workspace_url",
         }
@@ -219,6 +232,78 @@ pub struct UnityCatalogConfig {
     pub federated_token_file: Option<String>,
     pub use_azure_cli: bool,
     pub allow_http_url: bool,
+    /// The value of the `User-Agent` header, or `None` for [`UNITY_USER_AGENT`].
+    pub user_agent: Option<String>,
+}
+
+/// The value of the `User-Agent` header of the requests to Unity Catalog when the
+/// `user_agent` option is not set, such as `Sail/0.7.3 Delta Spark`.
+///
+/// Databricks accepts the requests of the Unity Catalog Delta API that write (the storage
+/// credentials for writing, staging tables, creating a table, and commits) only from
+/// clients that it recognizes by the products in the `User-Agent` header, and answers the
+/// others with HTTP 400. The `Delta` and `Spark` products say that Sail implements the
+/// Delta protocol and the Spark API. They have no version, since Sail does not follow the
+/// version of one release of Delta Lake or of Spark.
+/// Remove the two products when Databricks recognizes Sail by its own name.
+/// See the section "User-Agent" in `docs/guide/catalog/unity.md`.
+pub(crate) const UNITY_USER_AGENT: &str =
+    concat!("Sail/", env!("CARGO_PKG_VERSION"), " Delta Spark");
+
+/// Where the `User-Agent` header of the requests to Unity Catalog is documented.
+const USER_AGENT_DOCUMENTATION: &str =
+    "https://docs.lakesail.com/sail/latest/guide/catalog/unity.html#user-agent";
+
+/// Returns the message of the error for an HTTP 400 response of Unity Catalog. When the
+/// response says that the server refuses the `User-Agent` header of the request, the
+/// message starts with what to do about it, and the answer of the server follows.
+///
+/// The Delta REST API of Unity Catalog on Databricks answers such a request with "The UC
+/// Delta API requires clients to identify the calling application in the User-Agent
+/// header. The provided User-Agent '...' is insufficient. ...". Each of the two sentences
+/// is recognized on its own, so the hint stays if the wording of one of them changes.
+pub(crate) fn bad_request_message(message: String) -> String {
+    let lower = message.to_ascii_lowercase();
+    let refused = lower.contains("user-agent")
+        && (lower.contains("identify the calling application")
+            || lower.contains("is insufficient"));
+    if !refused {
+        return message;
+    }
+    format!(
+        "Unity Catalog rejected the `User-Agent` header that Sail sent. Set the `user_agent` \
+         option of the catalog to a value that the server accepts, see \
+         {USER_AGENT_DOCUMENTATION}. {message}"
+    )
+}
+
+/// Returns the `User-Agent` header of the requests to Unity Catalog, which is the
+/// configured value, or [`UNITY_USER_AGENT`] without one.
+pub(crate) fn user_agent_header_or_default(
+    value: Option<&str>,
+) -> CatalogResult<reqwest::header::HeaderValue> {
+    match value {
+        Some(value) => user_agent_header(value),
+        None => Ok(reqwest::header::HeaderValue::from_static(UNITY_USER_AGENT)),
+    }
+}
+
+/// Returns the `User-Agent` header for a configured value.
+///
+/// The value is a list of products as in RFC 9110, such as `MyEngine/1.2 MyConnector/0.4`.
+/// It is sent as it is, so only an empty value and a value that cannot be a header value
+/// are refused.
+pub(crate) fn user_agent_header(value: &str) -> CatalogResult<reqwest::header::HeaderValue> {
+    if value.trim().is_empty() {
+        return Err(CatalogError::InvalidArgument(
+            "The Unity Catalog option `user_agent` must not be empty".to_string(),
+        ));
+    }
+    reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+        CatalogError::InvalidArgument(format!(
+            "The Unity Catalog option `user_agent` is not a valid header value: {e}"
+        ))
+    })
 }
 
 fn str_is_truthy(value: &str) -> bool {
@@ -230,11 +315,33 @@ fn str_is_truthy(value: &str) -> bool {
         | value.eq_ignore_ascii_case("y")
 }
 
+/// Returns the URI of the Unity Catalog API for a workspace URL.
+///
+/// The API path is added if the URL has no path, since the host of a workspace
+/// (e.g. `DATABRICKS_HOST`) is configured without it.
+fn workspace_api_uri(workspace_url: &str) -> String {
+    match reqwest::Url::parse(workspace_url) {
+        Ok(url) if url.has_host() && matches!(url.path(), "" | "/") => {
+            format!("{}{WORKSPACE_API_PATH}", url.origin().ascii_serialization())
+        }
+        _ => workspace_url.to_string(),
+    }
+}
+
 impl UnityCatalogConfig {
     pub fn new(
         uri: Option<String>,
         token: &Option<SecretString>,
         options: Option<HashMap<String, String>>,
+    ) -> CatalogResult<Self> {
+        Self::new_with_env(uri, token, options, std::env::vars_os())
+    }
+
+    fn new_with_env(
+        uri: Option<String>,
+        token: &Option<SecretString>,
+        options: Option<HashMap<String, String>>,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> CatalogResult<Self> {
         let mut config = Self {
             uri: uri.unwrap_or_else(|| DEFAULT_URI.to_string()),
@@ -249,6 +356,7 @@ impl UnityCatalogConfig {
             federated_token_file: None,
             use_azure_cli: false,
             allow_http_url: false,
+            user_agent: None,
         };
 
         if let Some(token) = token {
@@ -260,13 +368,16 @@ impl UnityCatalogConfig {
             config.apply_options(opts)?;
         }
 
-        config.apply_env()?;
+        config.apply_env(env)?;
 
         Ok(config)
     }
 
-    pub fn apply_env(&mut self) -> CatalogResult<()> {
-        for (os_key, os_value) in std::env::vars_os() {
+    fn apply_env(
+        &mut self,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> CatalogResult<()> {
+        for (os_key, os_value) in env {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 let key = key.trim();
                 if (key.to_ascii_uppercase().starts_with("UNITY_")
@@ -311,7 +422,7 @@ impl UnityCatalogConfig {
                 self.authority_host = Some(value);
             }
             UnityCatalogConfigKey::Host | UnityCatalogConfigKey::WorkspaceUrl => {
-                self.uri = value;
+                self.uri = workspace_api_uri(&value);
             }
             UnityCatalogConfigKey::MsiEndpoint => {
                 self.msi_endpoint = Some(value);
@@ -327,6 +438,10 @@ impl UnityCatalogConfig {
             }
             UnityCatalogConfigKey::UseAzureCli => {
                 self.use_azure_cli = str_is_truthy(&value);
+            }
+            UnityCatalogConfigKey::UserAgent => {
+                user_agent_header(&value)?;
+                self.user_agent = Some(value);
             }
         }
         Ok(())
@@ -344,6 +459,7 @@ impl UnityCatalogConfig {
         {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(ClientSecretOAuthProvider::new(
                     client_id,
                     client_secret.expose_secret(),
@@ -356,6 +472,7 @@ impl UnityCatalogConfig {
         if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(WorkspaceOAuthProvider::new(
                     client_id,
                     client_secret.expose_secret(),
@@ -371,6 +488,7 @@ impl UnityCatalogConfig {
         ) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(WorkloadIdentityOAuthProvider::new(
                     client_id,
                     federated_token_file,
@@ -383,6 +501,7 @@ impl UnityCatalogConfig {
         if self.use_azure_cli {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(AzureCliCredential::new()),
             ));
         }
@@ -390,6 +509,7 @@ impl UnityCatalogConfig {
         if self.msi_endpoint.is_some() || self.msi_resource_id.is_some() {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
+                self.user_agent.clone(),
                 Box::new(ImdsManagedIdentityOAuthProvider::new(
                     self.client_id.clone(),
                     self.object_id.clone(),
@@ -400,5 +520,160 @@ impl UnityCatalogConfig {
         }
 
         None
+    }
+}
+
+#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(vars: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        vars.iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect()
+    }
+
+    #[test]
+    fn test_env_takes_precedence_over_explicit_configuration() {
+        let vars = env(&[
+            ("DATABRICKS_HOST", "https://env.cloud.databricks.com"),
+            ("DATABRICKS_TOKEN", "env-token"),
+        ]);
+        let token = Some(SecretString::from("config-token"));
+        let options = HashMap::from([("client_id".to_string(), "config-client".to_string())]);
+        let config = UnityCatalogConfig::new_with_env(
+            Some("https://config.cloud.databricks.com/api/2.1/unity-catalog".to_string()),
+            &token,
+            Some(options),
+            vars,
+        )
+        .unwrap();
+        assert_eq!(
+            config.uri,
+            "https://env.cloud.databricks.com/api/2.1/unity-catalog"
+        );
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "env-token");
+        // The explicit configuration is used for what the environment variables do not set.
+        assert_eq!(config.client_id.as_deref(), Some("config-client"));
+
+        let config = UnityCatalogConfig::new_with_env(
+            Some("https://config.cloud.databricks.com/api/2.1/unity-catalog".to_string()),
+            &token,
+            None,
+            env(&[]),
+        )
+        .unwrap();
+        assert_eq!(
+            config.uri,
+            "https://config.cloud.databricks.com/api/2.1/unity-catalog"
+        );
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "config-token");
+
+        let config = UnityCatalogConfig::new_with_env(None, &None, None, env(&[])).unwrap();
+        assert_eq!(config.uri, DEFAULT_URI);
+    }
+
+    #[test]
+    fn test_workspace_api_uri() {
+        for (workspace_url, expected) in [
+            (
+                "https://dbc-1.cloud.databricks.com",
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+            ),
+            (
+                "https://adb-1.2.azuredatabricks.net/",
+                "https://adb-1.2.azuredatabricks.net/api/2.1/unity-catalog",
+            ),
+            (
+                "http://localhost:8080",
+                "http://localhost:8080/api/2.1/unity-catalog",
+            ),
+            // A URL with a path is used as it is.
+            (
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+            ),
+            ("https://example.com/unity/", "https://example.com/unity/"),
+            ("not a url", "not a url"),
+        ] {
+            assert_eq!(workspace_api_uri(workspace_url), expected);
+        }
+    }
+
+    #[test]
+    fn test_workspace_oauth_is_not_used_with_authority_id() {
+        let vars = env(&[
+            ("DATABRICKS_CLIENT_ID", "client"),
+            ("DATABRICKS_CLIENT_SECRET", "secret"),
+        ]);
+        let uri = Some("https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog".to_string());
+        let config =
+            UnityCatalogConfig::new_with_env(uri.clone(), &None, None, vars.clone()).unwrap();
+        let output = format!("{:?}", config.get_credential_provider().unwrap());
+        assert!(
+            output.contains("\"https://dbc-1.cloud.databricks.com/oidc/v1/token\""),
+            "unexpected credential provider: {output}"
+        );
+
+        let mut vars = vars;
+        vars.extend(env(&[("DATABRICKS_AUTHORITY_ID", "tenant")]));
+        let config = UnityCatalogConfig::new_with_env(uri, &None, None, vars).unwrap();
+        let output = format!("{:?}", config.get_credential_provider().unwrap());
+        assert!(
+            output.contains("\"https://login.microsoftonline.com/tenant/oauth2/v2.0/token\""),
+            "unexpected credential provider: {output}"
+        );
+    }
+
+    #[test]
+    fn test_user_agent_default_and_environment_variables() {
+        // The default names Sail first, and then the products that Databricks looks for.
+        assert_eq!(
+            UNITY_USER_AGENT,
+            format!("{} Delta Spark", sail_common::utils::http::SAIL_USER_AGENT)
+        );
+        assert!(user_agent_header(UNITY_USER_AGENT).is_ok());
+        let config = UnityCatalogConfig::new_with_env(None, &None, None, env(&[])).unwrap();
+        assert_eq!(config.user_agent, None);
+
+        for key in ["DATABRICKS_USER_AGENT", "UNITY_USER_AGENT", "UC_USER_AGENT"] {
+            let vars = env(&[(key, "ExampleEngine/1.2")]);
+            let config = UnityCatalogConfig::new_with_env(None, &None, None, vars).unwrap();
+            assert_eq!(
+                config.user_agent.as_deref(),
+                Some("ExampleEngine/1.2"),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bad_request_message_has_a_hint_only_for_a_refused_user_agent() {
+        let hint = "Set the `user_agent` option of the catalog";
+        for refusal in [
+            "The UC Delta API requires clients to identify the calling application in the \
+             User-Agent header. The provided User-Agent 'Sail/0.7.3' is insufficient.",
+            "The provided user-agent 'X/1' is insufficient",
+            "Clients must identify the calling application in the User-Agent header",
+        ] {
+            let message = bad_request_message(format!("Failed to create table: {refusal}"));
+            assert!(message.starts_with("Unity Catalog rejected"), "{message}");
+            assert!(message.contains(hint), "{message}");
+            assert!(message.contains(USER_AGENT_DOCUMENTATION), "{message}");
+            assert!(
+                message.ends_with(&format!("Failed to create table: {refusal}")),
+                "{message}"
+            );
+        }
+        for other in [
+            "The table name is not valid",
+            "The request is missing the required field 'name'",
+            "The privileges of the principal are insufficient",
+            "The header User-Agent is too long",
+            "Table name 'user-agent' is not valid",
+        ] {
+            assert_eq!(bad_request_message(other.to_string()), other);
+        }
     }
 }

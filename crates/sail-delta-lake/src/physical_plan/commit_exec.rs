@@ -20,35 +20,35 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
-use log::warn;
-use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
+use sail_catalog::provider::{CreateTableMode, CreateTableOptions, StagedTableCreate};
+use sail_catalog::storage_credentials::remove_table_storage_credentials;
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, LakehouseOperation,
+};
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
+use crate::catalog::coordinator::{
+    DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable, commit_conflict_error,
+};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
+    column_mapping_metadata_only, column_mapping_mode, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
-    StructField, StructType, TableFeature, commit_path,
+    StructField, StructType,
 };
-use crate::table::{
-    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
-};
-use crate::transaction::{
-    CatalogManagedStagedCommit, CommitBuilder, CommitProperties, FinalizedCommit,
-    Metrics as CommitFinalMetrics, OperationMetrics,
-};
+use crate::table::{create_delta_table_with_object_store, open_catalog_table, open_table_error};
+use crate::transaction::{CommitBuilder, CommitProperties, FinalizedCommit, OperationMetrics};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
@@ -238,138 +238,119 @@ impl DeltaCommitExec {
         self.lakehouse_table.as_ref()
     }
 
+    /// Returns the table of the catalog that the write commits to. The table is the one
+    /// that the catalog resolved. A table that the statement itself registers in a catalog
+    /// that registers a table before version 0 is written is resolved without its ID, so
+    /// it is looked up.
     async fn load_catalog_managed_table(
         context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        table_url: &Url,
+        lakehouse_table: &LakehouseExecutionContext,
     ) -> Result<Option<DeltaCatalogManagedTable>> {
+        if let Some(table) = DeltaCatalogManagedTable::from_context(lakehouse_table) {
+            return Ok(Some(table));
+        }
         let manager = context.extension::<CatalogManager>()?;
         let status = manager
-            .get_table(catalog_table)
+            .get_table(lakehouse_table.catalog_table())
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let Some(table) = catalog_managed_delta_table(status.kind) else {
             return Ok(None);
         };
-
+        let Some(table_uri) = table
+            .location
+            .or(lakehouse_table.table_identity.table_uri.clone())
+        else {
+            return Ok(None);
+        };
         Ok(Some(DeltaCatalogManagedTable {
             table_id: table.table_id,
-            table_uri: table.location.unwrap_or_else(|| table_url.to_string()),
+            table_uri,
         }))
     }
 
-    async fn latest_catalog_managed_table_version(
+    /// Registers the table that the catalog staged, after the first commit of the write
+    /// created the table at the staged location. The catalog registers the table with the
+    /// protocol and the metadata of version 0, which also has the data of the write.
+    /// A write that ignores an existing table does nothing when the table is created
+    /// concurrently, and the staged table is abandoned.
+    async fn register_staged_table(
         context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        lakehouse_table: &LakehouseExecutionContext,
-        table: &DeltaCatalogManagedTable,
-    ) -> Result<i64> {
-        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
-            .latest_table_version(lakehouse_table, table)
-            .await
-    }
-
-    async fn refresh_catalog_managed_reference(
-        context: &Arc<TaskContext>,
-        lakehouse_table: &LakehouseExecutionContext,
-        table_url: &Url,
+        staged_table: &LakehouseExecutionContext,
         log_store: &LogStoreRef,
-        reference: Option<Arc<crate::table::DeltaSnapshot>>,
-        latest_catalog_version: i64,
-    ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
-        let Some(snapshot) = reference else {
-            return Ok(None);
-        };
-        if latest_catalog_version < 0 || snapshot.version() == latest_catalog_version {
-            return Ok(Some(snapshot));
-        }
-        if snapshot.version() > latest_catalog_version {
-            return Err(DataFusionError::Internal(format!(
-                "catalog-managed Delta commit snapshot version {} is newer than catalog latest ratified version {latest_catalog_version}",
-                snapshot.version()
-            )));
-        }
-
-        let catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-            context.as_ref(),
-            lakehouse_table,
-            table_url,
-            log_store.clone(),
-            Some(latest_catalog_version),
-        )
-        .await?;
-        let snapshot = crate::table::DeltaSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                catalog_managed_commits,
-                ..Default::default()
+        sink_mode: &PhysicalSinkMode,
+    ) -> Result<()> {
+        let location = staged_table
+            .table_identity
+            .table_uri
+            .clone()
+            .ok_or_else(|| {
+                DataFusionError::Internal("staged Delta table is missing its location".to_string())
+            })?;
+        let created = crate::lake_source::unity_create_commit(log_store.as_ref()).await?;
+        let options = CreateTableOptions {
+            columns: vec![],
+            comment: created.metadata.description.clone(),
+            constraints: vec![],
+            location: Some(location),
+            format: "delta".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode: match sink_mode {
+                PhysicalSinkMode::IgnoreIfExists => CreateTableMode::CreateIfNotExists,
+                _ => CreateTableMode::Create,
             },
-            Some(latest_catalog_version),
-            None,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Some(Arc::new(snapshot)))
+            properties: vec![],
+            is_external: false,
+            is_write_precondition: false,
+            staged: Some(Box::new(StagedTableCreate {
+                properties: vec![],
+                required_protocol: None,
+                created_metadata: Some(created),
+            })),
+        };
+        context
+            .extension::<CatalogManager>()?
+            .create_table(staged_table.catalog_table(), options)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(())
     }
 
     async fn load_reference_snapshot(
         context: &Arc<TaskContext>,
         lakehouse_table: Option<&LakehouseExecutionContext>,
-        table_url: &Url,
         log_store: &LogStoreRef,
         version: Option<i64>,
         require_files: bool,
         use_catalog_managed_replay: bool,
     ) -> Result<Arc<crate::table::DeltaSnapshot>> {
-        let catalog_managed_commits = if use_catalog_managed_replay {
-            let lakehouse_table = lakehouse_table.ok_or_else(|| {
-                DataFusionError::Internal(
-                    "catalog-managed Delta snapshot replay missing lakehouse context".to_string(),
-                )
-            })?;
-            load_catalog_managed_commits_for_snapshot(
-                context.as_ref(),
-                lakehouse_table,
-                table_url,
-                log_store.clone(),
-                version,
-            )
-            .await?
-        } else {
-            None
-        };
-        let snapshot = crate::table::DeltaSnapshot::try_new(
-            log_store.as_ref(),
+        if use_catalog_managed_replay
+            && let Some(latest) = stale_catalog_state_version(lakehouse_table, version)
+        {
+            // The write was prepared from a version of the table that is after the one
+            // that the catalog told when it resolved the table for the commit, so another
+            // writer has committed to the table since then.
+            return Err(commit_conflict_error(&format!(
+                "the write was prepared from version {} of the table, but the latest version \
+                 of the table was {latest} when the catalog resolved the table",
+                version.unwrap_or_default()
+            )));
+        }
+        let table = open_catalog_table(
+            context.as_ref(),
+            lakehouse_table.filter(|_| use_catalog_managed_replay),
+            log_store.clone(),
             DeltaSnapshotConfig {
                 require_files,
-                catalog_managed_commits,
                 ..Default::default()
             },
             version,
-            None,
         )
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        Ok(Arc::new(snapshot))
-    }
-
-    fn is_catalog_managed_commit(
-        reference: Option<&Arc<crate::table::DeltaSnapshot>>,
-        actions: &[CommitAction],
-    ) -> bool {
-        let protocol = actions
-            .iter()
-            .rev()
-            .find_map(|action| match action {
-                CommitAction::Protocol(protocol) => Some(protocol),
-                _ => None,
-            })
-            .or_else(|| reference.map(|snapshot| snapshot.protocol()));
-        protocol.is_some_and(|protocol| {
-            protocol.has_reader_feature(&TableFeature::CatalogManaged)
-                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
-        })
+        .map_err(open_table_error)?;
+        Ok(table.snapshot()?.clone())
     }
 
     fn split_create_actions_for_catalog_managed_commit(
@@ -414,9 +395,16 @@ impl DeltaCommitExec {
         }
     }
 
+    /// Loads the table that exists where the create actions are to be committed.
+    ///
+    /// The existing table must have the protocol and the metadata of the create actions.
+    /// For a catalog-managed table, the catalog creates the table before the data is
+    /// written and decides its protocol and configuration, so only the schema, the
+    /// column mapping and the partition columns must be the same.
     async fn existing_create_bootstrap_snapshot(
         log_store: &LogStoreRef,
         actions: &[CommitAction],
+        catalog_managed: bool,
     ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
         let latest_version = match log_store.get_latest_version(-1).await {
             Ok(version) => version,
@@ -438,7 +426,8 @@ impl DeltaCommitExec {
         if let Some(protocol) = actions.iter().find_map(|action| match action {
             CommitAction::Protocol(protocol) => Some(protocol),
             _ => None,
-        }) && protocol != snapshot.protocol()
+        }) && !catalog_managed
+            && protocol != snapshot.protocol()
         {
             return Err(DataFusionError::Plan(
                 "Delta table already exists with a different protocol".to_string(),
@@ -456,9 +445,28 @@ impl DeltaCommitExec {
                 .metadata()
                 .parse_schema()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let metadata_matches = create_schema == existing_schema
+            // The catalog creates the table from the column names and types, so the
+            // field metadata of the written data is not part of the comparison, except
+            // for the column mapping that the data files are written with.
+            let schema_matches = if catalog_managed {
+                // The JSON form is compared, as the order of the fields is part of it.
+                let fields = |schema| {
+                    serde_json::to_value(column_mapping_metadata_only(schema))
+                        .map_err(|e| DataFusionError::External(Box::new(e)))
+                };
+                fields(&create_schema)? == fields(&existing_schema)?
+                    && column_mapping_mode(metadata.configuration())
+                        == column_mapping_mode(snapshot.metadata().configuration())
+            } else {
+                create_schema == existing_schema
+            };
+            let metadata_matches = schema_matches
                 && metadata.partition_columns() == snapshot.metadata().partition_columns()
-                && metadata.configuration() == snapshot.metadata().configuration();
+                && (catalog_managed
+                    || crate::transaction::row_tracking::same_configuration_for_create(
+                        metadata.configuration(),
+                        snapshot.metadata().configuration(),
+                    ));
             if !metadata_matches {
                 return Err(DataFusionError::Plan(
                     "Delta table already exists with different metadata".to_string(),
@@ -472,79 +480,11 @@ impl DeltaCommitExec {
     async fn existing_create_bootstrap_commit_matches(
         log_store: &LogStoreRef,
         actions: &[CommitAction],
+        catalog_managed: bool,
     ) -> Result<bool> {
-        Self::existing_create_bootstrap_snapshot(log_store, actions)
+        Self::existing_create_bootstrap_snapshot(log_store, actions, catalog_managed)
             .await
             .map(|snapshot| snapshot.is_some())
-    }
-
-    async fn commit_catalog_managed_table(
-        context: &Arc<TaskContext>,
-        catalog_table: &[String],
-        lakehouse_table: &LakehouseExecutionContext,
-        table: &DeltaCatalogManagedTable,
-        staged: &CatalogManagedStagedCommit,
-        actions: &[CommitAction],
-        latest_backfilled_version: Option<i64>,
-    ) -> Result<()> {
-        DeltaCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
-            .commit_staged(
-                lakehouse_table,
-                table,
-                staged,
-                actions,
-                latest_backfilled_version,
-            )
-            .await
-    }
-
-    pub(crate) async fn publish_staged_commit(
-        log_store: &LogStoreRef,
-        staged: &CatalogManagedStagedCommit,
-    ) -> Result<()> {
-        let store = log_store.object_store(None);
-        let bytes = store
-            .get(&staged.staged_path)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        match store
-            .put_opts(
-                &commit_path(staged.version),
-                bytes.into(),
-                PutOptions {
-                    mode: PutMode::Create,
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(ObjectStoreError::AlreadyExists { .. }) => Ok(()),
-            Err(err) => Err(DataFusionError::External(Box::new(err))),
-        }
-    }
-
-    pub(crate) async fn latest_published_backfilled_version(
-        log_store: &LogStoreRef,
-        end_version: i64,
-    ) -> Result<Option<i64>> {
-        if end_version < 0 {
-            return Ok(None);
-        }
-
-        let store = log_store.object_store(None);
-        let mut latest = None;
-        for version in 0..=end_version {
-            match store.head(&commit_path(version)).await {
-                Ok(_) => latest = Some(version),
-                Err(ObjectStoreError::NotFound { .. }) => break,
-                Err(err) => return Err(DataFusionError::External(Box::new(err))),
-            }
-        }
-        Ok(latest)
     }
 }
 
@@ -645,8 +585,15 @@ impl ExecutionPlan for DeltaCommitExec {
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
-        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let output = self.output;
+        // The write creates the table that the catalog staged, and the catalog registers
+        // the table after the commit.
+        let staged_table = lakehouse_table
+            .clone()
+            .filter(|context| !table_exists && context.operation == LakehouseOperation::Create);
+        let cleanup = staged_table
+            .clone()
+            .map(|staged| (staged, Arc::clone(&context)));
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
@@ -759,11 +706,12 @@ impl ExecutionPlan for DeltaCommitExec {
                 return output.empty_batch();
             }
 
-            let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
-                (Some(catalog_table), Some(lakehouse_table))
-                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit =>
+            let catalog_managed_table = match lakehouse_table.as_ref() {
+                Some(lakehouse_table)
+                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit
+                        && staged_table.is_none() =>
                 {
-                    Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
+                    Self::load_catalog_managed_table(&context, lakehouse_table).await?
                 }
                 _ => None,
             };
@@ -862,9 +810,14 @@ impl ExecutionPlan for DeltaCommitExec {
             let log_store = table.log_store();
 
             if !table_exists
+                && staged_table.is_none()
                 && is_create_bootstrap_only_commit(&final_actions)
-                && Self::existing_create_bootstrap_commit_matches(&log_store, &final_actions)
-                    .await?
+                && Self::existing_create_bootstrap_commit_matches(
+                    &log_store,
+                    &final_actions,
+                    catalog_managed_table.is_some(),
+                )
+                .await?
             {
                 return output.empty_batch();
             }
@@ -875,7 +828,6 @@ impl ExecutionPlan for DeltaCommitExec {
                         Self::load_reference_snapshot(
                             &context,
                             lakehouse_table.as_ref(),
-                            &table_url,
                             &log_store,
                             commit_context.base_version(),
                             true,
@@ -901,7 +853,6 @@ impl ExecutionPlan for DeltaCommitExec {
                             Self::load_reference_snapshot(
                                 &context,
                                 lakehouse_table.as_ref(),
-                                &table_url,
                                 &log_store,
                                 commit_context.base_version(),
                                 false,
@@ -989,8 +940,13 @@ impl ExecutionPlan for DeltaCommitExec {
             }
 
             let commit_uses_catalog_managed_protocol =
-                Self::is_catalog_managed_commit(reference.as_ref(), &final_actions);
-            if commit_uses_catalog_managed_protocol && catalog_managed_table.is_none() {
+                crate::table::is_catalog_managed_commit(reference.as_deref(), &final_actions);
+            // Version 0 of a table that the catalog staged is written to the Delta log
+            // before the table is registered.
+            if commit_uses_catalog_managed_protocol
+                && catalog_managed_table.is_none()
+                && staged_table.is_none()
+            {
                 return Err(DataFusionError::Plan(
                     "catalog-managed Delta writes require a managed catalog table reference"
                         .to_string(),
@@ -1004,11 +960,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 .as_ref()
                 .filter(|_| use_catalog_managed_commit)
             {
-                let catalog_table = catalog_table.as_deref().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "catalog-managed Delta commit missing catalog table reference".to_string(),
-                    )
-                })?;
                 let lakehouse_context = lakehouse_table.as_ref().ok_or_else(|| {
                     DataFusionError::Internal(
                         "catalog-managed Delta commit missing lakehouse context".to_string(),
@@ -1028,6 +979,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         match Self::existing_create_bootstrap_snapshot(
                             &log_store,
                             &bootstrap_actions,
+                            true,
                         )
                         .await?
                         {
@@ -1098,70 +1050,22 @@ impl ExecutionPlan for DeltaCommitExec {
                     operation_metrics.finalize_for(&operation);
                     result =
                         commit_output_batch(output, total_rows, &operation, &operation_metrics)?;
-                    let latest_catalog_version = Self::latest_catalog_managed_table_version(
-                        &context,
-                        catalog_table,
-                        lakehouse_context,
-                        table,
-                    )
-                    .await?;
-                    // Refreshing would discard the snapshot on which the app version was checked.
-                    let reference = if commit_context.transaction.is_none()
-                        && crate::transaction::CommitData::is_blind_append(
-                            &final_actions,
-                            &operation,
-                        ) {
-                        Self::refresh_catalog_managed_reference(
-                            &context,
-                            lakehouse_context,
-                            &table_url,
-                            &log_store,
-                            reference,
-                            latest_catalog_version,
-                        )
-                        .await?
-                    } else {
-                        reference
-                    };
-                    let pre_commit = CommitBuilder::from(
-                        CommitProperties::default()
-                            .with_operation_metrics(operation_metrics)
-                            .with_user_metadata(user_metadata),
-                    )
-                    .with_actions(final_actions.clone())
-                    .build(reference, log_store.clone(), operation);
-                    let staged = pre_commit
-                        .into_staged_commit_future_with_catalog_latest_version(
-                            latest_catalog_version,
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let latest_backfilled_version =
-                        Self::latest_published_backfilled_version(&log_store, staged.version - 1)
+                    let staged =
+                        DeltaCatalogCommitCoordinator::new(context.as_ref(), lakehouse_context)
+                            .commit_actions(
+                                table,
+                                &log_store,
+                                reference,
+                                &final_actions,
+                                &operation,
+                                CommitProperties::default()
+                                    .with_operation_metrics(operation_metrics)
+                                    .with_user_metadata(user_metadata),
+                            )
                             .await?;
-                    Self::commit_catalog_managed_table(
-                        &context,
-                        catalog_table,
-                        lakehouse_context,
-                        table,
-                        &staged,
-                        &final_actions,
-                        latest_backfilled_version,
-                    )
-                    .await?;
-                    if let Err(err) = Self::publish_staged_commit(&log_store, &staged).await {
-                        warn!(
-                            "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {}",
-                            staged.version, err
-                        );
-                    }
                     FinalizedCommit {
                         snapshot: None,
-                        metrics: CommitFinalMetrics {
-                            num_retries: staged.metrics.num_retries,
-                            new_checkpoint_created: false,
-                            num_log_files_cleaned_up: 0,
-                        },
+                        metrics: staged.metrics,
                     }
                 }
             } else {
@@ -1178,6 +1082,9 @@ impl ExecutionPlan for DeltaCommitExec {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
+            if let Some(staged_table) = &staged_table {
+                Self::register_staged_table(&context, staged_table, &log_store, &sink_mode).await?;
+            }
 
             let retries =
                 usize::try_from(finalized_commit.metrics.num_retries).unwrap_or(usize::MAX);
@@ -1201,6 +1108,17 @@ impl ExecutionPlan for DeltaCommitExec {
             Ok(result)
         };
 
+        // A table that the catalog staged is not registered when the write fails, so the
+        // write stops using the storage credentials of the staged table.
+        let future = async move {
+            let result = future.await;
+            if result.is_err()
+                && let Some((staged_table, context)) = &cleanup
+            {
+                remove_table_storage_credentials(context.as_ref(), staged_table.catalog_table());
+            }
+            result
+        };
         let stream = stream::once(future);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
@@ -1475,6 +1393,21 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
     }
 }
 
+/// Returns the latest version of the table that the catalog told when it resolved the table,
+/// when the version that a write was prepared from is after it.
+fn stale_catalog_state_version(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+    version: Option<i64>,
+) -> Option<i64> {
+    let latest = lakehouse_table?
+        .delta
+        .as_ref()?
+        .commits
+        .as_ref()?
+        .latest_table_version;
+    (latest >= 0 && version? > latest).then_some(latest)
+}
+
 #[cfg(test)]
 mod identity_tests {
     use super::*;
@@ -1683,5 +1616,232 @@ mod result_tests {
         };
         assert!(commit_output_batch(CommandOutput::MergeRows, 0, &operation, &overflow).is_err());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod create_bootstrap_tests {
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::spec::{DataType, Protocol, StructField, TableFeature};
+
+    fn create_actions(
+        features: Vec<TableFeature>,
+        configuration: &[(&str, &str)],
+        column: &str,
+    ) -> Result<Vec<CommitAction>> {
+        let schema = StructType::try_new([StructField::nullable(column, DataType::LONG)])
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![],
+            0,
+            configuration
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(vec![
+            CommitAction::Protocol(Protocol::new(3, 7, Some(vec![]), Some(features))),
+            CommitAction::Metadata(metadata),
+        ])
+    }
+
+    /// The data of CREATE TABLE AS SELECT is committed to the table that the catalog
+    /// created with the protocol and the properties that the catalog requires.
+    #[tokio::test]
+    async fn catalog_managed_create_adopts_existing_table_of_catalog() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let existing = create_actions(
+            vec![TableFeature::InCommitTimestamp, TableFeature::AppendOnly],
+            &[("delta.appendOnly", "true")],
+            "id",
+        )?;
+        let commit = existing
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .join("\n");
+        store
+            .put(
+                &object_store::path::Path::from("t/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await?;
+        let table_url =
+            url::Url::parse("memory:///t").map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = create_delta_table_with_object_store(table_url, store, StorageConfig)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store();
+        let snapshot = |actions: Vec<CommitAction>, catalog_managed| {
+            let log_store = log_store.clone();
+            async move {
+                DeltaCommitExec::existing_create_bootstrap_snapshot(
+                    &log_store,
+                    &actions,
+                    catalog_managed,
+                )
+                .await
+            }
+        };
+
+        assert!(snapshot(existing, false).await?.is_some());
+        let writer = create_actions(vec![TableFeature::InCommitTimestamp], &[], "id")?;
+        let Err(error) = snapshot(writer.clone(), false).await else {
+            return internal_err!("expected an error for a different protocol");
+        };
+        assert!(error.to_string().contains("different protocol"), "{error}");
+        let adopted = snapshot(writer, true).await?;
+        assert_eq!(adopted.map(|snapshot| snapshot.version()), Some(0));
+
+        let writer = create_actions(vec![TableFeature::InCommitTimestamp], &[], "other")?;
+        let Err(error) = snapshot(writer, true).await else {
+            return internal_err!("expected an error for a different schema");
+        };
+        assert!(error.to_string().contains("different metadata"), "{error}");
+        Ok(())
+    }
+
+    /// The data files of CREATE TABLE AS SELECT are written with the column mapping that
+    /// the writer planned, so the table that the catalog created must have the same one.
+    #[tokio::test]
+    async fn catalog_managed_create_requires_the_column_mapping_of_the_data() -> Result<()> {
+        let schema = |comment: bool| {
+            let mut field = StructField::nullable("id", DataType::LONG);
+            if comment {
+                field = field.with_metadata([("comment", MetadataValue::String("c".to_string()))]);
+            }
+            StructType::try_new([field]).map_err(|e| DataFusionError::External(Box::new(e)))
+        };
+        let mapped_create_actions = |schema: StructType, mode: &str| {
+            let metadata = metadata_for_create_with_struct_type(
+                schema,
+                vec![],
+                0,
+                [("delta.columnMapping.mode".to_string(), mode.to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let features = vec![TableFeature::ColumnMapping];
+            Ok::<_, DataFusionError>(vec![
+                CommitAction::Protocol(Protocol::new(3, 7, Some(features.clone()), Some(features))),
+                CommitAction::Metadata(metadata),
+            ])
+        };
+        let annotated = crate::schema::annotate_schema_for_column_mapping(&schema(false)?);
+        let store = Arc::new(InMemory::new());
+        let commit = mapped_create_actions(annotated.clone(), "name")?
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .join("\n");
+        store
+            .put(
+                &object_store::path::Path::from("t/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await?;
+        let table_url =
+            url::Url::parse("memory:///t").map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = create_delta_table_with_object_store(table_url, store, StorageConfig)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store();
+        let snapshot = |actions: Vec<CommitAction>| {
+            let log_store = log_store.clone();
+            async move {
+                DeltaCommitExec::existing_create_bootstrap_snapshot(&log_store, &actions, true)
+                    .await
+            }
+        };
+
+        // The writer has the column mapping of the table, and the other field metadata
+        // is not compared.
+        let (with_comment, _) =
+            crate::schema::annotate_new_fields_for_column_mapping(&annotated, &schema(true)?, 2);
+        let adopted = snapshot(mapped_create_actions(with_comment, "name")?).await?;
+        assert_eq!(adopted.map(|snapshot| snapshot.version()), Some(0));
+
+        for (schema, mode) in [
+            (
+                crate::schema::annotate_schema_for_column_mapping(&schema(false)?),
+                "name",
+            ),
+            (annotated.clone(), "id"),
+            (schema(false)?, "none"),
+        ] {
+            let Err(error) = snapshot(mapped_create_actions(schema, mode)?).await else {
+                return internal_err!("expected an error for column mapping {mode}");
+            };
+            assert!(error.to_string().contains("different metadata"), "{error}");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stale_catalog_state_tests {
+    use sail_common_datafusion::catalog::delta::{
+        DeltaCatalogManaged, DeltaCatalogState, DeltaRatifiedCommits,
+    };
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, LakehouseAuthority,
+        LakehouseFormat, LakehouseOperation, MetadataPointerAuthority, ScanAuthority,
+        TableLifecycle,
+    };
+
+    use super::*;
+
+    fn context(latest_table_version: Option<i64>) -> LakehouseExecutionContext {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".to_string()),
+            vec!["unity".to_string(), "s".to_string(), "t".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("id".to_string()),
+                table_uri: Some("file:///tmp/t".to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
+                commit: CommitAuthority::DeltaRatifiedCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        context.delta = Some(DeltaCatalogState {
+            catalog_managed: DeltaCatalogManaged::Yes,
+            commits: latest_table_version.map(|latest_table_version| DeltaRatifiedCommits {
+                latest_table_version,
+                commits: vec![],
+            }),
+            registered_before_log: false,
+        });
+        context
+    }
+
+    #[test]
+    fn a_version_after_the_resolved_latest_version_is_stale() {
+        let resolved = context(Some(2));
+        assert_eq!(
+            stale_catalog_state_version(Some(&resolved), Some(3)),
+            Some(2)
+        );
+        assert_eq!(stale_catalog_state_version(Some(&resolved), Some(2)), None);
+        assert_eq!(stale_catalog_state_version(Some(&resolved), Some(1)), None);
+        assert_eq!(stale_catalog_state_version(Some(&resolved), None), None);
+        // The commits are requested from the catalog when they are not carried.
+        assert_eq!(
+            stale_catalog_state_version(Some(&context(None)), Some(3)),
+            None
+        );
+        assert_eq!(stale_catalog_state_version(None, Some(3)), None);
     }
 }

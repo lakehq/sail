@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::delta::DeltaCatalogState;
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogProviderId(pub String);
 
@@ -224,7 +226,7 @@ pub enum LocationPolicyDecision {
     Unknown,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct LakehouseExecutionContext {
     pub catalog_provider_id: CatalogProviderId,
     pub catalog_table: Vec<String>,
@@ -241,6 +243,56 @@ pub struct LakehouseExecutionContext {
     pub cross_format: Option<CrossFormatMetadata>,
     pub governance: Option<GovernanceContext>,
     pub capability_fingerprint: CapabilityFingerprint,
+    /// What the catalog told about a Delta table whose commits it may ratify. It is not
+    /// part of the stable table binding, since it is the state of the table when the
+    /// table was resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<DeltaCatalogState>,
+}
+
+// The context is shown in query plans, where the state of a Delta table in its catalog is
+// shown only for a table that has one.
+impl std::fmt::Debug for LakehouseExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            catalog_provider_id,
+            catalog_table,
+            table_identity,
+            operation,
+            format,
+            authority,
+            pointer,
+            commit,
+            scan,
+            access_session,
+            rest_session,
+            versioned_catalog,
+            cross_format,
+            governance,
+            capability_fingerprint,
+            delta,
+        } = self;
+        let mut out = f.debug_struct("LakehouseExecutionContext");
+        out.field("catalog_provider_id", catalog_provider_id)
+            .field("catalog_table", catalog_table)
+            .field("table_identity", table_identity)
+            .field("operation", operation)
+            .field("format", format)
+            .field("authority", authority)
+            .field("pointer", pointer)
+            .field("commit", commit)
+            .field("scan", scan)
+            .field("access_session", access_session)
+            .field("rest_session", rest_session)
+            .field("versioned_catalog", versioned_catalog)
+            .field("cross_format", cross_format)
+            .field("governance", governance)
+            .field("capability_fingerprint", capability_fingerprint);
+        if let Some(delta) = delta {
+            out.field("delta", delta);
+        }
+        out.finish()
+    }
 }
 
 /// Stable catalog/table binding captured in a logical plan.
@@ -347,6 +399,7 @@ impl LakehouseExecutionContext {
             cross_format: None,
             governance: None,
             capability_fingerprint: CapabilityFingerprint(fingerprint),
+            delta: None,
         }
     }
 
@@ -358,6 +411,22 @@ impl LakehouseExecutionContext {
         let mut context = self.clone();
         context.operation = operation;
         context
+    }
+
+    /// Returns the context with what the catalog told about the Delta table when it
+    /// resolved the table as the `resolved` context, when the context is of the same
+    /// table of the catalog and does not have it.
+    pub fn with_catalog_state_of(mut self, resolved: Option<&Self>) -> Self {
+        if let Some(resolved) = resolved
+            && self.delta.is_none()
+            && self.table_identity.table_id.is_some()
+            && self.table_identity == resolved.table_identity
+            && self.catalog_provider_id == resolved.catalog_provider_id
+            && self.catalog_table == resolved.catalog_table
+        {
+            self.delta = resolved.delta.clone();
+        }
+        self
     }
 }
 

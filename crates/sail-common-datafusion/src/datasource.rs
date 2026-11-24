@@ -268,6 +268,17 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The schema of the table that a precondition of the write creates, from
+    /// `LakeSource::create_table_schema_for_write`. The data is written with it.
+    pub create_table_schema: Option<SchemaRef>,
+    /// Whether the write replaces the definition of an existing table together with its
+    /// data, as `REPLACE TABLE ... AS SELECT` and the DataFrameWriterV2 `replace` and
+    /// `createOrReplace` do. An overwrite with `saveAsTable` replaces only the data.
+    pub replace_table_metadata: bool,
+    /// The definition of a table that the catalog staged for the write. The first commit
+    /// of the write creates the table at the staged location with this definition, and
+    /// the table is registered in the catalog after the commit.
+    pub create_table: Option<Box<crate::lakesource::LakeSourceCreateTableInfo>>,
 }
 
 impl SinkInfo {

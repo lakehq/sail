@@ -431,6 +431,26 @@ pub enum CommitAction {
     DomainMetadata(DomainMetadata),
 }
 
+impl CommitAction {
+    /// Returns the protocol action that takes effect in the actions of a commit, which is
+    /// the last one.
+    pub fn last_protocol(actions: &[Self]) -> Option<&Protocol> {
+        actions.iter().rev().find_map(|action| match action {
+            Self::Protocol(protocol) => Some(protocol),
+            _ => None,
+        })
+    }
+
+    /// Returns the metadata action that takes effect in the actions of a commit, which is
+    /// the last one.
+    pub fn last_metadata(actions: &[Self]) -> Option<&Metadata> {
+        actions.iter().rev().find_map(|action| match action {
+            Self::Metadata(metadata) => Some(metadata),
+            _ => None,
+        })
+    }
+}
+
 impl From<CommitAction> for Action {
     fn from(action: CommitAction) -> Self {
         match action {

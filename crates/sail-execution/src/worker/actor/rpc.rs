@@ -9,6 +9,7 @@ use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
 
+use crate::driver::DriverClient;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKeySet;
 use crate::rpc::server_options;
@@ -48,6 +49,7 @@ impl WorkerActor {
         handle: ActorHandle<WorkerActor>,
         task_runner: ActorHandle<TaskRunnerActor>,
         context: std::sync::Arc<datafusion::execution::TaskContext>,
+        driver: DriverClient,
         addr: impl ToSocketAddrs,
         compression: ShuffleCompression,
     ) -> ExecutionResult<()> {
@@ -55,7 +57,7 @@ impl WorkerActor {
         let port = listener.local_addr()?.port();
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let server = WorkerServer::new(handle.clone(), task_runner.clone(), context);
+        let server = WorkerServer::new(handle.clone(), task_runner.clone(), context, driver);
         let service = WorkerServiceServer::new(server)
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)

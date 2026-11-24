@@ -449,4 +449,48 @@ mod tests {
         let entries = list_delta_log_entries_from(store, 21).await.unwrap();
         assert!(entries.is_empty());
     }
+
+    #[tokio::test]
+    async fn listing_reads_every_version_of_a_store_that_lists_keys_out_of_order() {
+        use url::Url;
+
+        use crate::delta_log::{StorageConfig, default_logstore};
+
+        // An object store does not have to list keys in lexicographic order, and the scheme
+        // of the location does not tell whether it does. The keys of the subdirectories of
+        // the log are listed before the commits here.
+        let store = Arc::new(crate::test_store::ObservedStore::default());
+        store.list_in_reverse_order();
+        for key in [
+            "_delta_log/00000000000000000000.json",
+            "_delta_log/00000000000000000001.json",
+            "_delta_log/00000000000000000002.json",
+            "_delta_log/_last_checkpoint",
+            "_delta_log/_sidecars/00000000000000000001.uuid.parquet",
+            "_delta_log/_staged_commits/00000000000000000003.uuid.json",
+        ] {
+            store
+                .put(&Path::from(key), b"{}".to_vec().into())
+                .await
+                .unwrap();
+        }
+        let store = store as Arc<dyn ObjectStore>;
+        for location in ["memory:///", "s3://bucket/table"] {
+            let log_store = default_logstore(
+                store.clone(),
+                store.clone(),
+                &Url::parse(location).unwrap(),
+                &StorageConfig,
+            );
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+        }
+        let mut versions = list_delta_log_entries_from(store, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|meta| parse_commit_version_from_location(&meta.location))
+            .collect::<Vec<_>>();
+        versions.sort();
+        assert_eq!(versions, [0, 1, 2]);
+    }
 }

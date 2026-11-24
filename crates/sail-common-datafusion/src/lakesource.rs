@@ -11,6 +11,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
+use crate::catalog::delta::{DeltaCreatedVersion, DeltaProtocolInfo};
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::datasource::{
     DataSource, DeleteInfo, MergeInfo, RowLevelTarget, SourceInfo, UpdateInfo,
@@ -72,6 +73,9 @@ pub struct LakeSourceCreateTableInfo {
     pub properties: Vec<(String, String)>,
     pub replace: bool,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The Delta protocol that the catalog requires for the storage metadata of a table
+    /// it staged.
+    pub required_protocol: Option<DeltaProtocolInfo>,
 }
 
 impl LakeSourceCreateTableInfo {
@@ -89,6 +93,8 @@ pub struct LakeSourceCreateTableResult {
     /// Authoritative schema and partitioning when registering an existing table.
     pub schema: Option<SchemaRef>,
     pub partition_by: Option<Vec<CatalogPartitionField>>,
+    /// The first version of the Delta log created for a table that the catalog staged.
+    pub created_metadata: Option<DeltaCreatedVersion>,
 }
 
 #[derive(Debug, Default)]
@@ -227,6 +233,19 @@ pub trait LakeSource: DataSource {
     ) -> Result<LakeSourceCreateTableResult> {
         let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
+    }
+
+    /// Returns the schema of a table that is created before the data of a write is
+    /// written, with the storage metadata that the table assigns to its columns, or
+    /// `None` when the lake source assigns none. The table metadata and the data files
+    /// are both created with the returned schema, so that they agree.
+    fn create_table_schema_for_write(
+        &self,
+        schema: &SchemaRef,
+        properties: &[(String, String)],
+    ) -> Result<Option<SchemaRef>> {
+        let _ = (schema, properties);
+        Ok(None)
     }
 
     /// Prepares an independent log referencing the source snapshot's existing files.

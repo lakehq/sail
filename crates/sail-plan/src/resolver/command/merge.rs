@@ -66,7 +66,7 @@ impl PlanResolver<'_> {
             ));
         }
 
-        let target_metadata = self.resolve_row_level_target(&target).await?;
+        let target_metadata = self.resolve_row_level_target(&target, state).await?;
 
         let target_alias_string = target_alias
             .as_ref()

@@ -16,6 +16,7 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::provider::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
 use crate::token::{TemporaryToken, TokenCache};
 
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
@@ -53,8 +54,10 @@ pub enum CredentialProvider {
     /// static bearer token
     BearerToken(String),
 
-    /// a credential to fetch expiring auth tokens
-    TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+    /// a credential to fetch expiring auth tokens, and the configured value of the
+    /// `User-Agent` header of the requests for the tokens, or `None` for the default
+    /// of the requests to the catalog
+    TokenCredential(TokenCache<String>, Option<String>, Box<dyn TokenCredential>),
 }
 
 // The trait requires `Debug`, and a static token is usable exactly as it is printed, so it does
@@ -64,7 +67,7 @@ impl Debug for CredentialProvider {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BearerToken(_) => f.debug_tuple("BearerToken").field(&"[REDACTED]").finish(),
-            Self::TokenCredential(cache, credential) => f
+            Self::TokenCredential(cache, _, credential) => f
                 .debug_tuple("TokenCredential")
                 .field(cache)
                 .field(credential)
@@ -78,8 +81,14 @@ impl CatalogCredentials for CredentialProvider {
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
-            CredentialProvider::TokenCredential(cache, cred) => {
-                let oauth_client = Client::builder().build().map_err(|e| {
+            CredentialProvider::TokenCredential(cache, user_agent, cred) => {
+                let user_agent =
+                    crate::config::user_agent_header_or_default(user_agent.as_deref())?;
+                let builder = Client::builder()
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(REQUEST_TIMEOUT)
+                    .user_agent(user_agent);
+                let oauth_client = builder.build().map_err(|e| {
                     CatalogError::External(format!("Failed to build OAuth client: {e}"))
                 })?;
                 let token = cache
@@ -133,13 +142,22 @@ async fn non200_or_json<T: DeserializeOwned>(response: Response) -> CatalogResul
 }
 
 impl WorkspaceOAuthProvider {
+    /// Creates a provider for the workspace of the given URL.
+    ///
+    /// The token endpoint is at the root of the workspace host, so the path of the URL
+    /// (e.g. `/api/2.1/unity-catalog`) is ignored.
     pub fn new(
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
-        workspace_host: impl Into<String>,
+        workspace_url: impl Into<String>,
     ) -> Self {
+        let workspace_url = workspace_url.into();
+        let workspace_host = match reqwest::Url::parse(&workspace_url) {
+            Ok(url) if url.has_host() => url.origin().ascii_serialization(),
+            _ => workspace_url.trim_end_matches('/').to_string(),
+        };
         Self {
-            token_url: format!("{}/oidc/v1/token", workspace_host.into()),
+            token_url: format!("{workspace_host}/oidc/v1/token"),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
         }
@@ -563,6 +581,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_workspace_oauth_token_url_is_at_the_workspace_host() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oidc/v1/token"))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .and(body_string_contains("scope=all-apis"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "workspace-token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        for workspace_url in [
+            format!("{}/api/2.1/unity-catalog", server.uri()),
+            format!("{}/", server.uri()),
+            server.uri(),
+        ] {
+            let provider = WorkspaceOAuthProvider::new("client", "secret", workspace_url);
+            let token = provider.fetch_token(&client).await.unwrap();
+            assert_eq!(token.token, "workspace-token");
+        }
+
+        let provider = WorkspaceOAuthProvider::new(
+            "client",
+            "secret",
+            "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+        );
+        assert_eq!(
+            provider.token_url,
+            "https://dbc-1.cloud.databricks.com/oidc/v1/token"
+        );
+    }
+
+    #[tokio::test]
     async fn debug_output_hides_a_cached_token() {
         let cache = TokenCache::default();
         let token = cache
@@ -577,7 +633,7 @@ mod tests {
         assert_eq!(token, "s3cr3t-token");
 
         let credentials =
-            CredentialProvider::TokenCredential(cache, Box::new(AzureCliCredential::new()));
+            CredentialProvider::TokenCredential(cache, None, Box::new(AzureCliCredential::new()));
         let output = format!("{credentials:?}");
         assert!(
             !output.contains("s3cr3t-token"),

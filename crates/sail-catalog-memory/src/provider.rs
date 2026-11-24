@@ -528,6 +528,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             properties,
             is_external,
             is_write_precondition: _,
+            staged: _,
         } = options;
         validate_create_table_options(&format, &partition_by)?;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {

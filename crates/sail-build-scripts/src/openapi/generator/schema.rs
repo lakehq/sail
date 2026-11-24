@@ -30,7 +30,25 @@ impl<'a> OpenApiGenerator<'a> {
     ) -> BuildResult<SchemaDefinition> {
         let mut inline = InlineSchemas::new(name);
         let schema = self.resolve_schema(schema)?;
-        let schema = self.schema_definition_inner(type_name(name), schema, &mut inline, false)?;
+        let mut schema =
+            self.schema_definition_inner(type_name(name), schema, &mut inline, false)?;
+        if self.config.open_enums.contains(name) {
+            let SchemaKind::Enum {
+                tag: None,
+                untagged: false,
+                variants,
+            } = &mut schema.kind
+            else {
+                return Err(BuildError::InvalidInput(format!(
+                    "open enum schema is not a string enum: {name}"
+                )));
+            };
+            variants.push(EnumVariant {
+                name: type_name("Unknown"),
+                rename: None,
+                kind: EnumVariantKind::Unknown,
+            });
+        }
         Ok(SchemaDefinition {
             module_name: inline.module_name(),
             inline_definitions: inline.definitions,
@@ -726,6 +744,7 @@ struct EnumVariant {
 
 enum EnumVariantKind {
     Unit,
+    Unknown,
     Tuple { rust_type: RustType },
     Struct { fields: Vec<SchemaField> },
 }
@@ -811,9 +830,9 @@ impl SchemaDefinition {
                     .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }));
                 let display = (tag.is_none()
                     && !*untagged
-                    && variants
-                        .iter()
-                        .all(|x| matches!(x.kind, EnumVariantKind::Unit)))
+                    && variants.iter().all(|x| {
+                        matches!(x.kind, EnumVariantKind::Unit | EnumVariantKind::Unknown)
+                    }))
                 .then(|| generate_enum_display_impl(type_name, variants));
                 let variants = variants.iter().map(generate_enum_variant);
                 Ok(quote! {
@@ -855,6 +874,11 @@ impl SchemaDefinition {
 fn generate_enum_display_impl(type_name: &RustName, variants: &[EnumVariant]) -> TokenStream {
     let arms = variants.iter().map(|variant| {
         let name = &variant.name;
+        if matches!(variant.kind, EnumVariantKind::Unknown) {
+            return quote! {
+                Self::#name(value) => f.write_str(value),
+            };
+        }
         let value = variant
             .rename
             .clone()
@@ -918,6 +942,12 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
             quote! {
                 #rename
                 #name,
+            }
+        }
+        EnumVariantKind::Unknown => {
+            quote! {
+                #[serde(untagged)]
+                #name(String),
             }
         }
         EnumVariantKind::Tuple { rust_type } => {

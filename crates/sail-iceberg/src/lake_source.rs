@@ -124,6 +124,9 @@ impl DataSource for IcebergLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            create_table_schema: _,
+            replace_table_metadata: _,
+            create_table: _,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
@@ -336,6 +339,7 @@ impl LakeSource for IcebergLakeSource {
             properties,
             replace,
             lakehouse_table,
+            required_protocol: _,
         } = info;
         let catalog_table = lakehouse_table
             .as_ref()
@@ -360,6 +364,7 @@ impl LakeSource for IcebergLakeSource {
                         crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?,
                     )),
                     partition_by: Some(partition_columns_from_table_metadata(&metadata)?),
+                    created_metadata: None,
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),

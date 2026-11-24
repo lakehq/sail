@@ -21,6 +21,7 @@ use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
+use sail_object_store::VendedObjectStores;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
 
@@ -139,7 +140,10 @@ impl ServerSessionFactory {
                 self.config.cluster.shuffle_write_buffer_size,
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
-            .with_extension(Arc::new(DeltaTableCache::default()));
+            .with_extension(Arc::new(DeltaTableCache::default()))
+            // The storage credentials issued by catalogs stay in the session.
+            // In cluster mode, the workers of the session request them from the driver.
+            .with_extension(Arc::new(VendedObjectStores::new(self.runtime.clone())));
         self.apply_execution_config(&mut config)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,

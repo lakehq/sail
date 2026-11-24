@@ -852,6 +852,72 @@ mod tests {
         Ok(DeltaWriter::new(object_store, table_path, config))
     }
 
+    /// Statistics are written for the first columns, up to the number of indexed columns,
+    /// and for the given columns wherever they are, such as the clustering columns.
+    #[tokio::test]
+    async fn writer_collects_stats_for_the_given_columns_after_the_indexed_columns()
+    -> Result<(), DeltaTableError> {
+        use datafusion::arrow::array::Int64Array;
+
+        use crate::spec::ColumnName;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+        let column = |values: Vec<i64>| Arc::new(Int64Array::from(values)) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![column(vec![1, 2]), column(vec![3, 4]), column(vec![5, 6])],
+        )
+        .map_err(DeltaTableError::generic_err)?;
+        for (num_indexed_cols, stats_columns, expected) in [
+            (1, None, vec!["a"]),
+            (1, Some(vec!["c"]), vec!["a", "c"]),
+            (0, Some(vec!["b", "c"]), vec!["b", "c"]),
+            (-1, Some(vec!["c"]), vec!["a", "b", "c"]),
+        ] {
+            let config = WriterConfig::new(
+                schema.clone(),
+                vec![],
+                vec![],
+                None,
+                1024 * 1024,
+                1024,
+                num_indexed_cols,
+                stats_columns.map(|columns: Vec<&str>| {
+                    columns
+                        .into_iter()
+                        .map(|column| ColumnName::new([column]))
+                        .collect()
+                }),
+                Default::default(),
+                VariantShreddingConfig::default(),
+            );
+            let mut writer =
+                DeltaWriter::new(Arc::new(InMemory::new()), Path::from("delta_table"), config);
+            writer.write(&batch).await?;
+            let adds = writer.close().await?;
+            assert_eq!(adds.len(), 1);
+            let stats: serde_json::Value =
+                serde_json::from_str(adds[0].stats.as_deref().unwrap_or_default())
+                    .map_err(DeltaTableError::generic_err)?;
+            for key in ["minValues", "maxValues", "nullCount"] {
+                let mut columns = stats[key]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|columns| columns.keys())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                columns.sort_unstable();
+                assert_eq!(columns, expected, "{key} {num_indexed_cols}");
+            }
+            assert!(adds[0].clustering_provider.is_none());
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unordered_writer_reopens_partitions_with_exact_rows() -> Result<(), DeltaTableError> {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;

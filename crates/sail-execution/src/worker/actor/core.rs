@@ -130,6 +130,7 @@ impl Actor for WorkerActor {
                     ctx.handle().clone(),
                     task_runner,
                     task_context,
+                    self.driver_client_set.core.clone(),
                     addr,
                     self.options.shuffle_backend.flight_compression(),
                 )

@@ -500,6 +500,15 @@ mod tests {
         // Each spelling looks the table up, and the lookups return different orders.
         assert_eq!(lookups, 2);
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+
+        // A statement that writes a table and reads it looks the table up once, so that
+        // the write and the read are of the same state of the table.
+        let sql = "INSERT INTO t SELECT * FROM t";
+        let plan = from_ast_statement(parse_one_statement(sql)?)?;
+        let lookups = catalog.lookups.load(Ordering::SeqCst);
+        let result = resolver.resolve_named_plan(plan).await;
+        assert!(result.is_err_and(|e| e.to_string().contains("does not write")));
+        assert_eq!(catalog.lookups.load(Ordering::SeqCst) - lookups, 1);
         Ok(())
     }
 

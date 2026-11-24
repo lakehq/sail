@@ -53,8 +53,9 @@ pub enum TableFeature {
     TypeWideningPreview,
     TypeWidening,
     CatalogManaged,
-    #[serde(other)]
-    Unknown,
+    /// A feature that is not known, with the name that the table protocol declares.
+    #[serde(untagged)]
+    Unknown(String),
 }
 // SPDX-SnippetEnd
 
@@ -86,7 +87,7 @@ impl TableFeature {
             Self::TypeWideningPreview => "typeWidening-preview",
             Self::TypeWidening => "typeWidening",
             Self::CatalogManaged => "catalogManaged",
-            Self::Unknown => "unknown",
+            Self::Unknown(name) => name,
         }
     }
 
@@ -374,6 +375,14 @@ impl Protocol {
     pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
         self.writer_features()
             .is_some_and(|features| features.contains(feature))
+    }
+
+    /// Returns `true` if the table protocol declares the catalog-managed feature. The feature
+    /// is a reader-writer feature, and a protocol that declares it in either list is treated
+    /// as catalog-managed, so that a commit never bypasses the catalog.
+    pub fn is_catalog_managed(&self) -> bool {
+        self.has_reader_feature(&TableFeature::CatalogManaged)
+            || self.has_writer_feature(&TableFeature::CatalogManaged)
     }
 
     pub fn supports_in_commit_timestamps(&self) -> bool {

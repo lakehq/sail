@@ -85,7 +85,7 @@ impl PlanResolver<'_> {
             .iter()
             .map(|part| part.as_ref().to_string())
             .collect::<Vec<_>>();
-        let target = self.resolve_row_level_target(&table).await?;
+        let target = self.resolve_row_level_target(&table, state).await?;
         let target_identifier = if target.lakehouse_table.is_some() {
             self.ctx
                 .extension::<CatalogManager>()?

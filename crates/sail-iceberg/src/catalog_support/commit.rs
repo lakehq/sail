@@ -165,6 +165,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         let manager = context.extension::<CatalogManager>()?;
         let resolved = manager
             .resolve_lakehouse_table(
+                context,
                 catalog_table,
                 ResolveLakehouseTableRequest {
                     catalog_table: catalog_table.to_vec(),

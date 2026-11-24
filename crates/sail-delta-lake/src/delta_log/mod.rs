@@ -27,6 +27,7 @@ pub use store::{
 };
 pub(crate) use store::{default_logstore, get_actions, get_object_store_from_context};
 pub(crate) use timestamps::{
-    resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,
-    resolve_version_timestamp, version_uses_in_commit_timestamps,
+    in_commit_timestamp_from_actions, resolve_commit_timestamp_from_actions,
+    resolve_effective_protocol_and_metadata, resolve_version_timestamp,
+    version_uses_in_commit_timestamps,
 };

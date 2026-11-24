@@ -45,6 +45,8 @@ pub struct Info {
     pub title: String,
     pub version: String,
     #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub license: Option<License>,
@@ -74,6 +76,8 @@ pub struct ServerVariable {
     pub default: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default, rename = "enum")]
+    pub enum_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -290,6 +294,8 @@ pub struct Schema {
     pub min_length: Option<u64>,
     #[serde(default, rename = "maxLength")]
     pub max_length: Option<u64>,
+    #[serde(default, rename = "minItems")]
+    pub min_items: Option<u64>,
     #[serde(default, rename = "maxItems")]
     pub max_items: Option<u64>,
     #[serde(default, rename = "uniqueItems")]

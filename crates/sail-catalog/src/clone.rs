@@ -115,6 +115,7 @@ impl StageTableOptions {
             properties: vec![],
             is_external: external,
             is_write_precondition: false,
+            staged: None,
         })
     }
 }

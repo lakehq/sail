@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use sail_common_datafusion::catalog::TableStorageCredentials;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_object_store::StorageCredentialsRequest;
 use tonic::Request;
 
 use crate::driver::r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
@@ -9,15 +11,16 @@ use crate::driver::r#gen::{
     CelebornGetJobShuffleIdsRequest, CelebornGetShuffleIdRequest, CelebornMapperEndRequest,
     CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
     CelebornReportMetricsRequest, CelebornReviveRequest, CelebornReviveResponse,
-    CelebornUnregisterShuffleRequest, RegisterWorkerRequest, RegisterWorkerResponse,
-    ReportMetricsRequest, ReportMetricsResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
-    ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest,
-    ReportWorkerKnownPeersResponse,
+    CelebornUnregisterShuffleRequest, GetStorageCredentialsRequest, RegisterWorkerRequest,
+    RegisterWorkerResponse, ReportMetricsRequest, ReportMetricsResponse, ReportTaskStatusRequest,
+    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
+    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskKey, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
+use crate::storage::storage_credentials_from_response;
 use crate::stream::service::{TaskStreamFlightClient, TaskStreamOwner};
 
 #[derive(Clone)]
@@ -273,6 +276,27 @@ impl DriverClient {
         let response = self.inner.get().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();
         Ok(())
+    }
+
+    /// Gets the storage credentials of the session from the driver.
+    pub async fn get_storage_credentials(
+        &self,
+        request: StorageCredentialsRequest,
+    ) -> ExecutionResult<TableStorageCredentials> {
+        let access = request.access;
+        let response = self
+            .inner
+            .get()
+            .await?
+            .get_storage_credentials(Request::new(GetStorageCredentialsRequest {
+                driver_id: self.driver_id.into(),
+                token: request.token.to_vec(),
+                owner: request.owner,
+                location: request.location,
+                access: r#gen::StorageAccess::from(access) as i32,
+            }))
+            .await?;
+        storage_credentials_from_response(response.into_inner(), access)
     }
 
     pub async fn report_metrics(&self, metrics: Vec<Vec<u8>>) -> ExecutionResult<()> {

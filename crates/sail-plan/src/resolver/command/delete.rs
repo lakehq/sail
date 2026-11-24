@@ -25,7 +25,7 @@ impl PlanResolver<'_> {
             table_alias,
             condition,
         } = delete;
-        let target = self.resolve_row_level_target(&table).await?;
+        let target = self.resolve_row_level_target(&table, state).await?;
         let target_format = target.format.clone();
         let mut target_plan = self.resolve_row_level_table_plan(table, state).await?;
         if let Some(alias) = table_alias {

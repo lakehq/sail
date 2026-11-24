@@ -4,7 +4,9 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
+use sail_common_datafusion::catalog::{
+    FunctionStatus, LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
@@ -25,6 +27,7 @@ use crate::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
     DropViewOptions,
 };
+use crate::storage_credentials::remove_table_storage_credentials;
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 fn clone_result_schema() -> CatalogResult<SchemaRef> {
@@ -382,12 +385,22 @@ impl CatalogCommand {
                 } else {
                     false
                 };
-                let Some((options, create_plan)) =
+                let Some((options, create_plan, existing)) =
                     prepare_create_table_storage_metadata(ctx, manager, &table, options).await?
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 };
-                let status = manager.create_table(&table, options).await?;
+                // The storage metadata of a table that is created for the data of a
+                // write has the columns that the data is written with.
+                let write_columns = options
+                    .is_write_precondition
+                    .then(|| options.columns.clone())
+                    .filter(|columns| !columns.is_empty());
+                let status = match existing.filter(|_| create_plan.replaces_in_place) {
+                    // The table is replaced and keeps its entry in the catalog.
+                    Some(status) => status,
+                    None => manager.create_table(&table, options).await?,
+                };
                 if !existed_before {
                     prepare_created_table_storage_metadata(
                         ctx,
@@ -395,6 +408,7 @@ impl CatalogCommand {
                         &table,
                         &status,
                         &create_plan,
+                        write_columns.as_deref(),
                     )
                     .await?;
                 }
@@ -504,6 +518,7 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                remove_table_storage_credentials(ctx, &table);
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RenameTable {
@@ -636,14 +651,15 @@ impl CatalogCommand {
                         ))
                     })?;
                     let storage_operation = (&options).into();
-                    let lakehouse_table = manager
+                    let resolved = manager
                         .resolve_lakehouse_table_status(
+                            ctx,
                             &table,
                             &table_status,
                             LakehouseOperation::Alter,
                         )
-                        .await?
-                        .execution;
+                        .await?;
+                    let lakehouse_table = resolved.execution;
                     if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
                         && matches!(lakehouse_table.commit,
                         sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
@@ -1040,8 +1056,9 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     manager: &CatalogManager,
     table: &[String],
     mut options: CreateTableOptions,
-) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan)>> {
-    match manager.get_table_or_view(table).await {
+) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan, Option<TableStatus>)>> {
+    // The catalog table that the statement replaces, which the catalog is asked for once.
+    let existing = match manager.get_table_or_view(table).await {
         Ok(_) if options.mode.ignore_if_exists() => return Ok(None),
         Ok(_) if !options.mode.is_replace() => {
             return Err(CatalogError::AlreadyExists(
@@ -1049,23 +1066,25 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                 table.join("."),
             ));
         }
-        Ok(_) => {}
+        Ok(status) => Some(status).filter(|status| matches!(status.kind, TableKind::Table { .. })),
         Err(CatalogError::NotFound(_, _)) if options.mode.replace_requires_existing() => {
             return Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 table.join("."),
             ));
         }
-        Err(CatalogError::NotFound(_, _)) => {}
+        Err(CatalogError::NotFound(_, _)) => None,
         Err(err) => return Err(err),
-    }
+    };
 
     let create_plan = manager
         .plan_lakehouse_create(
+            ctx,
             table,
             LakehouseCreateRequest {
                 catalog_table: table.to_vec(),
                 options: options.clone(),
+                existing: existing.clone().map(Box::new),
             },
         )
         .await?;
@@ -1073,27 +1092,30 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     let LakehouseCreateMaterialization::BeforeCatalogLakeSource { context, .. } =
         &create_plan.materialization
     else {
-        return Ok(Some((options, create_plan)));
+        return Ok(Some((options, create_plan, existing)));
     };
-
-    let location = options.location.clone().ok_or_else(|| {
-        CatalogError::InvalidArgument(format!(
-            "Location is required to create storage metadata for {} tables",
-            options.format
-        ))
-    })?;
+    // The catalog may plan the storage metadata at a location it allocated and, for a
+    // staged table, with properties it requires.
+    if create_plan.table.status.location.is_some() {
+        options.location = create_plan.table.status.location.clone();
+    }
+    if let Some(staged) = &create_plan.staged {
+        options.properties = staged.properties.clone();
+    }
+    options.staged = create_plan.staged.clone();
     let metadata = materialize_lake_source_create_metadata(
         ctx,
         &options.format,
-        location,
-        &options.columns,
-        options.comment.clone(),
-        options.partition_by.clone(),
-        options.properties.clone(),
-        options.mode.is_replace(),
-        context.as_deref().cloned(),
+        lake_source_create_table_info(
+            &options,
+            options.mode.is_replace(),
+            context.as_deref().cloned(),
+        )?,
     )
     .await?;
+    if let Some(staged) = options.staged.as_mut() {
+        staged.created_metadata = metadata.created_metadata;
+    }
     if options.columns.is_empty() {
         if let Some(schema) = metadata.schema {
             options.columns = schema
@@ -1128,7 +1150,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         }
     }
     options.properties.extend(metadata.properties);
-    Ok(Some((options, create_plan)))
+    Ok(Some((options, create_plan, existing)))
 }
 
 async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
@@ -1137,6 +1159,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
     table: &[String],
     status: &sail_common_datafusion::catalog::TableStatus,
     create_plan: &LakehouseCreatePlan,
+    write_columns: Option<&[crate::provider::CreateTableColumnOptions]>,
 ) -> CatalogResult<()> {
     let LakehouseCreateMaterialization::AfterCatalogLakeSource { mode, .. } =
         &create_plan.materialization
@@ -1169,6 +1192,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         crate::provider::LakeSourceCreateMetadataMode::CatalogCoordinated => Some(
             manager
                 .resolve_lakehouse_table_status(
+                    ctx,
                     table,
                     status,
                     sail_common_datafusion::catalog::LakehouseOperation::Create,
@@ -1178,32 +1202,38 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         ),
     };
 
+    let columns = match write_columns {
+        Some(columns) => columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+        None => columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+    };
     materialize_lake_source_create_metadata(
         ctx,
         format,
-        location.clone(),
-        columns,
-        comment.clone(),
-        partition_by.clone(),
-        properties.clone(),
-        false,
-        lakehouse_table,
+        LakeSourceCreateTableInfo {
+            path: location.clone(),
+            columns,
+            comment: comment.clone(),
+            partition_by: partition_by.clone(),
+            properties: properties.clone(),
+            replace: false,
+            lakehouse_table,
+            required_protocol: None,
+        },
     )
     .await
     .map(|_| ())
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     ctx: &C,
     format: &str,
-    location: String,
-    columns: &[impl CreateTableColumnView],
-    comment: Option<String>,
-    partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
-    properties: Vec<(String, String)>,
-    replace: bool,
-    lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+    info: LakeSourceCreateTableInfo,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
     let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
@@ -1216,33 +1246,65 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
         ))
     })?;
     lake_source
-        .create_table_metadata(
-            ctx.runtime_env(),
-            &ctx.session_config(),
-            LakeSourceCreateTableInfo {
-                path: location,
-                columns: columns
-                    .iter()
-                    .map(|column| LakeSourceCreateTableColumn {
-                        metadata: column.metadata().clone(),
-                        name: column.name().to_string(),
-                        data_type: column.data_type().clone(),
-                        nullable: column.nullable(),
-                        comment: column.comment().cloned(),
-                        default: column.default().cloned(),
-                        generated_always_as: column.generated_always_as().cloned(),
-                        identity: column.identity().cloned(),
-                    })
-                    .collect(),
-                comment,
-                partition_by,
-                properties,
-                replace,
-                lakehouse_table,
-            },
-        )
+        .create_table_metadata(ctx.runtime_env(), &ctx.session_config(), info)
         .await
         .map_err(CatalogError::DataFusionError)
+}
+
+/// The definition of a table that the catalog staged, which the first commit of a write
+/// creates at the staged location before the table is registered in the catalog.
+pub fn staged_lake_source_create_table_info(
+    options: &CreateTableOptions,
+    lakehouse_table: LakehouseExecutionContext,
+) -> CatalogResult<LakeSourceCreateTableInfo> {
+    lake_source_create_table_info(options, false, Some(lakehouse_table))
+}
+
+/// The definition of the table of a CREATE TABLE statement for the lake source that
+/// creates its storage metadata.
+fn lake_source_create_table_info(
+    options: &CreateTableOptions,
+    replace: bool,
+    lakehouse_table: Option<LakehouseExecutionContext>,
+) -> CatalogResult<LakeSourceCreateTableInfo> {
+    let location = options.location.clone().ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Location is required to create storage metadata for {} tables",
+            options.format
+        ))
+    })?;
+    Ok(LakeSourceCreateTableInfo {
+        path: location,
+        columns: options
+            .columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+        comment: options.comment.clone(),
+        partition_by: options.partition_by.clone(),
+        properties: options.properties.clone(),
+        replace,
+        lakehouse_table,
+        required_protocol: options
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.required_protocol.clone()),
+    })
+}
+
+fn lake_source_create_table_column(
+    column: &impl CreateTableColumnView,
+) -> LakeSourceCreateTableColumn {
+    LakeSourceCreateTableColumn {
+        metadata: column.metadata().clone(),
+        name: column.name().to_string(),
+        data_type: column.data_type().clone(),
+        nullable: column.nullable(),
+        comment: column.comment().cloned(),
+        default: column.default().cloned(),
+        generated_always_as: column.generated_always_as().cloned(),
+        identity: column.identity().cloned(),
+    }
 }
 
 trait CreateTableColumnView {
@@ -1905,6 +1967,125 @@ mod tests {
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
     }
+    /// A lake source that reads a file of the table when it alters the table.
+    struct ReadingLakeSource {
+        file: object_store::path::Path,
+        read: std::sync::Mutex<Option<bool>>,
+    }
+
+    #[async_trait]
+    impl DataSource for ReadingLakeSource {
+        fn name(&self) -> &str {
+            "delta"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+            not_impl_err!("unused in test")
+        }
+
+        async fn create_writer(
+            &self,
+            _ctx: &dyn Session,
+            _info: SinkInfo,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    #[async_trait]
+    impl LakeSource for ReadingLakeSource {
+        async fn alter_table(
+            &self,
+            ctx: &datafusion::execution::TaskContext,
+            path: &str,
+            _operation: LakeSourceAlterTableOperation,
+            _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+        ) -> datafusion_common::Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult>
+        {
+            use object_store::ObjectStoreExt;
+
+            let url = url::Url::parse(path)
+                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+            let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
+            let read = store.get(&self.file).await.is_ok();
+            *self
+                .read
+                .lock()
+                .map_err(|e| datafusion_common::DataFusionError::Internal(e.to_string()))? =
+                Some(read);
+            Ok(Default::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn alter_table_accesses_catalog_managed_storage_with_vended_credentials() {
+        use object_store::memory::InMemory;
+        use object_store::{ObjectStore, ObjectStoreExt};
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        let location = "memory:///warehouse/items";
+        let file = object_store::path::Path::from("warehouse/items/_delta_log/0.json");
+        // Only the store that uses the vended credentials has the file.
+        let vended = Arc::new(InMemory::new());
+        let put = vended.put(&file, "{}".into()).await;
+        assert!(put.is_ok(), "{put:?}");
+        let factory: VendedStoreFactory = {
+            let vended = vended.clone();
+            Arc::new(move |_| Ok(vended.clone() as Arc<dyn ObjectStore>))
+        };
+        let lake_source = Arc::new(ReadingLakeSource {
+            file,
+            read: std::sync::Mutex::new(None),
+        });
+        let registry = Arc::new(DataSourceRegistry::new());
+        let registered = registry.register_data_source(lake_source.clone());
+        assert!(registered.is_ok(), "{registered:?}");
+        let plan_service = Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
+            Box::new(TestPlanFormatter),
+        ));
+        let catalog = crate::testing::ManagedDeltaCatalog::vending(location);
+        let manager = crate::testing::single_catalog_manager(Arc::new(catalog));
+        assert!(manager.is_ok());
+        let Ok(manager) = manager else {
+            unreachable!();
+        };
+        let manager = Arc::new(manager);
+        let config = SessionConfig::new()
+            .with_extension(registry)
+            .with_extension(plan_service)
+            .with_extension(manager.clone())
+            .with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
+        let ctx = SessionContext::new_with_config(config);
+        let url = url::Url::parse(location);
+        assert!(url.is_ok());
+        let Ok(url) = url else {
+            unreachable!();
+        };
+        ctx.runtime_env()
+            .register_object_store(&url, Arc::new(InMemory::new()));
+
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+        let result = command.execute(ctx.task_ctx().as_ref(), &manager).await;
+        assert!(result.is_ok(), "{result:?}");
+        let read = lake_source.read.lock().map(|read| *read);
+        assert!(matches!(read, Ok(Some(true))), "{read:?}");
+    }
+
     #[test]
     fn test_local_table_dir_converts_file_uris_only() {
         let dir = |location: &str| local_table_dir(location).ok().flatten();

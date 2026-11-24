@@ -12,11 +12,39 @@ import requests
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG, UNITY_CATALOG_IMAGE
+import docker
+from pysail.testing._dev.containers.unity_defaults import (
+    DEFAULT_CATALOG,
+    UNITY_CATALOG_SERVERS,
+    UnityCatalogServer,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
+
+
+# How long the Docker daemon may stay silent while it pulls an image. Two attempts and
+# the startup of the server fit in the timeout of a test.
+_IMAGE_PULL_TIMEOUT_SECONDS = 60
+
+
+def _pull_image(image: str) -> None:
+    """Pull the image if it is not present, with a bounded wait and one more attempt."""
+    client = docker.from_env(timeout=_IMAGE_PULL_TIMEOUT_SECONDS)
+    try:
+        try:
+            client.images.get(image)
+        except docker.errors.ImageNotFound:
+            pass
+        else:
+            return
+        try:
+            client.images.pull(image)
+        except (docker.errors.DockerException, requests.RequestException):
+            client.images.pull(image)
+    finally:
+        client.close()
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -26,25 +54,32 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.timeout(300))
 
 
-@pytest.fixture(scope="module")
-def unity_storage_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+@pytest.fixture(scope="session", params=UNITY_CATALOG_SERVERS, ids=lambda server: server.id)
+def unity_server(request: pytest.FixtureRequest) -> UnityCatalogServer:
+    """Return the Unity Catalog server image, so that every test runs against each image."""
+    return request.param
+
+
+@pytest.fixture(scope="session")
+def unity_storage_root(tmp_path_factory: pytest.TempPathFactory, unity_server: UnityCatalogServer) -> Path:
     """Return the host path mounted for managed Unity Catalog table storage."""
-    return tmp_path_factory.mktemp("unity_storage_root")
+    return tmp_path_factory.mktemp(f"unity_storage_root_{unity_server.id}")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def unity_container(
     tmp_path_factory: pytest.TempPathFactory,
+    unity_server: UnityCatalogServer,
     unity_storage_root: Path,
 ) -> Generator[DockerContainer, None, None]:
     """Start a Unity Catalog container with its embedded H2 backend."""
-    tmp_dir = tmp_path_factory.mktemp("unity")
+    tmp_dir = tmp_path_factory.mktemp(f"unity_{unity_server.id}")
     server_config = "server.env=dev\nserver.authorization=disable\nserver.managed-table.enabled=true\n"
     server_path = tmp_dir / "server.properties"
     server_path.write_text(server_config)
 
     container = (
-        DockerContainer(UNITY_CATALOG_IMAGE)
+        DockerContainer(unity_server.image)
         .with_exposed_ports(8080)
         .with_volume_mapping(str(server_path), "/home/unitycatalog/etc/conf/server.properties", "ro")
         .with_volume_mapping(str(unity_storage_root), str(unity_storage_root), "rw")
@@ -54,11 +89,14 @@ def unity_container(
             ).with_startup_timeout(120)
         )
     )
+    # A pull that hangs fails here, before the timeout of the test. The failure is the
+    # failure of every test of the server, and the server is not started again for them.
+    _pull_image(unity_server.image)
     with container:
         yield container
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def unity_rest_url(unity_container: DockerContainer) -> str:
     """Return the host-accessible Unity Catalog REST API URL."""
     host = unity_container.get_container_host_ip()
@@ -66,7 +104,7 @@ def unity_rest_url(unity_container: DockerContainer) -> str:
     return f"http://{host}:{port}/api/2.1/unity-catalog"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def unity_catalog_initialized(unity_rest_url: str, unity_storage_root: Path) -> None:
     """Create the test catalog in Unity Catalog via its REST API."""
     url = f"{unity_rest_url}/catalogs"

@@ -56,7 +56,7 @@ mod stats;
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
-    catalog_managed_commit_path,
+    catalog_managed_commit_path, catalog_managed_commit_version,
 };
 pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
@@ -172,6 +172,8 @@ impl DeltaSnapshot {
             }
         };
 
+        // A hint of a later version does not describe the target version.
+        let replay_hint = replay_hint.filter(|hint| hint.version <= target_version);
         if !config.require_files {
             match load_replayed_table_header(
                 target_version,
@@ -286,7 +288,7 @@ impl DeltaSnapshot {
         })
     }
 
-    fn replay_hint(&self) -> ReplayedTableHeader {
+    pub(crate) fn replay_hint(&self) -> ReplayedTableHeader {
         ReplayedTableHeader {
             version: self.version,
             protocol: self.protocol.clone(),
@@ -445,14 +447,7 @@ impl DeltaSnapshot {
     }
 
     pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
-        if (self
-            .protocol()
-            .has_reader_feature(&TableFeature::CatalogManaged)
-            || self
-                .protocol()
-                .has_writer_feature(&TableFeature::CatalogManaged))
-            && self.config.catalog_managed_commits.is_none()
-        {
+        if self.protocol().is_catalog_managed() && self.config.catalog_managed_commits.is_none() {
             return Err(DeltaTableError::Unsupported(
                 "Reading catalog-managed Delta tables requires catalog commit replay context"
                     .to_string(),
@@ -499,7 +494,7 @@ impl DeltaSnapshot {
             .into_iter()
             .flatten()
             .chain(self.protocol().writer_features().into_iter().flatten())
-            .any(|feature| matches!(feature, TableFeature::Unknown))
+            .any(|feature| matches!(feature, TableFeature::Unknown(_)))
         {
             return true;
         }
@@ -927,7 +922,7 @@ impl DeltaSnapshot {
         }
     }
 
-    fn row_tracking_high_water_mark(&self) -> DeltaResult<Option<i64>> {
+    pub(crate) fn row_tracking_high_water_mark(&self) -> DeltaResult<Option<i64>> {
         let Some(domain) = self.domain_metadata().get("delta.rowTracking") else {
             return Ok(None);
         };
@@ -1902,8 +1897,11 @@ mod tests {
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::Unknown]),
-            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
+            Some(vec![TableFeature::Unknown("mystery".to_string())]),
+            Some(vec![
+                TableFeature::AppendOnly,
+                TableFeature::Unknown("mystery".to_string()),
+            ]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1920,7 +1918,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("mystery")
         ));
     }
 

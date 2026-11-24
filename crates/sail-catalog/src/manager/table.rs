@@ -3,21 +3,29 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
+use sail_common_datafusion::catalog::{TableStatus, TableStorageCredentials};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
-    LakehouseResolvedTable, LakehouseScanPlanningRequest, LakehouseScanPlanningResponse,
-    ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest, resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
     Namespace, StageTableOptions,
 };
+use crate::storage_credentials::install_table_storage_credentials;
 use crate::utils::match_pattern;
+
+fn owned_table<T: AsRef<str>>(table: &[T]) -> Vec<String> {
+    table.iter().map(|part| part.as_ref().to_string()).collect()
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ResolvedCatalogTableReference {
@@ -148,47 +156,72 @@ impl CatalogManager {
             .await
     }
 
+    /// Like [`Self::get_lakehouse_table`], but only returns the lakehouse resolution.
     pub async fn resolve_lakehouse_table<T: AsRef<str>>(
         &self,
+        ctx: &(impl SessionExtensionAccessor + ?Sized),
         table: &[T],
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let (provider, database, name) = self.resolve_object(table)?;
-        let (_, resolved) = provider
-            .get_lakehouse_table(&database, &name, request)
-            .await?;
+        let (_, resolved) = self.get_lakehouse_table(ctx, table, request).await?;
         Ok(resolved)
     }
 
+    /// Like [`Self::resolve_lakehouse_table`], but for a table whose status is known.
     pub async fn resolve_lakehouse_table_status<T: AsRef<str>>(
+        &self,
+        ctx: &(impl SessionExtensionAccessor + ?Sized),
+        table: &[T],
+        status: &TableStatus,
+        operation: sail_common_datafusion::catalog::LakehouseOperation,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        let request = ResolveLakehouseTableRequest {
+            catalog_table: owned_table(table),
+            operation,
+            requested_format: None,
+            options: vec![],
+        };
+        let resolved = provider
+            .resolve_lakehouse_table(&database, &name, status, request)
+            .await?;
+        install_table_storage_credentials(ctx, &owned_table(table), &resolved).await?;
+        Ok(resolved)
+    }
+
+    /// Like [`Self::resolve_lakehouse_table_status`], but for a caller that does not
+    /// access the table, so the catalog is not asked for anything more than the status,
+    /// and no storage credentials are requested.
+    pub fn resolve_lakehouse_table_status_without_storage<T: AsRef<str>>(
         &self,
         table: &[T],
         status: &TableStatus,
         operation: sail_common_datafusion::catalog::LakehouseOperation,
     ) -> CatalogResult<LakehouseResolvedTable> {
         let (provider, _, _) = self.resolve_object(table)?;
-        let catalog_table = table
-            .iter()
-            .map(|part| part.as_ref().to_string())
-            .collect::<Vec<_>>();
         Ok(resolve_lakehouse_table_status(
             provider.get_name(),
-            catalog_table,
+            owned_table(table),
             status,
             operation,
             &provider.lakehouse_capabilities(),
         ))
     }
 
+    /// Plans the creation of the table, whose storage is accessed with the storage
+    /// credentials that the catalog issues for the planned table in the session `ctx`.
     pub async fn plan_lakehouse_create<T: AsRef<str>>(
         &self,
+        ctx: &(impl SessionExtensionAccessor + ?Sized),
         table: &[T],
         request: LakehouseCreateRequest,
     ) -> CatalogResult<LakehouseCreatePlan> {
         let (provider, database, name) = self.resolve_object(table)?;
-        provider
+        let plan = provider
             .plan_lakehouse_create(&database, &name, request)
-            .await
+            .await?;
+        install_table_storage_credentials(ctx, &owned_table(table), &plan.table).await?;
+        Ok(plan)
     }
 
     pub async fn begin_table_access<T: AsRef<str>>(
@@ -198,6 +231,17 @@ impl CatalogManager {
     ) -> CatalogResult<TableAccessSession> {
         let (provider, database, name) = self.resolve_object(table)?;
         provider.begin_table_access(&database, &name, request).await
+    }
+
+    pub async fn get_table_storage_credentials<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .get_table_storage_credentials(&database, &name, request)
+            .await
     }
 
     pub async fn plan_lakehouse_scan<T: AsRef<str>>(
@@ -323,6 +367,15 @@ impl CatalogManager {
             .await
     }
 
+    pub async fn commit_delta_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.commit_delta_table(&database, &table, commit).await
+    }
+
     pub async fn get_delta_ratified_commits<T: AsRef<str>>(
         &self,
         table: &[T],
@@ -343,27 +396,32 @@ impl CatalogManager {
     }
 
     /// Returns a catalog table together with its lakehouse resolution, loaded from one
-    /// catalog response.
+    /// catalog response. The storage of the table is accessed with the storage credentials
+    /// that the catalog issues for the table in the session `ctx`.
     pub async fn get_lakehouse_table<T: AsRef<str>>(
         &self,
+        ctx: &(impl SessionExtensionAccessor + ?Sized),
         table: &[T],
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let (provider, database, name) = self.resolve_object(table)?;
-        provider
+        let (status, resolved) = provider
             .get_lakehouse_table(&database, &name, request)
-            .await
+            .await?;
+        install_table_storage_credentials(ctx, &owned_table(table), &resolved).await?;
+        Ok((status, resolved))
     }
 
     /// Like [`Self::get_table_or_view`], but a catalog table also comes with its lakehouse
     /// resolution, as returned by [`Self::get_lakehouse_table`].
     pub async fn get_lakehouse_table_or_view<T: AsRef<str>>(
         &self,
+        ctx: &(impl SessionExtensionAccessor + ?Sized),
         reference: &[T],
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, Option<LakehouseResolvedTable>)> {
         let table = async {
-            let (status, resolved) = self.get_lakehouse_table(reference, request).await?;
+            let (status, resolved) = self.get_lakehouse_table(ctx, reference, request).await?;
             Ok((status, Some(resolved)))
         };
         self.get_table_or_view_with(reference, table, |status| (status, None))

@@ -5,8 +5,12 @@
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
+use chrono::DateTime;
+use object_store::ObjectMeta;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
+
+use crate::spec::parse_commit_version;
 
 /// Configuration options for loading Delta table snapshots.
 ///
@@ -15,6 +19,31 @@ use serde::{Deserialize, Serialize};
 pub struct CatalogManagedCommitFile {
     pub version: i64,
     pub file_name: String,
+    /// The size of the file in bytes that the catalog returns, or zero when it is not known.
+    #[serde(default)]
+    pub file_size: i64,
+    /// The modification time of the file in milliseconds since the epoch that the catalog
+    /// returns.
+    #[serde(default)]
+    pub file_modification_timestamp: i64,
+}
+
+impl CatalogManagedCommitFile {
+    /// Returns the metadata of the file from what the catalog returns, so that the file is not
+    /// looked up in the object store. Returns `None` when the catalog does not return the size.
+    pub(crate) fn object_meta(&self) -> Option<ObjectMeta> {
+        let size = u64::try_from(self.file_size)
+            .ok()
+            .filter(|size| *size > 0)?;
+        let last_modified = DateTime::from_timestamp_millis(self.file_modification_timestamp)?;
+        Some(ObjectMeta {
+            location: catalog_managed_commit_path(&self.file_name),
+            last_modified,
+            size,
+            e_tag: None,
+            version: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,9 +58,14 @@ impl CatalogManagedCommitSet {
     }
 }
 
+/// Returns the path of a commit file returned by the catalog. The catalog may return a commit
+/// after it is published, so a published file name (`<version>.json`) is a file of the Delta
+/// log directory, and any other file name is a staged commit.
 pub(crate) fn catalog_managed_commit_path(file_name: &str) -> Path {
     let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
+    if parse_commit_version(file_name).is_some() {
+        Path::from(format!("_delta_log/{file_name}"))
+    } else if let Some(index) = file_name.find("_delta_log/") {
         Path::from(&file_name[index..])
     } else if let Some(index) = file_name.find("_staged_commits/") {
         Path::from(format!("_delta_log/{}", &file_name[index..]))
@@ -42,6 +76,21 @@ pub(crate) fn catalog_managed_commit_path(file_name: &str) -> Path {
     } else {
         Path::from(format!("_delta_log/_staged_commits/{file_name}"))
     }
+}
+
+/// Returns the version that the file name of a commit returned by the catalog starts with.
+/// The file name of a published commit is `<version>.json`, and the file name of a staged
+/// commit is `<version>.<uuid>.json`, with the version padded to 20 digits.
+pub(crate) fn catalog_managed_commit_version(file_name: &str) -> Option<i64> {
+    let path = catalog_managed_commit_path(file_name);
+    let name = path.filename()?;
+    let (version, _) = name.split_once('.')?;
+    if version.len() != 20 || !version.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    name.ends_with(".json")
+        .then(|| version.parse().ok())
+        .flatten()
 }
 
 pub(crate) fn catalog_managed_commit_file_name(file_name: &str) -> String {

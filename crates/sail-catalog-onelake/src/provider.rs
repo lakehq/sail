@@ -6,10 +6,11 @@ use std::sync::Arc;
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -21,6 +22,8 @@ use sail_catalog_iceberg::{
     REST_CATALOG_PROP_WAREHOUSE,
 };
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
+use sail_common::utils::http::SAIL_USER_AGENT;
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
 use url::Url;
@@ -89,6 +92,9 @@ impl OneLakeCatalogProvider {
                         default_catalog: catalog_name,
                         uri,
                         credentials,
+                        // The default of the Unity Catalog provider names products for
+                        // Databricks, which do not concern OneLake.
+                        user_agent: Some(SAIL_USER_AGENT.to_string()),
                     },
                 )?)
             }
@@ -296,6 +302,18 @@ impl CatalogProvider for OneLakeCatalogProvider {
         Ok((self.normalize_table_status(status), resolved))
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, status, request)
+            .await
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
@@ -338,6 +356,15 @@ impl CatalogProvider for OneLakeCatalogProvider {
         self.inner
             .commit_lakehouse_table(database, table, request)
             .await
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        self.inner.commit_delta_table(database, table, commit).await
     }
 
     async fn get_delta_ratified_commits(

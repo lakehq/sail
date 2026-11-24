@@ -16,7 +16,7 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{CatalogTableLookupKey, PlanResolverState};
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_truncate(
@@ -34,26 +34,44 @@ impl PlanResolver<'_> {
         // Resolve views before format paths, including temporary views shadowing tables.
         let manager = self.ctx.extension::<CatalogManager>()?;
         let mut table = table;
-        let transactional = match manager.get_table_or_view(table.parts()).await {
-            Ok(status) => match status.kind {
+        // The target is looked up once in the statement.
+        let reference: Vec<String> = table.clone().into();
+        let transactional = match self
+            .lookup_catalog_table(&manager, &reference, true, state)
+            .await
+        {
+            Ok(lookup) => match &lookup.0.kind {
                 TableKind::Table { format, .. } => {
-                    // A namespace named delta/iceberg is not a format path. Preserve
-                    // the catalog resolution for both target metadata and its read plan.
-                    let name = status
-                        .catalog
-                        .into_iter()
-                        .chain(status.database)
-                        .chain(std::iter::once(status.name))
-                        .collect::<Vec<_>>();
-                    table = spec::ObjectName::from(name);
-                    registry
+                    let transactional = registry
                         .get_lake_source(&format.to_ascii_lowercase())
-                        .is_ok()
+                        .is_ok();
+                    // A namespace named delta/iceberg is not a format path. Preserve
+                    // the catalog resolution for both target metadata and its read plan,
+                    // which resolve the name of the table in the catalog with this lookup.
+                    if path_format.is_some() {
+                        let status = &lookup.0;
+                        let name = status
+                            .catalog
+                            .iter()
+                            .chain(&status.database)
+                            .chain(std::iter::once(&status.name))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        state.insert_catalog_table_lookup(
+                            CatalogTableLookupKey {
+                                reference: name.clone(),
+                                views: true,
+                            },
+                            lookup.clone(),
+                        );
+                        table = spec::ObjectName::from(name);
+                    }
+                    transactional
                 }
                 _ => {
                     return Err(PlanError::unsupported(format!(
                         "[EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE] 'TRUNCATE TABLE' expects a table but `{}` is a view.",
-                        status.name
+                        lookup.0.name
                     )));
                 }
             },
@@ -65,7 +83,7 @@ impl PlanResolver<'_> {
                 table: table.into(),
             });
         }
-        let target = self.resolve_row_level_target(&table).await?;
+        let target = self.resolve_row_level_target(&table, state).await?;
         let source = registry.get_lake_source(&target.format)?;
         let target_plan = Arc::new(self.resolve_row_level_table_plan(table, state).await?);
         let truncate = source

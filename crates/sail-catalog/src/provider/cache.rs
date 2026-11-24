@@ -8,14 +8,16 @@ use datafusion::arrow::datatypes::SchemaRef;
 use moka::future::Cache;
 use moka::policy::EvictionPolicy;
 use sail_common::config::CatalogCacheConfig;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest,
 };
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -339,6 +341,18 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             .await
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, status, request)
+            .await
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
@@ -358,6 +372,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
     ) -> CatalogResult<TableAccessSession> {
         self.inner
             .begin_table_access(database, table, request)
+            .await
+    }
+
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        self.inner
+            .get_table_storage_credentials(database, table, request)
             .await
     }
 
@@ -394,6 +419,28 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         })
         .await
         .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let inner = self.inner.clone();
+        let cache = self.table_cache.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        tokio::spawn(async move {
+            let outcome = inner.commit_delta_table(&database, &table, commit).await;
+            // Unknown outcomes may also have changed the authoritative table.
+            if let Some(cache) = cache {
+                cache.invalidate(&database).await;
+            }
+            outcome
+        })
+        .await
+        .unwrap_or_else(|error| Ok(DeltaCommitOutcome::Unknown(error.to_string())))
     }
 
     async fn get_delta_ratified_commits(
@@ -958,6 +1005,7 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: false,
+            staged: None,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();
 
@@ -1150,7 +1198,6 @@ mod tests {
                 "t1",
                 DeltaRatifiedCommitRequest {
                     context: context.clone(),
-                    table_uri: "file:///tmp/table".to_string(),
                     start_version: 7,
                     end_version: None,
                 },

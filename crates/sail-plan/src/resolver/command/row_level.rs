@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion_common::TableReference;
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
+use sail_catalog::lakehouse::TableAccessPurpose;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
@@ -64,6 +65,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_row_level_target(
         &self,
         table: &spec::ObjectName,
+        state: &mut PlanResolverState,
     ) -> PlanResult<RowLevelTarget> {
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
@@ -99,9 +101,13 @@ impl PlanResolver<'_> {
             }
         }
 
+        // The target is looked up once in the statement, so the rows that the statement
+        // reads from the target and the commit of the statement are of the same state of
+        // the table.
+        let table_name: Vec<String> = table.clone().into();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let status = catalog_manager
-            .get_table_or_view(table.parts())
+        let (status, resolved) = self
+            .lookup_catalog_table(&catalog_manager, &table_name, true, state)
             .await
             .map_err(PlanError::from)?;
         match status.kind {
@@ -116,13 +122,15 @@ impl PlanResolver<'_> {
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
-                let table_name: Vec<String> = table.clone().into();
+                let mut resolved = resolved.ok_or_else(|| {
+                    PlanError::internal("catalog table without lakehouse resolution")
+                })?;
+                resolved.execution.operation = LakehouseOperation::Write;
                 let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
+                    .begin_lakehouse_table_access(
                         &table_name,
-                        LakehouseOperation::Write,
-                        Some(&normalized_format),
-                        vec![],
+                        resolved,
+                        TableAccessPurpose::DataWrite,
                     )
                     .await?;
                 Ok(RowLevelTarget {

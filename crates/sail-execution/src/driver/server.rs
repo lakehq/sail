@@ -5,14 +5,16 @@ use std::sync::Arc;
 use log::debug;
 use opentelemetry_proto::tonic::metrics::v1::ResourceMetrics;
 use prost::Message;
+use sail_object_store::{StorageCredentialsError, StorageCredentialsRequest};
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
 use crate::driver::r#gen::driver_service_server::DriverService;
 use crate::driver::r#gen::{
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportMetricsRequest, ReportMetricsResponse,
-    ReportTaskStatusRequest, ReportTaskStatusResponse, ReportWorkerHeartbeatRequest,
-    ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    GetStorageCredentialsRequest, GetStorageCredentialsResponse, RegisterWorkerRequest,
+    RegisterWorkerResponse, ReportMetricsRequest, ReportMetricsResponse, ReportTaskStatusRequest,
+    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
+    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{DriverMessage, DriverRegistryAccessor, r#gen};
 use crate::error::ExecutionError;
@@ -157,6 +159,43 @@ impl DriverService for DriverServer {
         let response = ReportTaskStatusResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
+    }
+
+    async fn get_storage_credentials(
+        &self,
+        request: Request<GetStorageCredentialsRequest>,
+    ) -> Result<Response<GetStorageCredentialsResponse>, Status> {
+        // The request and the response are not logged.
+        let GetStorageCredentialsRequest {
+            driver_id,
+            token,
+            owner,
+            location,
+            access,
+        } = request.into_inner();
+        let access = r#gen::StorageAccess::try_from(access).map_err(ExecutionError::from)?;
+        let stores = self
+            .registry
+            .get(DriverId::from(driver_id))
+            .await?
+            .vended_object_stores()
+            .await?
+            .ok_or_else(|| Status::permission_denied("the request is not accepted"))?;
+        let request = StorageCredentialsRequest {
+            token: Arc::from(token),
+            owner,
+            location,
+            access: access.into(),
+        };
+        match stores.credentials(&request).await {
+            Ok(credentials) => Ok(Response::new(credentials.into())),
+            Err(StorageCredentialsError::Denied) => {
+                Err(Status::permission_denied("the request is not accepted"))
+            }
+            Err(StorageCredentialsError::Unavailable(message)) => {
+                Err(Status::failed_precondition(message))
+            }
+        }
     }
 
     async fn report_metrics(

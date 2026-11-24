@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
@@ -304,6 +305,7 @@ impl PlanResolver<'_> {
                     canonical_table.extend(table_status.database.iter().cloned());
                     canonical_table.push(table_status.name.clone());
                     let planning = resolve_procedure_table_planning(
+                        self.ctx,
                         manager.as_ref(),
                         &canonical_table,
                         format,
@@ -527,6 +529,7 @@ struct ProcedureTablePlanning {
 }
 
 async fn resolve_procedure_table_planning(
+    ctx: &SessionContext,
     manager: &CatalogManager,
     table: &[String],
     format: &str,
@@ -534,6 +537,7 @@ async fn resolve_procedure_table_planning(
 ) -> PlanResult<ProcedureTablePlanning> {
     let resolved = manager
         .resolve_lakehouse_table(
+            ctx,
             table,
             ResolveLakehouseTableRequest {
                 catalog_table: table.to_vec(),
@@ -737,6 +741,66 @@ fn procedure_path_source(path: String) -> SourceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod vended_credentials {
+        use datafusion::execution::context::SessionConfig;
+        use object_store::memory::InMemory;
+        use object_store::path::Path as ObjectPath;
+        use object_store::{ObjectStore, ObjectStoreExt};
+        use sail_catalog::testing::{ManagedDeltaCatalog, single_catalog_manager};
+        use sail_object_store::{VendedObjectStores, VendedStoreFactory};
+
+        use super::*;
+
+        const LOCATION: &str = "memory:///warehouse/items";
+
+        #[tokio::test]
+        async fn procedure_planning_accesses_catalog_managed_storage_with_vended_credentials() {
+            let file = ObjectPath::from("warehouse/items/_delta_log/0.json");
+            // Only the store that uses the vended credentials has the file.
+            let vended = Arc::new(InMemory::new());
+            let put = vended.put(&file, "{}".into()).await;
+            assert!(put.is_ok(), "{put:?}");
+            let factory: VendedStoreFactory = {
+                let vended = vended.clone();
+                Arc::new(move |_| Ok(vended.clone() as Arc<dyn ObjectStore>))
+            };
+            let manager = single_catalog_manager(Arc::new(ManagedDeltaCatalog::vending(LOCATION)));
+            assert!(manager.is_ok());
+            let Ok(manager) = manager else {
+                unreachable!();
+            };
+            let manager = Arc::new(manager);
+            let config = SessionConfig::new()
+                .with_extension(manager.clone())
+                .with_extension(Arc::new(VendedObjectStores::with_factory(factory)));
+            let ctx = SessionContext::new_with_config(config);
+            let url = url::Url::parse(LOCATION);
+            assert!(url.is_ok(), "{url:?}");
+            let Ok(url) = url else {
+                unreachable!();
+            };
+            ctx.runtime_env()
+                .register_object_store(&url, Arc::new(InMemory::new()));
+
+            let planning = resolve_procedure_table_planning(
+                &ctx,
+                &manager,
+                &["items".to_string()],
+                "delta",
+                LakeProcedureAccess::MetadataRead,
+            )
+            .await;
+            assert!(planning.is_ok(), "{:?}", planning.err());
+            let store = ctx.runtime_env().object_store_registry.get_store(&url);
+            assert!(store.is_ok(), "{:?}", store.err());
+            let Ok(store) = store else {
+                unreachable!();
+            };
+            let read = store.get(&file).await;
+            assert!(read.is_ok(), "{read:?}");
+        }
+    }
 
     #[test]
     fn procedure_long_arrays_preserve_null_elements_and_empty_arrays() {

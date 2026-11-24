@@ -14,7 +14,9 @@ use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::AlterTableOptions;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseOperation, TableColumnStatus, TableKind,
+};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo, find_path_in_options,
@@ -54,7 +56,7 @@ impl PlanResolver<'_> {
         if !self.alter_table_target_is_delta(table, false).await? {
             return Ok(());
         }
-        let Some(info) = self.resolve_table_info(table).await? else {
+        let Some(info) = self.resolve_table_info(table, state).await? else {
             return Ok(());
         };
         let generated = requested
@@ -309,6 +311,20 @@ impl PlanResolver<'_> {
             }
             Err(e) => return Err(e.into()),
         };
+        // A Unity Catalog managed table is refused before the validation reads its storage.
+        let resolved = self
+            .ctx
+            .extension::<CatalogManager>()?
+            .resolve_lakehouse_table_status_without_storage(
+                table.parts(),
+                &status,
+                LakehouseOperation::Alter,
+            )?;
+        if resolved.execution.commit == CommitAuthority::DeltaRatifiedCommit {
+            return Err(PlanError::unsupported(
+                "ALTER TABLE ADD CONSTRAINT is not yet supported for Unity Catalog managed Delta tables",
+            ));
+        }
 
         let TableKind::Table {
             columns: _,
@@ -866,4 +882,50 @@ fn parse_delta_check_constraint_expr(name: &str, expression: &str) -> PlanResult
             "failed to analyze Delta CHECK constraint `{name}` expression `{expression}`: {e}"
         ))
     })
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::prelude::SessionContext;
+    use sail_catalog::testing::{ManagedDeltaCatalog, single_catalog_manager};
+    use sail_common::spec;
+
+    use crate::config::PlanConfig;
+    use crate::resolver::PlanResolver;
+    use crate::resolver::state::PlanResolverState;
+
+    #[tokio::test]
+    async fn add_constraint_to_catalog_managed_table_is_refused_before_storage_is_read() {
+        // The storage of the table does not exist.
+        let catalog = ManagedDeltaCatalog::new("memory:///missing/");
+        let manager = single_catalog_manager(Arc::new(catalog)).unwrap();
+        let ctx = SessionContext::new();
+        let mut state = ctx.state();
+        state.config_mut().set_extension(Arc::new(manager));
+        let ctx = SessionContext::new_with_state(state);
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new().unwrap()));
+        let error = resolver
+            .resolve_delta_add_check_constraint(
+                spec::ObjectName::from(vec!["unity", "default", "items"]),
+                false,
+                "positive_id".to_string(),
+                spec::ExprWithSource {
+                    expr: spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                    source: Some("true".to_string()),
+                },
+                &mut PlanResolverState::new(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "ALTER TABLE ADD CONSTRAINT is not yet supported for Unity Catalog managed Delta tables"
+            ),
+            "{error}"
+        );
+    }
 }

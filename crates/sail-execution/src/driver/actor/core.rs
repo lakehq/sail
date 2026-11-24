@@ -55,6 +55,7 @@ impl Actor for DriverActor {
             worker_scaler,
             task_runner: None,
             extensions: Default::default(),
+            vended_object_stores: None,
             activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
@@ -191,6 +192,10 @@ impl Actor for DriverActor {
             } => self.handle_fetch_worker_streams(ctx, worker_id, keys, schema, result),
             DriverMessage::CelebornGetLifecycleManager { result } => {
                 self.handle_celeborn_get_lifecycle_manager(result)
+            }
+            DriverMessage::GetVendedObjectStores { result } => {
+                let _ = result.send(self.vended_object_stores.clone());
+                ActorAction::Continue
             }
             DriverMessage::Shutdown { result } => self.handle_shutdown(ctx, result),
         }

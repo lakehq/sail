@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 pub use sail_common::spec::{ColumnChange, CreateTableMode};
+use sail_common_datafusion::catalog::delta::{DeltaCreatedVersion, DeltaProtocolInfo};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -43,6 +44,24 @@ pub struct CreateTableOptions {
     pub is_external: bool,
     #[serde(default)]
     pub is_write_precondition: bool,
+    /// The state of the table when the catalog stages it before it is created.
+    #[serde(default)]
+    pub staged: Option<Box<StagedTableCreate>>,
+}
+
+/// The state of a table that the catalog stages before the table is created.
+/// The catalog plans it, and the storage metadata created for the table is added to it
+/// before the table is created in the catalog.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct StagedTableCreate {
+    /// The table properties for the storage metadata and the table in the catalog,
+    /// which include the properties that the catalog requires for the staged table.
+    #[serde(default)]
+    pub properties: Vec<(String, String)>,
+    /// The Delta protocol that the catalog requires for the storage metadata.
+    pub required_protocol: Option<DeltaProtocolInfo>,
+    /// The first version of the Delta log created for the table.
+    pub created_metadata: Option<DeltaCreatedVersion>,
 }
 
 pub enum StageTableOptions {

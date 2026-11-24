@@ -12,6 +12,7 @@ use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_object_store::VendedObjectStores;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -91,6 +92,11 @@ pub enum DriverMessage {
     CelebornGetLifecycleManager {
         result: oneshot::Sender<Option<ActorHandle<LifecycleManagerActor>>>,
     },
+    /// Gets the object stores of the session that use storage credentials issued by
+    /// catalogs, if the session has run a job.
+    GetVendedObjectStores {
+        result: oneshot::Sender<Option<Arc<VendedObjectStores>>>,
+    },
     Shutdown {
         result: Option<oneshot::Sender<()>>,
     },
@@ -157,6 +163,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStreams { .. } => "FetchWorkerStreams",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
+            DriverMessage::GetVendedObjectStores { .. } => "GetVendedObjectStores",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
         name.into()
@@ -277,6 +284,7 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
             }
             DriverMessage::CelebornGetLifecycleManager { result: _ } => {}
+            DriverMessage::GetVendedObjectStores { result: _ } => {}
             DriverMessage::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))

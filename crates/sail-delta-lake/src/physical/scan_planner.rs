@@ -371,7 +371,6 @@ pub(crate) async fn plan_delta_scan(
             scan_projection.clone(),
             limit,
             pushdown_filter,
-            None,
             snapshot.load_config().catalog_managed_commits.clone(),
         )
         .with_output_statistics(output_statistics),
@@ -424,7 +423,6 @@ pub(crate) async fn plan_delta_metadata_aggregate(
         Arc::new(snapshot.schema().clone()),
         Arc::clone(&source.schema),
         config,
-        None,
         None,
         None,
         None,

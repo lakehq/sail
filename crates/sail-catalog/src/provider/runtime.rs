@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 use tokio::runtime::Handle;
 
 use super::{
@@ -13,10 +14,11 @@ use super::{
 };
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest,
 };
 
 pub struct RuntimeAwareCatalogProvider<P: CatalogProvider> {
@@ -168,6 +170,29 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let status = status.clone();
+        self.handle
+            .spawn(async move {
+                inner
+                    .resolve_lakehouse_table(&database, &table, &status, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute resolve_lakehouse_table: {e}"))
+            })?
+    }
+
     async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
@@ -203,6 +228,29 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to execute begin_table_access: {e}"))
+            })?
+    }
+
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .get_table_storage_credentials(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to execute get_table_storage_credentials: {e}"
+                ))
             })?
     }
 
@@ -242,6 +290,26 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| {
                 CatalogError::External(format!("Failed to execute commit_lakehouse_table: {e}"))
             })?
+    }
+
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        // The catalog may have ratified the commit of a task that did not finish.
+        self.handle
+            .spawn(async move { inner.commit_delta_table(&database, &table, commit).await })
+            .await
+            .unwrap_or_else(|e| {
+                Ok(DeltaCommitOutcome::Unknown(format!(
+                    "Failed to execute commit_delta_table: {e}"
+                )))
+            })
     }
 
     async fn get_delta_ratified_commits(

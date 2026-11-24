@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub use sail_common_datafusion::catalog::delta::DeltaRatifiedCommit;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaRatifiedCommits,
+    unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,
     LakehouseAuthority, LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
     LakehouseRuntimeAccess, LakehouseStatusHints, MetadataPointerAuthority, ScanAuthority,
-    TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
+    StorageAccess, TableAccessSessionRef, TableKind, TableLifecycle, TableStatus,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{
     CreateTableMetadataRequirement, CreateTableOptions, LakeSourceCreateMetadataMode,
+    StagedTableCreate,
 };
 
 // TODO: Complete the remaining lakehouse catalog capability work:
@@ -51,16 +54,26 @@ pub struct LakehouseResolvedTable {
     pub runtime: Option<LakehouseRuntimeAccess>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LakehouseCreateRequest {
     pub catalog_table: Vec<String>,
     pub options: CreateTableOptions,
+    /// The table as the catalog returned it to the statement that asks for the plan,
+    /// when the statement has looked the table up and the table exists. The provider
+    /// looks the table up itself when it needs the table and this is `None`.
+    pub existing: Option<Box<TableStatus>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LakehouseCreatePlan {
     pub table: LakehouseResolvedTable,
     pub materialization: LakehouseCreateMaterialization,
+    /// The state of the table when the catalog stages it before it is created.
+    pub staged: Option<Box<StagedTableCreate>>,
+    /// Whether the plan replaces an existing table that keeps its entry in the catalog.
+    /// The storage metadata of the plan, or the commit of the write, is then all that
+    /// replaces the table, and the catalog has no table to create.
+    pub replaces_in_place: bool,
 }
 
 // TODO: Replace this compatibility materialization shape with protocol-specific
@@ -106,6 +119,14 @@ pub struct TableAccessSession {
     pub expires_at_ms: Option<i64>,
     pub credential_scope: Option<String>,
     pub capability_fingerprint: CapabilityFingerprint,
+}
+
+/// A request for the storage credentials that the catalog issues for a table.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TableStorageCredentialsRequest {
+    /// The storage location of the table.
+    pub location: String,
+    pub access: StorageAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,28 +177,35 @@ pub enum LakehouseCommitOutcome {
     },
 }
 
+/// What a catalog answers to a staged commit of a catalog-managed Delta table. An error
+/// instead of an outcome means that the catalog did not ratify the commit: the catalog
+/// refused the request, or the request was not sent.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DeltaCommitOutcome {
+    /// The catalog ratified the commit.
+    Committed,
+    /// The version of the commit is taken by another commit.
+    Conflict(String),
+    /// The catalog accepts no commit until the ratified commits of the table are published
+    /// and reported to it.
+    BackfillRequired(String),
+    /// The catalog throttled the request, which can be sent again.
+    Throttled(String),
+    /// The catalog did not tell whether it ratified the commit (a server error, a timeout, or
+    /// a network error).
+    Unknown(String),
+}
+
+/// A request for the ratified commits of the table of the context, with the versions from
+/// the start version to the end version, or to the latest version of the table.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DeltaRatifiedCommitRequest {
     pub context: LakehouseExecutionContext,
-    pub table_uri: String,
     pub start_version: i64,
     pub end_version: Option<i64>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct DeltaRatifiedCommitResponse {
-    pub latest_table_version: i64,
-    pub commits: Vec<DeltaRatifiedCommit>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct DeltaRatifiedCommit {
-    pub version: i64,
-    pub timestamp: i64,
-    pub file_name: String,
-    pub file_size: i64,
-    pub file_modification_timestamp: i64,
-}
+pub type DeltaRatifiedCommitResponse = DeltaRatifiedCommits;
 
 pub fn resolve_lakehouse_table_status(
     provider_id: impl Into<String>,
@@ -309,6 +337,8 @@ pub fn plan_lakehouse_create_from_requirement(
             runtime: None,
         },
         materialization,
+        staged: options.staged.clone(),
+        replaces_in_place: false,
     }
 }
 

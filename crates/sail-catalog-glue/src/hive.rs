@@ -151,6 +151,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         properties,
         is_external: _,
         is_write_precondition: _,
+        staged: _,
     } = options;
 
     // Extract just the column names for partitioning

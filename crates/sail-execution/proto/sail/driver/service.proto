@@ -64,6 +64,55 @@ message ReportMetricsRequest {
 message ReportMetricsResponse {
 }
 
+enum StorageAccess {
+  STORAGE_ACCESS_READ = 0;
+  STORAGE_ACCESS_READ_WRITE = 1;
+}
+
+// A request of a worker for the temporary storage credentials that a catalog issued
+// for a table in the session of the driver.
+message GetStorageCredentialsRequest {
+  uint64 driver_id = 1;
+  // The value that the driver sent to its workers with the storage routes.
+  bytes token = 2;
+  string owner = 3;
+  string location = 4;
+  StorageAccess access = 5;
+}
+
+message GetStorageCredentialsResponse {
+  oneof credential {
+    S3StorageCredential s3 = 1;
+    // An S3-compatible storage that is accessed with the credentials of the environment.
+    S3StorageEndpoint s3_environment = 2;
+    AzureSasStorageCredential azure_sas = 3;
+    GcsOauthStorageCredential gcs_oauth = 4;
+  }
+  // The time when the credential expires, in milliseconds since the Unix epoch.
+  optional int64 expires_at_ms = 5;
+}
+
+message S3StorageCredential {
+  string access_key_id = 1;
+  string secret_access_key = 2;
+  optional string session_token = 3;
+  // The storage that the credential is for, if it is not AWS S3.
+  optional S3StorageEndpoint endpoint = 4;
+}
+
+message S3StorageEndpoint {
+  string url = 1;
+  optional string region = 2;
+}
+
+message AzureSasStorageCredential {
+  string token = 1;
+}
+
+message GcsOauthStorageCredential {
+  string token = 1;
+}
+
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
@@ -72,4 +121,7 @@ service DriverService {
   rpc ReportWorkerKnownPeers(ReportWorkerKnownPeersRequest) returns (ReportWorkerKnownPeersResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
   rpc ReportMetrics(ReportMetricsRequest) returns (ReportMetricsResponse) {}
+  // Get the storage credentials for a storage route that the worker received with a task batch.
+  // The credentials are only sent in the response to this request, and are not part of any plan.
+  rpc GetStorageCredentials(GetStorageCredentialsRequest) returns (GetStorageCredentialsResponse) {}
 }

@@ -948,6 +948,10 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
+        /// The value of the `User-Agent` header of the requests to the catalog.
+        /// Defaults to `Sail/<version>`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_agent: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },

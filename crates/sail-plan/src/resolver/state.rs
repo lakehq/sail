@@ -28,12 +28,12 @@ pub(super) struct TableSourceKey {
     pub temporal_options: Vec<(String, String)>,
 }
 
-/// Identifies a catalog table lookup by the table reference as written and the
-/// format required by the read, if any.
+/// Identifies a catalog table lookup by the table reference as written and whether
+/// views are looked up as well.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct CatalogTableLookupKey {
     pub reference: Vec<String>,
-    pub required_format: Option<String>,
+    pub views: bool,
 }
 
 struct SharedTableSource(Arc<dyn TableSource>);

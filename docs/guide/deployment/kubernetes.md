@@ -108,6 +108,12 @@ The example sets the `SAIL_MODE` environment variable to `kubernetes-cluster` fo
 
 :::
 
+::: warning
+
+The driver and the workers communicate without encryption and do not authenticate each other. Protect the driver port and the worker ports in your cluster, for example with a service mesh that uses mutual TLS, or with network policies. This matters in particular when a catalog issues storage credentials for tables, since the workers get these credentials from the driver. See [Storage Credentials](../catalog/unity.md#storage-credentials) for more information.
+
+:::
+
 ## Overriding the Default Pod Spec
 
 By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into

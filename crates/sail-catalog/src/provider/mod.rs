@@ -10,15 +10,17 @@ use datafusion::arrow::datatypes::SchemaRef;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus, TableStorageCredentials};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
-    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
-    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
-    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
+    BeginTableAccessRequest, DeltaCommitOutcome, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession, TableStorageCredentialsRequest, plan_lakehouse_create_from_requirement,
+    resolve_lakehouse_table_status,
 };
 
 /// Storage publication performed only after the catalog has reserved and prevalidated the
@@ -131,14 +133,29 @@ pub trait CatalogProvider: Send + Sync {
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
-        let resolved = resolve_lakehouse_table_status(
+        let resolved = self
+            .resolve_lakehouse_table(database, table, &status, request)
+            .await?;
+        Ok((status, resolved))
+    }
+
+    /// Returns the lakehouse resolution of a table whose status the catalog returned.
+    /// A provider asks the catalog here for what the table status does not tell.
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        status: &TableStatus,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let _ = (database, table);
+        Ok(resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
-            &status,
+            status,
             request.operation,
             &self.lakehouse_capabilities(),
-        );
-        Ok((status, resolved))
+        ))
     }
 
     async fn plan_lakehouse_create(
@@ -170,6 +187,19 @@ pub trait CatalogProvider: Send + Sync {
         ))
     }
 
+    /// Gets the temporary storage credentials that the catalog issues for the table.
+    /// Returns nothing if the catalog does not issue storage credentials for the table,
+    /// in which case the storage is accessed with the credentials of the environment.
+    async fn get_table_storage_credentials(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: TableStorageCredentialsRequest,
+    ) -> CatalogResult<Option<TableStorageCredentials>> {
+        let _ = (database, table, request);
+        Ok(None)
+    }
+
     async fn plan_lakehouse_scan(
         &self,
         database: &Namespace,
@@ -191,6 +221,19 @@ pub trait CatalogProvider: Send + Sync {
         let _ = (database, table, request);
         Err(CatalogError::UnsupportedCapability(
             "lakehouse table commits".to_string(),
+        ))
+    }
+
+    /// Commits a staged commit of a catalog-managed Delta table to the catalog.
+    async fn commit_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        commit: DeltaCatalogCommit,
+    ) -> CatalogResult<DeltaCommitOutcome> {
+        let _ = (database, table, commit);
+        Err(CatalogError::UnsupportedCapability(
+            "Delta table commits".to_string(),
         ))
     }
 

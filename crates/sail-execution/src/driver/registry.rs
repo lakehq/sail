@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::{ActorHandle, ActorSendError};
+use sail_object_store::VendedObjectStores;
 use tokio::sync::oneshot;
 use tonic::async_trait;
 
@@ -39,6 +41,16 @@ impl DriverHandle {
     ) -> ExecutionResult<Option<ActorHandle<LifecycleManagerActor>>> {
         let (result, receiver) = oneshot::channel();
         self.send(DriverMessage::CelebornGetLifecycleManager { result })
+            .await
+            .map_err(ExecutionError::from)?;
+        receiver.await.map_err(ExecutionError::from)
+    }
+
+    pub(crate) async fn vended_object_stores(
+        &self,
+    ) -> ExecutionResult<Option<Arc<VendedObjectStores>>> {
+        let (result, receiver) = oneshot::channel();
+        self.send(DriverMessage::GetVendedObjectStores { result })
             .await
             .map_err(ExecutionError::from)?;
         receiver.await.map_err(ExecutionError::from)

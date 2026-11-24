@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use aws_config::identity::IdentityCache;
@@ -20,9 +21,11 @@ use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
-    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, resolve_bucket_region,
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider,
+    resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
+use sail_common_datafusion::catalog::S3Endpoint;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -39,6 +42,32 @@ impl std::fmt::Display for IdentityDataError {
 
 impl std::error::Error for IdentityDataError {}
 
+/// The failure to load the S3 credentials of the environment for a storage that a
+/// catalog named without issuing credentials for it.
+///
+/// The message has the cause and is the innermost error, since the error that a client
+/// gets for a failed statement can be the innermost error only.
+#[derive(Debug)]
+struct EndpointWithoutCredentialsError {
+    endpoint: String,
+    cause: String,
+}
+
+impl std::fmt::Display for EndpointWithoutCredentialsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the catalog issued only the S3 endpoint {} for the table and no credentials, \
+             so the table is accessed with the S3 credentials of Sail, which could not be \
+             loaded ({}). Provide S3 credentials to Sail, for example with the environment \
+             variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.",
+            self.endpoint, self.cause
+        )
+    }
+}
+
+impl std::error::Error for EndpointWithoutCredentialsError {}
+
 /// Provide AWS credentials for S3.
 /// Cached credentials are used when available.
 ///
@@ -49,6 +78,9 @@ pub(crate) struct S3CredentialProvider {
     identity_resolver: SharedIdentityResolver,
     runtime_components: RuntimeComponents,
     config_bag: ConfigBag,
+    /// The S3-compatible storage that a catalog named without issuing credentials for
+    /// it, if the credentials of the environment are used for such a storage.
+    endpoint_without_credentials: Option<String>,
 }
 
 impl S3CredentialProvider {
@@ -69,7 +101,13 @@ impl S3CredentialProvider {
             identity_resolver: SharedIdentityResolver::new(provider),
             runtime_components,
             config_bag: ConfigBag::base(),
+            endpoint_without_credentials: None,
         })
+    }
+
+    fn with_endpoint_without_credentials(mut self, endpoint: Option<&S3Endpoint>) -> Self {
+        self.endpoint_without_credentials = endpoint.map(|endpoint| endpoint.url.clone());
+        self
     }
 }
 
@@ -88,7 +126,13 @@ impl CredentialProvider for S3CredentialProvider {
             .await
             .map_err(|e| object_store::Error::Generic {
                 store: "S3",
-                source: e,
+                source: match &self.endpoint_without_credentials {
+                    Some(endpoint) => Box::new(EndpointWithoutCredentialsError {
+                        endpoint: endpoint.clone(),
+                        cause: e.to_string(),
+                    }),
+                    None => e,
+                },
             })?;
         let Some(creds) = identity.data::<Credentials>() else {
             return Err(object_store::Error::Generic {
@@ -105,21 +149,74 @@ impl CredentialProvider for S3CredentialProvider {
 }
 
 pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+    get_s3_object_store_with_credentials(url, None, None, None).await
+}
+
+/// The regions of buckets that are discovered already.
+#[derive(Debug, Default)]
+pub(crate) struct BucketRegions(Mutex<HashMap<String, String>>);
+
+impl BucketRegions {
+    fn get(&self, bucket: &str) -> Option<String> {
+        let regions = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        regions.get(bucket).cloned()
+    }
+
+    fn set(&self, bucket: &str, region: &str) {
+        let mut regions = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        regions.insert(bucket.to_string(), region.to_string());
+    }
+}
+
+/// Discovers the region of the bucket, unless it is among the given regions.
+async fn discover_bucket_region(
+    bucket: &str,
+    regions: Option<&BucketRegions>,
+) -> object_store::Result<String> {
+    if let Some(region) = regions.and_then(|x| x.get(bucket)) {
+        return Ok(region);
+    }
+    let region = resolve_bucket_region(bucket, &ClientOptions::default()).await?;
+    if let Some(regions) = regions {
+        regions.set(bucket, &region);
+    }
+    Ok(region)
+}
+
+/// Creates the S3 object store that uses the given credentials if any,
+/// or the credentials of the environment otherwise.
+/// The region of the bucket is not discovered if it is among the given regions.
+/// The requests go to the given S3-compatible storage if any, instead of AWS S3
+/// or the storage that the environment configures.
+pub(crate) async fn get_s3_object_store_with_credentials(
+    url: &Url,
+    credentials: Option<AwsCredentialProvider>,
+    regions: Option<&BucketRegions>,
+    endpoint: Option<&S3Endpoint>,
+) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
 
-    if let Some(provider) = config.credentials_provider() {
+    if let Some(credentials) = credentials {
+        builder = builder.with_credentials(credentials);
+    } else if let Some(provider) = config.credentials_provider() {
         let cache = config
             .identity_cache()
             .unwrap_or_else(|| IdentityCache::lazy().build());
-        let credentials = S3CredentialProvider::try_new(provider, cache)?;
+        // A storage endpoint without credentials is what a catalog issues when it only
+        // names the storage of a table.
+        let credentials = S3CredentialProvider::try_new(provider, cache)?
+            .with_endpoint_without_credentials(endpoint);
         builder = builder.with_credentials(Arc::new(credentials));
     }
 
     let mut builder = parse_s3_url(builder, url)?;
+    if let Some(endpoint) = endpoint {
+        return with_s3_endpoint(builder, endpoint).build();
+    }
     let bucket = builder
         .get_config_value(&AmazonS3ConfigKey::Bucket)
         .ok_or_else(|| object_store::Error::Generic {
@@ -133,7 +230,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
 
     if should_resolve_bucket_region(&builder, url)? {
         debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
-        let region = resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?;
+        let region = discover_bucket_region(bucket.as_str(), regions).await?;
         debug!("S3 object store bucket: {bucket} resolved region: {region}");
         builder = builder.with_region(region);
     } else if region.is_none_or(|r| r.is_empty()) {
@@ -141,7 +238,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
             Some(region) if !region.as_ref().is_empty() => region.to_string(),
             _ => {
                 debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
-                resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?
+                discover_bucket_region(bucket.as_str(), regions).await?
             }
         };
         debug!("S3 object store bucket: {bucket} resolved region: {region}");
@@ -149,6 +246,19 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
     }
 
     builder.build()
+}
+
+/// Sends the requests to the S3-compatible storage with path-style addressing.
+/// The region of the bucket is not discovered, since the bucket is not in AWS S3.
+fn with_s3_endpoint(builder: AmazonS3Builder, endpoint: &S3Endpoint) -> AmazonS3Builder {
+    // The region of the environment is not for this storage.
+    let region = endpoint.region.as_deref().unwrap_or("us-east-1");
+    builder
+        .with_endpoint(endpoint.url.as_str())
+        .with_allow_http(endpoint.url.starts_with("http://"))
+        .with_virtual_hosted_style_request(false)
+        .with_s3_express(false)
+        .with_region(region)
 }
 
 /// Discover ordinary AWS bucket regions without overriding explicit URL or endpoint settings.
@@ -341,6 +451,138 @@ mod tests {
         )
         .unwrap();
         assert!(!should_resolve_bucket_region(&builder, &url).unwrap());
+    }
+
+    /// A catalog that issues an S3 endpoint without credentials leaves the access to the
+    /// credentials of the environment, and the error says so when there are none.
+    #[tokio::test]
+    async fn missing_credentials_for_an_endpoint_without_credentials_are_explained() {
+        use aws_credential_types::provider::error::CredentialsError;
+        use aws_credential_types::provider::{ProvideCredentials, future};
+
+        #[derive(Debug)]
+        struct NoCredentials;
+
+        impl ProvideCredentials for NoCredentials {
+            fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+            where
+                Self: 'a,
+            {
+                future::ProvideCredentials::ready(Err(CredentialsError::not_loaded(
+                    "no providers in chain provided credentials",
+                )))
+            }
+        }
+
+        let provider = |endpoint: Option<&S3Endpoint>| {
+            S3CredentialProvider::try_new(
+                SharedCredentialsProvider::new(NoCredentials),
+                IdentityCache::no_cache(),
+            )
+            .unwrap()
+            .with_endpoint_without_credentials(endpoint)
+        };
+        let endpoint = S3Endpoint {
+            url: "http://storage.test:9000".to_string(),
+            region: None,
+        };
+        let error = provider(Some(&endpoint))
+            .get_credential()
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("the catalog issued only the S3 endpoint http://storage.test:9000")
+                && error.contains("Provide S3 credentials to Sail"),
+            "{error}"
+        );
+        // The credentials of the environment for AWS S3 keep the error of the provider.
+        let error = provider(None).get_credential().await.unwrap_err();
+        assert!(!error.to_string().contains("the catalog issued"), "{error}");
+    }
+
+    /// The requests for an S3-compatible storage go to its endpoint with path-style
+    /// addressing and are signed with its region and the given credential, whatever
+    /// the environment configures and whatever is known about a bucket of the same name.
+    #[tokio::test]
+    async fn s3_endpoint_requests_use_path_style_and_the_region_of_the_endpoint() {
+        use object_store::path::Path;
+        use object_store::{ObjectStoreExt, StaticCredentialProvider};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let Ok(byte) = stream.read_u8().await else {
+                        break;
+                    };
+                    request.push(byte);
+                }
+                let _ = sender.send(String::from_utf8_lossy(&request).to_string());
+                let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let regions = BucketRegions::default();
+        regions.set("bucket", "eu-central-1");
+        let url = Url::parse("s3://bucket/table").unwrap();
+        for (region, expected) in [(Some("xx-test-1"), "xx-test-1"), (None, "us-east-1")] {
+            let endpoint = S3Endpoint {
+                url: format!("http://{address}"),
+                region: region.map(|x| x.to_string()),
+            };
+            let credentials = Arc::new(StaticCredentialProvider::new(AwsCredential {
+                key_id: "vended-key".to_string(),
+                secret_key: "secret".to_string(),
+                token: None,
+            }));
+            let store = get_s3_object_store_with_credentials(
+                &url,
+                Some(credentials),
+                Some(&regions),
+                Some(&endpoint),
+            )
+            .await
+            .unwrap();
+            let result = store.get(&Path::from("table/part.parquet")).await;
+            assert!(matches!(result, Err(object_store::Error::NotFound { .. })));
+            let request = requests.recv().await.unwrap().to_ascii_lowercase();
+            assert!(
+                request.starts_with("get /bucket/table/part.parquet http/1.1\r\n"),
+                "{request}"
+            );
+            assert!(
+                request.contains(&format!("\r\nhost: {address}\r\n")),
+                "{request}"
+            );
+            assert!(
+                request.contains("credential=vended-key/")
+                    && request.contains(&format!("/{expected}/s3/aws4_request")),
+                "{request}"
+            );
+        }
+        // The settings of the environment for another storage are replaced.
+        let builder = AmazonS3Builder::new()
+            .with_endpoint("http://localhost:9000")
+            .with_region("eu-central-1")
+            .with_virtual_hosted_style_request(true);
+        let endpoint = S3Endpoint {
+            url: "https://minio.example.com".to_string(),
+            region: Some("xx-test-1".to_string()),
+        };
+        let builder = with_s3_endpoint(parse_s3_url(builder, &url).unwrap(), &endpoint);
+        for (key, value) in [
+            (AmazonS3ConfigKey::Endpoint, "https://minio.example.com"),
+            (AmazonS3ConfigKey::Region, "xx-test-1"),
+            (AmazonS3ConfigKey::VirtualHostedStyleRequest, "false"),
+            (AmazonS3ConfigKey::Bucket, "bucket"),
+        ] {
+            assert_eq!(builder.get_config_value(&key).as_deref(), Some(value));
+        }
     }
 
     #[test]

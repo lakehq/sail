@@ -12,13 +12,15 @@ import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
+import pyarrow.parquet as pq
 import pytest
 import requests
 from pytest_bdd import given, parsers, then
 
 from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG
+from pysail.testing._dev.spark.steps.delta import delta_log_assert
 from pysail.testing._dev.spark.steps.sql import PathWrapper
 from pysail.testing.spark.session import spark_connect_server
 
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from pyspark.sql import SparkSession
+
+    from pysail.testing._dev.containers.unity_defaults import UnityCatalogServer
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +61,54 @@ def _configure_unity_catalog_spark(
     )
 
 
+@pytest.fixture(scope="session")
+def unity_uses_delta_api(unity_server: UnityCatalogServer) -> bool:
+    """Whether the server has the Unity Catalog Delta REST API, which Sail then uses for managed Delta tables."""
+    return unity_server.delta_api
+
+
+@then(
+    parsers.re(
+        r"Unity Catalog (?P<api>legacy|Delta) API delta log "
+        r"(?P<which>first commit protocol and metadata|latest effective protocol and metadata) contains"
+    )
+)
+def unity_api_delta_log_contains(
+    api: str,
+    which: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+    variables,
+    delta_log_cache: dict[str, dict],
+    snapshot,
+    datatable,
+) -> None:
+    """Assert Delta log paths that depend on the API Sail uses to create managed Delta tables.
+
+    The server decides the protocol and the properties of the table with the Delta REST API,
+    where the table features are not kept in the table configuration.
+    """
+    if (api == "Delta") != unity_uses_delta_api:
+        return
+    delta_log_assert(which, "contains", variables, delta_log_cache, snapshot, datatable)
+
+
+def _unique_database(prefix: str) -> str:
+    """Returns a new schema name, so that a schema left behind by a failed test does not
+    affect other tests that share the Unity Catalog server."""
+    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def database(spark: SparkSession):
+    """A new schema that is dropped with its tables after the test."""
+    name = _unique_database("unity_test")
+    spark.sql(f"CREATE SCHEMA {name}")
+    try:
+        yield name
+    finally:
+        spark.sql(f"DROP SCHEMA {name} CASCADE")
+
+
 def _qualified_table_name(table_name: str) -> str:
     parts = table_name.split(".")
     if len(parts) == 3:
@@ -70,6 +122,23 @@ def _unity_table_info(unity_rest_url: str, table_name: str) -> dict:
     full_name = _qualified_table_name(table_name)
     response = requests.get(
         f"{unity_rest_url}/tables/{quote(full_name, safe='')}",
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _columns(unity_rest_url: str, table: str) -> list[tuple[str, str]]:
+    columns = sorted(_unity_table_info(unity_rest_url, table).get("columns") or [], key=lambda c: c["position"])
+    return [(column["name"], column["type_name"]) for column in columns]
+
+
+def _delta_api_table(unity_rest_url: str, table: str) -> dict:
+    """Loads the table with the Unity Catalog Delta REST API."""
+    catalog_name, schema_name, name = _unity_table_parts(table)
+    response = requests.get(
+        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}"
+        f"/schemas/{quote(schema_name, safe='')}/tables/{quote(name, safe='')}",
         timeout=10,
     )
     response.raise_for_status()
@@ -91,8 +160,16 @@ def _location_to_path(location: str) -> Path:
     return Path(location)
 
 
-def _write_seed_delta_log(location: Path, table_id: str) -> None:
-    """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files."""
+def _write_seed_delta_log(
+    location: Path,
+    table_id: str,
+    protocol: dict | None = None,
+    configuration: dict | None = None,
+) -> int:
+    """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files.
+
+    Returns the in-commit timestamp of version 0.
+    """
     timestamp = int(time.time() * 1000)
     schema = {
         "type": "struct",
@@ -101,6 +178,19 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
             {"name": "name", "type": "string", "nullable": True, "metadata": {}},
         ],
     }
+    if protocol is None:
+        protocol = {
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+            "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
+        }
+    if configuration is None:
+        configuration = {
+            "delta.feature.catalogManaged": "supported",
+            "delta.enableInCommitTimestamps": "true",
+            "io.unitycatalog.tableId": table_id,
+        }
     actions = [
         {
             "commitInfo": {
@@ -114,25 +204,14 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
                 "inCommitTimestamp": timestamp,
             }
         },
-        {
-            "protocol": {
-                "minReaderVersion": 3,
-                "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
-                "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
-            }
-        },
+        {"protocol": protocol},
         {
             "metaData": {
                 "id": str(uuid.uuid4()),
                 "format": {"provider": "parquet", "options": {}},
                 "schemaString": json.dumps(schema, separators=(",", ":")),
                 "partitionColumns": [],
-                "configuration": {
-                    "delta.feature.catalogManaged": "supported",
-                    "delta.enableInCommitTimestamps": "true",
-                    "io.unitycatalog.tableId": table_id,
-                },
+                "configuration": configuration,
                 "createdTime": timestamp,
             }
         },
@@ -144,6 +223,7 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
         for action in actions:
             f.write(json.dumps(action, separators=(",", ":")))
             f.write("\n")
+    return timestamp
 
 
 def _unity_column(name: str, type_name: str, position: int) -> dict:
@@ -163,7 +243,12 @@ def _create_unity_managed_delta_table(
     table_name: str,
     unity_rest_url: str,
     columns: list[dict],
+    *,
+    delta_api: bool,
 ) -> None:
+    if delta_api:
+        _create_unity_managed_delta_table_with_delta_api(table_name, unity_rest_url, columns)
+        return
     catalog_name, schema_name, name = _unity_table_parts(table_name)
     staging_response = requests.post(
         f"{unity_rest_url}/staging-tables",
@@ -180,24 +265,113 @@ def _create_unity_managed_delta_table(
     staging_location = staging_table["staging_location"]
     _write_seed_delta_log(_location_to_path(staging_location), table_id)
 
-    create_response = requests.post(
-        f"{unity_rest_url}/tables",
-        json={
-            "name": name,
-            "catalog_name": catalog_name,
-            "schema_name": schema_name,
-            "table_type": "MANAGED",
-            "data_source_format": "DELTA",
-            "storage_location": staging_location,
-            "columns": columns,
-        },
-        timeout=10,
+    _create_table_with_table_api(unity_rest_url, table_name, staging_location, columns).raise_for_status()
+
+
+def _create_table_with_table_api(
+    unity_rest_url: str,
+    table_name: str,
+    location: str,
+    columns: list[dict],
+    properties: dict | None = None,
+) -> requests.Response:
+    """Create a managed Delta table at the staging location with the table API."""
+    catalog_name, schema_name, name = _unity_table_parts(table_name)
+    table = {
+        "name": name,
+        "catalog_name": catalog_name,
+        "schema_name": schema_name,
+        "table_type": "MANAGED",
+        "data_source_format": "DELTA",
+        "storage_location": location,
+        "columns": columns,
+    }
+    if properties is not None:
+        table["properties"] = properties
+    return requests.post(f"{unity_rest_url}/tables", json=table, timeout=10)
+
+
+def _create_unity_managed_delta_table_with_delta_api(
+    table_name: str,
+    unity_rest_url: str,
+    columns: list[dict],
+) -> None:
+    """Create the table the way the servers with the Delta REST API expect.
+
+    The server names the protocol and the properties of the table when the table is staged,
+    and version 0 of the Delta log has them before the table is created in the catalog.
+    """
+    catalog_name, schema_name, name = _unity_table_parts(table_name)
+    schema_url = (
+        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}/schemas/{quote(schema_name, safe='')}"
     )
+    staging_response = requests.post(f"{schema_url}/staging-tables", json={"name": name}, timeout=10)
+    staging_response.raise_for_status()
+    staging_table = staging_response.json()
+    table_id = staging_table["table-id"]
+    staging_location = staging_table["location"]
+    required_protocol = staging_table["required-protocol"]
+    reader_features = sorted(required_protocol.get("reader-features") or [])
+    writer_features = sorted(required_protocol.get("writer-features") or [])
+    properties = {
+        key: value for key, value in (staging_table.get("required-properties") or {}).items() if value is not None
+    }
+    properties["io.unitycatalog.tableId"] = table_id
+    timestamp = _write_seed_delta_log(
+        _location_to_path(staging_location),
+        table_id,
+        protocol={
+            "minReaderVersion": required_protocol["min-reader-version"],
+            "minWriterVersion": required_protocol["min-writer-version"],
+            "readerFeatures": reader_features,
+            "writerFeatures": writer_features,
+        },
+        configuration=properties,
+    )
+
+    if columns:
+        create_response = requests.post(
+            f"{schema_url}/tables",
+            json={
+                "name": name,
+                "location": staging_location,
+                "table-type": "MANAGED",
+                "columns": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": column["name"],
+                            "type": json.loads(column["type_json"]),
+                            "nullable": column["nullable"],
+                            "metadata": {},
+                        }
+                        for column in columns
+                    ],
+                },
+                "protocol": {
+                    "min-reader-version": required_protocol["min-reader-version"],
+                    "min-writer-version": required_protocol["min-writer-version"],
+                    "reader-features": reader_features,
+                    "writer-features": writer_features,
+                },
+                "properties": properties,
+                "last-commit-timestamp-ms": timestamp,
+            },
+            timeout=10,
+        )
+    else:
+        # The Delta REST API does not create a table without columns, while the table API
+        # of the same server does when the table has the table ID as a property.
+        create_response = _create_table_with_table_api(unity_rest_url, table_name, staging_location, [], properties)
     create_response.raise_for_status()
 
 
 @given(parsers.parse("Unity Catalog managed Delta table {table_name} exists with id and name columns"))
-def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> None:
+def unity_managed_delta_table_exists(
+    table_name: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
     _create_unity_managed_delta_table(
         table_name,
         unity_rest_url,
@@ -205,6 +379,7 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
             _unity_column("id", "INT", 0),
             _unity_column("name", "STRING", 1),
         ],
+        delta_api=unity_uses_delta_api,
     )
 
 
@@ -213,8 +388,12 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
         "Unity Catalog managed Delta table {table_name} exists with no catalog columns and id and name Delta schema"
     )
 )
-def unity_managed_delta_table_with_empty_catalog_schema_exists(table_name: str, unity_rest_url: str) -> None:
-    _create_unity_managed_delta_table(table_name, unity_rest_url, [])
+def unity_managed_delta_table_with_empty_catalog_schema_exists(
+    table_name: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
+    _create_unity_managed_delta_table(table_name, unity_rest_url, [], delta_api=unity_uses_delta_api)
 
 
 @given(parsers.parse("final Unity Catalog managed table cleanup for {table_name}"))
@@ -267,6 +446,12 @@ def _delta_commit_file(location: Path, version: int) -> Path:
     return location / "_delta_log" / f"{version:020}.json"
 
 
+def _published_versions(location: Path) -> list[int]:
+    # A v2 checkpoint can be a JSON file (`<version>.checkpoint.<uuid>.json`) as well.
+    paths = (location / "_delta_log").glob("[0-9]*.json")
+    return sorted(int(path.stem) for path in paths if path.stem.isdigit())
+
+
 def _staged_delta_commit_files(location: Path, version: int) -> list[Path]:
     return sorted((location / "_delta_log" / "_staged_commits").glob(f"{version:020}.*.json"))
 
@@ -276,6 +461,10 @@ def _delta_commit_actions(location: Path, version: int) -> list[dict]:
     assert commit_file.exists(), f"Delta commit does not exist: {commit_file}"
     with commit_file.open(encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _actions(actions: list[dict], kind: str) -> list[dict]:
+    return [action[kind] for action in actions if kind in action]
 
 
 def _unity_delta_commit_info(unity_rest_url: str, table_name: str, version: int) -> dict:
@@ -427,6 +616,20 @@ def staged_delta_commit_exists(version: int, location_var: str, variables: dict)
     assert staged, f"staged Delta commit for version {version} does not exist in {staged_dir}"
 
 
+@then(parsers.parse("staged Delta commit for version {version:d} is published in {location_var}"))
+def staged_delta_commit_is_published(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    location_path = Path(location.path)
+    published = _delta_commit_actions(location_path, version)
+    staged = []
+    for staged_file in _staged_delta_commit_files(location_path, version):
+        with staged_file.open(encoding="utf-8") as f:
+            staged.append([json.loads(line) for line in f if line.strip()])
+    assert published in staged, f"published Delta commit for version {version} is not a staged commit"
+
+
 @then(parsers.parse("staged Delta commit for version {version:d} exists in {location_var} without published backfill"))
 def staged_delta_commit_exists_without_published_backfill(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)
@@ -482,6 +685,31 @@ def unity_delta_commit_references_staged_commit(
 
 
 @then(
+    parsers.re(
+        r"Unity Catalog (?P<api>legacy|Delta) API Delta commit for table (?P<table_name>\S+) "
+        r"version (?P<version>\d+) references staged Delta commit in (?P<location_var>\S+)"
+    )
+)
+def unity_api_delta_commit_references_staged_commit(
+    api: str,
+    table_name: str,
+    version: str,
+    location_var: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+    variables: dict,
+) -> None:
+    """Assert a commit that Sail makes through the catalog only with the given API.
+
+    With the Delta REST API, the data of CREATE TABLE AS SELECT is in version 0, which is
+    written before the table is registered, so the data is not committed through the catalog.
+    """
+    if (api == "Delta") != unity_uses_delta_api:
+        return
+    unity_delta_commit_references_staged_commit(table_name, int(version), location_var, unity_rest_url, variables)
+
+
+@then(
     parsers.parse(
         "Unity Catalog Delta commit for table {table_name} version {version:d} references staged Delta commit in {location_var} without published backfill"
     )
@@ -531,3 +759,42 @@ def unity_table_has_columns(table_name: str, unity_rest_url: str, datatable) -> 
     expected_rows = [list(row) for row in datatable[1:]]
     expected = [(row[0], row[1]) for row in expected_rows]
     assert actual == expected, f"expected Unity Catalog columns {expected!r}, got {actual!r}"
+
+
+@then(parsers.parse("Delta table in {location_var} has column mapping {mode} in the metadata and the data files"))
+def delta_table_has_column_mapping(location_var: str, mode: str, variables: dict) -> None:
+    """Checks that the table maps its columns to physical names that are not the column
+    names, and that the data files have the columns of the physical names."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location = Path(location.path)
+
+    metadata = _first_delta_metadata(location)
+    assert metadata["configuration"].get("delta.columnMapping.mode") == mode
+
+    def physical_names(fields: list[dict]) -> dict[str, str]:
+        names = {}
+        for field in fields:
+            field_metadata = field.get("metadata") or {}
+            name = field_metadata.get("delta.columnMapping.physicalName")
+            assert isinstance(name, str), field
+            assert name != field["name"], field
+            assert isinstance(field_metadata.get("delta.columnMapping.id"), int), field
+            if isinstance(field["type"], dict) and field["type"].get("type") == "struct":
+                physical_names(field["type"]["fields"])
+            names[field["name"]] = name
+        return names
+
+    names = physical_names(json.loads(metadata["schemaString"])["fields"])
+    data_columns = {name for column, name in names.items() if column not in metadata["partitionColumns"]}
+    log = location / "_delta_log"
+    commits = sorted(log.glob("*.json")) + sorted((log / "_staged_commits").glob("*.json"))
+    data_files = {
+        action["add"]["path"]
+        for commit in commits
+        for action in (json.loads(line) for line in commit.read_text(encoding="utf-8").splitlines() if line.strip())
+        if "add" in action
+    }
+    assert data_files, f"no data files in {location}"
+    for path in data_files:
+        assert set(pq.read_schema(location / unquote(path)).names) == data_columns, path

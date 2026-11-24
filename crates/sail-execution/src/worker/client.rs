@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use prost::Message;
+use sail_object_store::StorageRoutes;
 
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskAttempt, TaskKey};
@@ -53,6 +54,7 @@ impl WorkerClient {
         tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
         peers: Vec<WorkerLocation>,
+        storage_routes: Option<Arc<StorageRoutes>>,
     ) -> ExecutionResult<()> {
         let definition =
             crate::task::r#gen::TaskDefinition::from(definition.as_ref().clone()).encode_to_vec();
@@ -73,6 +75,7 @@ impl WorkerClient {
                 .collect(),
             definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
+            storage_routes: storage_routes.map(|x| x.as_ref().into()),
         };
         let response = self.inner.get().await?.run_task_batch(request).await?;
         let RunTaskBatchResponse {} = response.into_inner();

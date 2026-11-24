@@ -5,35 +5,41 @@ use std::sync::Arc;
 use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result};
 use moka::future::Cache as FutureCache;
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
-use crate::delta_log::{LogStoreRef, StorageConfig};
-use crate::snapshot::DeltaSnapshotConfig;
-use crate::table::{
-    DeltaSnapshot, DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
-};
+use crate::delta_log::StorageConfig;
+use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
+use crate::table::{DeltaSnapshot, DeltaTable, create_logstore_with_object_store};
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
 
+/// The key of a table that is loaded at a version. A version of a catalog-managed table is
+/// loaded with catalog commits, which are identified by their versions and their files.
+/// What a catalog tells about the latest version of the table is not part of the key, since
+/// it changes with every commit to the table while the version stays the same.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct TableCacheKey {
     pub(crate) table_url: String,
     pub(crate) version: i64,
-    pub(crate) lakehouse_table: Option<LakehouseExecutionContext>,
+    pub(crate) catalog_managed_commits: Option<Vec<(i64, String)>>,
 }
 
 impl TableCacheKey {
     fn new(
         table_url: &Url,
         version: i64,
-        lakehouse_table: Option<&LakehouseExecutionContext>,
+        catalog_managed_commits: Option<&CatalogManagedCommitSet>,
     ) -> Self {
         Self {
             table_url: table_url.to_string(),
             version,
-            lakehouse_table: lakehouse_table.cloned(),
+            catalog_managed_commits: catalog_managed_commits.map(|commits| {
+                commits
+                    .commits
+                    .iter()
+                    .map(|commit| (commit.version, commit.file_name.clone()))
+                    .collect()
+            }),
         }
     }
 }
@@ -53,23 +59,49 @@ impl DeltaTableCache {
         Self { cache }
     }
 
+    /// Returns the table at the version, which is loaded with the catalog commits for a
+    /// catalog-managed table. The catalog is not asked.
     pub(crate) async fn get(
         &self,
         context: &TaskContext,
         table_url: &Url,
         version: i64,
-        lakehouse_table: Option<&LakehouseExecutionContext>,
+        catalog_managed_commits: Option<&CatalogManagedCommitSet>,
     ) -> Result<Arc<CachedTable>> {
-        let lakehouse_table = catalog_managed_commit_context(lakehouse_table);
-        let key = TableCacheKey::new(table_url, version, lakehouse_table);
+        let key = TableCacheKey::new(table_url, version, catalog_managed_commits);
         let table_url = table_url.clone();
-        let lakehouse_table = lakehouse_table.cloned();
+        let catalog_managed_commits = catalog_managed_commits.cloned();
         self.cache
             .try_get_with(key, async move {
-                load_table_uncached(context, &table_url, version, lakehouse_table.as_ref()).await
+                load_table_uncached(context, &table_url, version, catalog_managed_commits).await
             })
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+impl DeltaTableCache {
+    /// Keeps the table that a write is planned from, so that the scans of the write, which
+    /// load the table at the same version, do not replay the Delta log again. A table that
+    /// is loaded with its files is not kept, since the files are only needed by the plan.
+    pub(crate) async fn seed(&self, table_url: &Url, table: &DeltaTable) {
+        let Ok(snapshot) = table.snapshot() else {
+            return;
+        };
+        let config = snapshot.load_config();
+        if config.require_files {
+            return;
+        }
+        let key = TableCacheKey::new(
+            table_url,
+            snapshot.version(),
+            config.catalog_managed_commits.as_ref(),
+        );
+        let cached = Arc::new(CachedTable {
+            snapshot: Arc::clone(snapshot),
+            log_store: table.log_store(),
+        });
+        self.cache.insert(key, cached).await;
     }
 }
 
@@ -89,7 +121,7 @@ pub(crate) async fn load_table_uncached(
     context: &TaskContext,
     table_url: &Url,
     version: i64,
-    lakehouse_table: Option<&LakehouseExecutionContext>,
+    catalog_managed_commits: Option<CatalogManagedCommitSet>,
 ) -> Result<Arc<CachedTable>> {
     let object_store = context
         .runtime_env()
@@ -99,56 +131,26 @@ pub(crate) async fn load_table_uncached(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), StorageConfig)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let mut table_config = DeltaSnapshotConfig {
+    let table_config = DeltaSnapshotConfig {
         require_files: false,
+        catalog_managed_commits,
         ..Default::default()
     };
-    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
-        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
-            context,
-            lakehouse_table,
-            table_url,
-            log_store.clone(),
-            Some(version),
-        )
-        .await?;
-    }
-    load_table_from_log_store(version, log_store, table_config).await
-}
-
-pub(crate) async fn load_table_with_config(
-    context: &TaskContext,
-    table_url: &Url,
-    version: i64,
-    table_config: DeltaSnapshotConfig,
-) -> Result<Arc<CachedTable>> {
-    let object_store = context
-        .runtime_env()
-        .object_store_registry
-        .get_store(table_url)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), StorageConfig)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    load_table_from_log_store(version, log_store, table_config).await
-}
-
-async fn load_table_from_log_store(
-    version: i64,
-    log_store: LogStoreRef,
-    table_config: DeltaSnapshotConfig,
-) -> Result<Arc<CachedTable>> {
-    let mut table = DeltaTable::new(log_store.clone(), table_config);
+    let mut table = DeltaTable::new(log_store, table_config);
     table
         .load_version(version)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let snapshot_state = table
+    cached_table(table)
+}
+
+fn cached_table(table: DeltaTable) -> Result<Arc<CachedTable>> {
+    let snapshot = table
         .snapshot()
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .clone();
     Ok(Arc::new(CachedTable {
-        snapshot: snapshot_state,
+        snapshot,
         log_store: table.log_store(),
     }))
 }
@@ -156,62 +158,62 @@ async fn load_table_from_log_store(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use sail_common_datafusion::catalog::{
-        CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,
-        LakehouseAuthority, LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
-        MetadataPointerAuthority, ScanAuthority, TableAccessSessionRef, TableLifecycle,
-    };
-
     use super::*;
+    use crate::snapshot::CatalogManagedCommitFile;
 
-    fn lakehouse_context(session_fingerprint: &str) -> LakehouseExecutionContext {
-        let mut context = LakehouseExecutionContext::catalog_table_context(
-            CatalogProviderId("unity".to_string()),
-            vec![
-                "unity".to_string(),
-                "schema".to_string(),
-                "table".to_string(),
-            ],
-            CatalogTableIdentity {
-                table_id: Some("table-id".to_string()),
-                table_uri: Some("file:///tmp/table".to_string()),
-            },
-            LakehouseOperation::Read,
-            LakehouseFormat::Delta,
-            LakehouseAuthority::CatalogAuthoritative {
-                lifecycle: TableLifecycle::Managed,
-                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
-                commit: CommitAuthority::DeltaRatifiedCommit,
-            },
-            ScanAuthority::ClientLakeSource,
-        );
-        context.access_session = Some(TableAccessSessionRef {
-            fingerprint: session_fingerprint.to_string(),
-        });
-        context.capability_fingerprint =
-            CapabilityFingerprint(format!("unity:schema.table:{session_fingerprint}"));
-        context
+    fn commits(latest_table_version: i64, files: &[(i64, &str)]) -> CatalogManagedCommitSet {
+        CatalogManagedCommitSet {
+            latest_table_version,
+            commits: files
+                .iter()
+                .map(|(version, file_name)| CatalogManagedCommitFile {
+                    version: *version,
+                    file_name: file_name.to_string(),
+                    file_size: 0,
+                    file_modification_timestamp: 0,
+                })
+                .collect(),
+        }
     }
 
     #[test]
-    fn table_cache_key_is_stable_without_lakehouse_context() {
+    fn table_cache_key_is_stable_without_catalog_commits() {
         let url = Url::parse("file:///tmp/table").unwrap();
 
         assert_eq!(
             TableCacheKey::new(&url, 7, None),
             TableCacheKey::new(&url, 7, None)
         );
+        assert_ne!(
+            TableCacheKey::new(&url, 7, None),
+            TableCacheKey::new(&url, 8, None)
+        );
     }
 
     #[test]
-    fn table_cache_key_separates_access_sessions() {
+    fn table_cache_key_does_not_change_with_the_latest_version_of_the_table() {
         let url = Url::parse("file:///tmp/table").unwrap();
-        let session_a = lakehouse_context("session-a");
-        let session_b = lakehouse_context("session-b");
+        let files = [(6, "6.a.json"), (7, "7.b.json")];
+
+        assert_eq!(
+            TableCacheKey::new(&url, 7, Some(&commits(7, &files))),
+            TableCacheKey::new(&url, 7, Some(&commits(9, &files)))
+        );
+    }
+
+    #[test]
+    fn table_cache_key_separates_catalog_commits() {
+        let url = Url::parse("file:///tmp/table").unwrap();
 
         assert_ne!(
-            TableCacheKey::new(&url, 7, Some(&session_a)),
-            TableCacheKey::new(&url, 7, Some(&session_b))
+            TableCacheKey::new(&url, 7, Some(&commits(7, &[(7, "7.a.json")]))),
+            TableCacheKey::new(&url, 7, Some(&commits(7, &[(7, "7.b.json")])))
+        );
+        // A table that is not catalog-managed is not loaded as a catalog-managed table
+        // whose commits are all published.
+        assert_ne!(
+            TableCacheKey::new(&url, 7, Some(&commits(7, &[]))),
+            TableCacheKey::new(&url, 7, None)
         );
     }
 }

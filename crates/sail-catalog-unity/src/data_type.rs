@@ -11,6 +11,7 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::r#gen;
 
@@ -29,8 +30,9 @@ pub(crate) fn unity_struct_field_type_json(
     data_type: &DataType,
     nullable: bool,
     metadata: &HashMap<String, String>,
+    variant_type: bool,
 ) -> CatalogResult<serde_json::Value> {
-    let data_type_json = spark_data_type_json(data_type)?;
+    let data_type_json = spark_data_type_json(data_type, variant_type)?;
     Ok(serde_json::json!({
         "name": name,
         "type": data_type_json,
@@ -39,48 +41,61 @@ pub(crate) fn unity_struct_field_type_json(
     }))
 }
 
-fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
+fn spark_struct_field_json(field: &Field, variant_type: bool) -> CatalogResult<serde_json::Value> {
     unity_struct_field_type_json(
         field.name(),
         field.data_type(),
         field.is_nullable(),
         field.metadata(),
+        variant_type,
     )
 }
 
 fn spark_field_metadata_json(
     metadata: &HashMap<String, String>,
 ) -> CatalogResult<serde_json::Value> {
-    let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
-        match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(serde_json::Value::Object(object)) => object,
-            Ok(other) => {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
-                )));
-            }
-            Err(e) => {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
-                )));
-            }
-        }
-    } else {
-        serde_json::Map::new()
-    };
+    let metadata = metadata
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    flatten_spark_field_metadata(&metadata)
+        .map(serde_json::Value::Object)
+        .map_err(CatalogError::InvalidArgument)
+}
 
+/// Returns the metadata of a field in the catalog, where the entries of the Spark field
+/// metadata are entries of the field metadata rather than the JSON object under a single
+/// key. The keys that only Sail uses are not part of it.
+pub(crate) fn flatten_spark_field_metadata(
+    metadata: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut out = match metadata.get(SPARK_METADATA_JSON_KEY) {
+        Some(serde_json::Value::String(value)) => serde_json::from_str(value)
+            .map_err(|e| format!("{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}"))?,
+        Some(value) => value.clone(),
+        None => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    let serde_json::Value::Object(out) = &mut out else {
+        return Err(format!(
+            "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {out:?}",
+        ));
+    };
     for (key, value) in metadata {
         if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
             continue;
         }
-        out.entry(key.clone())
-            .or_insert_with(|| serde_json::Value::String(value.clone()));
+        out.entry(key.clone()).or_insert_with(|| value.clone());
     }
-
-    Ok(serde_json::Value::Object(out))
+    Ok(std::mem::take(out))
 }
 
-fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value> {
+fn spark_data_type_json(
+    data_type: &DataType,
+    variant_type: bool,
+) -> CatalogResult<serde_json::Value> {
+    if variant_type && is_marked_variant_storage_type(data_type) {
+        return Ok(serde_json::Value::String("variant".to_string()));
+    }
     match data_type {
         DataType::Null => Ok(serde_json::Value::String("void".to_string())),
         DataType::Boolean => Ok(serde_json::Value::String("boolean".to_string())),
@@ -136,7 +151,7 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
         | DataType::LargeList(field)
         | DataType::LargeListView(field) => Ok(serde_json::json!({
             "type": "array",
-            "elementType": spark_data_type_json(field.data_type())?,
+            "elementType": spark_data_type_json(field.data_type(), variant_type)?,
             "containsNull": field.is_nullable(),
         })),
         DataType::Map(field, _) => {
@@ -152,15 +167,15 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
             }
             Ok(serde_json::json!({
                 "type": "map",
-                "keyType": spark_data_type_json(fields[0].data_type())?,
-                "valueType": spark_data_type_json(fields[1].data_type())?,
+                "keyType": spark_data_type_json(fields[0].data_type(), variant_type)?,
+                "valueType": spark_data_type_json(fields[1].data_type(), variant_type)?,
                 "valueContainsNull": fields[1].is_nullable(),
             }))
         }
         DataType::Struct(fields) => {
             let fields = fields
                 .iter()
-                .map(|field| spark_struct_field_json(field.as_ref()))
+                .map(|field| spark_struct_field_json(field.as_ref(), variant_type))
                 .collect::<CatalogResult<Vec<_>>>()?;
             Ok(serde_json::json!({
                 "type": "struct",
@@ -185,8 +200,22 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
     }
 }
 
-pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {
+/// Converts the data type to the type of a column in Unity Catalog.
+/// The variant type is the struct of its storage fields unless the server is known
+/// to have the variant type.
+pub(crate) fn data_type_to_unity_type(
+    data_type: &DataType,
+    variant_type: bool,
+) -> CatalogResult<UnityColumnType> {
     // TODO: UserDefinedType
+    if variant_type && is_marked_variant_storage_type(data_type) {
+        let type_text = r#gen::ColumnTypeName::Variant.to_string().to_lowercase();
+        return Ok(UnityColumnType {
+            type_json: serde_json::Value::String(type_text.clone()),
+            type_text,
+            type_name: r#gen::ColumnTypeName::Variant,
+        });
+    }
     match data_type {
         DataType::Null => Ok(UnityColumnType {
             type_text: r#gen::ColumnTypeName::Null.to_string().to_lowercase(),
@@ -365,7 +394,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
         | DataType::ListView(field)
         | DataType::LargeList(field)
         | DataType::LargeListView(field) => {
-            let field_type = data_type_to_unity_type(field.data_type())?;
+            let field_type = data_type_to_unity_type(field.data_type(), variant_type)?;
             let type_text = format!("array<{}>", field_type.type_text);
             let mut metadata_map = serde_json::Map::new();
             for (k, v) in field.metadata() {
@@ -388,8 +417,8 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
         DataType::Map(field, _) => {
             if let DataType::Struct(fields) = field.data_type() {
                 if fields.len() == 2 {
-                    let key_type = data_type_to_unity_type(fields[0].data_type())?;
-                    let value_type = data_type_to_unity_type(fields[1].data_type())?;
+                    let key_type = data_type_to_unity_type(fields[0].data_type(), variant_type)?;
+                    let value_type = data_type_to_unity_type(fields[1].data_type(), variant_type)?;
                     let type_text = format!("map<{},{}>", key_type.type_text, value_type.type_text);
                     let mut metadata_map = serde_json::Map::new();
                     for (k, v) in field.metadata() {
@@ -424,7 +453,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             let mut type_text_parts = Vec::new();
             let mut json_fields = Vec::new();
             for field in fields.iter() {
-                let field_type = data_type_to_unity_type(field.data_type())?;
+                let field_type = data_type_to_unity_type(field.data_type(), variant_type)?;
                 type_text_parts.push(format!("{}:{}", field.name(), field_type.type_text));
                 let mut metadata_map = serde_json::Map::new();
                 for (k, v) in field.metadata() {
@@ -499,6 +528,7 @@ pub(crate) fn unity_type_to_data_type(
             }
             r#gen::ColumnTypeName::String | r#gen::ColumnTypeName::Char => Ok(DataType::Utf8),
             r#gen::ColumnTypeName::Binary => Ok(DataType::Binary),
+            r#gen::ColumnTypeName::Variant => parse_simple_type_from_string("variant"),
             r#gen::ColumnTypeName::Null => Ok(DataType::Null),
             r#gen::ColumnTypeName::Decimal => {
                 if let (Some(precision), Some(scale)) = (type_precision, type_scale) {
@@ -550,6 +580,9 @@ pub(crate) fn unity_type_to_data_type(
             r#gen::ColumnTypeName::UserDefinedType | r#gen::ColumnTypeName::TableType => Err(
                 CatalogError::InvalidArgument(format!("{type_name:?} type is not supported yet",)),
             ),
+            r#gen::ColumnTypeName::Unknown(name) => Err(CatalogError::NotSupported(format!(
+                "Unity Catalog column type: {name}"
+            ))),
         }
     } else {
         parse_from_text_or_json(type_text, type_json)
@@ -630,7 +663,14 @@ pub(crate) fn parse_complex_type_from_json_object(
     let type_field = serde_object.get("type").ok_or_else(|| {
         CatalogError::InvalidArgument("Complex type_json missing 'type' field".to_string())
     })?;
-    let metadata = get_field_metadata(serde_object);
+    // The metadata of a named field describes the field itself, such as a column with
+    // its column mapping, and not the element of an array or the entries of a map
+    // that the field has as its type.
+    let metadata = if serde_object.contains_key("name") {
+        HashMap::new()
+    } else {
+        get_field_metadata(serde_object)
+    };
 
     let (type_info, type_field, metadata) = match type_field {
         serde_json::Value::String(s) => Ok((serde_object, s.trim().to_lowercase(), metadata)),
@@ -858,9 +898,10 @@ pub(crate) fn parse_complex_type_from_json_object(
 
             Ok(DataType::Struct(Fields::from(fields)))
         }
-        _ => Err(CatalogError::InvalidArgument(format!(
-            "Unsupported complex type: {type_field}"
-        ))),
+        // The type of a field can be a primitive type, such as `decimal(10,2)`.
+        _ => parse_simple_type_from_string(&type_field).map_err(|_| {
+            CatalogError::InvalidArgument(format!("Unsupported complex type: {type_field}"))
+        }),
     }
 }
 
@@ -953,6 +994,98 @@ mod tests {
         Ok(())
     }
 
+    /// The column mapping of an array column or a map column is in the metadata of
+    /// the column field, which is not the metadata of the element or the entries.
+    #[test]
+    fn column_field_metadata_is_not_nested_field_metadata() -> CatalogResult<()> {
+        let metadata = json!({
+            "delta.columnMapping.id": 3,
+            "delta.columnMapping.physicalName": "col-3",
+            "comment": "a column"
+        });
+        let item = json!({
+            "type": "struct",
+            "fields": [{
+                "name": "x",
+                "type": {"type": "array", "elementType": "integer", "containsNull": true},
+                "nullable": true,
+                "metadata": {"delta.columnMapping.physicalName": "col-1"}
+            }]
+        });
+        let item_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "x",
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    true,
+                ))),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                "delta.columnMapping.physicalName".to_string(),
+                "col-1".to_string(),
+            )])),
+        ]));
+        let cases = [
+            (
+                r#gen::ColumnTypeName::Array,
+                json!({"type": "array", "elementType": item, "containsNull": true}),
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    item_type.clone(),
+                    true,
+                ))),
+            ),
+            (
+                r#gen::ColumnTypeName::Map,
+                json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": item,
+                    "valueContainsNull": true
+                }),
+                DataType::Map(
+                    Arc::new(Field::new(
+                        SAIL_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                            Field::new(SAIL_MAP_VALUE_FIELD_NAME, item_type.clone(), true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+            ),
+            (
+                r#gen::ColumnTypeName::Struct,
+                item.clone(),
+                item_type.clone(),
+            ),
+        ];
+        for (type_name, data_type, expected) in cases {
+            let field = json!({
+                "name": "c",
+                "type": data_type,
+                "nullable": true,
+                "metadata": metadata
+            });
+            assert_eq!(
+                unity_type_to_data_type(
+                    Some(type_name),
+                    Some(field.to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )?,
+                expected,
+                "{field}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn simple_type_text_still_takes_precedence() -> CatalogResult<()> {
         assert_eq!(
@@ -964,6 +1097,402 @@ mod tests {
             parse_simple_type_from_string("DECIMAL(10,2)")?,
             DataType::Decimal128(10, 2)
         );
+        Ok(())
+    }
+
+    /// The columns of a table created with the Delta REST API have the type as a field
+    /// of the Delta schema in `type_json`, without the precision and the scale.
+    #[test]
+    fn primitive_types_in_delta_schema_fields() -> CatalogResult<()> {
+        use r#gen::ColumnTypeName;
+
+        let timestamp =
+            |tz: Option<&str>| DataType::Timestamp(TimeUnit::Microsecond, tz.map(Arc::from));
+        let cases = [
+            (
+                ColumnTypeName::Boolean,
+                "boolean",
+                "boolean",
+                DataType::Boolean,
+            ),
+            (ColumnTypeName::Byte, "byte", "tinyint", DataType::Int8),
+            (ColumnTypeName::Short, "short", "smallint", DataType::Int16),
+            (ColumnTypeName::Int, "integer", "int", DataType::Int32),
+            (ColumnTypeName::Long, "long", "bigint", DataType::Int64),
+            (ColumnTypeName::Float, "float", "float", DataType::Float32),
+            (
+                ColumnTypeName::Double,
+                "double",
+                "double",
+                DataType::Float64,
+            ),
+            (ColumnTypeName::Date, "date", "date", DataType::Date32),
+            (
+                ColumnTypeName::Timestamp,
+                "timestamp",
+                "timestamp",
+                timestamp(Some("UTC")),
+            ),
+            (
+                ColumnTypeName::TimestampNtz,
+                "timestamp_ntz",
+                "timestamp_ntz",
+                timestamp(None),
+            ),
+            (ColumnTypeName::String, "string", "string", DataType::Utf8),
+            (ColumnTypeName::Binary, "binary", "binary", DataType::Binary),
+            (
+                ColumnTypeName::Decimal,
+                "decimal(10,2)",
+                "decimal(10,2)",
+                DataType::Decimal128(10, 2),
+            ),
+            (
+                ColumnTypeName::Decimal,
+                "decimal(38,18)",
+                "decimal(38,18)",
+                DataType::Decimal128(38, 18),
+            ),
+        ];
+        for (type_name, delta_type, type_text, expected) in cases {
+            let field = json!({"name": "c", "type": delta_type, "nullable": true, "metadata": {}});
+            let actual = unity_type_to_data_type(
+                Some(type_name),
+                Some(field.to_string()),
+                Some(type_text.to_string()),
+                None,
+                None,
+                None,
+            )?;
+            assert_eq!(actual, expected, "{delta_type}");
+            // The type is also parsed from the field without the type name.
+            assert_eq!(
+                parse_unity_type_json(&field.to_string())?,
+                expected,
+                "{delta_type}"
+            );
+
+            // The primitive type is parsed when it is nested in complex types.
+            let field = json!({
+                "name": "c",
+                "type": {
+                    "type": "struct",
+                    "fields": [{
+                        "name": "m",
+                        "type": {
+                            "type": "map",
+                            "keyType": "string",
+                            "valueType": {
+                                "type": "array",
+                                "elementType": delta_type,
+                                "containsNull": true
+                            },
+                            "valueContainsNull": true
+                        },
+                        "nullable": true,
+                        "metadata": {}
+                    }]
+                },
+                "nullable": true,
+                "metadata": {}
+            });
+            let actual = unity_type_to_data_type(
+                Some(ColumnTypeName::Struct),
+                Some(field.to_string()),
+                None,
+                None,
+                None,
+                None,
+            )?;
+            let DataType::Struct(fields) = &actual else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::Map(entries, _) = fields[0].data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::Struct(entries) = entries.data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::List(element) = entries[1].data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            assert_eq!(element.data_type(), &expected, "{delta_type}");
+        }
+
+        let field = json!({"name": "c", "type": "unknown", "nullable": true, "metadata": {}});
+        let error = parse_unity_type_json(&field.to_string());
+        assert!(
+            matches!(&error, Err(CatalogError::InvalidArgument(message))
+                if message == "Unsupported complex type: unknown"),
+            "{error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn variant_type() -> CatalogResult<()> {
+        let field = json!({"name": "v", "type": "variant", "nullable": true, "metadata": {}});
+        let data_type = unity_type_to_data_type(
+            Some(r#gen::ColumnTypeName::Variant),
+            Some(field.to_string()),
+            Some("variant".to_string()),
+            None,
+            None,
+            None,
+        )?;
+        assert!(is_marked_variant_storage_type(&data_type), "{data_type:?}");
+        assert_eq!(parse_unity_type_json(&field.to_string())?, data_type);
+        let type_name: r#gen::ColumnTypeName = serde_json::from_value(json!("VARIANT"))
+            .map_err(|e| CatalogError::Internal(e.to_string()))?;
+        assert!(matches!(type_name, r#gen::ColumnTypeName::Variant));
+
+        // The variant type is parsed when it is nested in complex types.
+        let field = json!({
+            "name": "a",
+            "type": {"type": "array", "elementType": "variant", "containsNull": true},
+            "nullable": true,
+            "metadata": {}
+        });
+        let DataType::List(element) = parse_unity_type_json(&field.to_string())? else {
+            return Err(CatalogError::Internal("expected a list".to_string()));
+        };
+        assert_eq!(element.data_type(), &data_type);
+
+        // The variant type is a struct of its storage fields when a table is created
+        // in a server that is not known to have the variant type.
+        let unity_type = data_type_to_unity_type(&data_type, false)?;
+        assert!(matches!(
+            unity_type.type_name,
+            r#gen::ColumnTypeName::Struct
+        ));
+        let field = unity_struct_field_type_json("v", &data_type, true, &HashMap::new(), false)?;
+        assert_eq!(field["type"]["type"], json!("struct"));
+
+        let unity_type = data_type_to_unity_type(&data_type, true)?;
+        assert!(matches!(
+            unity_type.type_name,
+            r#gen::ColumnTypeName::Variant
+        ));
+        assert_eq!(unity_type.type_text, "variant");
+        assert_eq!(unity_type.type_json, json!("variant"));
+        let field = unity_struct_field_type_json("v", &data_type, true, &HashMap::new(), true)?;
+        assert_eq!(field["type"], json!("variant"));
+        let array = DataType::List(Arc::new(Field::new("element", data_type.clone(), true)));
+        assert_eq!(
+            data_type_to_unity_type(&array, true)?.type_text,
+            "array<variant>"
+        );
+        let field = unity_struct_field_type_json("a", &array, true, &HashMap::new(), true)?;
+        assert_eq!(field["type"]["elementType"], json!("variant"));
+        Ok(())
+    }
+
+    /// The type of the column in Unity Catalog for each Arrow type, or nothing when the
+    /// Arrow type cannot be the type of a column, and the Arrow type of the column that is
+    /// read back from the type the column is created with.
+    #[test]
+    fn arrow_types_are_converted_to_unity_types() -> CatalogResult<()> {
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let utc = || Some(Arc::from("UTC"));
+        let element = |data_type| Arc::new(Field::new(SAIL_LIST_FIELD_NAME, data_type, true));
+        let entries = |key: DataType, value: DataType| {
+            Arc::new(Field::new(
+                SAIL_MAP_FIELD_NAME,
+                DataType::Struct(Fields::from(vec![
+                    Field::new(SAIL_MAP_KEY_FIELD_NAME, key, false),
+                    Field::new(SAIL_MAP_VALUE_FIELD_NAME, value, true),
+                ])),
+                false,
+            ))
+        };
+        let nested = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "b",
+                DataType::Map(
+                    entries(DataType::Utf8, DataType::List(element(DataType::Date32))),
+                    false,
+                ),
+                true,
+            ),
+        ]));
+        let cases: Vec<(DataType, Option<&str>, Option<DataType>)> = vec![
+            (DataType::Null, Some("null"), Some(DataType::Null)),
+            (DataType::Boolean, Some("boolean"), Some(DataType::Boolean)),
+            (DataType::Int8, Some("byte"), Some(DataType::Int8)),
+            (DataType::Int16, Some("short"), Some(DataType::Int16)),
+            (DataType::Int32, Some("int"), Some(DataType::Int32)),
+            (DataType::Int64, Some("long"), Some(DataType::Int64)),
+            // Unsigned integers have the type of the next wider signed integer.
+            (DataType::UInt8, Some("short"), Some(DataType::Int16)),
+            (DataType::UInt16, Some("int"), Some(DataType::Int32)),
+            (DataType::UInt32, Some("long"), Some(DataType::Int64)),
+            (DataType::UInt64, None, None),
+            (DataType::Float16, None, None),
+            (DataType::Float32, Some("float"), Some(DataType::Float32)),
+            (DataType::Float64, Some("double"), Some(DataType::Float64)),
+            (DataType::Utf8, Some("string"), Some(DataType::Utf8)),
+            (DataType::LargeUtf8, Some("string"), Some(DataType::Utf8)),
+            (DataType::Utf8View, Some("string"), Some(DataType::Utf8)),
+            (DataType::Binary, Some("binary"), Some(DataType::Binary)),
+            (
+                DataType::LargeBinary,
+                Some("binary"),
+                Some(DataType::Binary),
+            ),
+            (DataType::BinaryView, Some("binary"), Some(DataType::Binary)),
+            (
+                DataType::FixedSizeBinary(4),
+                Some("binary"),
+                Some(DataType::Binary),
+            ),
+            (DataType::Date32, Some("date"), Some(DataType::Date32)),
+            (DataType::Date64, None, None),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                Some("timestamp_ntz"),
+                Some(DataType::Timestamp(TimeUnit::Microsecond, None)),
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+05:30"))),
+                Some("timestamp"),
+                Some(DataType::Timestamp(TimeUnit::Microsecond, utc())),
+            ),
+            (DataType::Timestamp(TimeUnit::Second, None), None, None),
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, utc()),
+                None,
+                None,
+            ),
+            (DataType::Timestamp(TimeUnit::Nanosecond, None), None, None),
+            (DataType::Time32(TimeUnit::Millisecond), None, None),
+            (DataType::Time64(TimeUnit::Microsecond), None, None),
+            (DataType::Duration(TimeUnit::Nanosecond), None, None),
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                Some("interval"),
+                Some(DataType::Interval(IntervalUnit::YearMonth)),
+            ),
+            (DataType::Interval(IntervalUnit::MonthDayNano), None, None),
+            (
+                DataType::Decimal32(9, 2),
+                Some("decimal(9,2)"),
+                Some(DataType::Decimal128(9, 2)),
+            ),
+            (
+                DataType::Decimal64(18, 3),
+                Some("decimal(18,3)"),
+                Some(DataType::Decimal128(18, 3)),
+            ),
+            (
+                DataType::Decimal128(38, 10),
+                Some("decimal(38,10)"),
+                Some(DataType::Decimal128(38, 10)),
+            ),
+            (
+                DataType::Decimal256(20, 4),
+                Some("decimal(20,4)"),
+                Some(DataType::Decimal128(20, 4)),
+            ),
+            (DataType::Decimal256(76, 4), None, None),
+            (
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                None,
+                None,
+            ),
+            (
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, true)),
+                ),
+                None,
+                None,
+            ),
+            (
+                DataType::Union(UnionFields::empty(), UnionMode::Dense),
+                None,
+                None,
+            ),
+            (
+                DataType::FixedSizeList(element(DataType::Int32), 2),
+                None,
+                None,
+            ),
+            (
+                DataType::List(element(DataType::Int32)),
+                Some("array<int>"),
+                Some(DataType::List(element(DataType::Int32))),
+            ),
+            (
+                DataType::LargeList(element(DataType::Utf8)),
+                Some("array<string>"),
+                Some(DataType::List(element(DataType::Utf8))),
+            ),
+            (
+                DataType::ListView(element(DataType::Int64)),
+                Some("array<long>"),
+                Some(DataType::List(element(DataType::Int64))),
+            ),
+            (
+                DataType::LargeListView(element(DataType::Boolean)),
+                Some("array<boolean>"),
+                Some(DataType::List(element(DataType::Boolean))),
+            ),
+            (
+                DataType::Map(entries(DataType::Utf8, DataType::Decimal128(5, 1)), false),
+                Some("map<string,decimal(5,1)>"),
+                Some(DataType::Map(
+                    entries(DataType::Utf8, DataType::Decimal128(5, 1)),
+                    false,
+                )),
+            ),
+            (
+                nested.clone(),
+                Some("struct<a:int,b:map<string,array<date>>>"),
+                Some(nested),
+            ),
+            (DataType::List(element(DataType::UInt64)), None, None),
+        ];
+        for (data_type, type_text, read_type) in cases {
+            let unity_type = data_type_to_unity_type(&data_type, false);
+            let field = unity_struct_field_type_json("c", &data_type, true, &HashMap::new(), false);
+            let Some(type_text) = type_text else {
+                assert!(unity_type.is_err(), "{data_type}");
+                assert!(field.is_err(), "{data_type}");
+                continue;
+            };
+            let unity_type = unity_type?;
+            assert_eq!(unity_type.type_text, type_text, "{data_type}");
+            let (type_precision, type_scale) = match &data_type {
+                DataType::Decimal32(precision, scale)
+                | DataType::Decimal64(precision, scale)
+                | DataType::Decimal128(precision, scale)
+                | DataType::Decimal256(precision, scale) => {
+                    (Some(*precision as i32), Some(*scale as i32))
+                }
+                _ => (None, None),
+            };
+            let type_interval_type =
+                matches!(data_type, DataType::Interval(_)).then(|| "YearMonth".to_string());
+            let actual = unity_type_to_data_type(
+                Some(unity_type.type_name),
+                Some(field?.to_string()),
+                Some(unity_type.type_text),
+                type_precision,
+                type_scale,
+                type_interval_type,
+            )?;
+            assert_eq!(Some(actual), read_type, "{data_type}");
+        }
         Ok(())
     }
 }
