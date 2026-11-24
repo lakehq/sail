@@ -202,14 +202,10 @@ def test_write_to_creates_column_mapped_managed_table(spark: SparkSession, mode:
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
 
 
-def test_save_as_table_with_delta_option_does_not_write_mismatched_data(
-    spark: SparkSession,
-    unity_uses_delta_api: bool,  # noqa: FBT001
-) -> None:
-    """Without the Delta REST API, the table is created before the data is written, without
-    the Delta write options as table properties, while the data is written with them. The
-    write fails instead of committing data files that the table cannot read. With the Delta
-    REST API, the data is written with the metadata of the table that the write creates."""
+def test_save_as_table_with_delta_option_writes_data_with_the_option(spark: SparkSession) -> None:
+    """The table that the write creates has the Delta write options as table properties,
+    whether the catalog creates the table before or after the data is written, so the data
+    is written with the metadata of the table."""
     database = _unique_database("unity_dataframe_delta_option_test")
     table_fqn = f"{database}.managed_delta_option_t"
 
@@ -217,15 +213,10 @@ def test_save_as_table_with_delta_option_does_not_write_mismatched_data(
     try:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         df = spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
-        write = df.write.format("delta").option("delta.columnMapping.mode", "name")
-        if unity_uses_delta_api:
-            write.saveAsTable(table_fqn)
-            assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
-            properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn}").collect()}
-            assert properties.get("delta.columnMapping.mode") == "name"
-        else:
-            with pytest.raises(Exception, match="different metadata"):
-                write.saveAsTable(table_fqn)
+        df.write.format("delta").option("delta.columnMapping.mode", "name").saveAsTable(table_fqn)
+        assert [tuple(row) for row in spark.table(table_fqn).collect()] == [(1, "one")]
+        properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {table_fqn}").collect()}
+        assert properties.get("delta.columnMapping.mode") == "name"
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")

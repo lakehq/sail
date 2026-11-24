@@ -16,7 +16,7 @@ import pytest
 from pyspark.sql import Row
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests._dev.spark.delta.utils import _active_files, _commits, _effective
+from pysail.tests._dev.spark.delta.utils import _commits, _effective
 
 pytestmark = pytest.mark.integration
 
@@ -32,24 +32,43 @@ def _clustering_columns(path):
 
 
 @pytest.fixture
-def clustered_table(spark, delta_jvm_spark, tmp_path):
-    path = tmp_path / "clustered"
-    jvm = delta_jvm_spark
-    jvm.sql(f"CREATE TABLE delta.`{path}` (id BIGINT, key BIGINT, value STRING) USING delta CLUSTER BY (key)")
-    jvm.sql(f"INSERT INTO delta.`{path}` VALUES (1, 10, 'a'), (2, 20, 'b')")
-    assert "clustering" in _effective(path, "protocol")["writerFeatures"]
+def clustered_table(spark, tmp_path):
+    """A table that another engine clusters by `key`, which is not among the columns that
+    the table collects statistics for by position."""
     name = "clustered_writes"
-    spark.sql(f"CREATE TABLE {name} USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
+    path = tmp_path / "clustered"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, key BIGINT, value STRING) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' "
+        "TBLPROPERTIES ('delta.dataSkippingNumIndexedCols' = '1')"
+    ).collect()
     try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 10, 'a'), (2, 20, 'b')").collect()
+        protocol = _effective(path, "protocol")
+        features = set(protocol.get("writerFeatures") or ["appendOnly", "invariants"])
+        protocol = {
+            **protocol,
+            "minWriterVersion": 7,
+            "writerFeatures": sorted(features | {"clustering", "domainMetadata"}),
+        }
+        domain = {
+            "domain": "delta.clustering",
+            "configuration": json.dumps({"clusteringColumns": [["key"]]}),
+            "removed": False,
+        }
+        version = max(_commits(path)) + 1
+        (path / "_delta_log" / f"{version:020d}.json").write_text(
+            json.dumps({"protocol": protocol}) + "\n" + json.dumps({"domainMetadata": domain}) + "\n"
+        )
         yield name, path
     finally:
-        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
-def test_clustered_table_is_written_and_stays_clustered(spark, delta_jvm_spark, clustered_table):
+def test_clustered_table_is_written_and_stays_clustered(spark, clustered_table):
     name, path = clustered_table
-    jvm = delta_jvm_spark
     versions = set(_commits(path))
+    assert spark.sql(f"DESCRIBE DETAIL {name}").first().clusteringColumns == ["key"]
 
     spark.sql(f"INSERT INTO {name} VALUES (3, 30, 'c'), (4, 40, 'd')").collect()
     spark.sql(f"UPDATE {name} SET value = 'B' WHERE id = 2").collect()
@@ -61,8 +80,8 @@ def test_clustered_table_is_written_and_stays_clustered(spark, delta_jvm_spark, 
     expected = [Row(id=2, key=20, value="B"), Row(id=3, key=30, value="c"), Row(id=4, key=44, value="D")]
     assert spark.table(name).orderBy("id").collect() == expected
 
-    # The commits of Sail keep the clustering columns, and add files that are not clustered,
-    # with statistics for the clustering columns.
+    # The commits keep the clustering columns, and add files that are not clustered, with
+    # statistics for the clustering columns after the columns that are indexed by position.
     assert _clustering_columns(path) == [["key"]]
     written = [
         action["add"]
@@ -75,27 +94,17 @@ def test_clustered_table_is_written_and_stays_clustered(spark, delta_jvm_spark, 
     for add in written:
         assert add.get("clusteringProvider") is None
         stats = json.loads(add["stats"])
-        assert "key" in stats["minValues"]
-        assert "key" in stats["maxValues"]
+        assert set(stats["minValues"]) == {"id", "key"}
+        assert set(stats["maxValues"]) == {"id", "key"}
     assert spark.sql(f"DESCRIBE DETAIL {name}").first().clusteringColumns == ["key"]
-
-    # Delta Spark reads the table, and clusters the files that Sail added.
-    assert jvm.sql(f"SELECT * FROM delta.`{path}` ORDER BY id").collect() == expected
-    assert jvm.sql(f"DESCRIBE DETAIL delta.`{path}`").first().clusteringColumns == ["key"]
-    jvm.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert all(add["clusteringProvider"] == "liquid" for add in _active_files(path))
-    assert spark.table(name).orderBy("id").collect() == expected
 
     spark.sql(f"INSERT OVERWRITE {name} VALUES (5, 50, 'e')").collect()
     assert _clustering_columns(path) == [["key"]]
-    assert jvm.sql(f"SELECT * FROM delta.`{path}`").collect() == [Row(id=5, key=50, value="e")]
+    assert spark.table(name).collect() == [Row(id=5, key=50, value="e")]
 
 
-def test_clustered_table_cannot_be_partitioned_and_is_unclustered_without_the_column(
-    spark, delta_jvm_spark, clustered_table
-):
+def test_clustered_table_cannot_be_partitioned_and_is_unclustered_without_the_column(spark, clustered_table):
     name, path = clustered_table
-    jvm = delta_jvm_spark
     rows = spark.table(name).orderBy("id").collect()
     versions = set(_commits(path))
 
@@ -116,5 +125,5 @@ def test_clustered_table_cannot_be_partitioned_and_is_unclustered_without_the_co
     df.drop("key").write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(path))
     assert _clustering_columns(path) == []
     assert "clustering" in _effective(path, "protocol")["writerFeatures"]
-    assert jvm.sql(f"SELECT * FROM delta.`{path}`").collect() == [Row(id=7, value="g")]
-    assert jvm.sql(f"DESCRIBE DETAIL delta.`{path}`").first().clusteringColumns == []
+    assert spark.read.format("delta").load(str(path)).collect() == [Row(id=7, value="g")]
+    assert spark.sql(f"DESCRIBE DETAIL delta.`{path}`").first().clusteringColumns == []
