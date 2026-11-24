@@ -110,6 +110,24 @@ If the server rejects the header, the statement fails with an error like the fol
 Unity Catalog rejected the `User-Agent` header that Sail sent. Set the `user_agent` option of the catalog to a value that the server accepts, see https://docs.lakesail.com/sail/latest/guide/catalog/unity.html#user-agent. Failed to create staging table: ... The UC Delta API requires clients to identify the calling application in the User-Agent header. The provided User-Agent 'MyPlatform/1.2' is insufficient. ...
 ```
 
+## Storage Credentials
+
+For a Delta table whose commits are managed by the catalog, Sail asks Unity Catalog for temporary storage credentials for the location of the table, and reads and writes the table with these credentials. The credentials are only used in the session that requested them, and Sail requests new credentials before they expire. If the catalog does not issue credentials for a table, Sail accesses the location with the storage credentials of the environment.
+
+### Cluster Mode
+
+When Sail runs in the `local-cluster` or `kubernetes-cluster` mode, the driver requests the storage credentials from the catalog, and the workers get them from the driver.
+
+- The driver sends each worker the locations of the tables that the session uses, and a random token of the session, together with the tasks. No storage credentials are sent with the tasks.
+- A worker sends the token to the driver to get the storage credentials for a location when it first reads or writes the location, and again before the credentials expire.
+- With the token, a worker can get the storage credentials for reading or writing every table that the session has used, as far as the catalog issues them to the user of the session.
+
+::: warning
+The token and the storage credentials are sent between the driver and the workers without encryption. Sail serves the driver port and the worker ports without TLS, and the `cluster.enable_tls` option does not change this.
+
+You must run the driver and the workers in a network that protects their ports and the traffic between them, for example with a service mesh that uses mutual TLS, or with Kubernetes network policies that only let the driver pod and the worker pods of Sail connect to each other.
+:::
+
 ## Example
 
 ```bash
