@@ -7,6 +7,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{AsArray, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -120,6 +121,14 @@ impl ScalarUDFImpl for DateTrunc {
 
     fn aliases(&self) -> &[String] {
         self.inner.aliases()
+    }
+
+    // A window ordered by a comparison needs timestamp bounds on both sides.
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        let [_, timestamp] = input else {
+            return internal_err!("date_trunc expects two arguments");
+        };
+        Interval::make_unbounded(&timestamp.data_type())
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

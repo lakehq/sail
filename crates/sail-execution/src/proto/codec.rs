@@ -3826,6 +3826,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = XpathTyped::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::VariantToJson(r#gen::SparkToJsonUdf { session_timezone }) => {
+                let udf = VariantToJsonUdf::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkToJson(r#gen::SparkToJsonUdf { session_timezone }) => {
+                let udf = ToJson::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkToXml(r#gen::SparkToXmlUdf { session_timezone }) => {
                 let udf = ToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -4103,7 +4111,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(CastToVariant::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(IsVariantNullUdf::new()))),
-            "variant_to_json" => Ok(Arc::new(ScalarUDF::from(VariantToJsonUdf::new()))),
+            "variant_to_json" => Ok(Arc::new(ScalarUDF::from(VariantToJsonUdf::default()))),
             "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(VariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(ToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SchemaOfVariantUdf::new()))),
@@ -4195,6 +4203,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_try_timestamp_add_interval" => Ok(Arc::new(ScalarUDF::from(
+                TimestampAddInterval::try_variant(),
+            ))),
             "spark_timestamp_add_interval" => {
                 Ok(Arc::new(ScalarUDF::from(TimestampAddInterval::new())))
             }
@@ -4243,7 +4254,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_mod" | "try_mod" => Ok(Arc::new(ScalarUDF::from(TryMod::new()))),
             "spark_try_multiply" | "try_multiply" => Ok(Arc::new(ScalarUDF::from(TryMult::new()))),
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(Version::new()))),
-            "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(ToJson::new()))),
+            "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(ToJson::new("UTC".into())))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(TrySubtract::new())))
             }
@@ -4402,12 +4413,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Unbase64>()
             || node_inner.is::<Uniform>()
             || node_inner.is::<UnHex>()
-            || node_inner.is::<VariantToJsonUdf>()
             || node_inner.is::<Version>()
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<YearMonthIntervalMonths>()
-            || node_inner.is::<ToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
@@ -4482,6 +4491,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().downcast_ref::<XpathTyped>() {
             let name = node.name().to_string();
             UdfKind::XpathTyped(r#gen::XpathTypedUdf { name })
+        } else if let Some(func) = node.inner().downcast_ref::<VariantToJsonUdf>() {
+            let session_timezone = func.timezone().to_string();
+            UdfKind::VariantToJson(r#gen::SparkToJsonUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<ToJson>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToJson(r#gen::SparkToJsonUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<ToXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkToXml(r#gen::SparkToXmlUdf { session_timezone })
@@ -10630,6 +10645,20 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(ToUtf8::new()))?;
         let decoded = downcast_udf::<ToUtf8>(&decoded, "SparkToUtf8")?;
         assert_eq!(decoded.timezone(), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_json_udfs_preserve_timezone() -> Result<()> {
+        let timezone = "Asia/Shanghai";
+        let decoded = round_trip_udf(ScalarUDF::from(VariantToJsonUdf::new(timezone.into())))?;
+        let decoded = downcast_udf::<VariantToJsonUdf>(&decoded, "VariantToJsonUdf")?;
+        assert_eq!(decoded.timezone(), timezone);
+
+        let decoded = round_trip_udf(ScalarUDF::from(ToJson::new(timezone.into())))?;
+        let decoded = downcast_udf::<ToJson>(&decoded, "ToJson")?;
+        assert_eq!(decoded.session_timezone(), timezone);
 
         Ok(())
     }

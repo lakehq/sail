@@ -115,21 +115,7 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if left.is_volatile() {
         return Ok(expr_fn::nullif(left, right));
     }
-    let timezone = &function_context.plan_config.session_timezone_label();
-    // TODO: `date_trunc` returns TIMESTAMP_NTZ for a TIMESTAMP_NTZ value, where Spark returns
-    //  TIMESTAMP. Remove this once it does. A value in other units than microseconds is still
-    //  cast after `date_trunc`, which this misses.
-    let (left, left_type) = match &left {
-        expr::Expr::ScalarFunction(function)
-            if function.name() == "date_trunc"
-                && matches!(left_type, DataType::Timestamp(_, None)) =>
-        {
-            let left = cast_to_session_timestamp(left, &left_type, timezone);
-            let left_type = left.get_type(schema)?;
-            (left, left_type)
-        }
-        _ => (left, left_type),
-    };
+    let timezone = &function_context.plan_config.session_timezone;
     // The native function returns the common type of the arguments, which is the type of the
     // first argument here. Unlike a CASE expression, it is always nullable, as in Spark.
     let right_type = right.get_type(schema)?;
@@ -197,7 +183,7 @@ fn coerce_date_timestamp_values(
     } else {
         return Ok(values);
     };
-    let timezone = &function_context.plan_config.session_timezone_label();
+    let timezone = &function_context.plan_config.session_timezone;
     Ok(values
         .into_iter()
         .zip(data_types)
@@ -242,7 +228,10 @@ fn coerce_string_temporal_values(
                     .zip(data_types)
                     .map(|(arg, data_type)| {
                         if is_temporal_type(&data_type) {
-                            ScalarUDF::from(ToUtf8::new()).call(vec![arg])
+                            ScalarUDF::from(ToUtf8::new().with_timezone(Some(
+                                function_context.plan_config.session_timezone.clone(),
+                            )))
+                            .call(vec![arg])
                         } else {
                             arg
                         }
@@ -256,7 +245,7 @@ fn coerce_string_temporal_values(
         coerce_timestamp_ntz_values(
             arguments,
             function_context.schema,
-            &function_context.plan_config.session_timezone_label(),
+            &function_context.plan_config.session_timezone,
         )?
     };
     Ok(arguments)
