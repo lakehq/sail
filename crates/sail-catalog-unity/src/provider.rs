@@ -3528,9 +3528,11 @@ mod tests {
             "table_type": table_type,
             "data_source_format": format,
             "storage_location": DELTA_TABLE_URI,
-            "properties": properties,
             "columns": []
         });
+        if !properties.is_null() {
+            table["properties"] = properties;
+        }
         if let Some(table_id) = table_id {
             table["table_id"] = serde_json::json!(table_id);
         }
@@ -3645,21 +3647,13 @@ mod tests {
     }
 
     async fn mount_legacy_delta_table(server: &MockServer) {
-        let table = serde_json::json!({
-            "catalog_name": "main",
-            "schema_name": "default",
-            "name": "events",
-            "table_type": "MANAGED",
-            "data_source_format": "DELTA",
-            "storage_location": DELTA_TABLE_URI,
-            "table_id": DELTA_TABLE_ID,
-            "columns": []
-        });
-        Mock::given(method("GET"))
-            .and(path_regex("^/tables/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(table))
-            .mount(server)
-            .await;
+        mount_existing_table(server, "MANAGED", "DELTA").await;
+    }
+
+    /// Mounts the table of the legacy API with the table ID, without properties.
+    async fn mount_existing_table(server: &MockServer, table_type: &str, format: &str) {
+        let properties = serde_json::Value::Null;
+        mount_legacy_table(server, table_type, format, Some(DELTA_TABLE_ID), properties).await;
     }
 
     async fn received_json_bodies(server: &MockServer, path: &str) -> Vec<serde_json::Value> {
@@ -4323,17 +4317,15 @@ mod tests {
                 .up_to_n_times(failures)
                 .mount(&server)
                 .await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                        DELTA_TABLE_ID,
-                        Some(vec![2, 1]),
-                        Some(2),
-                    )),
-                )
-                .mount(&server)
-                .await;
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![2, 1]),
+                    Some(2),
+                )),
+            )
+            .await;
             server
         }
 
@@ -4538,26 +4530,24 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_delta_ratified_commits_without_latest_table_version() {
+    /// Requests the ratified commits of the table that the catalog resolved, from a server
+    /// with the Delta REST API that answers the request for the table with the response.
+    async fn ratified_commits_of(
+        response: ResponseTemplate,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         let server = MockServer::start().await;
         mount_delta_config_ok(&server).await;
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                    DELTA_TABLE_ID,
-                    None,
-                    None,
-                )),
-            )
-            .mount(&server)
-            .await;
-
-        let provider = mock_provider(&server, "main");
+        mount_load_table(&server, response).await;
         let database = Namespace::try_from(vec!["default"]).unwrap();
-        let response = provider
+        mock_provider(&server, "main")
             .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_without_latest_table_version() {
+        let table = delta_load_table_json(DELTA_TABLE_ID, None, None);
+        let response = ratified_commits_of(ResponseTemplate::new(200).set_body_json(table))
             .await
             .unwrap();
         assert_eq!(response.latest_table_version, -1);
@@ -4566,25 +4556,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_ratified_commits_table_id_mismatch() {
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                    "00000000-0000-0000-0000-000000000000",
-                    Some(vec![1]),
-                    Some(1),
-                )),
-            )
-            .mount(&server)
-            .await;
-
-        let provider = mock_provider(&server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let error = provider
-            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+        let table = delta_load_table_json(
+            "00000000-0000-0000-0000-000000000000",
+            Some(vec![1]),
+            Some(1),
+        );
+        let error = ratified_commits_of(ResponseTemplate::new(200).set_body_json(table))
             .await
             .unwrap_err();
         assert!(
@@ -4595,19 +4572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_ratified_commits_table_not_found() {
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
-
-        let provider = mock_provider(&server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let error = provider
-            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+        let error = ratified_commits_of(ResponseTemplate::new(404))
             .await
             .unwrap_err();
         assert!(
@@ -4771,17 +4736,15 @@ mod tests {
             .await;
             mount_legacy_delta_table(&server).await;
             mount_refusing_legacy_commits(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                        DELTA_TABLE_ID,
-                        Some(vec![3, 2]),
-                        Some(3),
-                    )),
-                )
-                .mount(&server)
-                .await;
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![3, 2]),
+                    Some(3),
+                )),
+            )
+            .await;
 
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
@@ -4815,14 +4778,12 @@ mod tests {
             mount_delta_config(&server, ResponseTemplate::new(404)).await;
             mount_legacy_delta_table(&server).await;
             mount_refusing_legacy_commits(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(
-                    ResponseTemplate::new(status)
-                        .set_body_json(delta_api_error_json(error_type, status)),
-                )
-                .mount(&server)
-                .await;
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(status)
+                    .set_body_json(delta_api_error_json(error_type, status)),
+            )
+            .await;
 
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
@@ -4878,14 +4839,11 @@ mod tests {
             .await;
             mount_legacy_delta_table(&server).await;
             mount_refusing_legacy_commits(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(
-                    ResponseTemplate::new(table_status.unwrap_or(200))
-                        .set_body_string("table answer"),
-                )
-                .mount(&server)
-                .await;
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(table_status.unwrap_or(200)).set_body_string("table answer"),
+            )
+            .await;
 
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
@@ -4939,17 +4897,15 @@ mod tests {
             // The API is asked again, and the answer is used.
             server.reset().await;
             mount_delta_config_ok(&server).await;
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                        DELTA_TABLE_ID,
-                        Some(vec![]),
-                        Some(0),
-                    )),
-                )
-                .mount(&server)
-                .await;
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![]),
+                    Some(0),
+                )),
+            )
+            .await;
             let response = provider
                 .get_delta_ratified_commits(
                     &database,
@@ -5011,44 +4967,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_commit_uses_delta_api() {
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        Mock::given(method("POST"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
-                    DELTA_TABLE_ID,
-                    Some(vec![5]),
-                    Some(5),
-                )),
-            )
-            .mount(&server)
-            .await;
-
-        let provider = mock_provider(&server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let outcome = provider
-            .commit_delta_table(
-                &database,
-                "events",
-                delta_commit_request(legacy_delta_commit(5)),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(outcome, DeltaCommitOutcome::Committed));
-
         let mut commit = legacy_delta_commit(6);
         commit["latest_backfilled_version"] = serde_json::json!(5);
-        provider
-            .commit_delta_table(&database, "events", delta_commit_request(commit))
-            .await
-            .unwrap();
-
         let requirements = serde_json::json!([
             {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
         ]);
         assert_eq!(
-            received_json_bodies(&server, DELTA_TABLE_PATH).await,
+            delta_api_commit_bodies(vec![legacy_delta_commit(5), commit]).await,
             vec![
                 serde_json::json!({
                     "requirements": requirements,
@@ -5063,14 +4988,6 @@ mod tests {
                         {"action": "set-latest-backfilled-version", "latest-published-version": 5}
                     ]
                 }),
-            ]
-        );
-        assert_eq!(
-            received_targets(&server).await,
-            vec![
-                "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
-                format!("POST {DELTA_TABLE_PATH}"),
-                format!("POST {DELTA_TABLE_PATH}"),
             ]
         );
     }
@@ -5914,9 +5831,9 @@ mod tests {
             mount_legacy_delta_table(&server).await;
             // The response has only the fields used for commit discovery, with values of
             // other fields that are not in the specification.
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            mount_load_table(
+                &server,
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "metadata": {
                         "table-uuid": DELTA_TABLE_ID.to_uppercase(),
                         "table-type": "MANAGED_SHALLOW_CLONE",
@@ -5926,9 +5843,9 @@ mod tests {
                         {"version": 4, "file-name": "00000000000000000004.uuid.json"},
                         {"version": 3, "file-name": "00000000000000000003.uuid.json"}
                     ]
-                })))
-                .mount(&server)
-                .await;
+                })),
+            )
+            .await;
 
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
@@ -5958,21 +5875,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_ratified_commits_invalid_response_reports_reason() {
-        let server = MockServer::start().await;
-        mount_delta_config_ok(&server).await;
-        mount_legacy_delta_table(&server).await;
-        Mock::given(method("GET"))
-            .and(path(DELTA_TABLE_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"commits": []})),
-            )
-            .mount(&server)
-            .await;
-
-        let provider = mock_provider(&server, "main");
-        let database = Namespace::try_from(vec!["default"]).unwrap();
-        let error = provider
-            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+        let table = serde_json::json!({"commits": []});
+        let error = ratified_commits_of(ResponseTemplate::new(200).set_body_json(table))
             .await
             .unwrap_err();
         assert!(
@@ -6515,23 +6419,6 @@ mod tests {
         );
     }
 
-    async fn mount_existing_table(server: &MockServer, table_type: &str, format: &str) {
-        Mock::given(method("GET"))
-            .and(path_regex("^/tables/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "catalog_name": "main",
-                "schema_name": "default",
-                "name": "events",
-                "table_type": table_type,
-                "data_source_format": format,
-                "storage_location": DELTA_TABLE_URI,
-                "table_id": DELTA_TABLE_ID,
-                "columns": []
-            })))
-            .mount(server)
-            .await;
-    }
-
     fn replace_options(
         mode: sail_catalog::provider::CreateTableMode,
         is_write_precondition: bool,
@@ -6991,11 +6878,7 @@ mod tests {
                         .set_body_json(delta_load_table_json(table_id, None, Some(0))),
                     None => ResponseTemplate::new(404),
                 };
-            Mock::given(method("GET"))
-                .and(path(DELTA_TABLE_PATH))
-                .respond_with(load_table)
-                .mount(&server)
-                .await;
+            mount_load_table(&server, load_table).await;
 
             let provider = mock_provider(&server, "main");
             let database = Namespace::try_from(vec!["default"]).unwrap();
