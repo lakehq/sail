@@ -125,6 +125,9 @@ pub mod delta_gen {
         pub required_protocol: Option<DeltaProtocol>,
         #[serde(rename = "required-properties", default)]
         pub required_properties: Option<std::collections::HashMap<String, Option<String>>>,
+        /// The storage credentials for writing version 0 of the table.
+        #[serde(flatten)]
+        pub credentials: DeltaCredentialsResponse,
     }
 
     // The response of loading a table is defined manually with only the fields used for
