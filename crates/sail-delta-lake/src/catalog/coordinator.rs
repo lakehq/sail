@@ -307,6 +307,17 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     .rebase_reference(log_store, reference, &response, actions, operation)
                     .await?;
             }
+            // A commit that is not a blind append is not staged on top of the commits of
+            // other writers, since what it read from the table is not known here.
+            if let Some(snapshot) = &reference
+                && latest_version > snapshot.version()
+            {
+                return Err(commit_conflict_error(&format!(
+                    "another writer committed version {latest_version} of the table after \
+                     version {} that the write was prepared from",
+                    snapshot.version()
+                )));
+            }
             let staging = CommitBuilder::from(properties.clone())
                 .with_actions(actions.to_vec())
                 .build(reference.clone(), log_store.clone(), operation.clone())

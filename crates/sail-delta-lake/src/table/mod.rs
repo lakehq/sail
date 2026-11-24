@@ -2084,6 +2084,45 @@ mod catalog_managed_tests {
     }
 
     #[tokio::test]
+    async fn write_that_replaces_data_is_planned_from_the_commits_that_the_catalog_has_then() {
+        // The catalog has ratified version 2 after it resolved the table at version 1. A
+        // write that is not a blind append asks the catalog once when it is planned, so
+        // that it does not conflict with the commit of version 2.
+        let catalog = Arc::new(UnityManagedCatalog::new(
+            told(Yes, Some(ratified(1, &[(1, "a")]))),
+            Some(ratified(2, &[(1, "a"), (2, "b")])),
+        ));
+        let (session, context) = resolve_table(&catalog, LakehouseOperation::Write).await;
+        let refreshed = super::refresh_catalog_managed_commits(&session.state(), context)
+            .await
+            .unwrap();
+        assert_eq!(
+            refreshed.delta.unwrap().commits,
+            Some(ratified(2, &[(1, "a"), (2, "b")]))
+        );
+        assert_eq!(catalog.ratified_commit_requests(), 1);
+
+        // The catalog is not asked about a table that it resolved without its commits,
+        // since they are requested when the table is loaded.
+        for state in [
+            told(Yes, None),
+            told(No, None),
+            told_before_log(Undetermined),
+        ] {
+            let catalog = Arc::new(UnityManagedCatalog::new(
+                state.clone(),
+                Some(ratified(2, &[(1, "a"), (2, "b")])),
+            ));
+            let (session, context) = resolve_table(&catalog, LakehouseOperation::Write).await;
+            let refreshed = super::refresh_catalog_managed_commits(&session.state(), context)
+                .await
+                .unwrap();
+            assert_eq!(refreshed.delta, state);
+            assert_eq!(catalog.ratified_commit_requests(), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn catalog_managed_table_without_resolved_commits_requests_them_once() {
         // The catalog tells that the table is catalog-managed without its commits, as a
         // catalog with the legacy API does, so the commits are requested.
