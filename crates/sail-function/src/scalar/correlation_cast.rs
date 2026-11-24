@@ -165,12 +165,23 @@ fn cast_array(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
         )?),
         (_, DataType::Decimal128(p, s)) => {
             let decimal = match array.data_type() {
-                DataType::Utf8 => decimal_values(array.as_string::<i32>().iter(), *p, *s)?,
-                DataType::LargeUtf8 => decimal_values(array.as_string::<i64>().iter(), *p, *s)?,
-                DataType::Utf8View => decimal_values(array.as_string_view().iter(), *p, *s)?,
+                DataType::Utf8 => decimal_values(array.as_string::<i32>().iter(), *p, *s),
+                DataType::LargeUtf8 => decimal_values(array.as_string::<i64>().iter(), *p, *s),
+                DataType::Utf8View => decimal_values(array.as_string_view().iter(), *p, *s),
                 _ => return internal_err!("expected string correlation CAST"),
             };
-            Ok(Arc::new(decimal))
+            match decimal {
+                Ok(decimal) => Ok(Arc::new(decimal)),
+                // Arrow classifies syntax and precision errors using the original text.
+                Err(_) => Ok(arrow::compute::cast_with_options(
+                    array,
+                    target,
+                    &arrow::compute::CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
+                )?),
+            }
         }
         (DataType::Decimal128(_, 0), DataType::Int64) => {
             let array = array.as_primitive::<Decimal128Type>();
@@ -512,7 +523,7 @@ fn decimal_values<'a>(
                 {
                     value
                 } else {
-                    value.trim()
+                    value.trim_ascii()
                 })
                 .parse::<i128>()
                 .ok()

@@ -18,7 +18,7 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
+use datafusion::logical_expr::{Expr, LogicalPlan, ScalarUDF, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::expressions::{Column, Literal, cast};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr, create_lex_ordering};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
@@ -45,7 +45,7 @@ use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::partition::qualified_partition_path;
-use crate::listing::partition_write::HivePartitionWriteExec;
+use crate::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -242,7 +242,22 @@ async fn plan_file_write(
                         .iter()
                         .any(|(name, _)| name == field.name())
                 {
-                    let value = cast(column, &schema, DataType::Utf8)?;
+                    let value: Arc<dyn PhysicalExpr> = match field.data_type() {
+                        DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                            Arc::new(ScalarFunctionExpr::try_new(
+                                Arc::new(ScalarUDF::from(HivePartitionFloat::default())),
+                                vec![column],
+                                &schema,
+                                Arc::clone(session.config().options()),
+                            )?)
+                        }
+                        DataType::Date64 => cast(
+                            cast(column, &schema, DataType::Date32)?,
+                            &schema,
+                            DataType::Utf8,
+                        )?,
+                        _ => cast(column, &schema, DataType::Utf8)?,
+                    };
                     let null_marker =
                         Arc::new(Literal::new(ScalarValue::from(HIVE_DEFAULT_PARTITION_NAME)));
                     Arc::new(ScalarFunctionExpr::try_new(

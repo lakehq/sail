@@ -1571,7 +1571,7 @@ mod tests {
         ));
     }
     #[test]
-    fn time64_string_formatter_can_merge_unvalidated_raw_times() -> Result<()> {
+    fn time64_string_formatter_rejects_invalid_times() -> Result<()> {
         for (zero, wrapped) in [
             (
                 ScalarValue::Time64Microsecond(Some(0)),
@@ -1582,11 +1582,11 @@ mod tests {
                 ScalarValue::Time64Nanosecond(Some(4_294_967_296_000_000_000)),
             ),
         ] {
-            assert_ne!(zero, wrapped);
             assert_eq!(
                 zero.cast_to(&DataType::Utf8)?,
-                wrapped.cast_to(&DataType::Utf8)?
+                ScalarValue::Utf8(Some("00:00:00".into()))
             );
+            assert!(wrapped.cast_to(&DataType::Utf8).is_err());
             assert!(!injective_cast(&zero.data_type(), &DataType::Utf8));
         }
         Ok(())

@@ -322,6 +322,14 @@ fn shift_timestamps<T: ArrowTimestampType>(
 ) -> Option<ArrayRef> {
     let array = array.as_primitive::<T>();
     let local = if offset == 0 {
+        if ((min, max) != (i64::MIN, i64::MAX))
+            && array
+                .iter()
+                .flatten()
+                .any(|value| !(min..=max).contains(&value))
+        {
+            return None;
+        }
         array.clone()
     } else {
         // Both the value and its local date and time must be in the range of dates and times, so

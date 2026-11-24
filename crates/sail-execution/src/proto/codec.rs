@@ -133,7 +133,7 @@ use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
-use sail_data_source::listing::partition_write::HivePartitionWriteExec;
+use sail_data_source::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -4097,6 +4097,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(ArrayCompact::new()))),
             "spark_cast_string_to_int32" => Ok(Arc::new(ScalarUDF::from(CastStringToInt32::new()))),
+            "sail_hive_partition_float" => {
+                Ok(Arc::new(ScalarUDF::from(HivePartitionFloat::default())))
+            }
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -4326,6 +4329,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayPosition>()
             || node_inner.is::<ArrayCompact>()
             || node_inner.is::<CastStringToInt32>()
+            || node_inner.is::<HivePartitionFloat>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()

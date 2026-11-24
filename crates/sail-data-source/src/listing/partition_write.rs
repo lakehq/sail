@@ -2,10 +2,77 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::array::{ArrayRef, AsArray, StringArray};
+use datafusion::arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
+};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::functions::utils::make_scalar_function;
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::Result;
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, internal_err};
+
+/// Preserve directory names written by the native Hive float formatter.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct HivePartitionFloat {
+    signature: Signature,
+}
+
+impl Default for HivePartitionFloat {
+    fn default() -> Self {
+        Self {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Float16, DataType::Float32, DataType::Float64],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for HivePartitionFloat {
+    fn name(&self) -> &str {
+        "sail_hive_partition_float"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(
+            |args| {
+                let [array] = take_function_args(self.name(), args)?;
+                fn format<T: ArrowPrimitiveType>(array: &ArrayRef) -> ArrayRef
+                where
+                    T::Native: std::fmt::Display,
+                {
+                    Arc::new(StringArray::from_iter(
+                        array
+                            .as_primitive::<T>()
+                            .iter()
+                            .map(|value| value.map(|value| value.to_string())),
+                    ))
+                }
+                Ok(match array.data_type() {
+                    DataType::Float16 => format::<Float16Type>(array),
+                    DataType::Float32 => format::<Float32Type>(array),
+                    DataType::Float64 => format::<Float64Type>(array),
+                    _ => return internal_err!("expected a floating partition column"),
+                })
+            },
+            vec![],
+        )(&args.args)
+    }
+}
 use datafusion_common::tree_node::TreeNodeRecursion;
 
 /// Lets listing sinks write the Spark Hive null marker as a partition value.

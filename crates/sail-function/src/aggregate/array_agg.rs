@@ -2571,9 +2571,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // TODO: Uncomment after DataFusion 56 (the upstream size reflects Arrow 60)
-        // assert_eq!(acc1.size(), 2210);
-        assert_eq!(acc1.size(), 2274);
+        assert_eq!(acc1.size(), 2194);
 
         Ok(())
     }
@@ -2593,9 +2591,7 @@ mod tests {
         ]);
         acc.update_batch(&[Arc::clone(&input), input])?;
 
-        // TODO: Uncomment after DataFusion 56 (the upstream size reflects Arrow 60)
-        // assert_eq!(acc.size(), 2135);
-        assert_eq!(acc.size(), 2295);
+        assert_eq!(acc.size(), 2135);
 
         Ok(())
     }

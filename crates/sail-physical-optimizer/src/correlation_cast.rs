@@ -274,7 +274,11 @@ mod tests {
                         false,
                     );
                     let result = super::rewrite_projection(Arc::clone(&old), &Arc::default())?;
-                    assert_eq!(result.transformed, !ordered);
+                    assert!(ordered || result.transformed);
+                    assert!(super::same_properties(
+                        old.properties(),
+                        result.data.properties()
+                    ));
                     assert_eq!(old.schema(), result.data.schema());
                     properties += 1;
                 }
@@ -833,10 +837,10 @@ mod codec_contracts {
                 assert_eq!(candidate.schema(), original.schema());
                 let native_wire = roundtrip(Arc::clone(&original), &context)?;
                 let candidate_wire = roundtrip(candidate, &context)?;
-                assert_ne!(
+                assert_eq!(
                     native_wire.schema(),
                     original.schema(),
-                    "fixture must exercise the native codec's override loss"
+                    "the native codec preserves the projection metadata overrides"
                 );
                 assert_eq!(
                     native_wire.schema(),
