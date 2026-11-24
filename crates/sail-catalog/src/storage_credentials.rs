@@ -365,6 +365,7 @@ mod tests {
                 token: "secret-token".to_string(),
             },
             expires_at_ms: None,
+            access: sail_common_datafusion::catalog::StorageAccess::Read,
         }))
     }
 
@@ -653,8 +654,18 @@ mod tests {
             let error = failure(store(&session), other.clone()).await;
             assert!(!error.to_string().contains(ANSWER), "{error}");
 
-            // The catalog is asked again later.
-            tokio::time::advance(ttl + Duration::from_secs(1)).await;
+            // The catalog is asked again when the table is next used, since the storage
+            // could not be accessed with the credentials of the environment.
+            let _ = ttl;
+            session
+                .install(CommitAuthority::DeltaRatifiedCommit)
+                .await
+                .unwrap();
+            assert_eq!(
+                session.requests(),
+                vec![StorageAccess::Read, StorageAccess::Read]
+            );
+            // It is not asked again while the storage is accessed without such an error.
             session
                 .install(CommitAuthority::DeltaRatifiedCommit)
                 .await

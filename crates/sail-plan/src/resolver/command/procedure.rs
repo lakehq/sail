@@ -790,6 +790,7 @@ mod tests {
                         token: "secret-token".to_string(),
                     },
                     expires_at_ms: None,
+                    access: sail_common_datafusion::catalog::StorageAccess::Read,
                 }))
             }
 

@@ -45,4 +45,6 @@ pub struct TableStorageCredentials {
     pub credential: StorageCredential,
     /// The time when the credential expires, in milliseconds since the Unix epoch.
     pub expires_at_ms: Option<i64>,
+    /// The access that the credential gives, which can be more than the requested access.
+    pub access: StorageAccess,
 }

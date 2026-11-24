@@ -2309,6 +2309,7 @@ mod catalog_managed_tests {
                         token: "token".to_string(),
                     },
                     expires_at_ms: None,
+                    access: sail_common_datafusion::catalog::StorageAccess::Read,
                 },
                 Arc::new(|_| Box::pin(async { Err("not expected".to_string()) })),
             )
@@ -3937,6 +3938,7 @@ mod catalog_managed_tests {
                         token: "token".to_string(),
                     },
                     expires_at_ms: None,
+                    access: sail_common_datafusion::catalog::StorageAccess::Read,
                 },
                 Arc::new(|_| Box::pin(async { Err("not expected".to_string()) })),
             )

@@ -2478,16 +2478,26 @@ fn select_storage_credentials(
     access: StorageAccess,
 ) -> CatalogResult<Option<TableStorageCredentials>> {
     let location = storage_location_key(location);
+    // The prefixes of the credentials that are not for the location.
+    let mut other_prefixes = vec![];
     let selected = response
         .storage_credentials
         .unwrap_or_default()
         .into_iter()
         .filter_map(|item| {
             let prefix = storage_location_key(item.prefix.as_deref()?);
-            let rest = location.strip_prefix(prefix)?;
-            if !(rest.is_empty() || rest.starts_with('/')) {
+            let Some(rest) = location
+                .strip_prefix(prefix)
+                .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+            else {
+                other_prefixes.push(prefix.to_string());
                 return None;
-            }
+            };
+            let _ = rest;
+            let granted_write = item
+                .operation
+                .as_deref()
+                .is_some_and(|x| x.eq_ignore_ascii_case("READ_WRITE"));
             let exact = match (item.operation.as_deref(), access) {
                 (None, _) => false,
                 (Some(x), StorageAccess::Read) if x.eq_ignore_ascii_case("READ") => true,
@@ -2524,6 +2534,11 @@ fn select_storage_credentials(
                 Some(TableStorageCredentials {
                     credential,
                     expires_at_ms: item.expiration_time_ms,
+                    access: if granted_write {
+                        StorageAccess::ReadWrite
+                    } else {
+                        access
+                    },
                 }),
             ))
         })
@@ -2535,6 +2550,16 @@ fn select_storage_credentials(
              which is not supported"
         ))),
         Some((_, credentials)) => Ok(credentials),
+        // The server issued credentials, but not for the location, so the answer is not
+        // that the server has no credentials to issue.
+        None if !other_prefixes.is_empty() => {
+            other_prefixes.sort();
+            Err(CatalogError::CredentialUnavailable(format!(
+                "Unity Catalog issued storage credentials for {}, which does not cover the \
+                 table location {location}",
+                other_prefixes.join(", ")
+            )))
+        }
         None => Ok(None),
     }
 }
@@ -7615,6 +7640,7 @@ mod tests {
                     session_token: Some("table-token".to_string()),
                 },
                 expires_at_ms: Some(1_800_000_000_000),
+                access: sail_common_datafusion::catalog::StorageAccess::Read,
             }
         );
         let debug = format!("{credentials:?}");
@@ -7690,16 +7716,6 @@ mod tests {
                 "prefix": DELTA_TABLE_URI, "operation": "READ",
                 "config": {"s3.access-key-id": "key", "s3.secret-access-key": null}
             }]}),
-            serde_json::json!({"storage-credentials": [{
-                "prefix": "s3://bucket/other", "operation": "READ",
-                "config": {"gcs.oauth-token": "token"}
-            }]}),
-            // A credential for an S3-compatible storage that does not cover the location
-            // is not selected.
-            serde_json::json!({"storage-credentials": [{
-                "prefix": "s3://bucket/other", "operation": "READ",
-                "config": {"s3.endpoint": "https://minio.example.com:9000"}
-            }]}),
         ] {
             let credentials = table_storage_credentials(
                 "READ",
@@ -7709,6 +7725,30 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(credentials, None);
+        }
+        // The server issues credentials, but none for the location, which is reported
+        // with the locations that the credentials are for. A credential for an
+        // S3-compatible storage that does not cover the location is not selected either.
+        for config in [
+            serde_json::json!({"gcs.oauth-token": "secret-token"}),
+            serde_json::json!({"s3.endpoint": "https://minio.example.com:9000"}),
+        ] {
+            let response = serde_json::json!({"storage-credentials": [{
+                "prefix": "s3://bucket/other", "operation": "READ", "config": config
+            }]});
+            let result = table_storage_credentials(
+                "READ",
+                StorageAccess::Read,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await;
+            assert!(
+                matches!(&result, Err(CatalogError::CredentialUnavailable(message))
+                    if message.contains("s3://bucket/other")
+                        && message.contains(DELTA_TABLE_URI)
+                        && !message.contains("secret-token")),
+                "{result:?}"
+            );
         }
         // The credential for the location is for an S3-compatible storage endpoint, with
         // keys or with the keys of the client. The request fails, so that the location is

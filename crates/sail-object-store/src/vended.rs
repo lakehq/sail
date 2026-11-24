@@ -388,8 +388,9 @@ fn create_vended_store(
 struct Route {
     prefix: Path,
     owner: String,
-    /// Whether the object stores use credentials issued for the owner.
-    issued: bool,
+    /// For object stores that do not use credentials issued for the owner, whether an
+    /// access to the storage failed in a way that missing access can cause.
+    not_issued_failed: Option<Arc<AtomicBool>>,
     read: Arc<dyn ObjectStore>,
     write: Arc<dyn ObjectStore>,
 }
@@ -425,13 +426,23 @@ fn not_issued_error(
 struct NotIssuedObjectStore {
     inner: Arc<dyn ObjectStore>,
     reason: Arc<str>,
+    /// Whether such an error occurred, after which the catalog is asked for credentials
+    /// again when the table is next used, since the environment may have no access.
+    failed: Arc<AtomicBool>,
 }
 
 impl NotIssuedObjectStore {
-    fn explain(reason: &Arc<str>, error: object_store::Error) -> object_store::Error {
+    fn explain(
+        reason: &Arc<str>,
+        failed: &AtomicBool,
+        error: object_store::Error,
+    ) -> object_store::Error {
         use object_store::Error;
 
-        let explain = |source| not_issued_error(source, reason);
+        let explain = |source| {
+            failed.store(true, Ordering::Relaxed);
+            not_issued_error(source, reason)
+        };
         match error {
             Error::Generic { store, source } => Error::Generic {
                 store,
@@ -450,7 +461,7 @@ impl NotIssuedObjectStore {
     }
 
     fn explained<T>(&self, result: Result<T>) -> Result<T> {
-        result.map_err(|e| Self::explain(&self.reason, e))
+        result.map_err(|e| Self::explain(&self.reason, &self.failed, e))
     }
 
     fn explained_stream<T: 'static>(
@@ -458,8 +469,9 @@ impl NotIssuedObjectStore {
         stream: BoxStream<'static, Result<T>>,
     ) -> BoxStream<'static, Result<T>> {
         let reason = Arc::clone(&self.reason);
+        let failed = Arc::clone(&self.failed);
         stream
-            .map(move |result| result.map_err(|e| Self::explain(&reason, e)))
+            .map(move |result| result.map_err(|e| Self::explain(&reason, &failed, e)))
             .boxed()
     }
 }
@@ -575,7 +587,7 @@ impl PrefixRoutingObjectStore {
         self.push_route(Route {
             prefix,
             owner: owner.to_string(),
-            issued: true,
+            not_issued_failed: None,
             read,
             write,
         });
@@ -584,14 +596,16 @@ impl PrefixRoutingObjectStore {
     /// Accesses the path prefix with the default object store, and adds the reason
     /// why the catalog issued no storage credentials for the owner to the errors.
     fn set_not_issued_route(&self, prefix: Path, owner: &str, reason: &str) {
+        let failed = Arc::new(AtomicBool::new(false));
         let store: Arc<dyn ObjectStore> = Arc::new(NotIssuedObjectStore {
             inner: Arc::clone(&self.default),
             reason: Arc::from(reason),
+            failed: Arc::clone(&failed),
         });
         self.push_route(Route {
             prefix,
             owner: owner.to_string(),
-            issued: false,
+            not_issued_failed: Some(failed),
             read: Arc::clone(&store),
             write: store,
         });
@@ -617,7 +631,26 @@ impl PrefixRoutingObjectStore {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .any(|route| route.issued && &route.prefix == prefix && route.owner == owner)
+            .any(|route| {
+                route.not_issued_failed.is_none() && &route.prefix == prefix && route.owner == owner
+            })
+    }
+
+    /// Whether an access to the path prefix failed without credentials issued for the
+    /// owner, in a way that missing access can cause.
+    fn not_issued_failed(&self, prefix: &Path, owner: &str) -> bool {
+        self.routes
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|route| {
+                &route.prefix == prefix
+                    && route.owner == owner
+                    && route
+                        .not_issued_failed
+                        .as_ref()
+                        .is_some_and(|failed| failed.load(Ordering::Relaxed))
+            })
     }
 
     fn reader(&self, location: Option<&Path>) -> Arc<dyn ObjectStore> {
@@ -864,12 +897,29 @@ impl VendedObjectStores {
 
     /// Whether it is remembered that no credentials are issued for the storage
     /// location and the owner.
+    ///
+    /// It is forgotten once an access to the storage location with the credentials of
+    /// the environment fails in a way that missing access can cause, so that the catalog
+    /// is asked again when the table is next used.
     pub fn is_not_issued(&self, location: &Url, owner: &str) -> bool {
-        self.not_issued
+        let remembered = self
+            .not_issued
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(owner.to_string(), location.as_str().to_string()))
-            .is_some_and(|until| *until > tokio::time::Instant::now())
+            .is_some_and(|until| *until > tokio::time::Instant::now());
+        if !remembered {
+            return false;
+        }
+        let Ok(prefix) = Self::prefix(location) else {
+            return true;
+        };
+        !self
+            .stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&Self::key(location))
+            .is_some_and(|store| store.not_issued_failed(&prefix, owner))
     }
 
     /// Stops accessing storage locations with the credentials issued for the owner,
@@ -904,6 +954,9 @@ impl VendedObjectStores {
     ) -> DataFusionResult<()> {
         let prefix = Self::prefix(location)?;
         let kind = initial.credential.clone();
+        // A credential that the catalog issued for writing is also the first credential
+        // for writing, so that the catalog is not asked again before it expires.
+        let initial_write = (initial.access == StorageAccess::ReadWrite).then(|| initial.clone());
         let read = (self.factory)(VendedStoreRequest {
             location,
             access: StorageAccess::Read,
@@ -920,7 +973,7 @@ impl VendedObjectStores {
                     location: &location,
                     access: StorageAccess::ReadWrite,
                     kind: &kind,
-                    initial: None,
+                    initial: initial_write.clone(),
                     fetch: Arc::clone(&fetch),
                 });
                 async move { store }
@@ -999,6 +1052,7 @@ mod tests {
                 session_token: Some("token-value".to_string()),
             },
             expires_at_ms,
+            access: StorageAccess::Read,
         }
     }
 
@@ -1298,8 +1352,10 @@ mod tests {
     fn not_issued_errors_keep_the_kind_and_are_the_innermost_error() {
         let reason: Arc<str> = Arc::from("the catalog refused: no access");
         let source = std::io::Error::other(std::io::Error::other("invalid token"));
+        let failed = AtomicBool::new(false);
         let error = NotIssuedObjectStore::explain(
             &reason,
+            &failed,
             object_store::Error::Unauthenticated {
                 path: "a/b".to_string(),
                 source: Box::new(source),
@@ -1317,14 +1373,17 @@ mod tests {
             "{message}"
         );
 
+        assert!(failed.swap(false, Ordering::Relaxed));
         let error = NotIssuedObjectStore::explain(
             &reason,
+            &failed,
             object_store::Error::NotFound {
                 path: "a/b".to_string(),
                 source: "missing".into(),
             },
         );
         assert!(!error.to_string().contains("refused"), "{error}");
+        assert!(!failed.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
@@ -1619,8 +1678,13 @@ mod tests {
                 fetch.clone(),
             )
             .unwrap();
+        // The catalog issued a credential for writing the other location.
+        let read_write = TableStorageCredentials {
+            access: StorageAccess::ReadWrite,
+            ..s3_credentials("k", None)
+        };
         stores
-            .install(&session, &other, "other", s3_credentials("k", None), fetch)
+            .install(&session, &other, "other", read_write, fetch)
             .unwrap();
         assert!(stores.contains(&location, "table"));
         assert!(stores.contains(&Url::parse("memory:///warehouse/items/").unwrap(), "table"));
@@ -1655,6 +1719,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(paths(write.as_ref(), None).await.len(), 1);
+        // A credential that was issued for writing is the first credential for writing.
+        store
+            .put(&Path::from("warehouse/other/x"), "x".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            requests.lock().unwrap()[3..],
+            [(other.to_string(), StorageAccess::ReadWrite, true)]
+        );
 
         // Another session does not access the location with the credentials.
         let session = registry();
