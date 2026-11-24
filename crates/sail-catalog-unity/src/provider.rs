@@ -1438,11 +1438,11 @@ impl CatalogProvider for UnityCatalogProvider {
         let (status, message) = if let Some(table_id) = staging_table_id {
             match client.get_staging_table_credentials(table_id).await {
                 Ok(response) => {
-                    return Ok(select_storage_credentials(
+                    return select_storage_credentials(
                         response.inner,
                         &request.location,
                         request.access,
-                    ));
+                    );
                 }
                 Err(e) => (e.status(), delta_error_message(&e)),
             }
@@ -1461,11 +1461,11 @@ impl CatalogProvider for UnityCatalogProvider {
                 .await
             {
                 Ok(response) => {
-                    return Ok(select_storage_credentials(
+                    return select_storage_credentials(
                         response.inner,
                         &request.location,
                         request.access,
-                    ));
+                    );
                 }
                 Err(e) => (e.status(), delta_error_message(&e)),
             }
@@ -2451,7 +2451,9 @@ fn storage_location_key(location: &str) -> &str {
 }
 
 /// The key of a storage credential for an S3-compatible storage endpoint,
-/// which the client does not support. A credential with this key is not used.
+/// which the client does not support. The storage location of a credential with this key
+/// is not accessed, since the client must not use the credential and must not send its
+/// requests to AWS S3.
 const S3_ENDPOINT_STORAGE_CREDENTIAL_KEY: &str = "s3.endpoint";
 
 /// Selects the credential with the longest prefix that covers the storage location
@@ -2459,13 +2461,15 @@ const S3_ENDPOINT_STORAGE_CREDENTIAL_KEY: &str = "s3.endpoint";
 /// exactly the access. A credential for reading and writing can be used for reading,
 /// and a credential without an operation is assumed to be issued for the access.
 /// Returns nothing if no credential that the client can use covers the location.
+/// Fails if the selected credential is for a storage endpoint that the client does not
+/// support, so that the location is not accessed with other credentials.
 fn select_storage_credentials(
     response: delta_gen::DeltaCredentialsResponse,
     location: &str,
     access: StorageAccess,
-) -> Option<TableStorageCredentials> {
+) -> CatalogResult<Option<TableStorageCredentials>> {
     let location = storage_location_key(location);
-    response
+    let selected = response
         .storage_credentials
         .unwrap_or_default()
         .into_iter()
@@ -2484,16 +2488,11 @@ fn select_storage_credentials(
             };
             let length = prefix.len();
             let mut config = item.config?;
-            // The credential is for an S3-compatible storage that the client does not
-            // support, so the client must not use it and must not send its requests to AWS S3.
             if config
                 .get(S3_ENDPOINT_STORAGE_CREDENTIAL_KEY)
                 .is_some_and(|x| x.is_some())
             {
-                log::warn!(
-                    "ignoring the storage credential for {prefix} since it has the unsupported key {S3_ENDPOINT_STORAGE_CREDENTIAL_KEY}"
-                );
-                return None;
+                return Some(((length, exact), None));
             }
             let mut take = |key: &str| config.remove(key).flatten().filter(|x| !x.is_empty());
             let credential = if let Some(access_key_id) = take("s3.access-key-id")
@@ -2513,14 +2512,22 @@ fn select_storage_credentials(
             };
             Some((
                 (length, exact),
-                TableStorageCredentials {
+                Some(TableStorageCredentials {
                     credential,
                     expires_at_ms: item.expiration_time_ms,
-                },
+                }),
             ))
         })
-        .max_by_key(|(key, _)| *key)
-        .map(|(_, credentials)| credentials)
+        .max_by_key(|(key, _)| *key);
+    match selected {
+        Some((_, None)) => Err(CatalogError::NotSupported(format!(
+            "Unity Catalog issued a storage credential for {location} with the key \
+             {S3_ENDPOINT_STORAGE_CREDENTIAL_KEY} for an S3-compatible storage endpoint, \
+             which is not supported"
+        ))),
+        Some((_, credentials)) => Ok(credentials),
+        None => Ok(None),
+    }
 }
 
 /// Returns the error message that the server reports in a Delta REST API error response.
@@ -6924,16 +6931,10 @@ mod tests {
                 "prefix": "s3://bucket/other", "operation": "READ",
                 "config": {"gcs.oauth-token": "token"}
             }]}),
-            // The credentials for an S3-compatible storage are not supported.
+            // A credential for an S3-compatible storage that does not cover the location
+            // is not selected.
             serde_json::json!({"storage-credentials": [{
-                "prefix": DELTA_TABLE_URI, "operation": "READ",
-                "config": {
-                    "s3.access-key-id": "key", "s3.secret-access-key": "secret",
-                    "s3.endpoint": "https://minio.example.com:9000", "client.region": "us-east-1"
-                }
-            }]}),
-            serde_json::json!({"storage-credentials": [{
-                "prefix": DELTA_TABLE_URI, "operation": "READ",
+                "prefix": "s3://bucket/other", "operation": "READ",
                 "config": {"s3.endpoint": "https://minio.example.com:9000"}
             }]}),
         ] {
@@ -6945,6 +6946,34 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(credentials, None);
+        }
+        // The credential for the location is for an S3-compatible storage endpoint, with
+        // keys or with the keys of the client. The request fails, so that the location is
+        // not accessed with the credentials of the environment, whose requests go to AWS S3.
+        for config in [
+            serde_json::json!({
+                "s3.access-key-id": "key", "s3.secret-access-key": "secret",
+                "s3.endpoint": "https://minio.example.com:9000", "client.region": "us-east-1"
+            }),
+            serde_json::json!({"s3.endpoint": "https://minio.example.com:9000"}),
+        ] {
+            let response = serde_json::json!({"storage-credentials": [
+                {"prefix": "s3://bucket", "operation": "READ", "config": {
+                    "s3.access-key-id": "key", "s3.secret-access-key": "secret"
+                }},
+                {"prefix": DELTA_TABLE_URI, "operation": "READ", "config": config},
+            ]});
+            let error = table_storage_credentials(
+                "READ",
+                StorageAccess::Read,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, CatalogError::NotSupported(_)), "{error:?}");
+            let message = error.to_string();
+            assert!(message.contains("s3.endpoint"), "{message}");
+            assert!(!message.contains("secret"), "{message}");
         }
         // The server does not issue credentials for the table.
         for status in [400, 404, 501] {
