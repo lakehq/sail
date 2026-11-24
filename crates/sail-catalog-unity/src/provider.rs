@@ -73,12 +73,13 @@ const LOAD_TABLE_RESEND_BACKOFF: Duration = Duration::from_millis(200);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
 
 /// The time to wait before a request that failed with the error is sent again, or `None`
-/// when the failure is not transient: timeouts, connection failures, server errors other than
-/// 501, and 429, whose `Retry-After` header in seconds is followed.
+/// when the failure is not transient: timeouts, connection failures, responses whose body
+/// cannot be read to the end, server errors other than 501, and 429, whose `Retry-After`
+/// header in seconds is followed.
 fn transient_failure_delay<E>(error: &delta_gen::ApiError<E>, resends: u32) -> Option<Duration> {
     let (status, headers) = match error {
         delta_gen::ApiError::Request(error) => {
-            if error.is_timeout() || error.is_connect() {
+            if error.is_timeout() || error.is_connect() || error.is_body() || error.is_decode() {
                 return Some(LOAD_TABLE_RESEND_BACKOFF * (1 << resends));
             }
             (error.status()?, None)
@@ -3729,6 +3730,90 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(&error, delta_gen::ApiError::Request(e) if e.is_connect()),
+            "{error:?}"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1 + MAX_LOAD_TABLE_RESENDS as usize
+        );
+    }
+
+    /// Starts a server that answers each request with the headers of a successful response
+    /// and a part of the body, and then stalls or closes the connection.
+    /// Returns the address of the server and the number of requests.
+    async fn partial_body_server(stall: bool) -> (String, Arc<AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&requests);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let counter = Arc::clone(&counter);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let mut request = Vec::new();
+                    while !request.windows(4).any(|x| x == b"\r\n\r\n") {
+                        match stream.read(&mut buffer).await {
+                            Ok(n) if n > 0 => request.extend_from_slice(&buffer[..n]),
+                            _ => return,
+                        }
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                                    content-length: 1000\r\n\r\n{\"metadata\":";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                    if stall {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                    }
+                });
+            }
+        });
+        (uri, requests)
+    }
+
+    #[tokio::test]
+    async fn test_delta_table_load_retries_a_response_body_that_is_not_read() {
+        let load = |uri: String| {
+            let http_client = reqwest::Client::builder()
+                .timeout(Duration::from_millis(200))
+                .build()
+                .unwrap();
+            let client = delta_gen::ApiClient::new(uri, http_client, Default::default());
+            async move {
+                load_table_with_resends(|| {
+                    client.load_table("c".to_string(), "s".to_string(), "t".to_string())
+                })
+                .await
+                .unwrap_err()
+            }
+        };
+
+        // The request times out while the body of a successful response is read.
+        // It is a request timeout, which is retried once, and not a response with the
+        // status 200 that is not understood.
+        let (uri, requests) = partial_body_server(true).await;
+        let error = load(uri).await;
+        assert!(
+            matches!(&error, delta_gen::ApiError::Request(e) if e.is_timeout()),
+            "{error:?}"
+        );
+        assert_eq!(error.status(), None);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1 + MAX_LOAD_TABLE_TIMEOUT_RESENDS as usize
+        );
+
+        // The connection is closed before the end of the body.
+        let (uri, requests) = partial_body_server(false).await;
+        let error = load(uri).await;
+        assert!(
+            matches!(&error, delta_gen::ApiError::Request(e) if !e.is_timeout()),
             "{error:?}"
         );
         assert_eq!(

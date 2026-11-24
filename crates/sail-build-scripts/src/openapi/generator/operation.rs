@@ -637,29 +637,27 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
         quote! { () }
     } else {
         quote! {
-            match response
-                .bytes()
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|body| {
-                    serde_json::from_slice::<#rust_type>(&body).map_err(|e| e.to_string())
-                })
             {
-                Ok(value) => value,
-                Err(error) => {
-                    // The parsing error may quote the response body, which is not kept
-                    // for signed requests.
-                    let body = if self.signer.is_some() {
-                        "invalid response body".to_string()
-                    } else {
-                        format!("invalid response body: {error}")
-                    };
-                    return Err(ApiError::Unknown(Box::new(ErrorResponse {
-                        inner: (),
-                        status,
-                        headers,
-                        body,
-                    })));
+                // A failure to read the body is a failure of the request (e.g. a timeout
+                // or a closed connection), which is not a response that is not understood.
+                let body = response.bytes().await?;
+                match serde_json::from_slice::<#rust_type>(&body) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        // The parsing error may quote the response body, which is not kept
+                        // for signed requests.
+                        let body = if self.signer.is_some() {
+                            "invalid response body".to_string()
+                        } else {
+                            format!("invalid response body: {error}")
+                        };
+                        return Err(ApiError::Unknown(Box::new(ErrorResponse {
+                            inner: (),
+                            status,
+                            headers,
+                            body,
+                        })));
+                    }
                 }
             }
         }
