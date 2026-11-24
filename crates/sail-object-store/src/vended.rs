@@ -394,24 +394,26 @@ struct Route {
     write: Arc<dyn ObjectStore>,
 }
 
-/// An error of the object store with the reason why the catalog issued no storage
-/// credentials for the location.
-#[derive(Debug)]
-struct NotIssuedError {
+/// Returns the error of an object store as a message with the reason why the catalog
+/// issued no storage credentials for the location.
+///
+/// The message has the causes of the error and is the innermost error, since the error
+/// that a client gets for a failed statement can be the innermost error only.
+fn not_issued_error(
     source: Box<dyn std::error::Error + Send + Sync>,
-    reason: Arc<str>,
-}
-
-impl fmt::Display for NotIssuedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({})", self.source, self.reason)
+    reason: &str,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    let mut message = source.to_string();
+    let mut cause = source.source();
+    while let Some(error) = cause {
+        let text = error.to_string();
+        if !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        cause = error.source();
     }
-}
-
-impl std::error::Error for NotIssuedError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
+    format!("{message} ({reason})").into()
 }
 
 /// An object store that accesses a location for which the catalog issued no storage
@@ -429,12 +431,7 @@ impl NotIssuedObjectStore {
     fn explain(reason: &Arc<str>, error: object_store::Error) -> object_store::Error {
         use object_store::Error;
 
-        let explain = |source| {
-            Box::new(NotIssuedError {
-                source,
-                reason: Arc::clone(reason),
-            }) as Box<dyn std::error::Error + Send + Sync>
-        };
+        let explain = |source| not_issued_error(source, reason);
         match error {
             Error::Generic { store, source } => Error::Generic {
                 store,
@@ -1295,6 +1292,41 @@ mod tests {
             .unwrap();
         paths.sort();
         paths
+    }
+
+    #[test]
+    fn not_issued_errors_keep_the_kind_and_are_the_innermost_error() {
+        use std::error::Error as _;
+
+        let reason: Arc<str> = Arc::from("the catalog refused: no access");
+        let source = std::io::Error::other(std::io::Error::other("invalid token"));
+        let error = NotIssuedObjectStore::explain(
+            &reason,
+            object_store::Error::Unauthenticated {
+                path: "a/b".to_string(),
+                source: Box::new(source),
+            },
+        );
+        assert!(matches!(error, object_store::Error::Unauthenticated { .. }));
+        let mut innermost: &dyn std::error::Error = &error;
+        while let Some(source) = innermost.source() {
+            innermost = source;
+        }
+        let message = innermost.to_string();
+        assert!(
+            message.contains("invalid token")
+                && message.ends_with("(the catalog refused: no access)"),
+            "{message}"
+        );
+
+        let error = NotIssuedObjectStore::explain(
+            &reason,
+            object_store::Error::NotFound {
+                path: "a/b".to_string(),
+                source: "missing".into(),
+            },
+        );
+        assert!(!error.to_string().contains("refused"), "{error}");
     }
 
     #[tokio::test]
