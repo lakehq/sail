@@ -33,6 +33,7 @@ use sail_common_datafusion::datasource::{
     OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
     find_path_in_options,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
@@ -64,6 +65,7 @@ use crate::schema::{
     is_supported_type_change_for_write, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
 };
+use crate::session_extension::DeltaTableCache;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType,
@@ -888,8 +890,6 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
-        .filter(|context| {
     // A write that replaces data is not a blind append, so it is planned from the commits
     // that the catalog has now.
     let lakehouse_table = match lakehouse_table {
@@ -909,6 +909,8 @@ pub(crate) async fn plan_delta_write(
         }
         context => context,
     };
+    let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
+        .filter(|context| {
             context.table_identity.table_id.is_some()
                 && !matches!(
                     context.operation,
@@ -931,6 +933,9 @@ pub(crate) async fn plan_delta_write(
         }
         Err(err) => return Err(DataFusionError::External(Box::new(err))),
     };
+    if let (Some(table), Ok(cache)) = (&table, ctx.extension::<DeltaTableCache>()) {
+        cache.seed(&table_url, table).await;
+    }
     let table_exists = table.is_some();
     let table_snapshot = table
         .as_ref()

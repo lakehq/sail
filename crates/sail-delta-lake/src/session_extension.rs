@@ -80,6 +80,31 @@ impl DeltaTableCache {
     }
 }
 
+impl DeltaTableCache {
+    /// Keeps the table that a write is planned from, so that the scans of the write, which
+    /// load the table at the same version, do not replay the Delta log again. A table that
+    /// is loaded with its files is not kept, since the files are only needed by the plan.
+    pub(crate) async fn seed(&self, table_url: &Url, table: &DeltaTable) {
+        let Ok(snapshot) = table.snapshot() else {
+            return;
+        };
+        let config = snapshot.load_config();
+        if config.require_files {
+            return;
+        }
+        let key = TableCacheKey::new(
+            table_url,
+            snapshot.version(),
+            config.catalog_managed_commits.as_ref(),
+        );
+        let cached = Arc::new(CachedTable {
+            snapshot: Arc::clone(snapshot),
+            log_store: table.log_store(),
+        });
+        self.cache.insert(key, cached).await;
+    }
+}
+
 impl Default for DeltaTableCache {
     fn default() -> Self {
         Self::new(DEFAULT_MAX_ENTRIES)

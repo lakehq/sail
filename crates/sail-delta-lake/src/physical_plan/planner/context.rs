@@ -10,6 +10,7 @@ use object_store::ObjectStore;
 use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
@@ -19,6 +20,7 @@ use crate::physical_plan::{
     DeltaCommitContext, DeltaTableReplacement, DeltaWriteContext, DeltaWriterExecOptions,
     prepare_delta_write_context,
 };
+use crate::session_extension::DeltaTableCache;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{Metadata, Protocol};
 use crate::table::{
@@ -374,7 +376,7 @@ impl<'a> PlannerContext<'a> {
             table.state = Some(Arc::clone(snapshot));
             Ok(table)
         } else {
-            open_catalog_table(
+            let table = open_catalog_table(
                 &self.session,
                 self.config.lakehouse_table.as_ref(),
                 self.log_store()?,
@@ -382,7 +384,11 @@ impl<'a> PlannerContext<'a> {
                 None,
             )
             .await
-            .map_err(open_table_error)
+            .map_err(open_table_error)?;
+            if let Ok(cache) = self.session.extension::<DeltaTableCache>() {
+                cache.seed(&self.config.table_url, &table).await;
+            }
+            Ok(table)
         }
     }
 }

@@ -898,6 +898,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_table_info(
         &self,
         table: &spec::ObjectName,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Option<TableInfo>> {
         let catalog_table: Vec<String> = table.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
@@ -915,7 +916,6 @@ impl PlanResolver<'_> {
                 mut columns,
                 comment: _,
                 constraints: _,
-        state: &mut PlanResolverState,
                 location,
                 format,
                 mut partition_by,
