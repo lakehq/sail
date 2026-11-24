@@ -11,6 +11,7 @@ import uuid
 import pytest
 from pyspark.sql.connect.session import SparkSession
 from pyspark.sql.functions import col, udf
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.session import patch_spark_connect_session, spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -588,6 +589,83 @@ def test_view_reports_the_nullability_of_its_columns(spark, tmp_path, kind):
         database = "global_temp" if name != view else None
         columns = spark.catalog.listColumns(name, database)
         assert [(x.name, x.nullable) for x in columns] == expected
+    finally:
+        table.drop()
+
+
+def struct_schema(fields, nullable=False, comment=None):
+    """The schema `a INT, s STRUCT<...>` with the fields of `s`, whose columns and fields have no nulls by default."""
+    metadata = {"comment": comment} if comment else {}
+    struct = StructType([StructField(name, data_type, nullable) for name, data_type in fields])
+    return StructType([StructField("a", IntegerType(), nullable), StructField("s", struct, nullable, metadata)])
+
+
+def write_struct_table(spark, table, schema, values):
+    """Creates the table again with a schema that SQL cannot insert into, such as fields without nulls."""
+    table.locations += 1
+    location = table.tmp_path / f"{table.name}_{table.locations}"
+    spark.sql(f"DROP TABLE IF EXISTS {table.name}")
+    spark.createDataFrame(values, schema).write.format(table.fmt).option("path", str(location)).saveAsTable(table.name)
+
+
+INT_FIELDS = [("f", IntegerType()), ("g", IntegerType())]
+
+# Queries over `t (a INT NOT NULL, s STRUCT<f: INT NOT NULL, g: INT NOT NULL> NOT NULL)` and how the
+# table changes: its new schema and rows. The view reads the rows that the query reads then.
+STRUCT_CHANGES = {
+    "struct gains a field": (
+        "SELECT a, s.f AS f FROM {t}",
+        struct_schema([*INT_FIELDS, ("h", IntegerType())]),
+        [(1, (1, 2, 9))],
+    ),
+    "unread struct field retyped": (
+        "SELECT a, s.f AS f FROM {t}",
+        struct_schema([("f", IntegerType()), ("g", StringType())]),
+        [(1, (1, "x"))],
+    ),
+    "read struct field has nulls": (
+        "SELECT a, s.f AS f, s.f IS NULL AS n FROM {t}",
+        struct_schema(INT_FIELDS, nullable=True),
+        [(None, (None, 2)), (2, None), (3, (5, 6))],
+    ),
+    "read struct field counted": (
+        "SELECT a, count(s.f) AS n, count(*) AS m FROM {t} GROUP BY a",
+        struct_schema(INT_FIELDS, nullable=True),
+        [(None, (None, 2)), (2, None), (3, (5, 6))],
+    ),
+    "whole struct with nulls and a comment": (
+        "SELECT a, s FROM {t}",
+        struct_schema(INT_FIELDS, nullable=True, comment="the struct"),
+        [(None, (None, 2)), (2, None), (3, (5, 6))],
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("case", STRUCT_CHANGES)
+def test_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_path, kind, case):
+    query, schema, values = STRUCT_CHANGES[case]
+    table = Table(spark, tmp_path, "delta")
+    try:
+        write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
+        sql = query.format(t=table.name)
+        view = table.create_view(kind, sql)
+        assert spark.table(view).schema == spark.sql(sql).schema
+        write_struct_table(spark, table, schema, values)
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    finally:
+        table.drop()
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_path, kind):
+    table = Table(spark, tmp_path, "delta")
+    try:
+        write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
+        inner = table.create_view("sv", f"SELECT a, s FROM {table.name}")
+        outer = table.create_view(kind if kind != "sv" else "svc", f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}")
+        write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
+        assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
     finally:
         table.drop()
 

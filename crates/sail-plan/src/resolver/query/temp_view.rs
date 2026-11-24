@@ -271,7 +271,7 @@ impl ViewTableReference {
                     Some(ColumnUse::Identity) => column,
                     Some(used) if rebuilt(stored, current, Some(used)) => {
                         let value = rebuild_struct(column, stored, current, used, case_sensitive)?;
-                        let target = stored.as_ref().clone().with_nullable(current.is_nullable());
+                        let target = nullable_field(stored).with_nullable(current.is_nullable());
                         Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
                     }
                     _ if user_metadata_differs(stored, current) => {
@@ -1361,7 +1361,7 @@ fn required_columns(
 
 /// Returns the value of a struct with the type that the view was created with, from the
 /// current value of a struct that the view reads only through some of its fields. A field
-/// that the view does not read is null.
+/// that the view does not read is null, so every field of the value can have nulls.
 fn rebuild_struct(
     expr: Expr,
     stored: &Field,
@@ -1397,10 +1397,13 @@ fn rebuild_struct(
         args.push(lit(field.name().as_str()));
         args.push(Expr::Cast(Cast::new_from_field(
             Box::new(value),
-            Arc::clone(field),
+            Arc::new(nullable_field(field)),
         )));
     }
-    let null = Expr::Literal(ScalarValue::try_new_null(stored.data_type())?, None);
+    let null = Expr::Literal(
+        ScalarValue::try_new_null(nullable_field(stored).data_type())?,
+        None,
+    );
     Ok(when(expr.is_null(), null).otherwise(named_struct().call(args))?)
 }
 
