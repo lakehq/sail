@@ -148,6 +148,53 @@ def test_range_repartition_samples_imbalanced_input_again(spark):
     assert all(count > 30_000 for count in counts.values()), counts
 
 
+SHARED_CTE = "WITH c AS (SELECT id, rand() AS v FROM range(0, 12, 1, 2)) "
+# Of 201 partitions only one has rows, so the sample samples it again.
+IMBALANCED_SHARED_CTE = (
+    "WITH c AS (SELECT id, rand() AS v FROM "
+    "(SELECT id FROM range(0, 20000, 1, 1) UNION ALL SELECT id FROM range(0, 0, 1, 200))) "
+)
+
+
+@pytest.mark.parametrize(
+    ("cte", "rows"),
+    [(SHARED_CTE, 12), (IMBALANCED_SHARED_CTE, 20000)],
+    ids=["balanced", "imbalanced"],
+)
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT id, v FROM c UNION ALL SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c",
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c UNION ALL SELECT id, v FROM c",
+    ],
+    ids=["range-second", "range-first"],
+)
+def test_range_repartition_of_a_shared_cte_reads_the_rows_of_the_other_reference(spark, cte, rows, query):
+    # The sample reads the CTE before the query runs, and the other reference reads the
+    # same evaluation.
+    result = spark.sql(cte + query).collect()
+    values = {}
+    for row in result:
+        values.setdefault(row.id, set()).add(row.v)
+    assert len(result) == 2 * rows
+    assert sorted(values) == list(range(rows))
+    assert all(len(v) == 1 for v in values.values())
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT a.id FROM (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c) a JOIN c b ON a.v = b.v",
+        "SELECT a.id FROM c b JOIN (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id, v FROM c) a ON a.v = b.v",
+        "SELECT id FROM c WHERE v IN (SELECT /*+ REPARTITION_BY_RANGE(3, id) */ v FROM c)",
+    ],
+    ids=["join-range-left", "join-range-right", "in-subquery"],
+)
+def test_range_repartition_of_a_shared_cte_joins_the_other_reference(spark, query):
+    rows = spark.sql(SHARED_CTE + query).collect()
+    assert sorted(row.id for row in rows) == list(range(12))
+
+
 def assert_range_repartition_plan(df, sorts):
     plan = normalize_plan_text(df._explain_string(extended=True))  # noqa: SLF001
     keys = ", ".join(rf"\S+ {sort}" for sort in sorts)

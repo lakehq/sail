@@ -1615,12 +1615,12 @@ pub(super) mod tests {
             MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::clone(&schema), None)
                 .map(|x| x as Arc<dyn ExecutionPlan>)
         };
-        let sample = Arc::new(RangeSample::new(
+        let sample = Arc::new(RangeSample::try_new(
             Arc::new(RangePartitionSampleExec::try_new(input()?, 10)?),
             80.0,
             vec![SortOptions::default()],
             8,
-        ));
+        )?);
         let ordering = [PhysicalSortExpr::new_default(col("k", &schema)?)].into();
         let plan = Arc::new(RangeRepartitionExec::try_new(input()?, sample, ordering)?);
         let (job_id, _output) =
@@ -1684,12 +1684,12 @@ pub(super) mod tests {
         // A range repartitioning of a range repartitioning, whose sample reads a copy of
         // the inner one, runs to the end: every stage runs once its split points are read.
         let range = |input: Arc<dyn ExecutionPlan>| -> Result<_, Box<dyn std::error::Error>> {
-            let sample = Arc::new(RangeSample::new(
+            let sample = Arc::new(RangeSample::try_new(
                 Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 10)?),
                 80.0,
                 vec![SortOptions::default()],
                 8,
-            ));
+            )?);
             let ordering = [PhysicalSortExpr::new_default(col("k", &schema)?)].into();
             Ok(
                 Arc::new(RangeRepartitionExec::try_new(input, sample, ordering)?)

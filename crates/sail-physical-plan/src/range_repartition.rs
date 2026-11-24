@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
@@ -33,6 +34,7 @@ use crate::range_sample::{
     RangePartitionResampleExec, RangePartitionSampleExec, RangeSketch, RangeSplit,
 };
 use crate::range_split::RangeSampleOptions;
+use crate::shared_cte::{SharedCteExec, SharedCteScanExec};
 
 type SharedResult<T> = std::result::Result<T, Arc<DataFusionError>>;
 
@@ -47,6 +49,10 @@ type SharedResult<T> = std::result::Result<T, Arc<DataFusionError>>;
 pub struct RangeSample {
     /// The plan that computes the input again and emits the sampled range keys.
     plan: Arc<RangePartitionSampleExec>,
+    /// A copy of the keys plan of the sample, which the resample computes again. It is
+    /// planned with the sample, so that the readers of the shared CTEs that it reads are
+    /// planned too (see [`crate::shared_cte::share_ctes`]).
+    resample_input: Arc<dyn ExecutionPlan>,
     /// The total number of rows the sample should have.
     sample_size: f64,
     sort_options: Vec<SortOptions>,
@@ -55,19 +61,45 @@ pub struct RangeSample {
 }
 
 impl RangeSample {
-    pub fn new(
+    pub fn try_new(
         plan: Arc<RangePartitionSampleExec>,
         sample_size: f64,
         sort_options: Vec<SortOptions>,
         num_partitions: usize,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let resample_input = reset_plan_states(Arc::clone(plan.input()))?;
+        Ok(Self {
             plan,
+            resample_input,
             sample_size,
             sort_options,
             num_partitions,
             split: OnceCell::new(),
-        }
+        })
+    }
+
+    /// The copy of the keys plan that the resample computes again.
+    pub fn resample_input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.resample_input
+    }
+
+    /// The sample with each of its plans rewritten, which is not run yet.
+    fn map_plans(
+        &self,
+        f: &mut impl FnMut(Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Self> {
+        let keys = f(Arc::clone(self.plan.input()))?;
+        Ok(Self {
+            plan: Arc::new(RangePartitionSampleExec::try_new(
+                keys,
+                self.plan.sample_size(),
+            )?),
+            resample_input: f(Arc::clone(&self.resample_input))?,
+            sample_size: self.sample_size,
+            sort_options: self.sort_options.clone(),
+            num_partitions: self.num_partitions,
+            split: OnceCell::new(),
+        })
     }
 
     /// The plan of the first sample.
@@ -98,7 +130,7 @@ impl RangeSample {
             return Ok(None);
         }
         Ok(Some(Arc::new(RangePartitionResampleExec::try_new(
-            reset_plan_states(Arc::clone(self.plan.input()))?,
+            reset_plan_states(Arc::clone(&self.resample_input))?,
             sketch.fraction(),
             sketch.imbalanced_partitions().to_vec(),
         )?)))
@@ -136,10 +168,21 @@ impl RangeSample {
         let pool = context.memory_pool();
         let sample = execute_stream(self.plan(), Arc::clone(&context))?;
         let mut sketch = self.sketch(sample, pool).await?;
-        if let Some(resample) = self.resample_plan(&sketch)? {
-            sketch
-                .add_resample(execute_stream(resample, Arc::clone(&context))?)
-                .await?;
+        match self.resample_plan(&sketch)? {
+            Some(resample) => {
+                sketch
+                    .add_resample(execute_stream(resample, Arc::clone(&context))?)
+                    .await?;
+            }
+            // The shared CTEs keep no rows for the resample that does not run.
+            None => {
+                self.resample_input.apply(|node| {
+                    if let Some(scan) = node.downcast_ref::<SharedCteScanExec>() {
+                        scan.skip()?;
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
         }
         sketch.split_points(&self.sort_options, self.num_partitions)
     }
@@ -477,6 +520,10 @@ fn resolve(
                 .await?;
             return resolve(input, context).await;
         }
+        // A sample can read the shared CTEs of the node, before the node is executed.
+        if let Some(shared) = plan.downcast_ref::<SharedCteExec>() {
+            shared.produce(&context)?;
+        }
         let mut children = vec![];
         for child in plan.children() {
             children.push(resolve(Arc::clone(child), Arc::clone(&context)).await?);
@@ -498,6 +545,78 @@ fn resolve(
     })
 }
 
+/// Calls the function for every node of the plan and of the plans of the samples of its
+/// range repartitionings, which are not children of the repartitionings. Each sample is
+/// visited once, since the copies of a range repartitioning share it and it runs once.
+pub fn apply_with_samples(
+    plan: &Arc<dyn ExecutionPlan>,
+    f: &mut impl FnMut(&Arc<dyn ExecutionPlan>) -> Result<()>,
+) -> Result<()> {
+    fn visit(
+        plan: &Arc<dyn ExecutionPlan>,
+        f: &mut impl FnMut(&Arc<dyn ExecutionPlan>) -> Result<()>,
+        seen: &mut HashSet<*const RangeSample>,
+    ) -> Result<()> {
+        plan.apply(|node| {
+            f(node)?;
+            if let Some(range) = node.downcast_ref::<RangeRepartitionExec>()
+                && seen.insert(Arc::as_ptr(&range.sample))
+            {
+                visit(range.sample.plan.input(), f, seen)?;
+                visit(&range.sample.resample_input, f, seen)?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    visit(plan, f, &mut HashSet::new())
+}
+
+/// Rewrites the plan and the plans of the samples of its range repartitionings from the
+/// leaves up, like [`apply_with_samples`] visits them. The copies of a range
+/// repartitioning keep sharing one sample.
+pub fn transform_up_with_samples(
+    plan: Arc<dyn ExecutionPlan>,
+    f: &mut impl FnMut(Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    /// The rewritten sample of each sample, which is kept so that its address is not reused.
+    type Samples = HashMap<*const RangeSample, (Arc<RangeSample>, Arc<RangeSample>)>;
+
+    fn rewrite(
+        plan: Arc<dyn ExecutionPlan>,
+        f: &mut impl FnMut(Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>>,
+        samples: &mut Samples,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|node| {
+            let Some(range) = node.downcast_ref::<RangeRepartitionExec>() else {
+                return f(node);
+            };
+            let key = Arc::as_ptr(&range.sample);
+            let sample = match samples.get(&key) {
+                Some((_, sample)) => Arc::clone(sample),
+                None => {
+                    let sample = Arc::new(
+                        range
+                            .sample
+                            .map_plans(&mut |plan| rewrite(plan, f, samples))?,
+                    );
+                    samples.insert(key, (Arc::clone(&range.sample), Arc::clone(&sample)));
+                    sample
+                }
+            };
+            let node = Arc::new(RangeRepartitionExec::try_new_with_partitions(
+                Arc::clone(&range.input),
+                sample,
+                range.ordering.clone(),
+                range.partitions,
+            )?) as Arc<dyn ExecutionPlan>;
+            Ok(Transformed::yes(f(node)?.data))
+        })
+        .data()
+    }
+    rewrite(plan, f, &mut HashMap::new())
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
@@ -510,6 +629,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::shared_cte::{SharedCte, share_ctes};
 
     /// A leaf whose column `k` is constant within each of its partitions only.
     #[derive(Debug)]
@@ -579,12 +699,15 @@ mod tests {
     fn has_constants(input_partitions: usize) -> bool {
         let input: Arc<dyn ExecutionPlan> = Arc::new(PartitionConstantExec::new(input_partitions));
         let options = SortOptions::default();
-        let sample = Arc::new(RangeSample::new(
-            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 1).unwrap()),
-            40.0,
-            vec![options],
-            2,
-        ));
+        let sample = Arc::new(
+            RangeSample::try_new(
+                Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 1).unwrap()),
+                40.0,
+                vec![options],
+                2,
+            )
+            .unwrap(),
+        );
         let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
             Arc::new(Column::new("k", 0)),
             options,
@@ -623,12 +746,15 @@ mod tests {
         ];
         let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None).unwrap();
         let options = SortOptions::default();
-        let sample = Arc::new(RangeSample::new(
-            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input) as _, 1).unwrap()),
-            40.0,
-            vec![options],
-            2,
-        ));
+        let sample = Arc::new(
+            RangeSample::try_new(
+                Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input) as _, 1).unwrap()),
+                40.0,
+                vec![options],
+                2,
+            )
+            .unwrap(),
+        );
         let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
             Arc::new(Column::new("k", 0)),
             options,
@@ -662,12 +788,15 @@ mod tests {
                 .unwrap();
         let input = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let options = SortOptions::default();
-        let sample = Arc::new(RangeSample::new(
-            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input) as _, 100).unwrap()),
-            800.0,
-            vec![options],
-            8,
-        ));
+        let sample = Arc::new(
+            RangeSample::try_new(
+                Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input) as _, 100).unwrap()),
+                800.0,
+                vec![options],
+                8,
+            )
+            .unwrap(),
+        );
         let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
             Arc::new(Column::new("k", 0)),
             options,
@@ -686,6 +815,106 @@ mod tests {
             .iter()
             .map(|batches| batches.iter().map(|batch| batch.num_rows()).sum())
             .collect()
+    }
+
+    /// A range repartitioning into 2 partitions by `k` of the only reference to a shared
+    /// CTE, whose sample and resample read the CTE too.
+    fn range_repartition_of_a_shared_cte(
+        partitions: &[Vec<RecordBatch>],
+        partition_sample_size: usize,
+    ) -> (Arc<SharedCte>, Arc<dyn ExecutionPlan>) {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let producer: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(partitions, Arc::clone(&schema), None).unwrap();
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            producer.output_partitioning().clone(),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan: Arc<dyn ExecutionPlan> = Arc::new(SharedCteScanExec::new(
+            Arc::clone(&cte),
+            schema,
+            &statistics,
+            None,
+        ));
+        let options = SortOptions::default();
+        let sample = Arc::new(
+            RangeSample::try_new(
+                Arc::new(
+                    RangePartitionSampleExec::try_new(
+                        reset_plan_states(Arc::clone(&scan)).unwrap(),
+                        partition_sample_size,
+                    )
+                    .unwrap(),
+                ),
+                40.0,
+                vec![options],
+                2,
+            )
+            .unwrap(),
+        );
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("k", 0)),
+            options,
+        )])
+        .unwrap();
+        let node = Arc::new(RangeRepartitionExec::try_new(scan, sample, ordering).unwrap());
+        let plan = share_ctes(node, vec![(Arc::clone(&cte), producer)]).unwrap();
+        (cte, plan)
+    }
+
+    fn keys(range: std::ops::Range<i64>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from_iter_values(range))]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_sample_and_resample_of_a_shared_cte_read_their_own_rows() {
+        // The balanced input is sampled once, and the imbalanced one again.
+        let mut imbalanced = vec![vec![]; 1_024];
+        imbalanced[100] = vec![keys(0..100_000)];
+        for (partitions, partition_sample_size, rows) in [
+            (vec![vec![keys(0..500)], vec![keys(500..1_000)]], 100, 1_000),
+            (imbalanced, 1, 100_000),
+        ] {
+            let (_, plan) = range_repartition_of_a_shared_cte(&partitions, partition_sample_size);
+            let context = SessionContext::new().task_ctx();
+            let plan = resolve_range_partitions(plan, Arc::clone(&context))
+                .await
+                .unwrap();
+            let output = collect_partitioned(plan, context).await.unwrap();
+            let mut values = output
+                .iter()
+                .flatten()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            values.sort_unstable();
+            assert_eq!(values, (0..rows).collect::<Vec<_>>());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shared_cte_keeps_no_rows_for_a_resample_that_does_not_run() {
+        // Each partition of 500 rows keeps 20 rows of the sample of 40 rows of 1,000, which
+        // is fewer than the 100 rows that it samples, so the input is not sampled again.
+        let (cte, plan) =
+            range_repartition_of_a_shared_cte(&[vec![keys(0..500)], vec![keys(500..1_000)]], 100);
+        let context = SessionContext::new().task_ctx();
+        let plan = resolve_range_partitions(plan, Arc::clone(&context))
+            .await
+            .unwrap();
+        // The first partition ends once the whole input is read, before the output of
+        // the CTE is released.
+        let mut stream = plan.execute(0, Arc::clone(&context)).unwrap();
+        while stream.try_next().await.unwrap().is_some() {}
+        assert_eq!(cte.kept(), Some(0));
     }
 
     #[tokio::test]

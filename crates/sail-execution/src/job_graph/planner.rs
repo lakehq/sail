@@ -45,7 +45,6 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
-use sail_physical_plan::range_sample::RangePartitionSampleExec;
 use sail_physical_plan::range_split::{RangeChannelExec, RangeResampleExec, RangeSplitPointsExec};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -180,11 +179,8 @@ impl RangeProducers {
         }
         let options = sample.options();
         let first_sample = self.plan(reset_plan_states(sample.plan())?)?;
-        let Some(keys) = first_sample.downcast_ref::<RangePartitionSampleExec>() else {
-            return internal_err!("expected a range partition sample");
-        };
         // The resample computes the keys again.
-        let keys = reset_plan_states(Arc::clone(keys.input()))?;
+        let keys = self.plan(reset_plan_states(Arc::clone(sample.resample_input()))?)?;
         let first_sample = self.share("range_sample", first_sample);
         let first_sample = || Arc::new(CoalescePartitionsExec::new(Arc::clone(&first_sample)));
         let resample = RangeResampleExec::try_new(keys, first_sample(), options.clone())?;
@@ -3063,12 +3059,15 @@ mod tests {
 
         let schema = schema();
         let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
-        let sample = Arc::new(RangeSample::new(
-            Arc::new(RangePartitionSampleExec::try_new(sample_input, 10).unwrap()),
-            80.0,
-            vec![SortOptions::default()],
-            4,
-        ));
+        let sample = Arc::new(
+            RangeSample::try_new(
+                Arc::new(RangePartitionSampleExec::try_new(sample_input, 10).unwrap()),
+                80.0,
+                vec![SortOptions::default()],
+                4,
+            )
+            .unwrap(),
+        );
         Arc::new(RangeRepartitionExec::try_new(input, sample, ordering).unwrap())
     }
 

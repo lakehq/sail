@@ -956,12 +956,12 @@ fn plan_range_sample(
         sample,
         partition_sample_size.max(1),
     )?);
-    Ok(RangeSample::new(
+    RangeSample::try_new(
         sample,
         sample_size,
         ordering.iter().map(|x| x.options).collect(),
         num_partitions,
-    ))
+    )
 }
 
 /// Plans the explicit repartitioning emitted by the logical planner.
