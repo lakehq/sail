@@ -388,8 +388,149 @@ fn create_vended_store(
 struct Route {
     prefix: Path,
     owner: String,
+    /// Whether the object stores use credentials issued for the owner.
+    issued: bool,
     read: Arc<dyn ObjectStore>,
     write: Arc<dyn ObjectStore>,
+}
+
+/// An error of the object store with the reason why the catalog issued no storage
+/// credentials for the location.
+#[derive(Debug)]
+struct NotIssuedError {
+    source: Box<dyn std::error::Error + Send + Sync>,
+    reason: Arc<str>,
+}
+
+impl fmt::Display for NotIssuedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.source, self.reason)
+    }
+}
+
+impl std::error::Error for NotIssuedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// An object store that accesses a location for which the catalog issued no storage
+/// credentials with the object store of the environment, and adds the reason of the
+/// catalog to the errors that can be caused by missing access to the storage.
+/// The kind of the error is kept. Other errors, such as an object that is not found,
+/// are returned as they are.
+#[derive(Debug)]
+struct NotIssuedObjectStore {
+    inner: Arc<dyn ObjectStore>,
+    reason: Arc<str>,
+}
+
+impl NotIssuedObjectStore {
+    fn explain(reason: &Arc<str>, error: object_store::Error) -> object_store::Error {
+        use object_store::Error;
+
+        let explain = |source| {
+            Box::new(NotIssuedError {
+                source,
+                reason: Arc::clone(reason),
+            }) as Box<dyn std::error::Error + Send + Sync>
+        };
+        match error {
+            Error::Generic { store, source } => Error::Generic {
+                store,
+                source: explain(source),
+            },
+            Error::Unauthenticated { path, source } => Error::Unauthenticated {
+                path,
+                source: explain(source),
+            },
+            Error::PermissionDenied { path, source } => Error::PermissionDenied {
+                path,
+                source: explain(source),
+            },
+            error => error,
+        }
+    }
+
+    fn explained<T>(&self, result: Result<T>) -> Result<T> {
+        result.map_err(|e| Self::explain(&self.reason, e))
+    }
+
+    fn explained_stream<T: 'static>(
+        &self,
+        stream: BoxStream<'static, Result<T>>,
+    ) -> BoxStream<'static, Result<T>> {
+        let reason = Arc::clone(&self.reason);
+        stream
+            .map(move |result| result.map_err(|e| Self::explain(&reason, e)))
+            .boxed()
+    }
+}
+
+impl fmt::Display for NotIssuedObjectStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+#[async_trait::async_trait]
+#[warn(clippy::missing_trait_methods)]
+impl ObjectStore for NotIssuedObjectStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> Result<PutResult> {
+        self.explained(self.inner.put_opts(location, payload, opts).await)
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<Box<dyn MultipartUpload>> {
+        self.explained(self.inner.put_multipart_opts(location, opts).await)
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.explained(self.inner.get_opts(location, options).await)
+    }
+
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        self.explained(self.inner.get_ranges(location, ranges).await)
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        self.explained_stream(self.inner.delete_stream(locations))
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.explained_stream(self.inner.list(prefix))
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.explained_stream(self.inner.list_with_offset(prefix, offset))
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        self.explained(self.inner.list_with_delimiter(prefix).await)
+    }
+
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        self.explained(self.inner.copy_opts(from, to, options).await)
+    }
+
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
+        self.explained(self.inner.rename_opts(from, to, options).await)
+    }
 }
 
 fn select_route<'a>(routes: &'a [Route], location: &Path) -> Option<&'a Route> {
@@ -434,14 +575,35 @@ impl PrefixRoutingObjectStore {
         read: Arc<dyn ObjectStore>,
         write: Arc<dyn ObjectStore>,
     ) {
-        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
-        routes.retain(|route| route.prefix != prefix);
-        routes.push(Route {
+        self.push_route(Route {
             prefix,
             owner: owner.to_string(),
+            issued: true,
             read,
             write,
         });
+    }
+
+    /// Accesses the path prefix with the default object store, and adds the reason
+    /// why the catalog issued no storage credentials for the owner to the errors.
+    fn set_not_issued_route(&self, prefix: Path, owner: &str, reason: &str) {
+        let store: Arc<dyn ObjectStore> = Arc::new(NotIssuedObjectStore {
+            inner: Arc::clone(&self.default),
+            reason: Arc::from(reason),
+        });
+        self.push_route(Route {
+            prefix,
+            owner: owner.to_string(),
+            issued: false,
+            read: Arc::clone(&store),
+            write: store,
+        });
+    }
+
+    fn push_route(&self, route: Route) {
+        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
+        routes.retain(|x| x.prefix != route.prefix);
+        routes.push(route);
     }
 
     /// Removes the object stores registered for the owner.
@@ -452,12 +614,13 @@ impl PrefixRoutingObjectStore {
             .retain(|route| route.owner != owner);
     }
 
+    /// Whether the path prefix is accessed with credentials issued for the owner.
     fn has_route(&self, prefix: &Path, owner: &str) -> bool {
         self.routes
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .any(|route| &route.prefix == prefix && route.owner == owner)
+            .any(|route| route.issued && &route.prefix == prefix && route.owner == owner)
     }
 
     fn reader(&self, location: Option<&Path>) -> Arc<dyn ObjectStore> {
@@ -766,12 +929,42 @@ impl VendedObjectStores {
                 async move { store }
             }))
         };
+        self.routing_store(registry, location, owner)?
+            .set_route(prefix, owner, read, write);
+        Ok(())
+    }
+
+    /// Keeps accessing the storage location with the object store of the environment
+    /// after the catalog refused or failed to issue credentials for the owner, and adds
+    /// the reason to the errors of the storage that missing access can cause, so that
+    /// the reason of the catalog is not lost when the environment has no access either.
+    pub fn install_not_issued(
+        &self,
+        registry: &dyn ObjectStoreRegistry,
+        location: &Url,
+        owner: &str,
+        reason: &str,
+    ) -> DataFusionResult<()> {
+        let prefix = Self::prefix(location)?;
+        self.routing_store(registry, location, owner)?
+            .set_not_issued_route(prefix, owner, reason);
+        Ok(())
+    }
+
+    /// Returns the object store that is registered for the storage location in the
+    /// session, without the routes of the owner.
+    fn routing_store(
+        &self,
+        registry: &dyn ObjectStoreRegistry,
+        location: &Url,
+        owner: &str,
+    ) -> DataFusionResult<Arc<PrefixRoutingObjectStore>> {
         let mut stores = self.stores.lock().unwrap_or_else(|e| e.into_inner());
         // The table may have been dropped and created again at another location.
         for store in stores.values() {
             store.remove_routes(owner);
         }
-        let store = match stores.get(&Self::key(location)) {
+        Ok(match stores.get(&Self::key(location)) {
             Some(store) => Arc::clone(store),
             None => {
                 let store = Arc::new(PrefixRoutingObjectStore::new(registry.get_store(location)?));
@@ -779,9 +972,7 @@ impl VendedObjectStores {
                 stores.insert(Self::key(location), Arc::clone(&store));
                 store
             }
-        };
-        store.set_route(prefix, owner, read, write);
-        Ok(())
+        })
     }
 }
 

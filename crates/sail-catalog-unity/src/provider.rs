@@ -1580,20 +1580,25 @@ impl CatalogProvider for UnityCatalogProvider {
         let name = quote_names_if_needed(&[&catalog_name, &schema_name, table]);
         let message = message.map(|x| format!(": {x}")).unwrap_or_default();
         match status {
-            // The server does not issue credentials for the table,
-            // e.g. when the table is not managed by the catalog.
-            Some(
-                reqwest::StatusCode::BAD_REQUEST
-                | reqwest::StatusCode::NOT_FOUND
-                | reqwest::StatusCode::NOT_IMPLEMENTED,
-            ) => Ok(None),
-            Some(status) => Err(request_error(
-                Some(status),
-                format!(
+            Some(status) => {
+                let message = format!(
                     "Failed to get storage credentials for table {name} from Unity Catalog: \
                      HTTP {status}{message}"
-                ),
-            )),
+                );
+                match status {
+                    // The server answers that it issues no credentials for the table. This is
+                    // how a server without credentials for the storage answers, in which case
+                    // the storage is accessed with the credentials of the environment, but
+                    // also how a server refuses the client or the table. The answer does not
+                    // tell which, so the caller always gets the answer of the server.
+                    reqwest::StatusCode::BAD_REQUEST
+                    | reqwest::StatusCode::NOT_FOUND
+                    | reqwest::StatusCode::NOT_IMPLEMENTED => {
+                        Err(CatalogError::CredentialUnavailable(message))
+                    }
+                    status => Err(request_error(Some(status), message)),
+                }
+            }
             None => Err(CatalogError::External(format!(
                 "Failed to get storage credentials for table {name} from Unity Catalog"
             ))),
@@ -2505,7 +2510,8 @@ fn request_error(status: Option<reqwest::StatusCode>, message: String) -> Catalo
     }
 }
 
-/// Returns the error message that the server reports in a Delta REST API error response.
+/// Returns the error message that the server reports in the error response of a Delta
+/// REST API request.
 fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
     let body = match error {
         delta_gen::ApiError::Response(response) => response.body.as_str(),
@@ -2513,7 +2519,13 @@ fn delta_error_message<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
         _ => return None,
     };
     let body: serde_json::Value = serde_json::from_str(body).ok()?;
-    let message = body.get("error")?.get("message")?.as_str()?;
+    // An error that is not answered by the Delta REST API itself, such as a token that
+    // the server does not accept, has the message at the top level.
+    let message = body
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .or_else(|| body.get("message"))?
+        .as_str()?;
     Some(message.to_string())
 }
 
@@ -7634,19 +7646,74 @@ mod tests {
             assert!(message.contains("s3.endpoint"), "{message}");
             assert!(!message.contains("secret"), "{message}");
         }
-        // The server does not issue credentials for the table.
-        for status in [400, 404, 501] {
-            let error = serde_json::json!({
-                "error": {"message": "not managed", "type": "BadRequestException", "code": status}
-            });
-            let credentials = table_storage_credentials(
-                "READ",
-                StorageAccess::Read,
-                ResponseTemplate::new(status).set_body_json(error),
-            )
-            .await
-            .unwrap();
-            assert_eq!(credentials, None);
+    }
+
+    /// An answer that the server issues no credentials has the reason of the server, which
+    /// can be that the server has no credentials for the storage, or that it refuses the
+    /// client or the table.
+    #[tokio::test]
+    async fn test_table_storage_credentials_not_issued_have_the_answer_of_the_server() {
+        for (status, body, expected) in [
+            (
+                400,
+                serde_json::json!({"error": {
+                    "message": "The UC Delta API requires clients to identify the calling \
+                                application in the User-Agent header.",
+                    "type": "BadRequestException", "code": 400
+                }}),
+                "requires clients to identify the calling application",
+            ),
+            (
+                400,
+                serde_json::json!({"error": {
+                    "message": "S3 bucket configuration not found.",
+                    "type": "InvalidParameterValueException", "code": 400
+                }}),
+                "S3 bucket configuration not found.",
+            ),
+            (
+                404,
+                serde_json::json!({"error": {
+                    "message": "Table not found", "type": "NoSuchTableException", "code": 404
+                }}),
+                "Table not found",
+            ),
+            (
+                501,
+                serde_json::json!({"error": {
+                    "message": "Storage credential for GCP is not supported yet.",
+                    "type": "NotImplementedException", "code": 501
+                }}),
+                "not supported yet",
+            ),
+            // The answer of a server in the form of the legacy API.
+            (
+                400,
+                serde_json::json!({
+                    "error_code": "EXTERNAL_ACCESS_NOT_ALLOWED_FOR_TABLE",
+                    "message": "External access is not allowed for the table kind."
+                }),
+                "External access is not allowed for the table kind.",
+            ),
+        ] {
+            for (operation, access) in [
+                ("READ", StorageAccess::Read),
+                ("READ_WRITE", StorageAccess::ReadWrite),
+            ] {
+                let result = table_storage_credentials(
+                    operation,
+                    access,
+                    ResponseTemplate::new(status).set_body_json(&body),
+                )
+                .await;
+                assert!(
+                    matches!(&result, Err(CatalogError::CredentialUnavailable(message))
+                        if message.contains("main.default.events")
+                            && message.contains(&format!("HTTP {status}"))
+                            && message.contains(expected)),
+                    "status {status} {operation}: {result:?}"
+                );
+            }
         }
     }
 
@@ -7668,6 +7735,21 @@ mod tests {
         let result = table_storage_credentials("READ", StorageAccess::Read, error(401)).await;
         assert!(
             matches!(result, Err(CatalogError::Unauthorized(_))),
+            "{result:?}"
+        );
+        // A token that the server does not accept is answered outside the Delta REST API,
+        // with a number as the error code.
+        let result = table_storage_credentials(
+            "READ",
+            StorageAccess::Read,
+            ResponseTemplate::new(403).set_body_json(
+                serde_json::json!({"error_code": 403, "message": "Invalid access token."}),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(&result, Err(CatalogError::Forbidden(message))
+                if message.contains("Invalid access token.")),
             "{result:?}"
         );
         let result = table_storage_credentials("READ", StorageAccess::Read, error(500)).await;

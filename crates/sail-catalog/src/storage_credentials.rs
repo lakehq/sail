@@ -91,16 +91,15 @@ pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccesso
             return Ok(());
         }
         // The storage may be accessible with the credentials of the environment
-        // when the catalog refuses or fails to issue credentials.
-        Err(CatalogError::Unauthorized(message) | CatalogError::Forbidden(message)) => {
-            stores.report_refused(&owner, &name, &message);
-            stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
-            return Ok(());
-        }
+        // when the catalog refuses or fails to issue credentials. If it is not, the
+        // error of the storage has the answer of the catalog.
+        Err(
+            CatalogError::Unauthorized(message)
+            | CatalogError::Forbidden(message)
+            | CatalogError::CredentialUnavailable(message),
+        ) => return not_issued(ctx, &stores, &url, &owner, &name, &message, NOT_ISSUED_TTL),
         Err(CatalogError::External(message)) => {
-            stores.report_refused(&owner, &name, &message);
-            stores.set_not_issued(&url, &owner, FAILED_TTL);
-            return Ok(());
+            return not_issued(ctx, &stores, &url, &owner, &name, &message, FAILED_TTL);
         }
         Err(e) => return Err(e),
     };
@@ -126,6 +125,35 @@ pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccesso
             &owner,
             initial,
             fetch,
+        )
+        .map_err(|e| CatalogError::External(e.to_string()))
+}
+
+/// Keeps accessing the storage location of the table with the credentials of the
+/// environment for the given time, after the catalog refused or failed to issue storage
+/// credentials for the table with the given message. The message is logged once, and
+/// is added to the errors of the storage that missing access can cause.
+fn not_issued<C: SessionExtensionAccessor + ?Sized>(
+    ctx: &C,
+    stores: &VendedObjectStores,
+    url: &Url,
+    owner: &str,
+    name: &str,
+    message: &str,
+    duration: Duration,
+) -> CatalogResult<()> {
+    stores.report_refused(owner, name, message);
+    stores.set_not_issued(url, owner, duration);
+    let reason = format!(
+        "the catalog did not issue storage credentials for table {name}, \
+         so the storage credentials of the environment were used: {message}"
+    );
+    stores
+        .install_not_issued(
+            ctx.runtime_env().object_store_registry.as_ref(),
+            url,
+            owner,
+            &reason,
         )
         .map_err(|e| CatalogError::External(e.to_string()))
 }
@@ -512,6 +540,7 @@ mod tests {
         for response in [
             (|| Err(CatalogError::Forbidden("no privilege".to_string()))) as fn() -> _,
             || Err(CatalogError::Unauthorized("no token".to_string())),
+            || Err(CatalogError::CredentialUnavailable("HTTP 400".to_string())),
         ] {
             let session = TestSession::new(response, Some(true));
             session
@@ -545,6 +574,109 @@ mod tests {
         );
     }
 
+    /// When the catalog does not issue credentials and the storage cannot be accessed
+    /// with the credentials of the environment either, the error of the storage has the
+    /// answer of the catalog.
+    #[tokio::test(start_paused = true)]
+    async fn storage_errors_have_the_answer_of_the_catalog_that_issued_no_credentials() {
+        const ANSWER: &str = "HTTP 400 Bad Request: the client is not allowed";
+        let url = Url::parse(LOCATION).unwrap();
+        let store = |session: &TestSession| {
+            let registry = &session.ctx.runtime_env().object_store_registry;
+            registry.get_store(&url).unwrap()
+        };
+        let path = Path::from("warehouse/items/file");
+        let other = Path::from("warehouse/other/file");
+        // The in-memory store reports a range that is out of bounds as a generic error,
+        // which is the kind of error of a store that has no access.
+        let failure = |store: Arc<dyn ObjectStore>, path: Path| async move {
+            store.put(&path, "data".into()).await.unwrap();
+            store.get_range(&path, 100..200).await.unwrap_err()
+        };
+        for (response, ttl) in [
+            (
+                (|| Err(CatalogError::CredentialUnavailable(ANSWER.to_string()))) as fn() -> _,
+                NOT_ISSUED_TTL,
+            ),
+            (
+                || Err(CatalogError::Forbidden(ANSWER.to_string())),
+                NOT_ISSUED_TTL,
+            ),
+            (
+                || Err(CatalogError::External(ANSWER.to_string())),
+                FAILED_TTL,
+            ),
+        ] {
+            let session = TestSession::new(response, Some(true));
+            session
+                .install(CommitAuthority::DeltaRatifiedCommit)
+                .await
+                .unwrap();
+            assert!(!session.is_vended().await);
+
+            let error = failure(store(&session), path.clone()).await;
+            assert!(
+                matches!(error, object_store::Error::Generic { .. }),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains(ANSWER) && message.contains("default.items"),
+                "{message}"
+            );
+            // An error that missing access does not cause, and the errors of other
+            // locations, are as before.
+            let error = store(&session)
+                .get(&Path::from("warehouse/items/missing"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, object_store::Error::NotFound { .. }),
+                "{error:?}"
+            );
+            assert!(!error.to_string().contains(ANSWER), "{error}");
+            let error = failure(store(&session), other.clone()).await;
+            assert!(!error.to_string().contains(ANSWER), "{error}");
+
+            // The catalog is asked again later.
+            tokio::time::advance(ttl + Duration::from_secs(1)).await;
+            session
+                .install(CommitAuthority::DeltaRatifiedCommit)
+                .await
+                .unwrap();
+            assert_eq!(
+                session.requests(),
+                vec![StorageAccess::Read, StorageAccess::Read]
+            );
+        }
+
+        // The credentials are used once the catalog issues them.
+        thread_local! {
+            static REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        let session = TestSession::new(
+            || {
+                if REFUSED.replace(true) {
+                    issued()
+                } else {
+                    Err(CatalogError::CredentialUnavailable(ANSWER.to_string()))
+                }
+            },
+            Some(true),
+        );
+        let install = || session.install(CommitAuthority::DeltaRatifiedCommit);
+        install().await.unwrap();
+        assert!(!session.is_vended().await);
+        tokio::time::advance(NOT_ISSUED_TTL + Duration::from_secs(1)).await;
+        install().await.unwrap();
+        assert!(session.is_vended().await);
+        let error = store(&session)
+            .get(&Path::from("warehouse/items/missing"))
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains(ANSWER), "{error}");
+    }
+
     #[tokio::test]
     async fn storage_credentials_not_issued_are_not_requested_again_for_a_while() {
         for response in [
@@ -574,6 +706,10 @@ mod tests {
             ),
             (
                 || Err(CatalogError::Unauthorized("no token".to_string())),
+                NOT_ISSUED_TTL,
+            ),
+            (
+                || Err(CatalogError::CredentialUnavailable("HTTP 400".to_string())),
                 NOT_ISSUED_TTL,
             ),
             (
