@@ -93,6 +93,21 @@ def test_tables_are_read_and_written_with_vended_credentials(
     assert spark.sql(f"SELECT count(*) FROM {table}").collect() == [(4,)]
 
 
+def test_table_is_created_with_the_credential_of_the_staging_table(
+    spark: SparkSession, vended_storage: VendedStorage, vended_unity_url: str
+):
+    # The catalog issues a credential for writing when it stages the table. The table is
+    # created with that credential, without asking the catalog for another one.
+    for statement in ["CREATE TABLE {} (id INT) USING DELTA", "CREATE TABLE {} USING DELTA AS SELECT 1 AS id"]:
+        table = _table()
+        mark = _mark(vended_storage)
+        spark.sql(statement.format(table))
+        issued, sent = _usage(vended_storage, _prefix(vended_unity_url, table), mark)
+        assert len(issued) == 1, statement
+        assert "s3:PutObject" in issued[0][1]
+        assert {x[3] for x in sent} == {issued[0][0]}
+
+
 def test_vended_credentials_are_replaced_before_they_expire(
     new_session: SparkSession, spark: SparkSession, vended_storage: VendedStorage, vended_unity_url: str
 ):

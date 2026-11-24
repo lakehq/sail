@@ -43,6 +43,8 @@ _REGION = "us-east-1"
 _HOST = "host.docker.internal"
 # The shortest lifetime of the credentials that the object store issues.
 _LIFETIME_SECONDS = 900
+# The time to wait for the first report of the object store to the test.
+_HOOK_TIMEOUT_SECONDS = 30
 _ENVIRONMENT_CREDENTIALS = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -196,6 +198,17 @@ def vended_storage() -> Generator[VendedStorage, None, None]:
         storage.endpoint = f"http://{host}:{container.get_exposed_port(9000)}"
         storage.client("s3").create_bucket(Bucket=_BUCKET)
         storage.hook = hook
+        # The object store reports the request above to the test. Without the report, the
+        # containers cannot reach the test, so the storage requests and the credentials
+        # cannot be observed, and Unity Catalog cannot get credentials either.
+        deadline = time.monotonic() + _HOOK_TIMEOUT_SECONDS
+        while not storage.requests and time.monotonic() < deadline:
+            time.sleep(0.5)
+        if not storage.requests:
+            pytest.skip(
+                f"the containers cannot reach the test process at {hook} "
+                "(host.docker.internal is not routed to this host, or a firewall blocks it)"
+            )
         yield storage
     server.shutdown()
 
