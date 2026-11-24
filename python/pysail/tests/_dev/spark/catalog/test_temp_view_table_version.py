@@ -454,9 +454,28 @@ COLUMN_CHANGES = {
 }
 
 
-@pytest.mark.parametrize("fmt", ["delta", "parquet"])
-@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
-@pytest.mark.parametrize("case", COLUMN_CHANGES)
+# The cases that run for each table format and each way to store a view. The column rules
+# do not depend on either, so the other cases run for one of each.
+MATRIX_CASES = {
+    "unread column dropped",
+    "read column retyped",
+    "struct field added",
+    "unread struct field retyped",
+    "distinct row column retyped",
+    "column dropped on one side",
+}
+
+
+def change_params(cases):
+    return [
+        pytest.param(case, fmt, kind, id=f"{case}-{fmt}-{kind}")
+        for case in cases
+        for fmt in (["delta", "parquet"] if case in MATRIX_CASES else ["delta"])
+        for kind in (["sv", "gv", "dv"] if case in MATRIX_CASES else ["sv"])
+    ]
+
+
+@pytest.mark.parametrize(("case", "fmt", "kind"), change_params(COLUMN_CHANGES))
 def test_view_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
     columns, values, query, new_columns, new_values, expected = COLUMN_CHANGES[case]
     table = Table(spark, tmp_path, fmt, columns)
@@ -504,9 +523,7 @@ UNION_CHANGES = {
 }
 
 
-@pytest.mark.parametrize("fmt", ["delta", "parquet"])
-@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
-@pytest.mark.parametrize("case", UNION_CHANGES)
+@pytest.mark.parametrize(("case", "fmt", "kind"), change_params(UNION_CHANGES))
 def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
     query, changed, columns, values, expected = UNION_CHANGES[case]
     tables = {"t": Table(spark, tmp_path, fmt, "a INT, b INT"), "w": Table(spark, tmp_path, fmt, "a INT, b INT")}
