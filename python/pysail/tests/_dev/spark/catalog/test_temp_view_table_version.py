@@ -593,7 +593,7 @@ def test_view_reports_the_nullability_of_its_columns(spark, tmp_path, kind):
         table.drop()
 
 
-def struct_schema(fields, nullable=False, comment=None):
+def struct_schema(fields, *, nullable=False, comment=None):
     """The schema `a INT, s STRUCT<...>` with the fields of `s`, whose columns and fields have no nulls by default."""
     metadata = {"comment": comment} if comment else {}
     struct = StructType([StructField(name, data_type, nullable) for name, data_type in fields])
@@ -663,7 +663,9 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
     try:
         write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
         inner = table.create_view("sv", f"SELECT a, s FROM {table.name}")
-        outer = table.create_view(kind if kind != "sv" else "svc", f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}")
+        outer = table.create_view(
+            kind if kind != "sv" else "svc", f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}"
+        )
         write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
         assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
     finally:

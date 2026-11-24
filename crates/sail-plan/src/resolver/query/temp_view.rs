@@ -275,8 +275,11 @@ impl ViewTableReference {
                         Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
                     }
                     _ if user_metadata_differs(stored, current) => {
-                        let data_type = if can_cast_types(current.data_type(), stored.data_type()) {
+                        // The fields of a struct can have nulls now that had none.
+                        let data_type = if stored.data_type() == current.data_type() {
                             stored.data_type().clone()
+                        } else if can_cast_types(current.data_type(), stored.data_type()) {
+                            nullable_field(stored).data_type().clone()
                         } else {
                             current.data_type().clone()
                         };
