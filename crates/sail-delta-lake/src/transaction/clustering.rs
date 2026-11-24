@@ -17,6 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::row_tracking::effective_protocol_and_metadata;
+use crate::schema::column_mapping_mode;
 use crate::spec::{
     ColumnMappingMode, ColumnName, CommitAction, DataType, DeltaError, DeltaOperation, DeltaResult,
     DomainMetadata, Protocol, SaveMode, StructType, TableFeature,
@@ -138,11 +139,7 @@ pub(super) fn finalize_clustering(
         return Ok(());
     }
     let schema = metadata.parse_schema()?;
-    let mode = metadata
-        .configuration()
-        .get("delta.columnMapping.mode")
-        .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
-        .unwrap_or_default();
+    let mode = column_mapping_mode(metadata.configuration());
     let missing = clustering_columns(snapshot.protocol(), snapshot.domain_metadata())?
         .into_iter()
         .filter(|column| !has_column(&schema, mode, column))

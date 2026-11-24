@@ -58,12 +58,12 @@ use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, Pl
 use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
-    add_type_widening_metadata, annotate_arrow_schema_for_column_mapping,
-    annotate_for_column_mapping, annotate_new_fields_for_column_mapping, collect_type_changes,
-    column_mapping_metadata_only, compute_max_column_id, evolve_schema, format_type_change_path,
-    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
-    is_supported_type_change_for_write, metadata_for_create_with_struct_type,
-    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
+    ColumnMappingBase, add_type_widening_metadata, annotate_arrow_schema_for_column_mapping,
+    assign_column_mapping, collect_type_changes, column_mapping_metadata_only, column_mapping_mode,
+    compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
+    inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
+    protocol_for_metadata,
 };
 use crate::session_extension::DeltaTableCache;
 use crate::snapshot::DeltaSnapshotConfig;
@@ -290,11 +290,7 @@ impl LakeSource for DeltaLakeSource {
     ) -> Result<Option<SchemaRef>> {
         let configuration = delta_create_table_metadata_configuration(properties.to_vec())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let mode = configuration
-            .get("delta.columnMapping.mode")
-            .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
-            .unwrap_or_default();
-        if mode == ColumnMappingMode::None {
+        if column_mapping_mode(&configuration) == ColumnMappingMode::None {
             return Ok(None);
         }
         let schema = annotate_arrow_schema_for_column_mapping(schema)
@@ -2227,55 +2223,26 @@ fn create_table_protocol_and_metadata(
     kernel_schema =
         inject_identity_columns(kernel_schema, &delta_create_table_identity_columns(columns));
 
-    let effective_mode = metadata_configuration
-        .get("delta.columnMapping.mode")
-        .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
-        .unwrap_or_default();
+    let effective_mode = column_mapping_mode(&metadata_configuration);
 
     let mut configuration = metadata_configuration;
     // A table that is created before the data of a write is written has the column
     // mapping that the data is written with.
     let assigned_column_mapping = delta_create_table_column_mapping(columns)?;
     let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-        let (annotated, max_column_id) = if let Some(snapshot) = replace_snapshot
-            .filter(|snapshot| snapshot.effective_column_mapping_mode() != ColumnMappingMode::None)
-        {
-            // A replaced table gets new physical names, and column IDs after the IDs
-            // that the table has used.
-            let current = StructType::try_from(snapshot.schema())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let used_column_id = snapshot
-                .metadata()
-                .configuration()
-                .get("delta.columnMapping.maxColumnId")
-                .and_then(|id| id.parse::<i64>().ok())
-                .unwrap_or_default()
-                .max(compute_max_column_id(&current));
-            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
-                &StructType::try_new(Vec::<StructField>::new())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                &kernel_schema,
-                used_column_id + 1,
-            );
-            (annotated, max_column_id.to_string())
-        } else if let Some(assigned) = &assigned_column_mapping {
-            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
-                assigned,
-                &kernel_schema,
-                compute_max_column_id(assigned) + 1,
-            );
-            (annotated, max_column_id.to_string())
-        } else {
-            let annotated = annotate_for_column_mapping(&kernel_schema);
-            let max_column_id = compute_max_column_id(&annotated).to_string();
-            (annotated, max_column_id)
+        // A replaced table gets new physical names, and column IDs after the IDs
+        // that the table has used.
+        let replaced = replace_snapshot
+            .map(ColumnMappingBase::replacing)
+            .transpose()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .flatten();
+        let base = match (replaced, &assigned_column_mapping) {
+            (Some(base), _) => base,
+            (None, Some(assigned)) => ColumnMappingBase::Assigned(assigned),
+            (None, None) => ColumnMappingBase::After(0),
         };
-        configuration.insert(
-            "delta.columnMapping.mode".to_string(),
-            effective_mode.as_ref().to_string(),
-        );
-        configuration.insert("delta.columnMapping.maxColumnId".to_string(), max_column_id);
-        annotated
+        assign_column_mapping(&kernel_schema, effective_mode, base, &mut configuration)
     } else {
         kernel_schema
     };

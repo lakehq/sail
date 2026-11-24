@@ -16,13 +16,12 @@ use crate::conversion::DeltaTypeConverter;
 use crate::delta_log::LogStore;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
-    add_type_widening_metadata, annotate_for_column_mapping,
-    annotate_new_fields_for_column_mapping, collect_type_changes, column_mapping_metadata_only,
-    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
-    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
-    is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
-    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
-    schema_contains_type_widening_metadata, strip_column_mapping_metadata,
+    ColumnMappingBase, add_type_widening_metadata, assign_column_mapping, collect_type_changes,
+    column_mapping_metadata_only, column_mapping_mode, evolve_schema, format_type_change_path,
+    get_physical_schema, inject_default_expressions, inject_generation_expressions,
+    inject_identity_columns, is_supported_type_change_for_schema_evolution,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
+    protocol_for_metadata, schema_contains_type_widening_metadata, strip_column_mapping_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
@@ -164,10 +163,7 @@ impl DeltaTableReplacement {
             })
             .unwrap_or_else(|| snapshot.metadata().clone());
         let mut configuration = self.configuration.clone();
-        let mode = configuration
-            .get("delta.columnMapping.mode")
-            .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
-            .unwrap_or_default();
+        let mode = column_mapping_mode(&configuration);
         if mode == ColumnMappingMode::None
             && context.effective_column_mapping_mode == ColumnMappingMode::None
         {
@@ -232,35 +228,10 @@ impl DeltaTableReplacement {
             configuration.remove("delta.columnMapping.maxColumnId");
             schema
         } else {
-            let used_column_id =
-                if snapshot.effective_column_mapping_mode() != ColumnMappingMode::None {
-                    let current = StructType::try_from(snapshot.schema())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    snapshot
-                        .metadata()
-                        .configuration()
-                        .get("delta.columnMapping.maxColumnId")
-                        .and_then(|id| id.parse::<i64>().ok())
-                        .unwrap_or_default()
-                        .max(compute_max_column_id(&current))
-                } else {
-                    0
-                };
-            let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
-                &StructType::try_new(Vec::<crate::spec::StructField>::new())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                &schema,
-                used_column_id + 1,
-            );
-            configuration.insert(
-                "delta.columnMapping.mode".to_string(),
-                mode.as_ref().to_string(),
-            );
-            configuration.insert(
-                "delta.columnMapping.maxColumnId".to_string(),
-                max_column_id.to_string(),
-            );
-            annotated
+            let base = ColumnMappingBase::replacing(snapshot)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .unwrap_or(ColumnMappingBase::After(0));
+            assign_column_mapping(&schema, mode, base, configuration)
         };
         context.physical_partition_columns = metadata
             .partition_columns()
@@ -377,10 +348,7 @@ pub fn prepare_delta_write_context(
     let effective_mode = if let Some(snapshot) = table_snapshot {
         snapshot.effective_column_mapping_mode()
     } else {
-        metadata_configuration
-            .get("delta.columnMapping.mode")
-            .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
-            .unwrap_or_default()
+        column_mapping_mode(metadata_configuration)
     };
 
     let mut operation = planned_operation;
@@ -413,30 +381,22 @@ pub fn prepare_delta_write_context(
 
             let mut configuration = metadata_configuration.clone();
             let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-                let annotated_schema = match create_table_schema {
-                    // The table is created before the data is written, with the column
-                    // mapping of this schema.
-                    Some(create_table_schema) => {
-                        let assigned = column_mapping_metadata_only(
-                            &StructType::try_from(normalize_delta_schema(create_table_schema))
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                        );
-                        annotate_new_fields_for_column_mapping(
-                            &assigned,
-                            &kernel_schema,
-                            compute_max_column_id(&assigned) + 1,
-                        )
-                        .0
-                    }
-                    None => annotate_for_column_mapping(&kernel_schema),
-                };
-                configuration.insert(
-                    "delta.columnMapping.mode".to_string(),
-                    effective_mode.as_ref().to_string(),
-                );
-                configuration.insert(
-                    "delta.columnMapping.maxColumnId".to_string(),
-                    compute_max_column_id(&annotated_schema).to_string(),
+                // A table that is created before the data is written has the column
+                // mapping of the schema that it is created with.
+                let assigned = create_table_schema
+                    .map(|schema| {
+                        StructType::try_from(normalize_delta_schema(schema))
+                            .map(|schema| column_mapping_metadata_only(&schema))
+                    })
+                    .transpose()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let annotated_schema = assign_column_mapping(
+                    &kernel_schema,
+                    effective_mode,
+                    assigned
+                        .as_ref()
+                        .map_or(ColumnMappingBase::After(0), ColumnMappingBase::Assigned),
+                    &mut configuration,
                 );
                 annotated_schema_opt = Some(annotated_schema.clone());
                 annotated_schema

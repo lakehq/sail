@@ -39,12 +39,13 @@ use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context
 use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
+    column_mapping_metadata_only, column_mapping_mode, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata,
-    MetadataValue, SaveMode, StructField, StructType,
+    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
+    StructField, StructType,
 };
 use crate::table::{create_delta_table_with_object_store, open_catalog_table, open_table_error};
 use crate::transaction::{CommitBuilder, CommitProperties, FinalizedCommit, OperationMetrics};
@@ -448,20 +449,14 @@ impl DeltaCommitExec {
             // field metadata of the written data is not part of the comparison, except
             // for the column mapping that the data files are written with.
             let schema_matches = if catalog_managed {
+                // The JSON form is compared, as the order of the fields is part of it.
                 let fields = |schema| {
-                    serde_json::to_value(schema)
-                        .map(with_only_column_mapping_field_metadata)
+                    serde_json::to_value(column_mapping_metadata_only(schema))
                         .map_err(|e| DataFusionError::External(Box::new(e)))
                 };
-                let mode = |metadata: &Metadata| {
-                    metadata
-                        .configuration()
-                        .get("delta.columnMapping.mode")
-                        .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
-                        .unwrap_or_default()
-                };
                 fields(&create_schema)? == fields(&existing_schema)?
-                    && mode(metadata) == mode(snapshot.metadata())
+                    && column_mapping_mode(metadata.configuration())
+                        == column_mapping_mode(snapshot.metadata().configuration())
             } else {
                 create_schema == existing_schema
             };
@@ -1396,33 +1391,6 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
         MetadataValue::String(value) => value.parse().ok(),
         _ => None,
     }
-}
-
-/// Returns the JSON form of a Delta schema with only the column mapping metadata of
-/// every field.
-fn with_only_column_mapping_field_metadata(mut schema: serde_json::Value) -> serde_json::Value {
-    match &mut schema {
-        serde_json::Value::Object(object) => {
-            if let Some(serde_json::Value::Object(metadata)) = object.get_mut("metadata") {
-                metadata.retain(|key, _| {
-                    key == ColumnMetadataKey::ColumnMappingId.as_ref()
-                        || key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
-                });
-            }
-            for (key, value) in object.iter_mut() {
-                if key != "metadata" {
-                    *value = with_only_column_mapping_field_metadata(value.take());
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                *item = with_only_column_mapping_field_metadata(item.take());
-            }
-        }
-        _ => {}
-    }
-    schema
 }
 
 /// Returns the latest version of the table that the catalog told when it resolved the table,

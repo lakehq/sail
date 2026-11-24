@@ -23,10 +23,11 @@ pub(crate) use manager::{
     inject_default_expressions, inject_generation_expressions, inject_identity_columns,
 };
 pub use mapping::{
-    annotate_arrow_schema_for_column_mapping, annotate_new_fields_for_column_mapping,
-    annotate_schema_for_column_mapping,
-    annotate_schema_for_column_mapping as annotate_for_column_mapping,
-    column_mapping_metadata_only, compute_max_column_id, without_column_mapping_metadata,
+    ColumnMappingBase, annotate_arrow_schema_for_column_mapping,
+    annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
+    annotate_schema_for_column_mapping as annotate_for_column_mapping, assign_column_mapping,
+    column_mapping_metadata_only, column_mapping_mode, compute_max_column_id,
+    without_column_mapping_metadata,
 };
 pub use normalize::{normalize_delta_schema, strip_column_mapping_metadata};
 pub use type_widening::{
