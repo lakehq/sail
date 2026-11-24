@@ -11,17 +11,23 @@
 //! so that the view, the other references to the table, and the target of a write read
 //! one version of the table.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::{provider_as_source, source_as_provider};
-use datafusion_common::Column;
-use datafusion_common::tree_node::{Transformed, TransformedResult};
-use datafusion_expr::expr::Cast;
-use datafusion_expr::{Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::{Alias, Cast};
+use datafusion_expr::{
+    Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource, lit, when,
+};
+use datafusion_functions::core::getfield::GetFieldFunc;
+use datafusion_functions::core::{get_field, named_struct};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::manager::table::SessionCatalogTable;
@@ -42,7 +48,8 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::{PlanResolverState, table_source_address};
 use crate::shared_cte::{
-    inline_references, recompute_plan_schemas, renew_cte_definitions_with_scans, visit_scans,
+    CteReference, inline_references, recompute_plan_schemas, renew_cte_definitions_with_scans,
+    visit_scans,
 };
 
 /// What the source of a table scan reads, for the sources that a temporary view obtains
@@ -91,6 +98,8 @@ struct ViewTableReference {
     table: SchemaRef,
     /// The position in the table of each column of the schema.
     columns: Vec<usize>,
+    /// How the stored plan reads each column of the table, if it reads the column.
+    required: Vec<Option<ColumnUse>>,
     origin: Arc<TableOrigin>,
 }
 
@@ -105,8 +114,14 @@ impl ViewTableReference {
         scan.source.downcast_ref::<Self>()
     }
 
-    /// Returns the scan with a reference in the place of its source.
-    fn store(mut scan: TableScan, origin: &Arc<TableOrigin>) -> PlanResult<TableScan> {
+    /// Returns the scan with a reference in the place of its source. `required` tells how
+    /// the stored plan reads each column of the source by its position, and every column
+    /// of the scan is read whole without it.
+    fn store(
+        mut scan: TableScan,
+        origin: &Arc<TableOrigin>,
+        required: Option<&HashMap<usize, ColumnUse>>,
+    ) -> PlanResult<TableScan> {
         let schema = scan.source.schema();
         // A source with duplicate column names is read under other names.
         let table_schema = source_as_provider(&scan.source)
@@ -121,92 +136,181 @@ impl ViewTableReference {
             Some(projection) => (Arc::new(schema.project(projection)?), projection.clone()),
             None => (schema, (0..table_schema.fields().len()).collect()),
         };
+        let mut uses = vec![None; table_schema.fields().len()];
+        for &i in &columns {
+            uses[i] = match required {
+                Some(required) => required.get(&i).cloned(),
+                None => Some(ColumnUse::Whole),
+            };
+        }
         scan.source = Arc::new(Self {
             schema,
             table: table_schema,
             columns,
+            required: uses,
             origin: Arc::clone(origin),
         });
         scan.projection = None;
         Ok(scan)
     }
 
-    /// Returns the positions in the table of the columns that the scan read when the view
-    /// was created, or how the columns of the table changed. The rules are those of Spark
-    /// for a temporary view that stores a plan (`V2ReferenceUtils.validateLoadedTableInTempView`
-    /// and `SchemaUtils.validateSchemaCompatibility`): the table can have new columns and
-    /// another column order, while each column that the table had when the view was
-    /// created, whether the view reads it or not, keeps its type and its nullability, also
-    /// for the fields of nested types.
+    /// Returns the position in the table of each column that the scan read when the view
+    /// was created, or how the columns that the stored plan reads changed. The table can
+    /// have new columns and another column order. Each column that the stored plan reads
+    /// keeps its type and its nullability, also for the fields of nested types, as Spark
+    /// requires of every column of a temporary view that stores a plan
+    /// (`V2ReferenceUtils.validateLoadedTableInTempView` and
+    /// `SchemaUtils.validateSchemaCompatibility`), except that a nullable column can have
+    /// no nulls now. A struct that the stored plan reads only through some of its fields
+    /// keeps those fields. A column that only tells rows apart can change or be removed,
+    /// and so can a column that the stored plan does not read, which has no position then.
     fn match_columns(
         &self,
         table: &Schema,
         case_sensitive: bool,
         type_name: &dyn Fn(&DataType) -> String,
-    ) -> Result<Vec<usize>, Vec<String>> {
+    ) -> Result<Vec<Option<usize>>, Vec<String>> {
         let mut changes = vec![];
         let matches = match_fields(self.table.fields(), table.fields(), case_sensitive);
         let mut positions = Vec::with_capacity(matches.len());
-        for (field, found) in self.table.fields().iter().zip(matches) {
+        for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
             let path = vec![field.name().clone()];
-            positions.push(field_changes(
-                field,
-                found,
-                table.fields(),
-                &path,
-                case_sensitive,
-                type_name,
-                &mut changes,
-            ));
+            // The stored plan reads a nullable column, which can read a column without nulls.
+            let tightened;
+            let field = match found {
+                FieldMatch::Found(position)
+                    if field.is_nullable() && !table.field(position).is_nullable() =>
+                {
+                    tightened = field.as_ref().clone().with_nullable(false);
+                    &tightened
+                }
+                _ => field.as_ref(),
+            };
+            let position = match (used, found) {
+                (Some(ColumnUse::Identity), FieldMatch::Found(position)) => Some(position),
+                (Some(ColumnUse::Identity), FieldMatch::Missing) => None,
+                (Some(used @ ColumnUse::Fields(_)), FieldMatch::Found(position)) => {
+                    used_field_changes(
+                        field,
+                        &table.fields()[position],
+                        used,
+                        &path,
+                        case_sensitive,
+                        type_name,
+                        &mut changes,
+                    );
+                    Some(position)
+                }
+                (Some(_), found) => field_changes(
+                    field,
+                    found,
+                    table.fields(),
+                    &path,
+                    case_sensitive,
+                    type_name,
+                    &mut changes,
+                ),
+                (None, found) => {
+                    let count = changes.len();
+                    let position = field_changes(
+                        field,
+                        found,
+                        table.fields(),
+                        &path,
+                        case_sensitive,
+                        type_name,
+                        &mut changes,
+                    );
+                    let changed = changes.len() > count;
+                    changes.truncate(count);
+                    position.filter(|_| !changed)
+                }
+            };
+            positions.push(position);
         }
         if !changes.is_empty() {
             return Err(changes);
         }
-        self.columns
-            .iter()
-            .map(|&i| positions[i].ok_or_else(Vec::new))
-            .collect()
+        Ok(self.columns.iter().map(|&i| positions[i]).collect())
     }
 
     /// Returns the plan of a scan of the current table with the output of the stored scan:
-    /// the names that the view reads, and the metadata that clients see in its schema.
-    fn with_stored_output(&self, scan: TableScan) -> PlanResult<LogicalPlan> {
-        let fields = scan.projected_schema.fields();
-        let same = self
+    /// the names and the types that the view reads, and the metadata that clients see in
+    /// its schema. `positions` are those of [`Self::match_columns`], and the scan reads the
+    /// columns that have a position, in their order.
+    fn with_stored_output(
+        &self,
+        scan: TableScan,
+        positions: &[Option<usize>],
+        case_sensitive: bool,
+    ) -> PlanResult<LogicalPlan> {
+        let source = scan.source.schema();
+        let columns = self
             .schema
             .fields()
             .iter()
-            .zip(fields)
-            .all(|(stored, field)| {
-                stored.name() == field.name() && !user_metadata_differs(stored, field)
-            });
+            .zip(positions)
+            .zip(&self.columns)
+            .map(|((stored, position), &i)| {
+                let current = position.map(|position| source.field(position));
+                (stored, current, self.required[i].as_ref())
+            })
+            .collect::<Vec<_>>();
+        let rebuilt = |stored: &Field, current: &Field, used: Option<&ColumnUse>| {
+            matches!(used, Some(ColumnUse::Fields(_))) && stored.data_type() != current.data_type()
+        };
+        let same = columns.iter().all(|(stored, current, used)| {
+            current.is_some_and(|current| {
+                stored.name() == current.name()
+                    && !user_metadata_differs(stored, current)
+                    && !rebuilt(stored, current, *used)
+            })
+        });
         if same {
             return Ok(LogicalPlan::TableScan(scan));
         }
-        let expressions = self
-            .schema
-            .fields()
-            .iter()
-            .zip(fields)
-            .map(|(stored, field)| {
-                let column = Expr::Column(Column::new(
-                    Some(scan.table_name.clone()),
-                    field.name().clone(),
-                ));
-                let expression = if user_metadata_differs(stored, field) {
-                    let data_type = if can_cast_types(field.data_type(), stored.data_type()) {
-                        stored.data_type().clone()
-                    } else {
-                        field.data_type().clone()
-                    };
-                    let target = stored.as_ref().clone().with_data_type(data_type);
-                    Expr::Cast(Cast::new_from_field(Box::new(column), Arc::new(target)))
-                } else {
-                    column
+        let qualifier = Some(scan.table_name.clone());
+        let expressions = columns
+            .into_iter()
+            .map(|(stored, current, used)| {
+                let Some(current) = current else {
+                    // The view does not read the column, and the table no longer has it as
+                    // the view was created with. The value is a null of the stored type,
+                    // which makes the column nullable, and the plans above the scan then
+                    // compute their schemas again.
+                    let null = Expr::Literal(ScalarValue::try_new_null(stored.data_type())?, None);
+                    let target = stored.as_ref().clone().with_nullable(true);
+                    return Ok(
+                        Expr::Cast(Cast::new_from_field(Box::new(null), Arc::new(target)))
+                            .alias_qualified(qualifier.clone(), stored.name()),
+                    );
                 };
-                expression.alias_qualified(Some(scan.table_name.clone()), stored.name())
+                let column = Expr::Column(Column::new(qualifier.clone(), current.name().clone()));
+                let expression = match used {
+                    Some(ColumnUse::Identity) => column,
+                    Some(used) if rebuilt(stored, current, Some(used)) => {
+                        let value = rebuild_struct(column, stored, current, used, case_sensitive)?;
+                        let target = stored.as_ref().clone().with_nullable(current.is_nullable());
+                        Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
+                    }
+                    _ if user_metadata_differs(stored, current) => {
+                        let data_type = if can_cast_types(current.data_type(), stored.data_type()) {
+                            stored.data_type().clone()
+                        } else {
+                            current.data_type().clone()
+                        };
+                        let target = stored
+                            .as_ref()
+                            .clone()
+                            .with_data_type(data_type)
+                            .with_nullable(current.is_nullable());
+                        Expr::Cast(Cast::new_from_field(Box::new(column), Arc::new(target)))
+                    }
+                    _ => column,
+                };
+                Ok(expression.alias_qualified(qualifier.clone(), stored.name()))
             })
-            .collect();
+            .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expressions,
             Arc::new(LogicalPlan::TableScan(scan)),
@@ -443,6 +547,15 @@ fn describe_field(
     )
 }
 
+/// Returns the change of the nullability of a column or of a nested field.
+fn nullability_change(stored: bool, current: bool, path: &[String]) -> Option<String> {
+    match (stored, current) {
+        (true, false) => Some(format!("{} is no longer nullable", quote_path(path))),
+        (false, true) => Some(format!("{} is nullable now", quote_path(path))),
+        _ => None,
+    }
+}
+
 /// Adds the changes of a column or of a nested field from the type and the nullability
 /// that a view was created with, to those of the table now. The metadata of fields and the
 /// names of the fields that Spark does not name (the elements of lists and the entries
@@ -455,11 +568,7 @@ fn column_changes(
     type_name: &dyn Fn(&DataType) -> String,
     changes: &mut Vec<String>,
 ) {
-    if stored_nullable && !current_nullable {
-        changes.push(format!("{} is no longer nullable", quote_path(path)));
-    } else if !stored_nullable && current_nullable {
-        changes.push(format!("{} is nullable now", quote_path(path)));
-    }
+    changes.extend(nullability_change(stored_nullable, current_nullable, path));
     let child = |name: &str| {
         let mut path = path.to_vec();
         path.push(name.to_string());
@@ -586,6 +695,7 @@ impl PlanResolver<'_> {
         if !found {
             return Ok(plan);
         }
+        let required = required_columns(&plan, state)?;
         // The stored plan has its own CTE definitions, in the order of the definitions.
         let mut index = 0;
         let plan = renew_cte_definitions_with_scans(
@@ -597,10 +707,14 @@ impl PlanResolver<'_> {
             &mut |_| {},
             &mut |scan| {
                 Ok(match state.table_origin(&scan.source) {
-                    Some(origin) => Transformed::yes(LogicalPlan::TableScan(
-                        ViewTableReference::store(scan, origin)
-                            .map_err(|e| datafusion_common::DataFusionError::External(e.into()))?,
-                    )),
+                    Some(origin) => {
+                        let required = required.get(&table_source_address(&scan.source));
+                        Transformed::yes(LogicalPlan::TableScan(
+                            ViewTableReference::store(scan, origin, required).map_err(|e| {
+                                datafusion_common::DataFusionError::External(e.into())
+                            })?,
+                        ))
+                    }
                     None => Transformed::no(LogicalPlan::TableScan(scan)),
                 })
             },
@@ -759,15 +873,18 @@ impl PlanResolver<'_> {
                 .iter()
                 .map(|x| x.name().clone())
                 .collect::<Vec<_>>();
-            for (&position, field) in positions.iter().zip(reference.schema.fields()) {
-                names[position] = field.name().clone();
+            for (position, field) in positions.iter().zip(reference.schema.fields()) {
+                if let Some(position) = position {
+                    names[*position] = field.name().clone();
+                }
             }
             let mut seen = positions
                 .iter()
+                .flatten()
                 .map(|&i| names[i].clone())
                 .collect::<HashSet<_>>();
             for (i, name) in names.iter_mut().enumerate() {
-                if !positions.contains(&i) && !seen.insert(name.clone()) {
+                if !positions.contains(&Some(i)) && !seen.insert(name.clone()) {
                     *name = state.register_field_name(name.clone());
                 }
             }
@@ -782,9 +899,10 @@ impl PlanResolver<'_> {
         };
         // A scan of all the columns of the table in their order has no projection, as the
         // scan of a direct read.
-        let projection = (positions.len() != table_schema.fields().len()
-            || positions.iter().enumerate().any(|(i, &x)| i != x))
-        .then_some(positions);
+        let projection = positions.iter().flatten().copied().collect::<Vec<_>>();
+        let projection = (projection.len() != table_schema.fields().len()
+            || projection.iter().enumerate().any(|(i, &x)| i != x))
+        .then_some(projection);
         // A view that is created over this view reads the table again as well.
         state.record_table_origin(&source, Arc::clone(&reference.origin));
         let bound = TableScanBuilder::new(scan.table_name.clone(), source)
@@ -792,7 +910,7 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        reference.with_stored_output(bound)
+        reference.with_stored_output(bound, &positions, self.config.case_sensitive)
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
@@ -910,6 +1028,485 @@ fn view_name(view: &TableStatus) -> String {
     quote_names(&name)
 }
 
+/// How a stored plan reads a column.
+#[derive(Debug, Clone, PartialEq)]
+enum ColumnUse {
+    /// The plan reads the value of the column.
+    Whole,
+    /// The plan reads the values of some fields of a struct.
+    Fields(HashMap<String, ColumnUse>),
+    /// The plan only tells rows apart by the column, as a key of `DISTINCT` or `GROUP BY`
+    /// whose value is not read. The current values of the column tell the rows apart, of
+    /// whatever type they are now, and a column that the table no longer has tells no
+    /// rows apart.
+    Identity,
+}
+
+impl ColumnUse {
+    /// The use of the field at the end of a path of struct fields.
+    fn path(path: &[String]) -> Self {
+        path.iter().rev().fold(ColumnUse::Whole, |used, name| {
+            ColumnUse::Fields(HashMap::from([(name.clone(), used)]))
+        })
+    }
+
+    /// Adds another use of the column, and returns whether this use changed.
+    fn merge(&mut self, other: &ColumnUse) -> bool {
+        match (&mut *self, other) {
+            (ColumnUse::Whole, _) | (ColumnUse::Identity, ColumnUse::Identity) => false,
+            (ColumnUse::Fields(fields), ColumnUse::Fields(others)) => {
+                let mut changed = false;
+                for (name, other) in others {
+                    changed |= add_use(fields, name.clone(), other);
+                }
+                changed
+            }
+            // Rows told apart by a struct whose fields are also read need the struct as
+            // it was.
+            _ => {
+                *self = ColumnUse::Whole;
+                true
+            }
+        }
+    }
+}
+
+/// Adds a use of a column or a field, and returns whether the uses changed.
+fn add_use<K: Eq + Hash>(uses: &mut HashMap<K, ColumnUse>, key: K, used: &ColumnUse) -> bool {
+    match uses.entry(key) {
+        Entry::Occupied(mut entry) => entry.get_mut().merge(used),
+        Entry::Vacant(entry) => {
+            entry.insert(used.clone());
+            true
+        }
+    }
+}
+
+/// Returns the column and the path of fields of a chain of struct field accesses.
+fn field_access(expr: &Expr) -> Option<(&Column, Vec<String>)> {
+    let Expr::ScalarFunction(function) = expr else {
+        return None;
+    };
+    if !function.func.inner().is::<GetFieldFunc>() {
+        return None;
+    }
+    let [base, Expr::Literal(name, _)] = function.args.as_slice() else {
+        return None;
+    };
+    let name = name.try_as_str().flatten()?.to_string();
+    match base {
+        Expr::Column(column) => Some((column, vec![name])),
+        base => {
+            let (column, mut path) = field_access(base)?;
+            path.push(name);
+            Some((column, path))
+        }
+    }
+}
+
+/// Adds the columns that an expression reads, and the fields of the structs that it
+/// reads only through field accesses.
+fn add_expression_uses(
+    expr: &Expr,
+    uses: &mut HashMap<String, ColumnUse>,
+) -> datafusion_common::Result<()> {
+    expr.apply(|e| {
+        if let Some((column, path)) = field_access(e) {
+            add_use(uses, column.name.clone(), &ColumnUse::path(&path));
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        if let Expr::Column(column) | Expr::OuterReferenceColumn(_, column) = e {
+            add_use(uses, column.name.clone(), &ColumnUse::Whole);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
+}
+
+/// Returns the column that an expression passes on as it is, under its name or another one.
+fn passed_column(expr: &Expr) -> Option<&Column> {
+    match expr {
+        Expr::Column(column) => Some(column),
+        Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
+            Expr::Column(column) => Some(column),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// How an output of a projection or of a scan reads the columns that it comes from, by
+/// their names or by their positions in a source.
+#[derive(Debug, Clone)]
+enum Derivation<K> {
+    /// The output is the column, so it reads the column as the output is read.
+    Column(K),
+    /// The output is the column, which must keep its type, as an input of `UNION`.
+    Value(K),
+    /// The output is computed, and it reads these columns when it is read.
+    Computed(HashMap<K, ColumnUse>),
+}
+
+impl Derivation<String> {
+    fn of(expr: &Expr) -> datafusion_common::Result<Self> {
+        Ok(match passed_column(expr) {
+            Some(column) => Derivation::Column(column.name.clone()),
+            None => {
+                let mut reads = HashMap::new();
+                add_expression_uses(expr, &mut reads)?;
+                Derivation::Computed(reads)
+            }
+        })
+    }
+}
+
+impl<K: Eq + Hash + Clone> Derivation<K> {
+    /// Adds the uses of the columns that the output reads when it is read as `used`, and
+    /// returns the columns whose uses changed.
+    fn add_reads(&self, used: &ColumnUse, uses: &mut HashMap<K, ColumnUse>) -> Vec<K> {
+        let reads = match self {
+            Derivation::Column(column) => vec![(column, used)],
+            Derivation::Value(column) if used == &ColumnUse::Identity => {
+                vec![(column, &ColumnUse::Whole)]
+            }
+            Derivation::Value(column) => vec![(column, used)],
+            Derivation::Computed(reads) => reads.iter().collect(),
+        };
+        reads
+            .into_iter()
+            .filter(|(column, read)| add_use(uses, (*column).clone(), read))
+            .map(|(column, _)| column.clone())
+            .collect()
+    }
+}
+
+/// Returns the address of the source of a scan that a view obtains again, and how each
+/// output reads the source, for the scan itself or for projections over it that compute
+/// their outputs from the scan alone. A scan with filters is not described, and all its
+/// columns are read.
+fn scan_lineage(
+    plan: &LogicalPlan,
+    state: &PlanResolverState,
+) -> Option<(usize, HashMap<String, Derivation<usize>>)> {
+    match plan {
+        LogicalPlan::TableScan(scan)
+            if scan.filters.is_empty() && state.table_origin(&scan.source).is_some() =>
+        {
+            let outputs = scan
+                .projected_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    let position = scan.projection.as_ref().map_or(i, |p| p[i]);
+                    (field.name().clone(), Derivation::Column(position))
+                })
+                .collect();
+            Some((table_source_address(&scan.source), outputs))
+        }
+        LogicalPlan::Projection(projection) => {
+            let (address, inputs) = scan_lineage(&projection.input, state)?;
+            let mut outputs = HashMap::new();
+            for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
+                let lineage = match Derivation::of(expr).ok()? {
+                    Derivation::Column(name) | Derivation::Value(name) => {
+                        inputs.get(&name)?.clone()
+                    }
+                    Derivation::Computed(reads) => {
+                        // A subquery or an outer reference reads columns of other plans.
+                        let other = expr.exists(|e| {
+                            Ok(matches!(
+                                e,
+                                Expr::ScalarSubquery(_)
+                                    | Expr::Exists(_)
+                                    | Expr::InSubquery(_)
+                                    | Expr::SetComparison(_)
+                                    | Expr::OuterReferenceColumn(..)
+                            ))
+                        });
+                        if other.ok()? {
+                            return None;
+                        }
+                        let mut positions = HashMap::new();
+                        for (name, read) in &reads {
+                            inputs.get(name)?.add_reads(read, &mut positions);
+                        }
+                        Derivation::Computed(positions)
+                    }
+                };
+                outputs.insert(field.name().clone(), lineage);
+            }
+            Some((address, outputs))
+        }
+        _ => None,
+    }
+}
+
+/// Returns how the plan reads the columns of each source that a temporary view obtains
+/// again, by the address of the source and the position of the column in the source.
+/// A source without an entry has all its columns read, and a column of a source without
+/// an entry in the map of the source is not read.
+///
+/// The plan reads its output columns, and the columns of the expressions of a filter,
+/// a sort, an aggregate, a window, a join, a limit, a repartition or a scan. A projection
+/// reads the columns of its expressions for the outputs that are read, and a union reads
+/// the columns of its inputs at the positions of the outputs that are read. `DISTINCT`
+/// and the grouping columns of an aggregate tell rows apart by their columns. Any other
+/// operator reads all the columns of its inputs. The plan, its subqueries, and the CTE definitions
+/// that it refers to are all visited, and the uses are propagated through the projections
+/// once all of them are known, so that the order of the visit does not matter.
+fn required_columns(
+    plan: &LogicalPlan,
+    state: &PlanResolverState,
+) -> PlanResult<HashMap<usize, HashMap<usize, ColumnUse>>> {
+    let mut uses = HashMap::new();
+    for field in plan.schema().fields() {
+        add_use(&mut uses, field.name().clone(), &ColumnUse::Whole);
+    }
+    let mut derivations: HashMap<String, Vec<Derivation<String>>> = HashMap::new();
+    let mut lineages = vec![];
+    let mut whole = HashSet::new();
+    let mut definitions = HashSet::new();
+    let mut pending = vec![];
+    let mut visit = |plan: &LogicalPlan, pending: &mut Vec<Arc<LogicalPlan>>| {
+        plan.apply_with_subqueries(|node| {
+            match node {
+                LogicalPlan::Projection(projection) => {
+                    if let Some(lineage) = scan_lineage(node, state) {
+                        // The projections below it and the scan are part of the lineage.
+                        lineages.push(lineage);
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+                    for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
+                        derivations
+                            .entry(field.name().clone())
+                            .or_default()
+                            .push(Derivation::of(expr)?);
+                    }
+                }
+                LogicalPlan::TableScan(scan) => {
+                    if let Some(reference) = CteReference::try_from_scan(scan) {
+                        let definition = reference.definition();
+                        if definitions.insert(Arc::as_ptr(definition) as usize) {
+                            let body = definition.resolved();
+                            for field in body.schema().fields() {
+                                add_use(&mut uses, field.name().clone(), &ColumnUse::Whole);
+                            }
+                            pending.push(Arc::clone(body));
+                        }
+                    } else if state.table_origin(&scan.source).is_some() {
+                        whole.insert(table_source_address(&scan.source));
+                    }
+                    for filter in &scan.filters {
+                        add_expression_uses(filter, &mut uses)?;
+                    }
+                }
+                LogicalPlan::Union(union) => {
+                    // Each output reads the column at its position in each input.
+                    for input in &union.inputs {
+                        for (output, field) in
+                            union.schema.fields().iter().zip(input.schema().fields())
+                        {
+                            derivations
+                                .entry(output.name().clone())
+                                .or_default()
+                                .push(Derivation::Value(field.name().clone()));
+                        }
+                    }
+                }
+                LogicalPlan::Distinct(Distinct::All(input)) => {
+                    for field in input.schema().fields() {
+                        add_use(&mut uses, field.name().clone(), &ColumnUse::Identity);
+                    }
+                }
+                LogicalPlan::Aggregate(aggregate) => {
+                    for expr in &aggregate.group_expr {
+                        match expr {
+                            Expr::Column(column) => {
+                                add_use(&mut uses, column.name.clone(), &ColumnUse::Identity);
+                            }
+                            expr => add_expression_uses(expr, &mut uses)?,
+                        }
+                    }
+                    for expr in &aggregate.aggr_expr {
+                        add_expression_uses(expr, &mut uses)?;
+                    }
+                }
+                LogicalPlan::Filter(_)
+                | LogicalPlan::Sort(_)
+                | LogicalPlan::Window(_)
+                | LogicalPlan::Join(_)
+                | LogicalPlan::Limit(_)
+                | LogicalPlan::SubqueryAlias(_)
+                | LogicalPlan::Repartition(_)
+                | LogicalPlan::EmptyRelation(_)
+                | LogicalPlan::Values(_) => {
+                    node.apply_expressions(|e| {
+                        add_expression_uses(e, &mut uses)?;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                }
+                node => {
+                    node.apply_expressions(|e| {
+                        add_expression_uses(e, &mut uses)?;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                    for input in node.inputs() {
+                        for field in input.schema().fields() {
+                            add_use(&mut uses, field.name().clone(), &ColumnUse::Whole);
+                        }
+                    }
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+    };
+    visit(plan, &mut pending)?;
+    while let Some(body) = pending.pop() {
+        visit(&body, &mut pending)?;
+    }
+    // A projection output that is read reads the input of the projection.
+    let mut queue = uses.keys().cloned().collect::<Vec<_>>();
+    while let Some(name) = queue.pop() {
+        let (Some(inputs), Some(used)) = (derivations.get(&name), uses.get(&name).cloned()) else {
+            continue;
+        };
+        for input in inputs {
+            queue.extend(input.add_reads(&used, &mut uses));
+        }
+    }
+    let mut required: HashMap<usize, HashMap<usize, ColumnUse>> = HashMap::new();
+    for (address, outputs) in lineages {
+        let columns = required.entry(address).or_default();
+        for (name, lineage) in outputs {
+            let Some(used) = uses.get(&name) else {
+                continue;
+            };
+            lineage.add_reads(used, columns);
+        }
+    }
+    for address in whole {
+        required.remove(&address);
+    }
+    Ok(required)
+}
+
+/// Adds the changes of the fields that a view reads of a struct that it reads only
+/// through some of its fields.
+fn used_field_changes(
+    stored: &Field,
+    current: &Field,
+    used: &ColumnUse,
+    path: &[String],
+    case_sensitive: bool,
+    type_name: &dyn Fn(&DataType) -> String,
+    changes: &mut Vec<String>,
+) {
+    match (used, stored.data_type(), current.data_type()) {
+        (
+            ColumnUse::Fields(fields),
+            DataType::Struct(stored_fields),
+            DataType::Struct(current_fields),
+        ) => {
+            changes.extend(nullability_change(
+                stored.is_nullable(),
+                current.is_nullable(),
+                path,
+            ));
+            logical_type_changes(stored, current, path, type_name, changes);
+            let matches = match_fields(stored_fields, current_fields, case_sensitive);
+            for (field, found) in stored_fields.iter().zip(matches) {
+                let Some((_, used)) = fields
+                    .iter()
+                    .find(|(name, _)| same_name(name, field.name(), case_sensitive))
+                else {
+                    continue;
+                };
+                let mut path = path.to_vec();
+                path.push(field.name().clone());
+                match found {
+                    FieldMatch::Found(position) => used_field_changes(
+                        field,
+                        &current_fields[position],
+                        used,
+                        &path,
+                        case_sensitive,
+                        type_name,
+                        changes,
+                    ),
+                    found => {
+                        field_changes(
+                            field,
+                            found,
+                            current_fields,
+                            &path,
+                            case_sensitive,
+                            type_name,
+                            changes,
+                        );
+                    }
+                }
+            }
+        }
+        _ => {
+            column_changes(
+                (stored.data_type(), stored.is_nullable()),
+                (current.data_type(), current.is_nullable()),
+                path,
+                case_sensitive,
+                type_name,
+                changes,
+            );
+            logical_type_changes(stored, current, path, type_name, changes);
+        }
+    }
+}
+
+/// Returns the value of a struct with the type that the view was created with, from the
+/// current value of a struct that the view reads only through some of its fields. A field
+/// that the view does not read is null.
+fn rebuild_struct(
+    expr: Expr,
+    stored: &Field,
+    current: &Field,
+    used: &ColumnUse,
+    case_sensitive: bool,
+) -> PlanResult<Expr> {
+    let (
+        ColumnUse::Fields(fields),
+        DataType::Struct(stored_fields),
+        DataType::Struct(current_fields),
+    ) = (used, stored.data_type(), current.data_type())
+    else {
+        return Ok(expr);
+    };
+    if stored.data_type() == current.data_type() {
+        return Ok(expr);
+    }
+    let matches = match_fields(stored_fields, current_fields, case_sensitive);
+    let mut args = Vec::with_capacity(stored_fields.len() * 2);
+    for (field, found) in stored_fields.iter().zip(matches) {
+        let used = fields
+            .iter()
+            .find(|(name, _)| same_name(name, field.name(), case_sensitive));
+        let value = match (used, found) {
+            (Some((_, used)), FieldMatch::Found(position)) => {
+                let current = &current_fields[position];
+                let value = get_field().call(vec![expr.clone(), lit(current.name().as_str())]);
+                rebuild_struct(value, field, current, used, case_sensitive)?
+            }
+            _ => Expr::Literal(ScalarValue::try_new_null(field.data_type())?, None),
+        };
+        args.push(lit(field.name().as_str()));
+        args.push(Expr::Cast(Cast::new_from_field(
+            Box::new(value),
+            Arc::clone(field),
+        )));
+    }
+    let null = Expr::Literal(ScalarValue::try_new_null(stored.data_type())?, None);
+    Ok(when(expr.is_null(), null).otherwise(named_struct().call(args))?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -918,24 +1515,40 @@ mod tests {
     use datafusion::arrow::datatypes::{
         DataType, Field, Fields, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
     };
+    use datafusion::datasource::{MemTable, provider_as_source};
+    use datafusion::functions_aggregate::expr_fn::sum;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_common::{Column, JoinType, ScalarValue};
+    use datafusion_expr::expr::Exists;
+    use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan, col, lit};
+    use datafusion_functions::core::get_field;
 
-    use super::{TableOrigin, ViewTableReference, user_metadata_differs};
+    use super::{
+        ColumnUse, TableOrigin, ViewTableReference, required_columns, user_metadata_differs,
+    };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
+    use crate::resolver::state::{PlanResolverState, table_source_address};
+    use crate::shared_cte::CteDefinition;
+
+    fn origin() -> Arc<TableOrigin> {
+        Arc::new(TableOrigin::CatalogTable(CatalogTableOrigin {
+            name: vec![],
+            session_table: None,
+            lake_relation: None,
+            format: String::new(),
+            options: vec![],
+            temporal_options: vec![],
+            read_case_sensitive: false,
+        }))
+    }
 
     fn reference(schema: &Schema) -> ViewTableReference {
         ViewTableReference {
             schema: Arc::new(schema.clone()),
             table: Arc::new(schema.clone()),
             columns: (0..schema.fields().len()).collect(),
-            origin: Arc::new(TableOrigin::CatalogTable(CatalogTableOrigin {
-                name: vec![],
-                session_table: None,
-                lake_relation: None,
-                format: String::new(),
-                options: vec![],
-                temporal_options: vec![],
-                read_case_sensitive: false,
-            })),
+            required: vec![Some(ColumnUse::Whole); schema.fields().len()],
+            origin: origin(),
         }
     }
 
@@ -943,12 +1556,14 @@ mod tests {
         format!("{data_type}")
     }
 
+    /// Matches the columns of a scan that reads all of them whole.
     fn match_columns(
         stored: &Schema,
         table: &Schema,
         case_sensitive: bool,
     ) -> Result<Vec<usize>, Vec<String>> {
-        reference(stored).match_columns(table, case_sensitive, &type_name)
+        let positions = reference(stored).match_columns(table, case_sensitive, &type_name)?;
+        Ok(positions.into_iter().flatten().collect())
     }
 
     fn field(name: &str, data_type: DataType) -> Field {
@@ -1069,9 +1684,10 @@ mod tests {
         for data_type in data_types() {
             let nullable = Schema::new(vec![field("c", data_type.clone())]);
             let required = Schema::new(vec![Field::new("c", data_type.clone(), false)]);
+            // A nullable column can read a column without nulls.
             assert_eq!(
                 match_columns(&nullable, &required, true),
-                Err(vec!["`c` is no longer nullable".to_string()]),
+                Ok(vec![0]),
                 "{data_type}"
             );
             assert_eq!(
@@ -1250,14 +1866,17 @@ mod tests {
     }
 
     #[test]
-    fn test_all_the_captured_columns_are_validated() {
+    fn test_columns_that_the_view_does_not_read_can_change() -> TestResult {
         let table = Schema::new(vec![
             field("a", DataType::Int32),
             field("b", DataType::Utf8),
+            field("c", DataType::Int32),
         ]);
+        // The scan captured `a` and `b`, and the view reads only `a`.
         let reference = ViewTableReference {
-            schema: Arc::new(Schema::new(vec![field("a", DataType::Int32)])),
-            columns: vec![0],
+            schema: Arc::new(table.project(&[0, 1])?),
+            columns: vec![0, 1],
+            required: vec![Some(ColumnUse::Whole), None, None],
             ..reference(&table)
         };
         let current = Schema::new(vec![
@@ -1266,13 +1885,80 @@ mod tests {
         ]);
         assert_eq!(
             reference.match_columns(&current, true, &type_name),
-            Ok(vec![1])
+            Ok(vec![Some(1), Some(0)])
         );
-        let current = Schema::new(vec![field("a", DataType::Int32)]);
+        for current in [
+            Schema::new(vec![field("a", DataType::Int32)]),
+            Schema::new(vec![
+                field("a", DataType::Int32),
+                field("b", DataType::Int64),
+            ]),
+            Schema::new(vec![
+                field("a", DataType::Int32),
+                Field::new("b", DataType::Int64, false),
+            ]),
+        ] {
+            assert_eq!(
+                reference.match_columns(&current, true, &type_name),
+                Ok(vec![Some(0), None]),
+                "{current}"
+            );
+        }
+        // A column without nulls now is read, as the same column.
+        let current = Schema::new(vec![
+            field("a", DataType::Int32),
+            Field::new("b", DataType::Utf8, false),
+        ]);
         assert_eq!(
             reference.match_columns(&current, true, &type_name),
-            Err(vec!["`b` Utf8 has been removed".to_string()])
+            Ok(vec![Some(0), Some(1)])
         );
+        assert_eq!(
+            reference.match_columns(
+                &Schema::new(vec![field("b", DataType::Utf8)]),
+                true,
+                &type_name
+            ),
+            Err(vec!["`a` Int32 has been removed".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_columns_that_only_tell_rows_apart_can_change() -> TestResult {
+        let table = Schema::new(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Int32),
+        ]);
+        let reference = ViewTableReference {
+            required: vec![Some(ColumnUse::Whole), Some(ColumnUse::Identity)],
+            ..reference(&table)
+        };
+        for current in [
+            Schema::new(vec![
+                field("b", DataType::Utf8),
+                field("a", DataType::Int32),
+            ]),
+            Schema::new(vec![
+                Field::new("b", DataType::Int64, false),
+                field("a", DataType::Int32),
+            ]),
+        ] {
+            assert_eq!(
+                reference.match_columns(&current, true, &type_name),
+                Ok(vec![Some(1), Some(0)]),
+                "{current}"
+            );
+        }
+        assert_eq!(
+            reference.match_columns(
+                &Schema::new(vec![field("a", DataType::Int32)]),
+                true,
+                &type_name
+            ),
+            Ok(vec![Some(0), None])
+        );
+        Ok(())
     }
 
     #[test]
@@ -1402,5 +2088,357 @@ mod tests {
             match_columns(&value(false), &value(true), true),
             Err(vec!["`c`.`value` is nullable now".to_string()])
         );
+    }
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// How a plan reads the columns of a source, by position, or `None` if it reads all
+    /// of them.
+    type Uses = Option<Vec<(usize, ColumnUse)>>;
+
+    /// A scan of a table `(a INT, b INT, c INT, s STRUCT<x INT, y INT>)` that a view obtains
+    /// again, under the projection that renames its columns after `name` (`t_a` for `t`),
+    /// as the resolver reads a table. Returns the plan and the address of the source.
+    fn read_table(
+        state: &mut PlanResolverState,
+        name: &str,
+    ) -> Result<(LogicalPlan, usize), Box<dyn std::error::Error>> {
+        let fields = Fields::from(vec![
+            field("x", DataType::Int32),
+            field("y", DataType::Int32),
+        ]);
+        let schema = Arc::new(Schema::new(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Int32),
+            field("c", DataType::Int32),
+            field("s", DataType::Struct(fields)),
+        ]));
+        let source = provider_as_source(Arc::new(MemTable::try_new(schema, vec![vec![]])?));
+        state.record_table_origin(&source, origin());
+        let address = table_source_address(&source);
+        let plan = LogicalPlanBuilder::scan(name, source, None)?
+            .project(["a", "b", "c", "s"].map(|x| col(x).alias(format!("{name}_{x}"))))?
+            .build()?;
+        Ok((plan, address))
+    }
+
+    /// Returns the columns that the plan reads of the source, by position, or `None` if it
+    /// reads all of them.
+    fn uses(
+        plan: &LogicalPlan,
+        state: &PlanResolverState,
+        address: usize,
+    ) -> Result<Uses, Box<dyn std::error::Error>> {
+        let required = required_columns(plan, state)?;
+        Ok(required.get(&address).map(|columns| {
+            let mut columns = columns
+                .iter()
+                .map(|(i, used)| (*i, used.clone()))
+                .collect::<Vec<_>>();
+            columns.sort_by_key(|(i, _)| *i);
+            columns
+        }))
+    }
+
+    fn whole(positions: &[usize]) -> Uses {
+        Some(positions.iter().map(|i| (*i, ColumnUse::Whole)).collect())
+    }
+
+    fn get(expr: Expr, name: &str) -> Expr {
+        get_field().call(vec![expr, lit(name)])
+    }
+
+    #[test]
+    fn test_projections_read_only_the_columns_of_the_outputs_that_are_read() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        // `SELECT a FROM (SELECT * FROM t)`.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![col("t_a"), col("t_b"), col("t_c"), col("t_s")])?
+            .project(vec![col("t_a").alias("a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0]));
+        // An output that is computed and not read does not read its columns, also above
+        // an operator that only passes its input on.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .filter(col("t_c").gt(lit(0)))?
+            .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 2]));
+        // The computed output is read.
+        let plan = LogicalPlanBuilder::from(t)
+            .filter(col("t_c").gt(lit(0)))?
+            .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
+            .project(vec![col("y")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[1, 2]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_operators_read_the_columns_of_their_expressions() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .aggregate(vec![col("t_a")], vec![sum(col("t_b")).alias("total")])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .sort(vec![col("t_c").sort(true, false)])?
+            .limit(0, Some(1))?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 2]));
+        let (u, other) = read_table(&mut state, "u")?;
+        let plan = LogicalPlanBuilder::from(t)
+            .join_on(u, JoinType::Inner, vec![col("t_c").eq(col("u_b"))])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 2]));
+        assert_eq!(uses(&plan, &state, other)?, whole(&[1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_rows_are_told_apart_by_distinct_and_grouping_columns() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let identity = |positions: &[usize]| {
+            positions
+                .iter()
+                .map(|i| (*i, ColumnUse::Identity))
+                .collect::<Vec<_>>()
+        };
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .distinct()?
+            .project(vec![col("t_a")])?
+            .build()?;
+        let mut expected = vec![(0, ColumnUse::Whole)];
+        expected.extend(identity(&[1, 2, 3]));
+        assert_eq!(uses(&plan, &state, address)?, Some(expected));
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .aggregate(
+                vec![col("t_a"), col("t_c")],
+                vec![sum(col("t_b")).alias("total")],
+            )?
+            .project(vec![col("t_a"), col("total")])?
+            .build()?;
+        assert_eq!(
+            uses(&plan, &state, address)?,
+            Some(vec![
+                (0, ColumnUse::Whole),
+                (1, ColumnUse::Whole),
+                (2, ColumnUse::Identity)
+            ])
+        );
+        // A struct whose fields are read, and that tells rows apart, is read whole.
+        let plan = LogicalPlanBuilder::from(t)
+            .filter(get(col("t_s"), "x").gt(lit(0)))?
+            .distinct()?
+            .project(vec![col("t_a")])?
+            .build()?;
+        let mut expected = vec![(0, ColumnUse::Whole)];
+        expected.extend(identity(&[1, 2]));
+        expected.push((3, ColumnUse::Whole));
+        assert_eq!(uses(&plan, &state, address)?, Some(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn test_unions_read_the_columns_at_the_positions_that_are_read() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let (u, other) = read_table(&mut state, "u")?;
+        let union = LogicalPlanBuilder::from(t)
+            .project(vec![col("t_a"), col("t_b")])?
+            .union(
+                LogicalPlanBuilder::from(u)
+                    .project(vec![col("u_c"), col("u_a")])?
+                    .build()?,
+            )?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(union.clone())
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0]));
+        assert_eq!(uses(&plan, &state, other)?, whole(&[2]));
+        // The inputs of a union keep the types of the columns that tell rows apart.
+        let plan = LogicalPlanBuilder::from(union)
+            .distinct()?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
+        assert_eq!(uses(&plan, &state, other)?, whole(&[0, 2]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_other_operators_read_all_the_columns_of_their_inputs() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .distinct_on(vec![col("t_a")], vec![col("t_a")], None)?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1, 2, 3]));
+        // A scan that no projection renames, or that has filters, is read whole.
+        let LogicalPlan::Projection(projection) = &t else {
+            return Err("expected a projection".into());
+        };
+        let scan = projection.input.as_ref().clone();
+        let plan = LogicalPlanBuilder::from(scan.clone())
+            .filter(col("a").gt(lit(0)))?
+            .project(vec![col("a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, None);
+        let LogicalPlan::TableScan(scan) = scan else {
+            return Err("expected a scan".into());
+        };
+        let filtered = LogicalPlan::TableScan(TableScan {
+            filters: vec![col("b").gt(lit(0))],
+            ..scan
+        });
+        let plan = LogicalPlanBuilder::from(filtered)
+            .project(vec![col("a").alias("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_fields_are_read_through_field_accesses() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let x = ColumnUse::Fields(HashMap::from([("x".to_string(), ColumnUse::Whole)]));
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![get(col("t_s"), "x").alias("sx")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, Some(vec![(3, x.clone())]));
+        // The struct passes through a projection, and is read in a filter.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .filter(get(col("t_s"), "x").gt(lit(0)))?
+            .project(vec![col("t_a"), col("t_s").alias("s2")])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(
+            uses(&plan, &state, address)?,
+            Some(vec![(0, ColumnUse::Whole), (3, x.clone())])
+        );
+        // The struct is read whole as an output.
+        let plan = LogicalPlanBuilder::from(t)
+            .filter(get(col("t_s"), "y").gt(lit(0)))?
+            .project(vec![col("t_s")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[3]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_outer_references_read_the_columns_of_the_outer_query() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let (u, other) = read_table(&mut state, "u")?;
+        let outer = |name: &str| {
+            Expr::OuterReferenceColumn(
+                Arc::new(field(name, DataType::Int32)),
+                Column::from_name(name),
+            )
+        };
+        // `SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.b)`.
+        let subquery = LogicalPlanBuilder::from(u)
+            .filter(col("u_a").eq(outer("t_b")))?
+            .project(vec![lit(1)])?
+            .build()?;
+        let exists = Expr::Exists(Exists::new(
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns: vec![outer("t_b")],
+                spans: Default::default(),
+            },
+            false,
+        ));
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![col("t_a"), col("t_b")])?
+            .filter(exists)?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
+        assert_eq!(uses(&plan, &state, other)?, whole(&[0]));
+        // A lateral join reads the columns of its left side in its right side, which is
+        // visited after its left side.
+        let left = LogicalPlanBuilder::from(t)
+            .filter(lit(true))?
+            .project(vec![col("t_a"), col("t_b").alias("b2")])?
+            .build()?;
+        let right = LogicalPlanBuilder::empty(true)
+            .project(vec![outer("b2").alias("z")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(right)?
+            .project(vec![col("t_a"), col("z")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cte_definitions_are_read_whole() -> TestResult {
+        let mut state = PlanResolverState::new();
+        let (t, address) = read_table(&mut state, "t")?;
+        let body = LogicalPlanBuilder::from(t)
+            .project(vec![col("t_a"), col("t_b")])?
+            .build()?;
+        let definition = Arc::new(CteDefinition::new(0, "c".into(), Arc::new(body), false));
+        let plan = LogicalPlanBuilder::from(definition.scan()?)
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_columns_that_are_no_longer_read_are_typed_nulls_of_each_type() -> TestResult {
+        for data_type in data_types() {
+            let stored = Schema::new(vec![
+                field("a", DataType::Int32),
+                field("c", data_type.clone()),
+            ]);
+            let table = Schema::new(vec![field("a", DataType::Int32)]);
+            let reference = ViewTableReference {
+                required: vec![Some(ColumnUse::Whole), None],
+                ..reference(&stored)
+            };
+            let positions = reference
+                .match_columns(&table, true, &type_name)
+                .map_err(|e| e.join(", "))?;
+            assert_eq!(positions, vec![Some(0), None], "{data_type}");
+            let source =
+                provider_as_source(Arc::new(MemTable::try_new(Arc::new(table), vec![vec![]])?));
+            let scan = LogicalPlanBuilder::scan("t", source, Some(vec![0]))?.build()?;
+            let LogicalPlan::TableScan(scan) = scan else {
+                return Err("expected a scan".into());
+            };
+            let plan = reference.with_stored_output(scan, &positions, true)?;
+            let output = plan.schema().field(1);
+            assert_eq!(output.name(), "c");
+            assert_eq!(output.data_type(), &data_type);
+            assert!(output.is_nullable(), "{data_type}");
+            let LogicalPlan::Projection(projection) = &plan else {
+                return Err("expected a projection".into());
+            };
+            let mut null = None;
+            projection.expr[1].apply(|e| {
+                if let Expr::Literal(value, _) = e {
+                    null = Some(value.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert!(
+                null.as_ref().is_some_and(ScalarValue::is_null),
+                "{data_type}"
+            );
+        }
+        Ok(())
     }
 }

@@ -507,41 +507,39 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
     let sql = "SELECT * FROM wide";
     fixture.resolve(sql).await?.expect(1, 1, sql);
     fixture.execute(sql).await?;
-    // The new column is dropped again. A view created before the table had it still reads.
-    // A view created after that captured it, whether the view reads it or not.
+    // The new column is dropped again. The views that do not read it still read the table.
     fixture
         .replace_table(&["t"], vec![column("k"), column("v")])
         .await?;
-    let sql = "SELECT * FROM cols_sv";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
-    fixture.execute(sql).await?;
-    for view in ["wide", "narrow"] {
-        let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
-        let error = resolution.error.ok_or("missing error")?;
-        assert!(
-            error.contains(&format!(
-                "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View `{view}` plan \
-                references table `sail`.`default`.`t` whose data columns changed since the view \
-                plan was initially captured.\nColumn changes:\n- `w` BIGINT has been removed\n\
-                This indicates the table has evolved and the view based on the plan must be \
-                recreated."
-            )),
-            "{error}"
-        );
+    for sql in ["SELECT * FROM cols_sv", "SELECT * FROM narrow"] {
+        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.execute(sql).await?;
     }
+    let resolution = fixture.resolve("SELECT * FROM wide").await?;
+    let error = resolution.error.ok_or("missing error")?;
+    assert!(
+        error.contains(
+            "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View `wide` plan \
+            references table `sail`.`default`.`t` whose data columns changed since the view \
+            plan was initially captured.\nColumn changes:\n- `w` BIGINT has been removed\n\
+            This indicates the table has evolved and the view based on the plan must be \
+            recreated."
+        ),
+        "{error}"
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn test_temporary_view_validates_the_columns_that_it_does_not_read() -> TestResult {
+async fn test_temporary_view_ignores_the_columns_that_it_does_not_read() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
     fixture
         .execute("CREATE TEMPORARY VIEW only_k AS SELECT k FROM t")
         .await?;
     fixture.replace_table(&["t"], vec![column("k")]).await?;
-    let resolution = fixture.resolve("SELECT * FROM only_k").await?;
-    let error = resolution.error.ok_or("missing error")?;
-    assert!(error.contains("- `v` BIGINT has been removed"), "{error}");
+    let sql = "SELECT * FROM only_k";
+    fixture.resolve(sql).await?.expect(1, 1, sql);
+    fixture.execute(sql).await?;
     Ok(())
 }
 
@@ -584,16 +582,6 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             ],
             "- `v` type has changed from BIGINT to INT",
         ),
-        (
-            vec![
-                column("k"),
-                TestColumn {
-                    nullable: false,
-                    ..column("v")
-                },
-            ],
-            "- `v` is no longer nullable",
-        ),
     ];
     for (index, (columns, change)) in changes.into_iter().enumerate() {
         let fixture = Fixture::try_new(&[]).await?;
@@ -613,6 +601,36 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             );
             assert!(error.contains(change), "{error}");
         }
+    }
+    // A column that the views read can have nulls now. The views were created when it had
+    // none, and the plans that they store can depend on it.
+    let fixture = Fixture::try_new(&[]).await?;
+    let not_null = || TestColumn {
+        nullable: false,
+        ..column("v")
+    };
+    fixture
+        .replace_table(&["t"], vec![column("k"), not_null()])
+        .await?;
+    let views = create_views(&fixture, "nullable").await?;
+    fixture
+        .replace_table(&["t"], vec![column("k"), column("v")])
+        .await?;
+    for view in &views {
+        let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
+        let error = resolution.error.ok_or("missing error")?;
+        assert!(error.contains("- `v` is nullable now"), "{error}");
+    }
+    // A column that the views read has no nulls now, which they can read.
+    let fixture = Fixture::try_new(&[]).await?;
+    let views = create_views(&fixture, "not_null").await?;
+    fixture
+        .replace_table(&["t"], vec![column("k"), not_null()])
+        .await?;
+    for view in &views {
+        let sql = format!("SELECT * FROM {view}");
+        fixture.resolve(&sql).await?.expect(1, 1, &sql);
+        fixture.execute(&sql).await?;
     }
     Ok(())
 }

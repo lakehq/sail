@@ -128,8 +128,8 @@ def test_view_reads_a_table_that_is_created_again_in_another_format(spark, table
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
-@pytest.mark.parametrize("kind", PLAN_KINDS)
-def test_plan_view_rejects_a_table_whose_column_type_changed(spark, table, kind):
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_rejects_a_table_whose_column_type_changed(spark, table, kind):
     table.insert("(1)")
     view = table.create_view(kind)
     spark.sql(f"DROP TABLE {table.name}")
@@ -139,23 +139,20 @@ def test_plan_view_rejects_a_table_whose_column_type_changed(spark, table, kind)
     assert "- `id` type has changed from BIGINT to INT" in message
 
 
-@pytest.mark.parametrize("kind", PLAN_KINDS)
-def test_plan_view_rejects_a_table_whose_columns_were_dropped_or_renamed(spark, tmp_path, kind):
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, tmp_path, kind):
     table = Table(spark, tmp_path, "iceberg", "id BIGINT, extra STRING, other STRING")
     try:
         table.insert("(1, 'x', 'y')")
         view = table.create_view(kind, f"SELECT id FROM {table.name}")
         spark.sql(f"ALTER TABLE {table.name} DROP COLUMN extra")
-        message = error(spark, f"SELECT * FROM {view}")
-        assert COLUMNS_CHANGED in message
-        assert "- `extra` STRING has been removed" in message
-        # A view that is created now reads the table, until the next change.
-        view = table.create_view(kind, f"SELECT id FROM {table.name}")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
         spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN other TO another")
+        table.insert("(2, 'z')")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
+        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN id TO key")
         message = error(spark, f"SELECT * FROM {view}")
         assert COLUMNS_CHANGED in message
-        assert "- `other` STRING has been removed" in message
+        assert "- `id` BIGINT has been removed" in message
     finally:
         table.drop()
 
@@ -196,18 +193,359 @@ def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tmp_path
 
 
 @pytest.mark.parametrize("fmt", LAKE_FORMATS)
-@pytest.mark.parametrize("kind", PLAN_KINDS)
-def test_plan_view_rejects_a_table_whose_struct_gains_a_field(spark, tmp_path, fmt, kind):
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_of_a_whole_struct_rejects_a_table_whose_struct_gains_a_field(spark, tmp_path, fmt, kind):
     table = Table(spark, tmp_path, fmt, "id BIGINT, s STRUCT<a: INT>")
     try:
         table.insert("(1, named_struct('a', 1))")
         view = table.create_view(kind)
+        fields = table.create_view(
+            "sv" if kind.startswith("d") else "dv", f"SELECT id, s.a AS a FROM {table.name} WHERE s.a > 0"
+        )
         spark.sql(f"ALTER TABLE {table.name} ADD COLUMNS (s.b INT)")
+        table.insert("(2, named_struct('a', 2, 'b', 3))")
         message = error(spark, f"SELECT * FROM {view}")
         assert COLUMNS_CHANGED in message
         assert "- `s`.`b` INT has been added" in message
+        # A view that reads only some fields of the struct reads the table.
+        assert rows(spark, f"SELECT * FROM {fields}") == [(1, 1), (2, 2)]
     finally:
         table.drop()
+
+
+# The cases of a table that is created again with other columns: its columns and rows,
+# the query of a view over it, the columns and rows that it is created with again, and
+# the rows that the view reads then, or `None` if the view must be created again.
+COLUMN_CHANGES = {
+    "unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM {t}",
+        "a INT, x INT",
+        "(5, 500)",
+        [(5,)],
+    ),
+    "unread column retyped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM {t}",
+        "a INT, b STRING, x INT",
+        "(5, 'q', 500)",
+        [(5,)],
+    ),
+    "unread column made not null": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT a FROM {t}",
+        "a INT, b INT NOT NULL",
+        "(5, 50)",
+        [(5,)],
+    ),
+    "read column made not null": ("a INT", "(1)", "SELECT * FROM {t}", "a INT NOT NULL", "(5)", [(5,)]),
+    "read column retyped to a string": ("a INT", "(1)", "SELECT * FROM {t}", "a STRING", "('x')", None),
+    "read column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT * FROM {t}",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "read column retyped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, b FROM {t}",
+        "a INT, b BIGINT, x INT",
+        "(5, 50, 500)",
+        None,
+    ),
+    "filter column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM {t} WHERE b > 0",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "count of rows": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT count(*) AS n FROM {t}",
+        "a INT, x INT",
+        "(5, 500)",
+        [(1,)],
+    ),
+    "aggregate, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, sum(b) AS s FROM {t} GROUP BY a",
+        "a INT, b INT",
+        "(5, 50)",
+        [(5, 50)],
+    ),
+    "aggregate column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, sum(b) AS s FROM {t} GROUP BY a",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "window, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, row_number() OVER (ORDER BY b) AS r FROM {t}",
+        "a INT, b INT",
+        "(5, 50)",
+        [(5, 1)],
+    ),
+    "sort column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM {t} ORDER BY b",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "scalar subquery, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, (SELECT max(x) FROM {t}) AS m FROM {t}",
+        "a INT, x INT",
+        "(5, 500)",
+        [(5, 500)],
+    ),
+    "volatile CTE, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "WITH c AS (SELECT a, x, rand() AS r FROM {t}) SELECT a FROM c",
+        "a INT, x INT",
+        "(5, 500)",
+        [(5,)],
+    ),
+    "correlated subquery, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM {t} WHERE EXISTS (SELECT 1 FROM {t} AS t2 WHERE t2.b = {t}.b)",
+        "a INT, b INT",
+        "(5, 50)",
+        [(5,)],
+    ),
+    "subquery of all columns, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM (SELECT * FROM {t}) AS q",
+        "a INT, b INT",
+        "(5, 50)",
+        [(5,)],
+    ),
+    "subquery of all columns, filter column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a FROM (SELECT * FROM {t}) AS q WHERE q.b > 0",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "lateral subquery, read column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT q.a, l.z FROM (SELECT a, b AS c FROM {t} WHERE a > 0) AS q, LATERAL (SELECT q.c + 1 AS z) AS l",
+        "a INT, x INT",
+        "(5, 500)",
+        None,
+    ),
+    "lateral subquery, unread column dropped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT q.a, l.z FROM (SELECT a, b AS c FROM {t} WHERE a > 0) AS q, LATERAL (SELECT q.c + 1 AS z) AS l",
+        "a INT, b INT",
+        "(5, 50)",
+        [(5, 51)],
+    ),
+    "struct field added": (
+        "id INT, s STRUCT<a: INT, b: INT>",
+        "(1, named_struct('a', 10, 'b', 20))",
+        "SELECT s.a AS a FROM {t}",
+        "id INT, s STRUCT<a: INT, b: INT, c: INT>",
+        "(2, named_struct('a', 11, 'b', 21, 'c', 31))",
+        [(11,)],
+    ),
+    "unread struct field retyped": (
+        "id INT, s STRUCT<a: INT, b: INT>",
+        "(1, named_struct('a', 10, 'b', 20))",
+        "SELECT id, s.a AS a FROM {t} WHERE s.a > 0",
+        "id INT, s STRUCT<a: INT, b: STRING>",
+        "(3, named_struct('a', 12, 'b', 'x'))",
+        [(3, 12)],
+    ),
+    "read struct field dropped": (
+        "id INT, s STRUCT<a: INT, b: INT>",
+        "(1, named_struct('a', 10, 'b', 20))",
+        "SELECT s.a AS a FROM {t}",
+        "id INT, s STRUCT<b: INT>",
+        "(4, named_struct('b', 22))",
+        None,
+    ),
+    "distinct row column retyped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT a FROM (SELECT DISTINCT * FROM {t})",
+        "a INT, b STRING",
+        "(1, 'z'), (1, 'y'), (2, 'y')",
+        [(1,), (1,), (2,)],
+    ),
+    "distinct row column retyped with fewer distinct rows": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT a FROM (SELECT DISTINCT a, b FROM {t})",
+        "a INT, b STRING",
+        "(1, 'z'), (1, 'z'), (2, 'y')",
+        [(1,), (2,)],
+    ),
+    "distinct row column dropped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT a FROM (SELECT DISTINCT * FROM {t})",
+        "a INT",
+        "(1), (1), (2)",
+        [(1,), (2,)],
+    ),
+    "grouping column retyped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT a FROM {t} GROUP BY a, b",
+        "a INT, b STRING",
+        "(1, 'z'), (1, 'y'), (2, 'y')",
+        [(1,), (1,), (2,)],
+    ),
+    "distinct row struct gains a field": (
+        "a INT, b STRUCT<x: INT>",
+        "(1, named_struct('x', 1)), (1, named_struct('x', 1)), (2, named_struct('x', 3))",
+        "SELECT a FROM (SELECT DISTINCT * FROM {t})",
+        "a INT, b STRUCT<x: INT, y: INT>",
+        "(1, named_struct('x', 1, 'y', 5)), (1, named_struct('x', 1, 'y', 6)), (2, named_struct('x', 3, 'y', 7))",
+        [(1,), (1,), (2,)],
+    ),
+    "read struct field retyped": (
+        "id INT, s STRUCT<a: INT, b: INT>",
+        "(1, named_struct('a', 10, 'b', 20))",
+        "SELECT s.a AS a FROM {t}",
+        "id INT, s STRUCT<a: STRING, b: INT>",
+        "(5, named_struct('a', 'q', 'b', 23))",
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("case", COLUMN_CHANGES)
+def test_view_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
+    columns, values, query, new_columns, new_values, expected = COLUMN_CHANGES[case]
+    table = Table(spark, tmp_path, fmt, columns)
+    try:
+        table.insert(values)
+        view = table.create_view(kind, query.format(t=table.name))
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create(new_columns)
+        table.insert(new_values)
+        if expected is None:
+            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+        else:
+            assert rows(spark, f"SELECT * FROM {view}") == expected
+    finally:
+        table.drop()
+
+
+# The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
+# (1, 10), (1, 20), (2, 30) and (1, 10), (3, 40), when one of them is created again with
+# other columns: the query of the view, the table, its columns and rows, and the rows
+# that the view reads then, or `None` if the view must be created again.
+UNION_CHANGES = {
+    "column dropped on one side": (
+        "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
+        "w",
+        "a INT",
+        "(1), (3)",
+        [(1,), (1,), (1,), (2,), (3,)],
+    ),
+    "column retyped on one side": (
+        "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
+        "t",
+        "a INT, b STRING",
+        "(1, 'z'), (1, 'y'), (2, 'y')",
+        [(1,), (1,), (1,), (2,), (3,)],
+    ),
+    # The inputs of a union keep the types of the columns that tell its rows apart.
+    "distinct row column widened on one side": (
+        "SELECT a FROM (SELECT a, b FROM {t} UNION SELECT a, b FROM {w})",
+        "t",
+        "a INT, b BIGINT",
+        "(1, 10), (1, 20), (2, 30)",
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("case", UNION_CHANGES)
+def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, case):
+    query, changed, columns, values, expected = UNION_CHANGES[case]
+    tables = {"t": Table(spark, tmp_path, fmt, "a INT, b INT"), "w": Table(spark, tmp_path, fmt, "a INT, b INT")}
+    try:
+        tables["t"].insert("(1, 10), (1, 20), (2, 30)")
+        tables["w"].insert("(1, 10), (3, 40)")
+        view = tables["t"].create_view(kind, query.format(t=tables["t"].name, w=tables["w"].name))
+        spark.sql(f"DROP TABLE {tables[changed].name}")
+        tables[changed].create(columns)
+        tables[changed].insert(values)
+        if expected is None:
+            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+        else:
+            assert rows(spark, f"SELECT * FROM {view}") == expected
+    finally:
+        for table in tables.values():
+            table.drop()
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tmp_path, kind):
+    table = Table(spark, tmp_path, "delta", "id INT, extra INT")
+    try:
+        table.insert("(1, 2)")
+        view = table.create_view(kind, f"SELECT id FROM {table.name}")
+        write = spark.sql("SELECT 5 AS id, 'x' AS extra").write.mode("overwrite")
+        write.option("overwriteSchema", "true").saveAsTable(table.name)
+        assert rows(spark, f"SELECT * FROM {view}") == [(5,)]
+    finally:
+        table.drop()
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT a FROM {t} WHERE EXISTS (SELECT 1 FROM {u} WHERE {u}.k = {t}.b)",
+        "SELECT a, (SELECT max(k) FROM {u} WHERE {u}.k = {t}.b) AS m FROM {t}",
+    ],
+)
+def test_view_rejects_a_table_without_a_column_of_an_outer_reference(spark, tmp_path, fmt, kind, query):
+    table = Table(spark, tmp_path, fmt, "a INT, b INT, x INT")
+    other = Table(spark, tmp_path, fmt, "k INT")
+    try:
+        table.insert("(1, 10, 100)")
+        other.insert("(10)")
+        view = table.create_view(kind, query.format(t=table.name, u=other.name))
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create("a INT, x INT")
+        table.insert("(1, 100)")
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+    finally:
+        table.drop()
+        other.drop()
 
 
 @pytest.mark.parametrize("kind", KINDS)
