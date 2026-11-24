@@ -4,7 +4,6 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::delta::DeltaProtocolInfo;
 use sail_common_datafusion::catalog::{
     FunctionStatus, LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
@@ -1104,26 +1103,14 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         options.properties = staged.properties.clone();
     }
     options.staged = create_plan.staged.clone();
-    let location = options.location.clone().ok_or_else(|| {
-        CatalogError::InvalidArgument(format!(
-            "Location is required to create storage metadata for {} tables",
-            options.format
-        ))
-    })?;
     let metadata = materialize_lake_source_create_metadata(
         ctx,
         &options.format,
-        location,
-        &options.columns,
-        options.comment.clone(),
-        options.partition_by.clone(),
-        options.properties.clone(),
-        options.mode.is_replace(),
-        context.as_deref().cloned(),
-        options
-            .staged
-            .as_ref()
-            .and_then(|staged| staged.required_protocol.clone()),
+        lake_source_create_table_info(
+            &options,
+            options.mode.is_replace(),
+            context.as_deref().cloned(),
+        )?,
     )
     .await?;
     if let Some(staged) = options.staged.as_mut() {
@@ -1215,53 +1202,38 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         ),
     };
 
-    match write_columns {
-        Some(columns) => {
-            materialize_lake_source_create_metadata(
-                ctx,
-                format,
-                location.clone(),
-                columns,
-                comment.clone(),
-                partition_by.clone(),
-                properties.clone(),
-                false,
-                lakehouse_table,
-                None,
-            )
-            .await
-        }
-        None => {
-            materialize_lake_source_create_metadata(
-                ctx,
-                format,
-                location.clone(),
-                columns,
-                comment.clone(),
-                partition_by.clone(),
-                properties.clone(),
-                false,
-                lakehouse_table,
-                None,
-            )
-            .await
-        }
-    }
+    let columns = match write_columns {
+        Some(columns) => columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+        None => columns
+            .iter()
+            .map(lake_source_create_table_column)
+            .collect(),
+    };
+    materialize_lake_source_create_metadata(
+        ctx,
+        format,
+        LakeSourceCreateTableInfo {
+            path: location.clone(),
+            columns,
+            comment: comment.clone(),
+            partition_by: partition_by.clone(),
+            properties: properties.clone(),
+            replace: false,
+            lakehouse_table,
+            required_protocol: None,
+        },
+    )
+    .await
     .map(|_| ())
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     ctx: &C,
     format: &str,
-    location: String,
-    columns: &[impl CreateTableColumnView],
-    comment: Option<String>,
-    partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
-    properties: Vec<(String, String)>,
-    replace: bool,
-    lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-    required_protocol: Option<DeltaProtocolInfo>,
+    info: LakeSourceCreateTableInfo,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
     let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
@@ -1274,23 +1246,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
         ))
     })?;
     lake_source
-        .create_table_metadata(
-            ctx.runtime_env(),
-            &ctx.session_config(),
-            LakeSourceCreateTableInfo {
-                path: location,
-                columns: columns
-                    .iter()
-                    .map(lake_source_create_table_column)
-                    .collect(),
-                comment,
-                partition_by,
-                properties,
-                replace,
-                lakehouse_table,
-                required_protocol,
-            },
-        )
+        .create_table_metadata(ctx.runtime_env(), &ctx.session_config(), info)
         .await
         .map_err(CatalogError::DataFusionError)
 }
@@ -1300,6 +1256,16 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
 pub fn staged_lake_source_create_table_info(
     options: &CreateTableOptions,
     lakehouse_table: LakehouseExecutionContext,
+) -> CatalogResult<LakeSourceCreateTableInfo> {
+    lake_source_create_table_info(options, false, Some(lakehouse_table))
+}
+
+/// The definition of the table of a CREATE TABLE statement for the lake source that
+/// creates its storage metadata.
+fn lake_source_create_table_info(
+    options: &CreateTableOptions,
+    replace: bool,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> CatalogResult<LakeSourceCreateTableInfo> {
     let location = options.location.clone().ok_or_else(|| {
         CatalogError::InvalidArgument(format!(
@@ -1317,8 +1283,8 @@ pub fn staged_lake_source_create_table_info(
         comment: options.comment.clone(),
         partition_by: options.partition_by.clone(),
         properties: options.properties.clone(),
-        replace: false,
-        lakehouse_table: Some(lakehouse_table),
+        replace,
+        lakehouse_table,
         required_protocol: options
             .staged
             .as_ref()
