@@ -887,135 +887,21 @@ fn parse_delta_check_constraint_expr(name: &str, expression: &str) -> PlanResult
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::prelude::SessionContext;
-    use sail_catalog::error::{CatalogError, CatalogResult};
-    use sail_catalog::lakehouse::LakehouseCapability;
-    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
-    use sail_catalog::provider::*;
+    use sail_catalog::testing::{ManagedDeltaCatalog, single_catalog_manager};
     use sail_common::spec;
-    use sail_common_datafusion::catalog::*;
 
     use crate::config::PlanConfig;
     use crate::resolver::PlanResolver;
     use crate::resolver::state::PlanResolverState;
 
-    /// A catalog with a managed Delta table whose commits the catalog ratifies. The storage
-    /// of the table does not exist.
-    struct CatalogManagedDeltaCatalog;
-
-    fn unsupported<T>() -> CatalogResult<T> {
-        Err(CatalogError::NotSupported(
-            "unused test catalog operation".into(),
-        ))
-    }
-
-    #[async_trait::async_trait]
-    impl CatalogProvider for CatalogManagedDeltaCatalog {
-        fn get_name(&self) -> &str {
-            "unity"
-        }
-        fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
-            vec![LakehouseCapability::DeltaRatifiedCommits]
-        }
-        async fn get_table(&self, _: &Namespace, _: &str) -> CatalogResult<TableStatus> {
-            Ok(TableStatus {
-                catalog: Some("unity".into()),
-                database: vec!["default".into()],
-                name: "items".into(),
-                kind: TableKind::Table {
-                    columns: vec![],
-                    comment: None,
-                    constraints: vec![],
-                    location: Some("memory:///missing/".into()),
-                    format: "delta".into(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    properties: vec![("io.unitycatalog.tableId".into(), "table-id".into())],
-                    is_external: false,
-                },
-            })
-        }
-        async fn alter_table(
-            &self,
-            _: &Namespace,
-            _: &str,
-            _: AlterTableOptions,
-        ) -> CatalogResult<()> {
-            unsupported()
-        }
-        async fn create_database(
-            &self,
-            _: &Namespace,
-            _: CreateDatabaseOptions,
-        ) -> CatalogResult<DatabaseStatus> {
-            unsupported()
-        }
-        async fn get_database(&self, _: &Namespace) -> CatalogResult<DatabaseStatus> {
-            unsupported()
-        }
-        async fn list_databases(
-            &self,
-            _: Option<&Namespace>,
-        ) -> CatalogResult<Vec<DatabaseStatus>> {
-            unsupported()
-        }
-        async fn drop_database(&self, _: &Namespace, _: DropDatabaseOptions) -> CatalogResult<()> {
-            unsupported()
-        }
-        async fn create_table(
-            &self,
-            _: &Namespace,
-            _: &str,
-            _: CreateTableOptions,
-        ) -> CatalogResult<TableStatus> {
-            unsupported()
-        }
-        async fn list_tables(&self, _: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-            unsupported()
-        }
-        async fn drop_table(
-            &self,
-            _: &Namespace,
-            _: &str,
-            _: DropTableOptions,
-        ) -> CatalogResult<()> {
-            unsupported()
-        }
-        async fn create_view(
-            &self,
-            _: &Namespace,
-            _: &str,
-            _: CreateViewOptions,
-        ) -> CatalogResult<TableStatus> {
-            unsupported()
-        }
-        async fn get_view(&self, _: &Namespace, _: &str) -> CatalogResult<TableStatus> {
-            unsupported()
-        }
-        async fn list_views(&self, _: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-            unsupported()
-        }
-        async fn drop_view(&self, _: &Namespace, _: &str, _: DropViewOptions) -> CatalogResult<()> {
-            unsupported()
-        }
-    }
-
     #[tokio::test]
     async fn add_constraint_to_catalog_managed_table_is_refused_before_storage_is_read() {
-        let manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([(
-                "unity".to_string(),
-                Arc::new(CatalogManagedDeltaCatalog) as Arc<dyn CatalogProvider>,
-            )]),
-            default_catalog: "unity".to_string(),
-            default_database: vec!["default".to_string()],
-            global_temporary_database: vec!["global_temp".to_string()],
-        })
-        .unwrap();
+        // The storage of the table does not exist.
+        let catalog = ManagedDeltaCatalog::new("memory:///missing/");
+        let manager = single_catalog_manager(Arc::new(catalog)).unwrap();
         let ctx = SessionContext::new();
         let mut state = ctx.state();
         state.config_mut().set_extension(Arc::new(manager));
