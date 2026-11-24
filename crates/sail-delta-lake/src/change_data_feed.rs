@@ -396,7 +396,6 @@ impl ChangeDataFeedSource {
                 None,
                 None,
                 None,
-                None,
                 self.snapshot.load_config().catalog_managed_commits.clone(),
             )));
         }

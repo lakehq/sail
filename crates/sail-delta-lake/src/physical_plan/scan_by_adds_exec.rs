@@ -27,7 +27,6 @@ use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, PhysicalExpr, ScalarFunctionExpr,
 };
 use futures::stream::{self, StreamExt, TryStreamExt};
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, is_input_file_metadata_function,
@@ -44,8 +43,8 @@ use crate::datasource::{DeltaScanConfig, PATH_COLUMN, build_file_scan_config};
 use crate::delta_log::LogStoreRef;
 use crate::physical_plan::{COL_ACTION, DeltaDecodePath, decode_adds_from_batch, meta_adds};
 use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
-use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
-use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig, GroupedCountMetadataRow};
+use crate::session_extension::{DeltaTableCache, load_table_uncached};
+use crate::snapshot::{CatalogManagedCommitSet, GroupedCountMetadataRow};
 use crate::spec::StructType;
 use crate::table::DeltaSnapshot;
 
@@ -63,7 +62,6 @@ struct ScanByAddsStreamState {
     scan_schema: SchemaRef,
     input_file_projection: Option<ProjectionExprs>,
     scan_config: DeltaScanConfig,
-    lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
     remaining_rows: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
@@ -96,7 +94,6 @@ impl ScanByAddsStreamState {
         output_schema: SchemaRef,
         input_file_projection: Option<ProjectionExprs>,
         scan_config: DeltaScanConfig,
-        lakehouse_table: Option<LakehouseExecutionContext>,
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
@@ -123,7 +120,6 @@ impl ScanByAddsStreamState {
             scan_schema,
             input_file_projection,
             scan_config,
-            lakehouse_table,
             catalog_managed_commits,
             remaining_rows: limit,
             pushdown_filter,
@@ -145,42 +141,30 @@ impl ScanByAddsStreamState {
         if self.table_opened {
             return Ok(());
         }
-        let cached = if let Some(catalog_managed_commits) = self.catalog_managed_commits.clone() {
-            load_table_with_config(
-                self.context.as_ref(),
-                &self.table_url,
-                self.table_version,
-                DeltaSnapshotConfig {
-                    require_files: false,
-                    catalog_managed_commits: Some(catalog_managed_commits),
-                    ..Default::default()
-                },
-            )
-            .await?
-        } else {
-            // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
-            // If the cache extension is not installed, fall back to no caching.
-            let lakehouse_table = self.lakehouse_table.as_ref();
-            match self.context.as_ref().extension::<DeltaTableCache>() {
-                Ok(cache) => {
-                    cache
-                        .get(
-                            self.context.as_ref(),
-                            &self.table_url,
-                            self.table_version,
-                            lakehouse_table,
-                        )
-                        .await?
-                }
-                Err(_) => {
-                    load_table_uncached(
+        // The table is loaded at the version of the scan with the catalog commits that the
+        // snapshot of the plan was loaded with, so the catalog is not asked here. Prefer a
+        // session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
+        // If the cache extension is not installed, fall back to no caching.
+        let catalog_managed_commits = self.catalog_managed_commits.as_ref();
+        let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
+            Ok(cache) => {
+                cache
+                    .get(
                         self.context.as_ref(),
                         &self.table_url,
                         self.table_version,
-                        lakehouse_table,
+                        catalog_managed_commits,
                     )
                     .await?
-                }
+            }
+            Err(_) => {
+                load_table_uncached(
+                    self.context.as_ref(),
+                    &self.table_url,
+                    self.table_version,
+                    catalog_managed_commits.cloned(),
+                )
+                .await?
             }
         };
 
@@ -629,7 +613,9 @@ pub struct DeltaScanByAddsExec {
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
-    lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The catalog commits that the snapshot of the plan was loaded with, for a
+    /// catalog-managed table. The scan loads the table with them, so that it reads the
+    /// version of the plan without asking the catalog.
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
     statistics: Statistics,
     scan_metrics: ScanMetrics,
@@ -649,7 +635,6 @@ impl DeltaScanByAddsExec {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
-        lakehouse_table: Option<LakehouseExecutionContext>,
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
@@ -667,7 +652,6 @@ impl DeltaScanByAddsExec {
             projection,
             limit,
             pushdown_filter,
-            lakehouse_table,
             catalog_managed_commits,
             statistics,
             scan_metrics: Arc::new(Mutex::new(Vec::new())),
@@ -760,16 +744,6 @@ impl DeltaScanByAddsExec {
 
     pub fn pushdown_filter(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.pushdown_filter.as_ref()
-    }
-
-    pub fn catalog_table(&self) -> Option<&[String]> {
-        self.lakehouse_table
-            .as_ref()
-            .map(LakehouseExecutionContext::catalog_table)
-    }
-
-    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
-        self.lakehouse_table.as_ref()
     }
 
     pub fn catalog_managed_commits(&self) -> Option<&CatalogManagedCommitSet> {
@@ -924,7 +898,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
-        let lakehouse_table = self.lakehouse_table.clone();
         let catalog_managed_commits = self.catalog_managed_commits.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.as_ref().map(Arc::clone);
@@ -942,7 +915,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             Arc::clone(&output_schema),
             self.input_file_projection.clone(),
             scan_config,
-            lakehouse_table,
             catalog_managed_commits,
             limit,
             pushdown_filter,
@@ -1259,7 +1231,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         ));
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = 4;
@@ -1393,7 +1364,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .with_output_statistics(Some(table_stats));
 
@@ -1446,7 +1416,6 @@ mod tests {
             table_schema,
             output_schema,
             crate::datasource::DeltaScanConfig::default(),
-            None,
             None,
             None,
             None,

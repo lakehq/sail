@@ -248,8 +248,7 @@ pub(crate) async fn plan(
             None,
             None,
             None,
-            node.lakehouse_table.clone(),
-            None,
+            snapshot.load_config().catalog_managed_commits.clone(),
         )
         .preserve_file_groups(),
     );

@@ -127,7 +127,6 @@ pub async fn build_delete_plan(
         None,
         None,
         None,
-        ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
 
@@ -372,7 +371,6 @@ pub async fn build_delete_plan_mor(
         Some(projection),
         None,
         pushdown_filter,
-        ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
     let physical_condition = SchemaEvolutionPhysicalExprAdapterFactory {}

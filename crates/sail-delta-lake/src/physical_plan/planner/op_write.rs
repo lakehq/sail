@@ -389,7 +389,6 @@ async fn build_old_data_plan(
         None,
         None,
         None,
-        ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
 

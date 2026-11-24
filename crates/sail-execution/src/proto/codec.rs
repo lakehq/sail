@@ -1162,7 +1162,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version,
                 statistics,
-                lakehouse_table_json,
                 catalog_managed_commits_json,
                 input_file_projection,
                 preserve_file_groups,
@@ -1217,7 +1216,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .as_ref()
                     .map(|bytes| self.try_decode_statistics(bytes))
                     .transpose()?;
-                let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
                 let catalog_managed_commits = if catalog_managed_commits_json.is_empty() {
                     None
                 } else {
@@ -1236,7 +1234,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection,
                     limit,
                     pushdown_filter,
-                    lakehouse_table,
                     catalog_managed_commits,
                 )
                 .with_input_file_projection(input_file_projection)?
@@ -2896,8 +2893,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version: delta_scan_by_adds_exec.version(),
                 preserve_file_groups: delta_scan_by_adds_exec.preserves_file_groups(),
                 statistics,
-                lakehouse_table_json: self
-                    .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
                 catalog_managed_commits_json,
                 input_file_projection,
             })
@@ -7214,7 +7209,6 @@ mod tests {
                 schema.clone(),
                 schema,
                 Default::default(),
-                None,
                 None,
                 None,
                 None,
