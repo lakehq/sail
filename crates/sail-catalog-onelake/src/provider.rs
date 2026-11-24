@@ -22,6 +22,7 @@ use sail_catalog_iceberg::{
     REST_CATALOG_PROP_WAREHOUSE,
 };
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
+use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::DeltaCatalogCommit;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
@@ -91,7 +92,9 @@ impl OneLakeCatalogProvider {
                         default_catalog: catalog_name,
                         uri,
                         credentials,
-                        user_agent: None,
+                        // The default of the Unity Catalog provider names products for
+                        // Databricks, which do not concern OneLake.
+                        user_agent: Some(SAIL_USER_AGENT.to_string()),
                     },
                 )?)
             }

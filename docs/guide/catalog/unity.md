@@ -18,7 +18,7 @@ Unity Catalog can be configured using the following options.
 - `default_catalog` (optional): The default catalog name. The default is `unity`.
 - `token` (optional): The authentication token for the Unity Catalog API. The default is an empty value, which disables authentication. See [Unity Catalog Authentication and Authorization](https://docs.unitycatalog.io/server/auth/) for more information.
 
-- `user_agent` (optional): The value of the `User-Agent` header that Sail sends with every request to the Unity Catalog API, and with the requests for an access token. The value is a list of products separated by spaces, each written as `<name>/<version>`, such as `MyPlatform/1.2 MyConnector/0.4`. The default is `Sail/<version>`. Set this option if the server requires clients to identify the calling application in a particular way.
+- `user_agent` (optional): The value of the `User-Agent` header that Sail sends with every request to the Unity Catalog API, and with the requests for an access token. The value is a list of products separated by spaces, each written as `<name>` or `<name>/<version>`, such as `MyPlatform/1.2 MyConnector/0.4`. The default is `Sail/<version> Delta Spark`. See [User-Agent](#user-agent).
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -87,6 +87,28 @@ The following table lists the supported configuration keys and their correspondi
 - `DATABRICKS_USER_AGENT`, `UNITY_USER_AGENT`, `UC_USER_AGENT`
 
   The value of the `User-Agent` header. See the `user_agent` option.
+
+## User-Agent
+
+Sail sends a `User-Agent` header with every request to the Unity Catalog API, and with the requests for an access token. The default value names Sail and its version, followed by the products `Delta` and `Spark`. For example, Sail 0.7.3 sends the following header.
+
+```text
+User-Agent: Sail/0.7.3 Delta Spark
+```
+
+The products `Delta` and `Spark` say that Sail implements the Delta protocol and the Spark API. Databricks accepts requests of the Unity Catalog Delta API that write only from clients that it recognizes by the products in this header. This applies to requests for storage credentials for writing, and to requests that create staging tables, create tables, or commit to tables. A header that contains both a `Delta` product and a `Spark` product is accepted, and a header that contains only `Sail/<version>` is rejected. Requests that read are not affected. The open source Unity Catalog server does not examine the header.
+
+You can replace the default value with the `user_agent` option, or with one of the environment variables `DATABRICKS_USER_AGENT`, `UNITY_USER_AGENT`, and `UC_USER_AGENT`. The value that you set is sent as it is.
+
+```bash
+export SAIL_CATALOG__LIST='[{type="unity", name="sail", uri="https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog", default_catalog="main", token="...", user_agent="Sail/0.7.3 Delta Spark MyPlatform/1.2"}]'
+```
+
+If the server rejects the header, the statement fails with an error like the following one. In this case, set `user_agent` to a value that the server accepts. Databricks accepts the default value of Sail.
+
+```text
+Unity Catalog rejected the `User-Agent` header that Sail sent. Set the `user_agent` option of the catalog to a value that the server accepts, see https://docs.lakesail.com/sail/latest/guide/catalog/unity.html#user-agent. Failed to create staging table: ... The UC Delta API requires clients to identify the calling application in the User-Agent header. The provided User-Agent 'MyPlatform/1.2' is insufficient. ...
+```
 
 ## Example
 

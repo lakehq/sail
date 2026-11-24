@@ -55,7 +55,8 @@ pub enum CredentialProvider {
     BearerToken(String),
 
     /// a credential to fetch expiring auth tokens, and the configured value of the
-    /// `User-Agent` header of the requests for the tokens
+    /// `User-Agent` header of the requests for the tokens, or `None` for the default
+    /// of the requests to the catalog
     TokenCredential(TokenCache<String>, Option<String>, Box<dyn TokenCredential>),
 }
 
@@ -81,12 +82,16 @@ impl CatalogCredentials for CredentialProvider {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
             CredentialProvider::TokenCredential(cache, user_agent, cred) => {
-                let mut builder = Client::builder()
+                let user_agent = match user_agent {
+                    Some(user_agent) => crate::config::user_agent_header(user_agent)?,
+                    None => {
+                        reqwest::header::HeaderValue::from_static(crate::config::UNITY_USER_AGENT)
+                    }
+                };
+                let builder = Client::builder()
                     .connect_timeout(CONNECT_TIMEOUT)
-                    .timeout(REQUEST_TIMEOUT);
-                if let Some(user_agent) = user_agent {
-                    builder = builder.user_agent(crate::config::user_agent_header(user_agent)?);
-                }
+                    .timeout(REQUEST_TIMEOUT)
+                    .user_agent(user_agent);
                 let oauth_client = builder.build().map_err(|e| {
                     CatalogError::External(format!("Failed to build OAuth client: {e}"))
                 })?;

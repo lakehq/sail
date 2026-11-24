@@ -232,8 +232,49 @@ pub struct UnityCatalogConfig {
     pub federated_token_file: Option<String>,
     pub use_azure_cli: bool,
     pub allow_http_url: bool,
-    /// The value of the `User-Agent` header, or `None` for the default of Sail.
+    /// The value of the `User-Agent` header, or `None` for [`UNITY_USER_AGENT`].
     pub user_agent: Option<String>,
+}
+
+/// The value of the `User-Agent` header of the requests to Unity Catalog when the
+/// `user_agent` option is not set, such as `Sail/0.7.3 Delta Spark`.
+///
+/// Databricks accepts the requests of the Unity Catalog Delta API that write (the storage
+/// credentials for writing, staging tables, creating a table, and commits) only from
+/// clients that it recognizes by the products in the `User-Agent` header, and answers the
+/// others with HTTP 400. The `Delta` and `Spark` products say that Sail implements the
+/// Delta protocol and the Spark API. They have no version, since Sail does not follow the
+/// version of one release of Delta Lake or of Spark.
+/// Remove the two products when Databricks recognizes Sail by its own name.
+/// See the section "User-Agent" in `docs/guide/catalog/unity.md`.
+pub(crate) const UNITY_USER_AGENT: &str =
+    concat!("Sail/", env!("CARGO_PKG_VERSION"), " Delta Spark");
+
+/// Where the `User-Agent` header of the requests to Unity Catalog is documented.
+const USER_AGENT_DOCUMENTATION: &str =
+    "https://docs.lakesail.com/sail/latest/guide/catalog/unity.html#user-agent";
+
+/// Returns the message of the error for an HTTP 400 response of Unity Catalog. When the
+/// response says that the server refuses the `User-Agent` header of the request, the
+/// message starts with what to do about it, and the answer of the server follows.
+///
+/// The Delta REST API of Unity Catalog on Databricks answers such a request with "The UC
+/// Delta API requires clients to identify the calling application in the User-Agent
+/// header. The provided User-Agent '...' is insufficient. ...". Each of the two sentences
+/// is recognized on its own, so the hint stays if the wording of one of them changes.
+pub(crate) fn bad_request_message(message: String) -> String {
+    let lower = message.to_ascii_lowercase();
+    let refused = lower.contains("user-agent")
+        && (lower.contains("identify the calling application")
+            || lower.contains("is insufficient"));
+    if !refused {
+        return message;
+    }
+    format!(
+        "Unity Catalog rejected the `User-Agent` header that Sail sent. Set the `user_agent` \
+         option of the catalog to a value that the server accepts, see \
+         {USER_AGENT_DOCUMENTATION}. {message}"
+    )
 }
 
 /// Returns the `User-Agent` header for a configured value.
@@ -572,5 +613,56 @@ mod tests {
             output.contains("\"https://login.microsoftonline.com/tenant/oauth2/v2.0/token\""),
             "unexpected credential provider: {output}"
         );
+    }
+
+    #[test]
+    fn test_user_agent_default_and_environment_variables() {
+        // The default names Sail first, and then the products that Databricks looks for.
+        assert_eq!(
+            UNITY_USER_AGENT,
+            format!("{} Delta Spark", sail_common::utils::http::SAIL_USER_AGENT)
+        );
+        assert!(user_agent_header(UNITY_USER_AGENT).is_ok());
+        let config = UnityCatalogConfig::new_with_env(None, &None, None, env(&[])).unwrap();
+        assert_eq!(config.user_agent, None);
+
+        for key in ["DATABRICKS_USER_AGENT", "UNITY_USER_AGENT", "UC_USER_AGENT"] {
+            let vars = env(&[(key, "ExampleEngine/1.2")]);
+            let config = UnityCatalogConfig::new_with_env(None, &None, None, vars).unwrap();
+            assert_eq!(
+                config.user_agent.as_deref(),
+                Some("ExampleEngine/1.2"),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bad_request_message_has_a_hint_only_for_a_refused_user_agent() {
+        let hint = "Set the `user_agent` option of the catalog";
+        for refusal in [
+            "The UC Delta API requires clients to identify the calling application in the \
+             User-Agent header. The provided User-Agent 'Sail/0.7.3' is insufficient.",
+            "The provided user-agent 'X/1' is insufficient",
+            "Clients must identify the calling application in the User-Agent header",
+        ] {
+            let message = bad_request_message(format!("Failed to create table: {refusal}"));
+            assert!(message.starts_with("Unity Catalog rejected"), "{message}");
+            assert!(message.contains(hint), "{message}");
+            assert!(message.contains(USER_AGENT_DOCUMENTATION), "{message}");
+            assert!(
+                message.ends_with(&format!("Failed to create table: {refusal}")),
+                "{message}"
+            );
+        }
+        for other in [
+            "The table name is not valid",
+            "The request is missing the required field 'name'",
+            "The privileges of the principal are insufficient",
+            "The header User-Agent is too long",
+            "Table name 'user-agent' is not valid",
+        ] {
+            assert_eq!(bad_request_message(other.to_string()), other);
+        }
     }
 }

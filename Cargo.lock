@@ -7069,6 +7069,7 @@ dependencies = [
  "sail-catalog",
  "sail-catalog-iceberg",
  "sail-catalog-unity",
+ "sail-common",
  "sail-common-datafusion",
  "tokio",
  "url",

@@ -20,7 +20,6 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
 use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
-use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, DeltaCatalogCommit,
     DeltaCatalogManaged, DeltaCatalogState, DeltaCommitActions, DeltaCreatedVersion,
@@ -193,7 +192,7 @@ pub struct UnityCatalogOptions {
     pub uri: String,
     pub credentials: Arc<dyn CatalogCredentials>,
     /// The value of the `User-Agent` header of the requests to the catalog,
-    /// or `None` for `Sail/<version>`.
+    /// or `None` for [`crate::config::UNITY_USER_AGENT`].
     pub user_agent: Option<String>,
 }
 
@@ -206,7 +205,7 @@ impl UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to create HTTP client: {e}")))?;
         let user_agent = match &options.user_agent {
             Some(user_agent) => crate::config::user_agent_header(user_agent)?,
-            None => reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
+            None => reqwest::header::HeaderValue::from_static(crate::config::UNITY_USER_AGENT),
         };
         Ok(Self {
             name,
@@ -1620,9 +1619,10 @@ impl CatalogProvider for UnityCatalogProvider {
                     // the storage is accessed with the credentials of the environment, but
                     // also how a server refuses the client or the table. The answer does not
                     // tell which, so the caller always gets the answer of the server.
-                    reqwest::StatusCode::BAD_REQUEST
-                    | reqwest::StatusCode::NOT_FOUND
-                    | reqwest::StatusCode::NOT_IMPLEMENTED => {
+                    reqwest::StatusCode::BAD_REQUEST => Err(CatalogError::CredentialUnavailable(
+                        crate::config::bad_request_message(message),
+                    )),
+                    reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::NOT_IMPLEMENTED => {
                         Err(CatalogError::CredentialUnavailable(message))
                     }
                     status => Err(request_error(Some(status), message)),
@@ -2609,7 +2609,9 @@ fn select_storage_credentials(
 /// request.
 fn request_error(status: Option<reqwest::StatusCode>, message: String) -> CatalogError {
     match status {
-        Some(reqwest::StatusCode::BAD_REQUEST) => CatalogError::InvalidArgument(message),
+        Some(reqwest::StatusCode::BAD_REQUEST) => {
+            CatalogError::InvalidArgument(crate::config::bad_request_message(message))
+        }
         Some(reqwest::StatusCode::UNAUTHORIZED) => CatalogError::Unauthorized(message),
         Some(reqwest::StatusCode::FORBIDDEN) => CatalogError::Forbidden(message),
         Some(reqwest::StatusCode::NOT_IMPLEMENTED) => CatalogError::NotSupported(message),
@@ -3025,11 +3027,14 @@ mod tests {
             assert_eq!(user_agent.as_deref(), Some(configured), "{path}");
         }
 
-        // Without the option, the requests to the catalog name Sail.
+        // Without the option, the request for an access token and the requests to the
+        // catalog, with the legacy API and with the Delta REST API, name Sail and the
+        // products that Databricks requires of a client that writes.
+        let default = format!("Sail/{} Delta Spark", env!("CARGO_PKG_VERSION"));
         let requests = received_user_agents(None).await;
         assert_eq!(requests.len(), 3);
-        for (path, user_agent) in &requests[1..] {
-            assert_eq!(user_agent.as_deref(), Some(SAIL_USER_AGENT), "{path}");
+        for (path, user_agent) in &requests {
+            assert_eq!(user_agent.as_deref(), Some(default.as_str()), "{path}");
         }
 
         // A value that cannot be sent is refused when the catalog is configured.
@@ -8474,5 +8479,149 @@ mod tests {
             .await;
         assert!(result.is_err(), "{result:?}");
         assert_eq!(token(&provider).await, "table-token");
+    }
+
+    /// The error that a server returns for a request whose `User-Agent` header it does
+    /// not accept.
+    fn refused_user_agent_response() -> ResponseTemplate {
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({"error": {
+            "message": "The UC Delta API requires clients to identify the calling application \
+                        in the User-Agent header. The provided User-Agent 'Sail/0.7.3' is \
+                        insufficient.",
+            "type": "BadRequestException",
+            "code": 400
+        }}))
+    }
+
+    /// Another error with the same status and the same error type.
+    fn other_bad_request_response() -> ResponseTemplate {
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({"error": {
+            "message": "The request is missing the required field 'name'.",
+            "type": "BadRequestException",
+            "code": 400
+        }}))
+    }
+
+    /// Sends each request that Databricks refuses by the `User-Agent` header to a server
+    /// that answers all of them with the response, and returns the errors by the request.
+    async fn write_request_errors(response: ResponseTemplate) -> Vec<(&'static str, CatalogError)> {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        mount_table_credentials(&server, "READ_WRITE", response.clone()).await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/delta/v1/staging-tables/[^/]+/credentials$"))
+            .respond_with(response.clone())
+            .mount(&server)
+            .await;
+        for path_of_request in [DELTA_STAGING_PATH, DELTA_TABLES_PATH, DELTA_TABLE_PATH] {
+            Mock::given(method("POST"))
+                .and(path(path_of_request))
+                .respond_with(response.clone())
+                .mount(&server)
+                .await;
+        }
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let mut errors = vec![];
+
+        let provider = mock_provider(&server, "main");
+        let request = storage_credentials_request(StorageAccess::ReadWrite);
+        let error = provider
+            .get_table_storage_credentials(&database, "events", request)
+            .await
+            .unwrap_err();
+        errors.push(("table credentials", error));
+
+        let options = managed_delta_create_options(vec![], false);
+        let error = provider
+            .plan_lakehouse_create(&database, "new_events", lakehouse_create_request(options))
+            .await
+            .unwrap_err();
+        errors.push(("create staging table", error));
+
+        let error = provider
+            .create_table(&database, "events", staged_delta_create_options())
+            .await
+            .unwrap_err();
+        errors.push(("create table", error));
+
+        let commit = delta_commit_request(legacy_delta_commit(5));
+        let error = provider
+            .commit_delta_table(&database, "events", commit)
+            .await
+            .unwrap_err();
+        errors.push(("commit", error));
+
+        provider.staging_table_id_cache().unwrap().insert(
+            storage_location_key(DELTA_TABLE_URI).to_string(),
+            StagingTable {
+                id: DELTA_TABLE_ID.to_string(),
+                credentials: None,
+            },
+        );
+        let request = storage_credentials_request(StorageAccess::ReadWrite);
+        let error = provider
+            .get_table_storage_credentials(&database, "events", request)
+            .await
+            .unwrap_err();
+        errors.push(("staging table credentials", error));
+
+        let targets = received_targets(&server).await;
+        for target in [
+            format!("GET {DELTA_CREDENTIALS_PATH}?operation=READ_WRITE"),
+            format!("POST {DELTA_STAGING_PATH}"),
+            format!("POST {DELTA_TABLES_PATH}"),
+            format!("POST {DELTA_TABLE_PATH}"),
+            format!("GET /delta/v1/staging-tables/{DELTA_TABLE_ID}/credentials"),
+        ] {
+            assert!(targets.contains(&target), "{target}: {targets:?}");
+        }
+        errors
+    }
+
+    /// The error of a request that the server refuses by the `User-Agent` header says which
+    /// option to set and where it is documented, and has the answer of the server.
+    #[tokio::test]
+    async fn test_refused_user_agent_error_names_the_option_and_the_documentation() {
+        let errors = write_request_errors(refused_user_agent_response()).await;
+        assert_eq!(errors.len(), 5);
+        for (request, error) in errors {
+            let message = error.to_string();
+            for expected in [
+                "Unity Catalog rejected the `User-Agent` header that Sail sent.",
+                "Set the `user_agent` option of the catalog to a value that the server accepts",
+                "https://docs.lakesail.com/sail/latest/guide/catalog/unity.html#user-agent",
+                "The provided User-Agent 'Sail/0.7.3' is insufficient.",
+            ] {
+                assert!(message.contains(expected), "{request}: {message}");
+            }
+            assert!(
+                match request {
+                    "table credentials" | "staging table credentials" =>
+                        matches!(error, CatalogError::CredentialUnavailable(_)),
+                    _ => matches!(error, CatalogError::InvalidArgument(_)),
+                },
+                "{request}: {error:?}"
+            );
+        }
+    }
+
+    /// Another request that the server answers with the same status has no such hint.
+    #[tokio::test]
+    async fn test_other_bad_request_error_does_not_name_the_user_agent() {
+        let errors = write_request_errors(other_bad_request_response()).await;
+        assert_eq!(errors.len(), 5);
+        for (request, error) in errors {
+            let message = error.to_string();
+            assert!(
+                message.contains("The request is missing the required field 'name'."),
+                "{request}: {message}"
+            );
+            assert!(
+                !message.to_ascii_lowercase().contains("user-agent")
+                    && !message.contains("user_agent"),
+                "{request}: {message}"
+            );
+        }
     }
 }
