@@ -7,10 +7,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::conflict_checker::WinningCommitSummary;
+use super::{protocol_has_writer_feature, table_property_enabled};
 use crate::spec::{
     Add, ColumnMappingMode, CommitAction, CommitConflictError, DeltaError, DeltaOperation,
     DeltaResult, DomainMetadata, Metadata, Protocol, SaveMode, StructType, TableFeature,
@@ -26,19 +27,27 @@ const MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME: &str =
     "delta.rowTracking.materializedRowCommitVersionColumnName";
 const PRESERVED_TAG: &str = "delta.rowTracking.preserved";
 
-fn property_enabled(configuration: &HashMap<String, String>, key: &str) -> bool {
-    configuration
-        .get(key)
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+/// The configuration of the `delta.rowTracking` metadata domain.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RowTrackingDomain {
+    row_id_high_water_mark: i64,
+}
+
+/// Returns the row ID high-water mark that a commit sets with the configuration of the
+/// `delta.rowTracking` metadata domain.
+pub(crate) fn committed_row_id_high_water_mark(configuration: &str) -> serde_json::Result<i64> {
+    serde_json::from_str::<RowTrackingDomain>(configuration)
+        .map(|domain| domain.row_id_high_water_mark)
 }
 
 fn supports_row_tracking(protocol: &Protocol) -> bool {
-    protocol.min_writer_version() >= 7 && protocol.has_writer_feature(&TableFeature::RowTracking)
+    protocol_has_writer_feature(protocol, &TableFeature::RowTracking)
 }
 
 /// Whether the table configuration enables row tracking.
 pub(crate) fn row_tracking_enabled(configuration: &HashMap<String, String>) -> bool {
-    property_enabled(configuration, ENABLE_ROW_TRACKING)
+    table_property_enabled(configuration, ENABLE_ROW_TRACKING)
 }
 
 /// Adds the names of the materialized row tracking columns to the configuration of a new
@@ -106,21 +115,9 @@ pub(super) fn effective_protocol_and_metadata<'a>(
     actions: &'a [CommitAction],
     read_snapshot: Option<&'a Arc<DeltaSnapshot>>,
 ) -> Option<(&'a Protocol, &'a Metadata)> {
-    let protocol = actions
-        .iter()
-        .rev()
-        .find_map(|action| match action {
-            CommitAction::Protocol(protocol) => Some(protocol),
-            _ => None,
-        })
+    let protocol = CommitAction::last_protocol(actions)
         .or_else(|| read_snapshot.map(|snapshot| snapshot.protocol()))?;
-    let metadata = actions
-        .iter()
-        .rev()
-        .find_map(|action| match action {
-            CommitAction::Metadata(metadata) => Some(metadata),
-            _ => None,
-        })
+    let metadata = CommitAction::last_metadata(actions)
         .or_else(|| read_snapshot.map(|snapshot| snapshot.metadata()))?;
     Some((protocol, metadata))
 }
@@ -162,7 +159,7 @@ pub(super) fn assign_row_tracking(
         return Ok(());
     };
     if !supports_row_tracking(protocol)
-        || property_enabled(metadata.configuration(), ROW_TRACKING_SUSPENDED)
+        || table_property_enabled(metadata.configuration(), ROW_TRACKING_SUSPENDED)
     {
         return Ok(());
     }
@@ -195,7 +192,9 @@ pub(super) fn assign_row_tracking(
     if high_water_mark > committed_high_water_mark {
         actions.push(CommitAction::DomainMetadata(DomainMetadata {
             domain: ROW_TRACKING_DOMAIN.to_string(),
-            configuration: serde_json::json!({ "rowIdHighWaterMark": high_water_mark }).to_string(),
+            configuration: serde_json::to_string(&RowTrackingDomain {
+                row_id_high_water_mark: high_water_mark,
+            })?,
             removed: false,
         }));
     }
@@ -244,18 +243,8 @@ pub(super) fn check_files_added_concurrently(
     if supports_row_tracking(read_snapshot.protocol()) {
         return Ok(());
     }
-    let protocol = actions.iter().rev().find_map(|action| match action {
-        CommitAction::Protocol(protocol) => Some(protocol),
-        _ => None,
-    });
-    let metadata = actions
-        .iter()
-        .rev()
-        .find_map(|action| match action {
-            CommitAction::Metadata(metadata) => Some(metadata),
-            _ => None,
-        })
-        .unwrap_or_else(|| read_snapshot.metadata());
+    let protocol = CommitAction::last_protocol(actions);
+    let metadata = CommitAction::last_metadata(actions).unwrap_or_else(|| read_snapshot.metadata());
     if protocol.is_some_and(supports_row_tracking)
         && row_tracking_enabled(metadata.configuration())
         && !winning_commit.added_files().is_empty()
@@ -276,7 +265,7 @@ pub(super) fn validate_row_tracking(
     let configuration = metadata.configuration();
     let supported = supports_row_tracking(protocol);
     let enabled = row_tracking_enabled(configuration);
-    let suspended = property_enabled(configuration, ROW_TRACKING_SUSPENDED);
+    let suspended = table_property_enabled(configuration, ROW_TRACKING_SUSPENDED);
     if enabled && suspended {
         return Err(DeltaError::generic(format!(
             "Table properties {ENABLE_ROW_TRACKING} and {ROW_TRACKING_SUSPENDED} cannot both be true"

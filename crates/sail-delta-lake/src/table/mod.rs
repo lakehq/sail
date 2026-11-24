@@ -448,13 +448,7 @@ pub(crate) fn is_catalog_managed_commit(
     snapshot: Option<&DeltaSnapshot>,
     actions: &[crate::spec::CommitAction],
 ) -> bool {
-    let protocol = actions
-        .iter()
-        .rev()
-        .find_map(|action| match action {
-            crate::spec::CommitAction::Protocol(protocol) => Some(protocol),
-            _ => None,
-        })
+    let protocol = crate::spec::CommitAction::last_protocol(actions)
         .or_else(|| snapshot.map(|snapshot| snapshot.protocol()));
     protocol.is_some_and(|protocol| protocol.is_catalog_managed())
 }

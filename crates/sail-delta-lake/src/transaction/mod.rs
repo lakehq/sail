@@ -30,8 +30,8 @@ use crate::delta_log::{
 use crate::options::session_user_metadata;
 use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig, catalog_managed_commit_path};
 use crate::spec::{
-    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
-    Transaction, VersionChecksum, checksum_path, commit_path, logical_file_key, staged_commit_path,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, TableFeature, Transaction,
+    VersionChecksum, checksum_path, commit_path, logical_file_key, staged_commit_path,
     temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
@@ -843,9 +843,8 @@ fn finalize_attempt_actions(
     Ok(finalized_actions)
 }
 
-fn table_property_enabled(metadata: &Metadata, key: &str) -> bool {
-    metadata
-        .configuration()
+fn table_property_enabled(configuration: &HashMap<String, String>, key: &str) -> bool {
+    configuration
         .get(key)
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))
 }
@@ -937,7 +936,7 @@ fn validate_effective_commit_target(
     PROTOCOL.check_can_write_variant_to_protocol(&protocol, &schema)?;
     PROTOCOL.check_can_write_variant_shredding_to_protocol(
         &protocol,
-        table_property_enabled(&metadata, "delta.enableVariantShredding"),
+        table_property_enabled(metadata.configuration(), "delta.enableVariantShredding"),
     )?;
 
     if actions_as_actions
@@ -965,7 +964,7 @@ fn validate_effective_commit_target(
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
-    if !table_property_enabled(&metadata, "delta.enableDeletionVectors")
+    if !table_property_enabled(metadata.configuration(), "delta.enableDeletionVectors")
         && actions_as_actions
             .iter()
             .any(|action| matches!(action, Action::Add(add) if add.deletion_vector.is_some()))
@@ -989,7 +988,7 @@ fn validate_effective_commit_target(
     }
     validate_deletion_vector_add_stats(&actions_as_actions)?;
 
-    if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
+    if table_property_enabled(metadata.configuration(), "delta.enableChangeDataFeed") {
         if !protocol_supports_legacy_change_data_feed(&protocol)
             && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
         {
@@ -1009,7 +1008,7 @@ fn validate_effective_commit_target(
         ));
     }
 
-    if table_property_enabled(&metadata, "delta.enableDeletionVectors")
+    if table_property_enabled(metadata.configuration(), "delta.enableDeletionVectors")
         && !protocol_has_reader_writer_feature(&protocol, &TableFeature::DeletionVectors)
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());

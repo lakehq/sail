@@ -2375,12 +2375,6 @@ fn clustering_columns(actions: &[Action]) -> Result<Option<Vec<Vec<String>>>> {
 
 /// The row ID high-water mark that the actions of a commit set.
 fn row_id_high_water_mark(actions: &[Action]) -> Result<Option<i64>> {
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct RowTrackingDomain {
-        row_id_high_water_mark: i64,
-    }
-
     actions
         .iter()
         .find_map(|action| match action {
@@ -2393,8 +2387,7 @@ fn row_id_high_water_mark(actions: &[Action]) -> Result<Option<i64>> {
             _ => None,
         })
         .map(|configuration| {
-            serde_json::from_str::<RowTrackingDomain>(configuration)
-                .map(|domain| domain.row_id_high_water_mark)
+            crate::transaction::row_tracking::committed_row_id_high_water_mark(configuration)
                 .map_err(|e| DataFusionError::External(Box::new(e)))
         })
         .transpose()

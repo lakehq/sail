@@ -912,14 +912,8 @@ fn delta_commit_actions(
     actions: &[CommitAction],
     domain_metadata: &[DomainMetadata],
 ) -> DeltaCommitActions {
-    let metadata = actions.iter().rev().find_map(|action| match action {
-        CommitAction::Metadata(metadata) => Some(metadata),
-        _ => None,
-    });
-    let protocol = actions.iter().rev().find_map(|action| match action {
-        CommitAction::Protocol(protocol) => Some(protocol),
-        _ => None,
-    });
+    let metadata = CommitAction::last_metadata(actions);
+    let protocol = CommitAction::last_protocol(actions);
     DeltaCommitActions {
         metadata: metadata.map(delta_metadata_info),
         base_metadata: metadata
