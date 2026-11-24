@@ -241,7 +241,11 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                             staged.version
                         )));
                     }
-                    Ok(StagedCommitState::Pending) if !unknown => {}
+                    // The catalog has not ratified the staged commit so far, but it may still
+                    // ratify the request that it did not answer. Only an answer about the
+                    // staged commit itself is followed. Any other answer (e.g. a request that
+                    // is throttled or not authorized) tells nothing about the earlier request.
+                    Ok(StagedCommitState::Pending) if refusal_is_of_staged_commit(&error) => {}
                     Ok(StagedCommitState::Pending) => {
                         return Err(commit_state_unknown_error(staged, error));
                     }
@@ -290,6 +294,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             }
             return match (error, publish_failure) {
                 (CatalogError::Conflict(message), _) => Ok(StagedCommitOutcome::Conflict(message)),
+                // The catalog is at its limit now, which does not tell whether it ratifies
+                // the request that it did not answer.
+                (error, _) if outcome_unknown => Err(commit_state_unknown_error(staged, error)),
                 // The commit that blocks the backfill must be repaired before the catalog
                 // accepts another commit.
                 (CatalogError::ResourceExhausted(message), Some(failure)) => {
@@ -983,6 +990,16 @@ fn commit_is_rejected(error: &CatalogError) -> bool {
             | CatalogError::UnsupportedCapability(_)
             | CatalogError::StaleMetadata(_)
             | CatalogError::CommitRejected(_)
+    )
+}
+
+/// Whether the catalog refuses the staged commit itself: the version of the commit is taken,
+/// or the catalog is at its limit of commits that are not published, which it checks after
+/// it looks for the staged commit among the commits that it has ratified.
+fn refusal_is_of_staged_commit(error: &CatalogError) -> bool {
+    matches!(
+        error,
+        CatalogError::Conflict(_) | CatalogError::ResourceExhausted(_)
     )
 }
 
