@@ -380,6 +380,32 @@ Feature: Unity Catalog managed Delta table operations
     Then staged Delta commit for version 1 is published in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_unpublished_latest_t version 2 references staged Delta commit in location
 
+  Scenario: Managed Delta named-table reads use Unity ratified commit when it is not published
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_read_unpublished_t (
+        id INT,
+        name STRING
+      )
+      USING delta
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_read_unpublished_t VALUES
+        (1, 'one')
+      """
+    Given variable location for table unity_table_test.managed_delta_read_unpublished_t
+    Given published Delta commit for version 1 in location is removed
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_read_unpublished_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | one  |
+    Then staged Delta commit for version 1 exists in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_read_unpublished_t version 1 exists
+
   Scenario: Managed Delta named-table reads use Unity ratified commit when published commit is corrupted
     Given statement
       """
