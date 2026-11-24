@@ -66,9 +66,25 @@ pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccesso
     if stores.contains(&url, &owner) || stores.is_not_issued(&url, &owner) {
         return Ok(());
     }
+    let name = table.join(".");
     if !stores.is_enabled() {
+        // The catalog is not asked, since the workers cannot use the credentials. If the
+        // storage cannot be accessed with the credentials of the environment, the error
+        // of the storage says why the credentials of the catalog were not used.
         stores.report_disabled();
-        return Ok(());
+        stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
+        let reason = format!(
+            "the storage credentials that the catalog may issue for table {name} are not \
+             used in cluster mode, so the storage credentials of the environment were used"
+        );
+        return stores
+            .install_not_issued(
+                ctx.runtime_env().object_store_registry.as_ref(),
+                &url,
+                &owner,
+                &reason,
+            )
+            .map_err(|e| CatalogError::External(e.to_string()));
     }
     let get = {
         let table = table.clone();
@@ -83,7 +99,6 @@ pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccesso
             async move { manager.get_table_storage_credentials(&table, request).await }
         }
     };
-    let name = table.join(".");
     let initial = match get(StorageAccess::Read).await {
         Ok(Some(initial)) => initial,
         Ok(None) => {
@@ -675,6 +690,38 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!error.to_string().contains(ANSWER), "{error}");
+    }
+
+    /// In cluster mode the catalog is not asked for credentials, and an error of the
+    /// storage on the driver says so.
+    #[tokio::test]
+    async fn storage_errors_in_cluster_mode_say_that_catalog_credentials_are_not_used() {
+        let session = TestSession::new(issued, Some(false));
+        for _ in 0..2 {
+            session
+                .install(CommitAuthority::DeltaRatifiedCommit)
+                .await
+                .unwrap();
+        }
+        assert!(session.requests().is_empty());
+        let store = session
+            .ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&Url::parse(LOCATION).unwrap())
+            .unwrap();
+        let path = Path::from("warehouse/items/file");
+        store.put(&path, "data".into()).await.unwrap();
+        assert_eq!(
+            store.get(&path).await.unwrap().bytes().await.unwrap(),
+            "data"
+        );
+        let error = store.get_range(&path, 100..200).await.unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("cluster mode") && message.contains("default.items"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
