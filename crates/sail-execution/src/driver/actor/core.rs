@@ -116,8 +116,6 @@ impl Actor for DriverActor {
             }
             ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
-        // Synchronous batch processing must leave the driver transport free to shut down.
-        let _guard = self.options.runtime.io().enter();
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
                 session_id: self.options.session_id.clone(),
