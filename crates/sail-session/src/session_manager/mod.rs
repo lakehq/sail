@@ -51,9 +51,9 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
-        let shutdown = Arc::new(QueryCancellation::default());
+        let shutdown = Arc::clone(&components.shutdown);
         let query_runtime = options.runtime.io().clone();
-        let handle = system.spawn::<SessionManagerActor>((options, components, shutdown.clone()));
+        let handle = system.spawn::<SessionManagerActor>((options, components));
         Ok(Self {
             handle,
             shutdown,
@@ -208,6 +208,7 @@ pub async fn create_session_manager(
         session_factory,
         job_runner_factory,
         driver_gateway,
+        shutdown: Arc::new(QueryCancellation::default()),
         event_reporter: global_system_event_reporter().ok_or_else(|| {
             SessionError::internal("telemetry is not initialized for system store")
         })?,

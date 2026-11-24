@@ -6,7 +6,6 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use log::{info, warn};
 use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
-use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
@@ -38,22 +37,19 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
 
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
-    type Options = (
-        SessionManagerOptions,
-        SessionManagerComponents,
-        Arc<QueryCancellation>,
-    );
+    type Options = (SessionManagerOptions, SessionManagerComponents);
 
     fn name() -> &'static str {
         "SessionManagerActor"
     }
 
     fn new(options: Self::Options) -> Self {
-        let (options, components, shutdown) = options;
+        let (options, components) = options;
         let SessionManagerComponents {
             session_factory,
             job_runner_factory,
             driver_gateway,
+            shutdown,
             event_reporter,
         } = components;
         Self {
