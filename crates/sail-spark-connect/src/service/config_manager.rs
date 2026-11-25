@@ -6,7 +6,6 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -52,17 +51,6 @@ pub(crate) async fn handle_sql_config(
             } else {
                 (variable.as_str(), value.clone())
             };
-            if key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(&value) {
-                warn!(
-                    "invalid time zone {:?} for {variable}: the statement is rejected and the \
-                    session keeps its time zone, as Spark does",
-                    value.chars().take(64).collect::<String>()
-                );
-                return Err(SparkError::invalid(format!(
-                    "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{variable}\" \
-                    is invalid. Cannot resolve the given timezone. SQLSTATE: 22022"
-                )));
-            }
             handle_config_set(
                 ctx,
                 vec![KeyValue {
@@ -228,6 +216,15 @@ pub(crate) fn handle_config_set(
     let result = kv.into_iter().try_for_each(|pair| {
         let is_parquet_binary_as_string = pair.key == parquet_binary_as_string_key;
         let is_session_timezone = pair.key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE;
+        if is_session_timezone
+            && let Some(value) = &pair.value
+            && !is_valid_time_zone(value)
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{}\" is invalid. Cannot resolve the given timezone. SQLSTATE: 22022",
+                pair.key
+            )));
+        }
         spark.set_config(vec![pair])?;
         sets_parquet_binary_as_string |= is_parquet_binary_as_string;
         sets_session_timezone |= is_session_timezone;

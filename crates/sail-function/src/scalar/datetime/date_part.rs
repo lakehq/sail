@@ -129,7 +129,7 @@ impl ScalarUDFImpl for DatePart {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+        let [field, temporal] = take_function_args(self.name(), args.scalar_arguments)?;
 
         field
             .and_then(|sv| sv.try_as_str())
@@ -146,12 +146,30 @@ impl ScalarUDFImpl for DatePart {
                 )))
             })
             .unwrap_or_else(|| {
-                // Spark reports the nullability of the temporal input.
-                let [_, input] = take_function_args(self.name(), args.arg_fields)?;
-                let field = self.inner.return_field_from_args(args)?;
-                Ok(Arc::new(
-                    field.as_ref().clone().with_nullable(input.is_nullable()),
-                ))
+                let arg_fields = args.arg_fields;
+                let result = self.inner.return_field_from_args(args)?;
+                // Calendar extraction can exceed the Arrow date range. A literal can
+                // still have a non-nullable result when the kernel can represent it.
+                if let (Some(part), Some(temporal)) = (*field, *temporal)
+                    && result.is_nullable()
+                    && let Ok(ColumnarValue::Scalar(value)) = invoke_date_part(
+                        &self.inner,
+                        ScalarFunctionArgs {
+                            args: vec![
+                                ColumnarValue::Scalar(part.clone()),
+                                ColumnarValue::Scalar(temporal.clone()),
+                            ],
+                            arg_fields: arg_fields.to_vec(),
+                            number_rows: 1,
+                            return_field: Arc::clone(&result),
+                            config_options: Default::default(),
+                        },
+                    )
+                    && !value.is_null()
+                {
+                    return Ok(Arc::new(result.as_ref().clone().with_nullable(false)));
+                }
+                Ok(result)
             })
     }
 
@@ -482,6 +500,39 @@ mod tests {
             inner.invoke_with_args(args)?
         };
         result.into_array(array.len())
+    }
+
+    #[test]
+    fn year_nullability_accounts_for_the_timestamp_range() -> Result<()> {
+        let part = ScalarValue::from("year");
+        let arg_fields = [
+            Arc::new(Field::new("part", part.data_type(), false)),
+            Arc::new(Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )),
+        ];
+        for (timestamp, nullable) in [
+            (None, true),
+            (
+                Some(ScalarValue::TimestampMicrosecond(Some(i64::MAX), None)),
+                true,
+            ),
+            (
+                Some(ScalarValue::TimestampMicrosecond(Some(0), None)),
+                false,
+            ),
+        ] {
+            let field = super::DatePart::new().return_field_from_args(
+                datafusion_expr::ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &[Some(&part), timestamp.as_ref()],
+                },
+            )?;
+            assert_eq!(field.is_nullable(), nullable);
+        }
+        Ok(())
     }
 
     #[test]

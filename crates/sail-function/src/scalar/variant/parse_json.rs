@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, StringViewArray, StructArray, new_null_array};
@@ -13,8 +14,12 @@ use datafusion::logical_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::utils::make_scalar_function;
+use jiter::{Jiter, Peek};
+use parquet_variant::{
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16,
+};
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
-use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
     VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME, variant_metadata_field,
 };
@@ -51,104 +56,115 @@ impl Default for ParseJson {
     }
 }
 
-/// A `serde_json::Value` wrapper that rejects objects with duplicate keys
-/// during deserialization. Spark's `parse_json` treats duplicate keys in
-/// any nested object as a parse failure (MALFORMED_RECORD_IN_PARSING).
-struct StrictValue(serde_json::Value);
-
-struct StrictValueVisitor;
-
-impl<'de> serde::de::Visitor<'de> for StrictValueVisitor {
-    type Value = StrictValue;
-
-    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("any valid JSON value without duplicate object keys")
+/// Spark chooses the variant type from the JSON token before rounding to a double.
+fn variant_number(token: &str) -> Option<Variant<'static, 'static>> {
+    if let Ok(i) = token.parse::<i64>() {
+        return Some(if let Ok(n) = i8::try_from(i) {
+            n.into()
+        } else if let Ok(n) = i16::try_from(i) {
+            n.into()
+        } else if let Ok(n) = i32::try_from(i) {
+            n.into()
+        } else {
+            i.into()
+        });
     }
-
-    fn visit_bool<E>(self, v: bool) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(v.into()))
-    }
-    fn visit_i64<E>(self, v: i64) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(v.into()))
-    }
-    fn visit_u64<E>(self, v: u64) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(v.into()))
-    }
-    fn visit_f64<E>(self, v: f64) -> std::result::Result<StrictValue, E> {
-        // Spark normalizes negative zero to positive zero in variants, e.g.
-        // `parse_json('-0')` / `parse_json('-0.0')` render as `0`.
-        let v = if v == 0.0 { 0.0 } else { v };
-        Ok(StrictValue(v.into()))
-    }
-    fn visit_str<E>(self, v: &str) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(v.to_owned().into()))
-    }
-    fn visit_string<E>(self, v: String) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(v.into()))
-    }
-    fn visit_none<E>(self) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(serde_json::Value::Null))
-    }
-    fn visit_unit<E>(self) -> std::result::Result<StrictValue, E> {
-        Ok(StrictValue(serde_json::Value::Null))
-    }
-
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(
-        self,
-        mut seq: A,
-    ) -> std::result::Result<StrictValue, A::Error> {
-        let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-        while let Some(StrictValue(v)) = seq.next_element()? {
-            vec.push(v);
-        }
-        Ok(StrictValue(serde_json::Value::Array(vec)))
-    }
-
-    fn visit_map<A: serde::de::MapAccess<'de>>(
-        self,
-        mut map: A,
-    ) -> std::result::Result<StrictValue, A::Error> {
-        let mut obj = serde_json::Map::new();
-        while let Some(key) = map.next_key::<String>()? {
-            let StrictValue(v) = map.next_value()?;
-            if obj.contains_key(&key) {
-                return Err(serde::de::Error::custom(format!("duplicate key '{key}'")));
+    if !token.contains(['e', 'E']) {
+        let fraction = token.split_once('.').map_or("", |(_, fraction)| fraction);
+        if fraction.len() <= 38
+            && let Ok(n) = token.replace('.', "").parse::<i128>()
+            && let Ok(scale) = u8::try_from(fraction.len())
+        {
+            if let Ok(i) = i32::try_from(n)
+                && let Ok(d) = VariantDecimal4::try_new(i, scale)
+            {
+                return Some(d.into());
             }
-            obj.insert(key, v);
+            if let Ok(i) = i64::try_from(n)
+                && let Ok(d) = VariantDecimal8::try_new(i, scale)
+            {
+                return Some(d.into());
+            }
+            if let Ok(d) = VariantDecimal16::try_new(n, scale) {
+                return Some(d.into());
+            }
         }
-        Ok(StrictValue(serde_json::Value::Object(obj)))
+    }
+    token.parse::<f64>().ok().map(Into::into)
+}
+
+fn primitive_token(parser: &mut Jiter<'_>, peek: Peek) -> Option<Variant<'static, 'static>> {
+    match peek {
+        Peek::Null => {
+            parser.known_null().ok()?;
+            Some(Variant::Null)
+        }
+        Peek::True | Peek::False => Some(parser.known_bool(peek).ok()?.into()),
+        _ => variant_number(std::str::from_utf8(parser.known_number_bytes(peek).ok()?).ok()?),
     }
 }
 
-impl<'de> serde::Deserialize<'de> for StrictValue {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        deserializer.deserialize_any(StrictValueVisitor)
+fn append_json_value(
+    parser: &mut Jiter<'_>,
+    peek: Peek,
+    builder: &mut impl VariantBuilderExt,
+    depth: usize,
+) -> Option<()> {
+    if depth >= 128 {
+        return None;
     }
+    match peek {
+        Peek::String => builder.append_value(parser.known_str().ok()?),
+        Peek::Array => {
+            let mut list = builder.try_new_list().ok()?;
+            let mut next = parser.known_array().ok()?;
+            while let Some(peek) = next {
+                append_json_value(parser, peek, &mut list, depth + 1)?;
+                next = parser.array_step().ok()?;
+            }
+            list.finish();
+        }
+        Peek::Object => {
+            let mut object = builder.try_new_object().ok()?;
+            let mut names = HashSet::new();
+            let mut next = parser.known_object().ok()?;
+            while let Some(name) = next {
+                let name = name.to_owned();
+                if names.contains(&name) {
+                    return None;
+                }
+                let mut field = ObjectFieldBuilder::new(&name, &mut object);
+                let peek = parser.peek().ok()?;
+                append_json_value(parser, peek, &mut field, depth + 1)?;
+                names.insert(name);
+                next = parser.next_key().ok()?;
+            }
+            object.finish();
+        }
+        _ => builder.append_value(primitive_token(parser, peek)?),
+    }
+    Some(())
 }
 
-/// Try to parse a JSON string leniently, rejecting objects with duplicate
-/// keys. If `serde_json::from_str` fails because of trailing garbage, use
-/// streaming parsing to read the first complete JSON value (matching
-/// Spark's `parse_json` / `try_parse_json`, which both accept trailing
-/// content after a valid prefix).
-fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
-    if let Ok(StrictValue(value)) = serde_json::from_str::<StrictValue>(json_str) {
-        return Some(value);
+/// Parse one complete value. Spark accepts trailing content after a valid prefix.
+fn try_append_json(builder: &mut VariantArrayBuilder, json: &str) -> Option<()> {
+    let mut parser = Jiter::new(json.as_bytes());
+    let peek = parser.peek().ok()?;
+    if matches!(peek, Peek::Array | Peek::Object | Peek::String) {
+        return append_json_value(&mut parser, peek, builder, 0);
     }
-    let mut stream = serde_json::Deserializer::from_str(json_str).into_iter::<StrictValue>();
-    stream.next().and_then(|r| r.ok()).map(|sv| sv.0)
-}
-
-/// Try to append a JSON string to the builder leniently. Returns true if successful.
-fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
-    // Must go through try_parse_json_lenient (StrictValue) to reject duplicate keys,
-    // matching Spark's try_parse_json semantics (returns NULL on duplicate keys).
-    match try_parse_json_lenient(json_str) {
-        Some(value) => append_json(&value, builder).is_ok(),
-        None => false,
+    // Primitive tokens must end at a delimiter before any trailing content.
+    let value = primitive_token(&mut parser, peek)?;
+    if let Some(&next) = json.as_bytes().get(parser.current_index())
+        && !matches!(
+            next,
+            b' ' | b'\n' | b'\t' | b'\r' | b'"' | b'[' | b']' | b'{' | b'}' | b',' | b':'
+        )
+    {
+        return None;
     }
+    builder.append_value(value);
+    Some(())
 }
 
 /// Wrap a JSON-parse failure with Spark's canonical error code so feature
@@ -157,15 +173,6 @@ fn malformed_record_err(record: &str) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
         "[MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION] Malformed records are detected in record parsing: {record}."
     )
-}
-
-/// Strict-path append: accept trailing garbage (first valid prefix), error
-/// with `MALFORMED_RECORD_IN_PARSING` on unparseable input.
-fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Result<()> {
-    match try_parse_json_lenient(json_str) {
-        Some(value) => append_json(&value, builder).map_err(|_| malformed_record_err(json_str)),
-        None => Err(malformed_record_err(json_str)),
-    }
 }
 
 impl ScalarUDFImpl for ParseJson {
@@ -293,16 +300,9 @@ pub(crate) fn from_utf8view_arr(arr: &ArrayRef, safe: bool) -> Result<ArrayRef> 
 
     for v in typed_arr {
         match v {
-            Some(json_str) => {
-                if safe {
-                    if !try_append_json(&mut builder, json_str) {
-                        builder.append_null();
-                    }
-                } else {
-                    append_json_strict(&mut builder, json_str)?;
-                }
-            }
-            None => builder.append_null(),
+            Some(json_str) if try_append_json(&mut builder, json_str).is_some() => {}
+            Some(json_str) if !safe => return Err(malformed_record_err(json_str)),
+            Some(_) | None => builder.append_null(),
         }
     }
 
@@ -587,10 +587,7 @@ mod tests {
 
     #[test]
     fn test_parse_json_scientific_notation_is_numeric() -> Result<()> {
-        let Some(serde_json::Value::Number(number)) = try_parse_json_lenient("1.5e-1") else {
-            return exec_err!("expected a JSON number");
-        };
-        assert_eq!(number.as_f64(), Some(0.15));
+        assert_eq!(variant_number("1.5e-1"), Some(Variant::Double(0.15)));
         Ok(())
     }
 }

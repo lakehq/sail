@@ -20,7 +20,9 @@ use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, ScalarUDF, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::expressions::{Column, Literal, cast};
-use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr, create_lex_ordering};
+use datafusion::physical_expr::{
+    Partitioning, PhysicalExpr, ScalarFunctionExpr, create_lex_ordering,
+};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
@@ -33,7 +35,9 @@ use datafusion_common::{
 };
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, output_range_partitioning_from_split_points,
+};
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -59,6 +63,7 @@ use crate::listing::write::{FileWriteNode, FileWriteOptions};
 struct ListFilesResult {
     file_groups: Vec<FileGroup>,
     statistics: Statistics,
+    partitioning: Option<Partitioning>,
 }
 
 /// Physical planner for logical listing table scans.
@@ -125,6 +130,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let ListFilesResult {
             mut file_groups,
             statistics,
+            mut partitioning,
         } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
@@ -156,6 +162,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             Some(Ok(new_groups)) => {
                 if new_groups.len() <= source.config().target_partitions {
                     file_groups = new_groups;
+                    partitioning = None;
                 } else {
                     log::debug!(
                         "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
@@ -192,7 +199,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                     preserve_order: false,
                     output_ordering,
                     statistics,
-                    output_partitioning: None,
+                    output_partitioning: partitioning,
                     schema: source.config().schema.clone(),
                     compression: source.config().compression,
                 },
@@ -237,10 +244,9 @@ async fn plan_file_write(
             .enumerate()
             .map(|(index, field)| {
                 let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
-                let column = if field.is_nullable()
-                    && table_partition_cols
-                        .iter()
-                        .any(|(name, _)| name == field.name())
+                let column = if table_partition_cols
+                    .iter()
+                    .any(|(name, _)| name == field.name())
                 {
                     let value: Arc<dyn PhysicalExpr> = match field.data_type() {
                         DataType::Float16 | DataType::Float32 | DataType::Float64 => {
@@ -258,14 +264,18 @@ async fn plan_file_write(
                         )?,
                         _ => cast(column, &schema, DataType::Utf8)?,
                     };
-                    let null_marker =
-                        Arc::new(Literal::new(ScalarValue::from(HIVE_DEFAULT_PARTITION_NAME)));
-                    Arc::new(ScalarFunctionExpr::try_new(
-                        datafusion::functions::core::coalesce(),
-                        vec![value, null_marker],
-                        &schema,
-                        Arc::clone(session.config().options()),
-                    )?)
+                    if field.is_nullable() {
+                        let null_marker =
+                            Arc::new(Literal::new(ScalarValue::from(HIVE_DEFAULT_PARTITION_NAME)));
+                        Arc::new(ScalarFunctionExpr::try_new(
+                            datafusion::functions::core::coalesce(),
+                            vec![value, null_marker],
+                            &schema,
+                            Arc::clone(session.config().options()),
+                        )?) as Arc<dyn PhysicalExpr>
+                    } else {
+                        value
+                    }
                 } else {
                     column
                 };
@@ -399,6 +409,7 @@ async fn list_files_for_scan<'a>(
     } else {
         return Ok(ListFilesResult {
             file_groups: vec![],
+            partitioning: None,
             statistics: Statistics::new_unknown(source.config().schema.file_schema()),
         });
     };
@@ -524,9 +535,16 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
+    let mut partitioning = None;
     let file_groups = if threshold > 0 && !partition_cols.is_empty() {
-        let grouped = file_group.group_by_partition_values(source.config().target_partitions);
+        let (grouped, split_points) = file_group
+            .group_by_partition_values_with_split_points(source.config().target_partitions);
         if grouped.len() >= threshold {
+            partitioning = output_range_partitioning_from_split_points(
+                source.config().schema.table_schema(),
+                partition_fields,
+                split_points,
+            )?;
             grouped
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
@@ -546,6 +564,7 @@ async fn list_files_for_scan<'a>(
     Ok(ListFilesResult {
         file_groups,
         statistics: stats,
+        partitioning,
     })
 }
 

@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion::functions::expr_fn::{coalesce, get_field, named_struct};
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
@@ -183,7 +184,12 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     .distinct()?
                     .build()?;
                 let output = query.subquery.schema().columns();
-                let default = empty_scalar_value(&query.subquery)?;
+                let default = scalar_aggregate_value(&query.subquery, true)?;
+                let value = if matches!(default, Expr::Literal(ref v, _) if v.is_null()) {
+                    None
+                } else {
+                    Some(scalar_aggregate_value(&query.subquery, false)?)
+                };
                 let correlation = conjunction(bindings.iter().map(|(reference, _, key)| {
                     datafusion_expr::expr_fn::binary_expr(
                         Expr::Column(key.clone()),
@@ -195,7 +201,7 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     datafusion_common::internal_datafusion_err!("empty scalar correlation domain")
                 })?;
                 let mut attached = false;
-                let mut aggregate_marker = None;
+                let mut grouped = None;
                 let rewritten = Arc::unwrap_or_clone(query.subquery)
                     .transform_up(|node| {
                         let was_attached = attached;
@@ -310,21 +316,14 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                                     .aggregate(aggregate.group_expr, aggregate.aggr_expr)?
                                     .filter(correlation.clone())?
                                     .build()?;
-                                // Test for an input group before HAVING can remove it.
-                                // A rejected nonempty group must not receive the empty
-                                // aggregate's default value.
-                                aggregate_marker = Some(Arc::new(
-                                    LogicalPlanBuilder::from(aggregate.clone())
-                                        .project(vec![datafusion_expr::lit(true)])?
-                                        .build()?,
-                                ));
+                                grouped = Some(aggregate.clone());
                                 aggregate
                             }
                             // Ordering a scalar aggregate cannot change its value.
                             // Remove this sort so native decorrelation can reach
                             // the correlation we attached above the aggregate.
                             LogicalPlan::Sort(sort)
-                                if aggregate_marker.is_some() && sort.fetch.is_none() =>
+                                if grouped.is_some() && sort.fetch.is_none() =>
                             {
                                 Arc::unwrap_or_clone(sort.input)
                             }
@@ -333,25 +332,29 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                         Ok(Transformed::yes(result))
                     })?
                     .data;
-                query.subquery = Arc::new(
-                    LogicalPlanBuilder::from(rewritten)
-                        .project(output.into_iter().map(Expr::Column))?
-                        .build()?,
-                );
-                let result = if matches!(default, Expr::Literal(ref value, _) if value.is_null()) {
-                    Expr::ScalarSubquery(query)
-                } else {
-                    let mut marker = query.clone();
-                    marker.subquery = aggregate_marker.ok_or_else(|| {
-                        datafusion_common::internal_datafusion_err!(
-                            "missing scalar aggregate marker"
-                        )
+                let result = if let Some(value) = value {
+                    // The struct distinguishes an absent group from a present group whose
+                    // projection or HAVING produces NULL, with one evaluation of the input.
+                    let pack = |expr| named_struct(vec![datafusion_expr::lit("value"), expr]);
+                    let grouped = grouped.ok_or_else(|| {
+                        datafusion_common::internal_datafusion_err!("missing scalar aggregate")
                     })?;
-                    datafusion_expr::when(
-                        Expr::ScalarSubquery(marker).is_not_null(),
-                        Expr::ScalarSubquery(query),
+                    query.subquery = Arc::new(
+                        LogicalPlanBuilder::from(grouped)
+                            .project([pack(value)])?
+                            .build()?,
+                    );
+                    get_field(
+                        coalesce(vec![Expr::ScalarSubquery(query), pack(default)]),
+                        "value",
                     )
-                    .otherwise(default)?
+                } else {
+                    query.subquery = Arc::new(
+                        LogicalPlanBuilder::from(rewritten)
+                            .project(output.into_iter().map(Expr::Column))?
+                            .build()?,
+                    );
+                    Expr::ScalarSubquery(query)
                 };
                 Ok(Transformed::yes(result))
             })
@@ -479,9 +482,8 @@ fn bind_single_outer_row(plan: &LogicalPlan, input: &LogicalPlan) -> Result<Opti
     Ok(bound.all_out_ref_exprs().is_empty().then_some(bound))
 }
 
-/// Evaluate the scalar aggregate's projection on empty input, retaining defaults
-/// such as COUNT = 0 without replacing legitimate null results of nonempty groups.
-fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
+/// Express the scalar output and HAVING in terms of aggregate columns or their empty defaults.
+fn scalar_aggregate_value(plan: &LogicalPlan, empty: bool) -> Result<Expr> {
     fn substitute(expr: Expr, input: &LogicalPlan, values: &[Expr]) -> Result<Expr> {
         expr.transform_up(|expr| {
             if let Expr::Column(column) = &expr {
@@ -496,8 +498,17 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
 
     // Keep row existence separate from values: a projection such as COALESCE
     // must not turn a row rejected by HAVING into a non-null scalar result.
-    fn values(plan: &LogicalPlan) -> Result<(Vec<Expr>, Option<Expr>)> {
+    fn values(plan: &LogicalPlan, empty: bool) -> Result<(Vec<Expr>, Option<Expr>)> {
         match plan {
+            LogicalPlan::Aggregate(aggregate) if !empty => Ok((
+                aggregate
+                    .schema
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect(),
+                None,
+            )),
             LogicalPlan::Aggregate(aggregate) => aggregate
                 .aggr_expr
                 .iter()
@@ -519,7 +530,7 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
                 .collect::<Result<Vec<_>>>()
                 .map(|values| (values, None)),
             LogicalPlan::Projection(projection) => {
-                let (input, predicate) = values(&projection.input)?;
+                let (input, predicate) = values(&projection.input, empty)?;
                 let values = projection
                     .expr
                     .iter()
@@ -528,7 +539,7 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
                 Ok((values, predicate))
             }
             LogicalPlan::Filter(filter) => {
-                let (input, predicate) = values(&filter.input)?;
+                let (input, predicate) = values(&filter.input, empty)?;
                 let condition = substitute(filter.predicate.clone(), &filter.input, &input)?;
                 let predicate = Some(match predicate {
                     Some(predicate) => predicate.and(condition),
@@ -536,12 +547,12 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
                 });
                 Ok((input, predicate))
             }
-            LogicalPlan::SubqueryAlias(alias) => values(&alias.input),
-            LogicalPlan::Sort(sort) if sort.fetch.is_none() => values(&sort.input),
+            LogicalPlan::SubqueryAlias(alias) => values(&alias.input, empty),
+            LogicalPlan::Sort(sort) if sort.fetch.is_none() => values(&sort.input, empty),
             _ => datafusion_common::not_impl_err!("empty result of scalar correlation"),
         }
     }
-    let (values, predicate) = values(plan)?;
+    let (values, predicate) = values(plan, empty)?;
     let value = values
         .into_iter()
         .next()
