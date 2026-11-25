@@ -16,7 +16,7 @@ use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableKind, Tabl
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureCall;
 
-use super::add_files::{AddFiles, ImportOutput, supports_import_format};
+use super::add_files::{AddFiles, ImportOutput, catalog_directory_url, supports_import_format};
 use super::arguments::{
     optional_bool, optional_i32, optional_string, optional_string_map, required_string,
 };
@@ -33,6 +33,7 @@ use crate::operations::metadata_commit::{
 };
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::TableMetadata;
+use crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING;
 
 mod registration;
 
@@ -116,6 +117,9 @@ pub(crate) async fn execute(
             return plan_err!("Cannot import a transactional source table");
         }
         match key.as_str() {
+            "option.basepath" => {
+                return plan_err!("Migration does not support source option {key}");
+            }
             "option.pathglobfilter" | "option.path_glob_filter" if !value.is_empty() => {
                 return plan_err!("Migration does not support source option {key}");
             }
@@ -126,7 +130,10 @@ pub(crate) async fn execute(
         }
     }
     let mut properties = properties.iter().cloned().collect::<BTreeMap<_, _>>();
+    // A file table does not use Iceberg name mappings. Generate one for its
+    // imported schema unless the procedure caller explicitly supplies one.
     for key in [
+        DEFAULT_SCHEMA_NAME_MAPPING,
         "path",
         "transient_lastDdlTime",
         "serialization.format",
@@ -146,10 +153,11 @@ pub(crate) async fn execute(
         }
     }
     properties.extend(optional_string_map(invocation, "properties")?.unwrap_or_default());
+    let source_url = catalog_directory_url(source_location.clone())?;
     let property_location = properties.remove("location");
     let location = if migrate {
         properties.insert("migrated".into(), "true".into());
-        Some(property_location.unwrap_or_else(|| source_location.clone()))
+        property_location
     } else {
         properties.insert("gc.enabled".into(), "false".into());
         properties.insert("snapshot".into(), "true".into());
@@ -157,8 +165,11 @@ pub(crate) async fn execute(
     };
     let location = location
         .map(sail_data_source::resolve_table_url)
-        .transpose()?;
-    let source_url = sail_data_source::resolve_table_url(source_location.clone())?;
+        .transpose()?
+        .or_else(|| migrate.then(|| source_url.clone()));
+    if let Some(url) = &location {
+        check_location(migrate, &source_url, url)?;
+    }
     // Spark file-table schemas place partition columns after the data columns, in spec order.
     let mut columns = columns.iter().collect::<Vec<_>>();
     columns.sort_by_cached_key(|column| partition_by.iter().position(|p| p.column == column.name));
@@ -231,7 +242,6 @@ pub(crate) async fn execute(
     {
         let url =
             location.ok_or_else(|| DataFusionError::Plan("Missing import location".into()))?;
-        check_location(migrate, &source_url, &url)?;
         let metadata = empty_table_metadata(&url, iceberg_schema, spec, &options.properties)?;
         let ctx = Arc::clone(ctx);
         let output_schema = invocation.procedure.schema();
@@ -273,8 +283,10 @@ pub(crate) async fn execute(
         .stage_table_replacement(&destination, stage)
         .await
         .map_err(catalog_error)?;
-    let url = sail_data_source::resolve_table_url(replacement.location.clone())?;
-    check_location(migrate, &source_url, &url)?;
+    let url = catalog_directory_url(replacement.location.clone())?;
+    if location.as_ref() != Some(&url) {
+        check_location(migrate, &source_url, &url)?;
+    }
     let metadata = if let Some(json) = replacement.authority.rest_metadata() {
         serde_json::from_str(json).map_err(|e| DataFusionError::External(Box::new(e)))?
     } else {
@@ -415,10 +427,21 @@ async fn prepare_import(
 }
 
 fn check_location(migrate: bool, source_url: &url::Url, url: &url::Url) -> Result<()> {
-    if !migrate
-        && (url.as_str().starts_with(source_url.as_str())
-            || source_url.as_str().starts_with(url.as_str()))
+    if migrate {
+        return Ok(());
+    }
+    let overlaps = if source_url.as_str().starts_with(url.as_str())
+        || url.as_str().starts_with(source_url.as_str())
     {
+        true
+    } else if source_url.scheme() == "file" && url.scheme() == "file" {
+        let source = sail_data_source::canonical_local_path(source_url)?;
+        let destination = sail_data_source::canonical_local_path(url)?;
+        destination.starts_with(&source) || source.starts_with(&destination)
+    } else {
+        false
+    };
+    if overlaps {
         return plan_err!("Snapshot location overlaps the source table location");
     }
     Ok(())

@@ -95,7 +95,7 @@ pub(crate) fn table_to_status(
         for (key, value) in parameters {
             if matches!(
                 key.to_ascii_lowercase().as_str(),
-                "pathglobfilter" | "path_glob_filter" | "recursivefilelookup"
+                "pathglobfilter" | "path_glob_filter" | "recursivefilelookup" | "basepath"
             ) {
                 let option = format!("option.{key}");
                 if !properties

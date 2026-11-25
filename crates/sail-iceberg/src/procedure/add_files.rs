@@ -27,6 +27,13 @@ pub(super) fn supports_import_format(format: &str) -> bool {
     format.eq_ignore_ascii_case("parquet") || format.eq_ignore_ascii_case("avro")
 }
 
+pub(super) fn catalog_directory_url(location: String) -> Result<url::Url> {
+    match sail_data_source::parse_absolute_directory_url(&location) {
+        Some(url) => Ok(url),
+        None => sail_data_source::resolve_table_url(location),
+    }
+}
+
 pub(crate) enum ImportOutput {
     AddFiles(SchemaRef),
     FileCount(SchemaRef),
@@ -221,10 +228,7 @@ impl AddFiles {
                 return plan_err!("Unsupported add_files partition format: {format}");
             }
             let source_url = if catalog_source {
-                match sail_data_source::parse_absolute_directory_url(&location) {
-                    Some(url) => url,
-                    None => sail_data_source::resolve_table_url(location)?,
-                }
+                catalog_directory_url(location)?
             } else {
                 crate::lake_source::IcebergLakeSource::parse_table_url(vec![location]).await?
             };
@@ -372,10 +376,7 @@ impl AddFiles {
         if !catalog_source && !spec.is_unpartitioned() && candidates.is_empty() {
             return plan_err!("Cannot find any matching partitions in table");
         }
-        let expected = migration
-            .then(|| ImportSchema::new(schema))
-            .transpose()?
-            .map(Arc::new);
+        let expected = migration.then(|| Arc::new(ImportSchema::new(schema)));
         let files = futures::stream::iter(
             candidates
                 .into_iter()
@@ -556,7 +557,7 @@ async fn import_record_count(
                     let header = reader.avro_header().get("avro.schema").ok_or_else(|| {
                         DataFusionError::Plan(format!("Missing Avro schema in {path}"))
                     })?;
-                    expected.validate_avro(header, &path)?;
+                    expected.validate_avro(header, &reader.schema(), &path)?;
                 }
                 let rows = reader.try_fold(0u64, |rows, batch| {
                     rows.checked_add(batch?.num_rows() as u64).ok_or_else(|| {

@@ -89,16 +89,24 @@ pub(super) async fn import(ctx: &TaskContext, mut request: Import) -> Result<Rec
             }
             Err(error) if is_unknown_commit(error) => {}
             Err(error) => {
-                if matches!(
-                    manager.get_table(&request.destination).await,
-                    Err(CatalogError::NotFound(_, _))
-                ) && let Err(restore) = manager.rename_table(&source, &request.destination).await
-                {
-                    return Err(catalog_error(CatalogError::CommitStateUnknown(format!(
-                        "Migration failed ({error}); could not confirm restoration of {}: {restore}",
-                        source.join(".")
-                    ).into())));
-                }
+                let reason = match manager.get_table_or_view(&request.destination).await {
+                    Err(CatalogError::NotFound(_, _)) => {
+                        match manager.rename_table(&source, &request.destination).await {
+                            Ok(()) => return outcome,
+                            Err(restore) => format!("backup rename failed: {restore}"),
+                        }
+                    }
+                    Err(lookup) => format!("destination lookup failed: {lookup}"),
+                    Ok(_) => "destination is occupied".to_owned(),
+                };
+                let message = format!(
+                    "Migration failed ({error}); could not confirm restoration of {} from {}: {reason}",
+                    request.destination.join("."),
+                    source.join(".")
+                );
+                return Err(catalog_error(CatalogError::CommitStateUnknown(
+                    message.into(),
+                )));
             }
         }
     }

@@ -386,3 +386,100 @@ def test_avro_import_field_ids(spark, tmp_path, procedure, swapped):
     finally:
         for name in ["src", "src_BACKUP_", "dest"]:
             spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_snapshot_symlink_overlap(spark, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    pq.write_table(pa.table({"a": [13]}), source / "part.parquet")
+    alias = tmp_path / "alias"
+    alias.symlink_to(source, target_is_directory=True)
+    spark.sql(f"CREATE TABLE src (a BIGINT) USING parquet LOCATION '{source.as_uri()}'")
+    try:
+        for destination in [alias.as_uri(), (alias / "new" / "child").as_uri().replace("file:///", "file:/", 1)]:
+            with pytest.raises(PySparkException, match="overlaps"):
+                spark.sql(f"CALL system.snapshot('src', 'dst', '{destination}')").collect()
+            assert spark.table("src").first().a == 13
+            assert not spark.catalog.tableExists("dst")
+            assert not (source / "metadata").exists()
+            assert not (source / "new").exists()
+    finally:
+        spark.sql("DROP TABLE IF EXISTS dst")
+        spark.sql("DROP TABLE src")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+def test_import_source_base_path(spark, tmp_path, procedure):
+    source = tmp_path / "root"
+    partition = source / "p=x"
+    partition.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [13]}), partition / "part.parquet")
+    spark.sql(f"""CREATE TABLE src (a BIGINT, p STRING) USING parquet
+        OPTIONS (basePath '{source.as_uri()}') LOCATION '{escape_sql_string_literal(str(partition))}'""")
+    dest = tmp_path / "target"
+    args = "'src'" if procedure == "migrate" else f"'src', 'dst', '{dest.as_uri()}'"
+    try:
+        assert tuple(spark.table("src").first()) == (13, "x")
+        with pytest.raises(PySparkException, match=r"option\.basepath"):
+            spark.sql(f"CALL system.{procedure}({args})").collect()
+        assert tuple(spark.table("src").first()) == (13, "x")
+        assert not spark.catalog.tableExists("src_BACKUP_")
+        assert not spark.catalog.tableExists("dst")
+        assert not (partition / "metadata").exists()
+        assert not (dest / "metadata").exists()
+    finally:
+        spark.sql("DROP TABLE src")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize("explicit_mapping", [False, True])
+def test_import_name_mapping_property(spark, tmp_path, procedure, explicit_mapping):
+    import json
+
+    key = "schema.name-mapping.default"
+    source = tmp_path / "source"
+    source.mkdir()
+    pq.write_table(pa.table({"a": [13]}), source / "part.parquet")
+    stale = json.dumps([{"field-id": 1, "names": ["z"]}])
+    spark.sql(f"""CREATE TABLE src (a BIGINT) USING parquet LOCATION '{source.as_uri()}'
+        TBLPROPERTIES ('{key}'='{stale}')""")
+    dest = source if procedure == "migrate" else tmp_path / "target"
+    args = (
+        "table => 'src'"
+        if procedure == "migrate"
+        else f"source_table => 'src', table => 'dst', location => '{dest.as_uri()}'"
+    )
+    names = ["a", "alias"] if explicit_mapping else ["a"]
+    if explicit_mapping:
+        mapping = json.dumps([{"field-id": 1, "names": names}])
+        args += f", properties => map('{key}', '{mapping}')"
+    try:
+        assert spark.sql(f"CALL system.{procedure}({args})").first()[0] == 1
+        assert spark.table("src" if procedure == "migrate" else "dst").first().a == 13
+        assert json.loads(_find_latest_metadata(dest)["properties"][key]) == [{"field-id": 1, "names": names}]
+    finally:
+        for name in ["src", "src_BACKUP_", "dst"]:
+            spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize("compliant", [False, True], ids=["item", "element"])
+def test_parquet_list_element_id(spark, tmp_path, procedure, compliant):
+    source = tmp_path / "source"
+    source.mkdir()
+    item = pa.field("item", pa.int64(), metadata={"PARQUET:field_id": "2"})
+    schema = pa.schema([pa.field("xs", pa.list_(item), metadata={"PARQUET:field_id": "1"})])
+    pq.write_table(
+        pa.Table.from_pylist([{"xs": [3, 7]}], schema=schema),
+        source / "part.parquet",
+        use_compliant_nested_type=compliant,
+        store_schema=False,
+    )
+    spark.sql(f"CREATE TABLE src (xs ARRAY<BIGINT>) USING parquet LOCATION '{source.as_uri()}'")
+    args = "'src'" if procedure == "migrate" else f"'src','dst','{(tmp_path / 'target').as_uri()}'"
+    try:
+        assert spark.sql(f"CALL system.{procedure}({args})").first()[0] == 1
+        assert spark.table("src" if procedure == "migrate" else "dst").first().xs == [3, 7]
+    finally:
+        for name in ["src", "src_BACKUP_", "dst"]:
+            spark.sql(f"DROP TABLE IF EXISTS {name}")

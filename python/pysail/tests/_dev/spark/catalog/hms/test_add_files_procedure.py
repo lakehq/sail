@@ -466,7 +466,8 @@ def test_migrate_bucketed_hive_table(spark, jvm_spark, database):
         jvm_spark.sql(f"DROP TABLE IF EXISTS {src}")
 
 
-def test_migrate_hms_rename_lost_reply(hms_s3_metastore_endpoint, hms_s3_env, jvm_spark, database):
+@contextmanager
+def _hms_fault_session(endpoint, envs, drop_message, *, failover=False):
     import select
     import socket
     import socketserver
@@ -474,24 +475,47 @@ def test_migrate_hms_rename_lost_reply(hms_s3_metastore_endpoint, hms_s3_env, jv
 
     from pysail.testing.spark.session import spark_session_factory
 
-    host, port = hms_s3_metastore_endpoint.rsplit(":", 1)
-    dropped = threading.Event()
+    host, port = endpoint.rsplit(":", 1)
 
-    class DropRenameReply(socketserver.BaseRequestHandler):
+    class FaultProxy(socketserver.BaseRequestHandler):
         def handle(self):
             with socket.create_connection((host, int(port))) as upstream:
                 while True:
                     for sock in select.select([upstream, self.request], [], [])[0]:
                         data = sock.recv(65536)
-                        if not data:
+                        if not data or drop_message(sock is upstream, data):
                             return
-                        if sock is upstream:
-                            if b"alter_table" in data and not dropped.is_set():
-                                dropped.set()
-                                return
-                            self.request.sendall(data)
-                        else:
-                            upstream.sendall(data)
+                        (self.request if sock is upstream else upstream).sendall(data)
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), FaultProxy) as proxy:
+        proxy.daemon_threads = True
+        thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        thread.start()
+        uri = f"127.0.0.1:{proxy.server_address[1]}"
+        endpoints = f'"{uri}","{endpoint}"' if failover else f'"{uri}"'
+        env = {
+            "SAIL_CATALOG__LIST": f'[{{name="sail",type="hms",uris=[{endpoints}]}}]',
+            "SAIL_CATALOG__DEFAULT_CATALOG": "sail",
+            **envs,
+        }
+        try:
+            with spark_connect_server(envs=env) as server, spark_session_factory(server.remote) as sessions:
+                yield sessions.create()
+        finally:
+            proxy.shutdown()
+            thread.join()
+
+
+def test_migrate_hms_rename_lost_reply(hms_s3_metastore_endpoint, hms_s3_env, jvm_spark, database):
+    import threading
+
+    dropped = threading.Event()
+
+    def drop_rename_reply(reply, data):
+        if reply and b"alter_table" in data and not dropped.is_set():
+            dropped.set()
+            return True
+        return False
 
     src = f"{database}.lost_reply"
     jvm_spark.sql(
@@ -499,40 +523,146 @@ def test_migrate_hms_rename_lost_reply(hms_s3_metastore_endpoint, hms_s3_env, jv
     )
     try:
         jvm_spark.sql(f"INSERT INTO {src} VALUES (42)")  # noqa: S608
-        with socketserver.ThreadingTCPServer(("127.0.0.1", 0), DropRenameReply) as proxy:
-            proxy.daemon_threads = True
-            thread = threading.Thread(target=proxy.serve_forever, daemon=True)
-            thread.start()
-            uri = f"127.0.0.1:{proxy.server_address[1]}"
-            env = {
-                "SAIL_CATALOG__LIST": f'[{{name="sail",type="hms",uris=["{uri}","{hms_s3_metastore_endpoint}"]}}]',
-                "SAIL_CATALOG__DEFAULT_CATALOG": "sail",
-                **hms_s3_env,
-            }
-            try:
-                with spark_connect_server(envs=env) as server, spark_session_factory(server.remote) as sessions:
-                    session = sessions.create()
-                    assert session.sql(f"CALL sail.system.migrate('{src}')").first()[0] == 1
-                    assert dropped.is_set()
-                    assert session.table(src).first().id == 42
-                    assert jvm_spark.table(f"{src}_BACKUP_").first().id == 42
-            finally:
-                proxy.shutdown()
-                thread.join()
+        with _hms_fault_session(hms_s3_metastore_endpoint, hms_s3_env, drop_rename_reply, failover=True) as session:
+            assert session.sql(f"CALL sail.system.migrate('{src}')").first()[0] == 1
+            assert dropped.is_set()
+            assert session.table(src).first().id == 42
+            assert jvm_spark.table(f"{src}_BACKUP_").first().id == 42
     finally:
         for name in [src, f"{src}_BACKUP_"]:
             jvm_spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-def test_hive_source_file_filter(spark, jvm_spark, database):
-    src = f"{database}.filtered_src"
-    path = f"s3://hms-warehouse/{database}/filtered_src"
-    jvm_spark.sql(f"CREATE TABLE {src} (id BIGINT) USING parquet OPTIONS (pathGlobFilter 'part-*') LOCATION '{path}'")
+def test_migrate_hms_recovery_lookup_failure(
+    hms_s3_metastore_endpoint, hms_s3_env, hms_warehouse_dir, jvm_spark, database
+):
+    import threading
+
+    reading_backup = threading.Event()
+    dropped = threading.Event()
+
+    def fail_original_lookup(reply, data):
+        if not reply and b"get_table_req" in data:
+            if b"recovery_backup" in data.lower():
+                reading_backup.set()
+            elif reading_backup.is_set() and b"recovery_src" in data.lower():
+                dropped.set()
+                return True
+        return False
+
+    source = hms_warehouse_dir / "recovery_src"
+    source.mkdir()
+    (source / "broken.parquet").write_bytes(b"bad")
+    src = f"{database}.recovery_src"
+    backup = f"{database}.recovery_backup"
+    jvm_spark.sql(f"CREATE EXTERNAL TABLE {src} (id BIGINT) STORED AS parquet LOCATION '{source.as_uri()}'")
     try:
-        jvm_spark.sql(f"INSERT INTO {src} VALUES (7)")  # noqa: S608
-        with pytest.raises(PySparkException, match="pathglobfilter"):
+        with _hms_fault_session(hms_s3_metastore_endpoint, hms_s3_env, fail_original_lookup) as session:
+            with pytest.raises(PySparkException, match="commit state unknown") as failure:
+                session.sql(
+                    f"CALL sail.system.migrate(table => '{src}', backup_table_name => 'recovery_backup')"
+                ).collect()
+            assert dropped.is_set()
+            assert "parquet" in str(failure.value).lower()
+            assert "could not confirm restoration" in str(failure.value)
+            assert "destination lookup failed" in str(failure.value)
+            assert "recovery_src" in str(failure.value)
+        assert jvm_spark.catalog.tableExists(backup)
+        assert not jvm_spark.catalog.tableExists(src)
+        assert (source / "broken.parquet").read_bytes() == b"bad"
+    finally:
+        for name in [src, backup]:
+            jvm_spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("option", ["pathGlobFilter", "basePath"])
+def test_hive_source_file_options(spark, jvm_spark, database, option):
+    src = f"{database}.filtered_{option.lower()}"
+    path = f"s3://hms-warehouse/{database}/filtered_{option.lower()}"
+    value = "part-*" if option == "pathGlobFilter" else path
+    jvm_spark.sql("SELECT 7L AS id").write.parquet(path)
+    jvm_spark.sql(f"CREATE TABLE {src} (id BIGINT) USING parquet OPTIONS ({option} '{value}') LOCATION '{path}'")
+    try:
+        with pytest.raises(PySparkException, match=option.lower()):
             spark.sql(f"CALL sail.system.migrate('{src}')").collect()
         assert jvm_spark.table(src).first().id == 7
         assert not spark.catalog.tableExists(f"{src}_BACKUP_")
     finally:
         jvm_spark.sql(f"DROP TABLE IF EXISTS {src}")
+
+
+# [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.1/spark-extensions/src/test/java/org/apache/iceberg/spark/extensions/TestMigrateTableProcedure.java#L313-L348
+# [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/spark/v4.1/spark-extensions/src/test/java/org/apache/iceberg/spark/extensions/TestSnapshotTableProcedure.java#L433-L469
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize("ignore_missing", [False, True])
+def test_import_registered_missing_partition(spark, jvm_spark, database, hms_warehouse_dir, procedure, ignore_missing):
+    import shutil
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = f"missing_{procedure}_{int(ignore_missing)}"
+    src = f"{database}.{table}"
+    dest = f"{database}.{table}_snapshot"
+    root = hms_warehouse_dir / table
+    snapshot_path = hms_warehouse_dir / f"{table}_snapshot"
+    for part in (1, 2):
+        path = root / f"p={part}"
+        path.mkdir(parents=True)
+        pq.write_table(pa.table({"id": [part]}), path / "part.parquet")
+    jvm_spark.sql(
+        f"CREATE EXTERNAL TABLE {src} (id BIGINT) PARTITIONED BY (p INT) STORED AS parquet LOCATION '{root.as_uri()}'"
+    )
+    try:
+        jvm_spark.sql(f"ALTER TABLE {src} ADD PARTITION (p=1) PARTITION (p=2)")
+        assert sorted(r.p for r in jvm_spark.table(src).collect()) == [1, 2]
+        shutil.rmtree(root / "p=1")
+        args = (
+            f"table => '{src}'"
+            if procedure == "migrate"
+            else f"source_table => '{src}', table => '{dest}', location => '{snapshot_path.as_uri()}'"
+        )
+        if ignore_missing:
+            args += ", ignore_missing_files => true"
+        call = f"CALL sail.system.{procedure}({args})"
+        if ignore_missing:
+            assert spark.sql(call).first()[0] == 1
+            target = src if procedure == "migrate" else dest
+            assert [tuple(r) for r in spark.table(target).collect()] == [(2, 2)]
+            assert [tuple(r) for r in jvm_spark.table(f"iceberg.{target}").collect()] == [(2, 2)]
+        else:
+            with pytest.raises(PySparkException, match=r"[Nn]o such file|[Nn]ot found"):
+                spark.sql(call).collect()
+            assert [tuple(r) for r in jvm_spark.table(src).where("p = 2").collect()] == [(2, 2)]
+            assert not jvm_spark.catalog.tableExists(dest)
+            assert not jvm_spark.catalog.tableExists(f"{src}_BACKUP_")
+            assert not (root / "metadata").exists()
+            assert not (snapshot_path / "metadata").exists()
+    finally:
+        for name in [src, dest, f"{src}_BACKUP_"]:
+            jvm_spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_import_avro_case_mismatch(spark, jvm_spark, database, hms_warehouse_dir, procedure, nested):
+    table = f"avro_case_{procedure}_{int(nested)}"
+    src = f"{database}.{table}"
+    dest = f"{database}.{table}_snapshot"
+    root = hms_warehouse_dir / table
+    snapshot_path = hms_warehouse_dir / f"{table}_snapshot"
+    physical = "named_struct('a', 13L) AS s" if nested else "13L AS a"
+    jvm_spark.sql(f"SELECT {physical}").write.format("avro").save(str(root))
+    columns = "s STRUCT<A: BIGINT>" if nested else "A BIGINT"
+    jvm_spark.sql(f"CREATE TABLE {src} ({columns}) USING avro LOCATION '{root.as_uri()}'")
+    args = f"'{src}'" if procedure == "migrate" else f"'{src}','{dest}','{snapshot_path.as_uri()}'"
+    try:
+        with pytest.raises(PySparkException, match=r"Avro field name .* differs in case"):
+            spark.sql(f"CALL sail.system.{procedure}({args})").collect()
+        assert jvm_spark.catalog.tableExists(src)
+        assert not jvm_spark.catalog.tableExists(dest)
+        assert not jvm_spark.catalog.tableExists(f"{src}_BACKUP_")
+        assert not (root / "metadata").exists()
+    finally:
+        for name in [src, dest, f"{src}_BACKUP_"]:
+            jvm_spark.sql(f"DROP TABLE IF EXISTS {name}")
