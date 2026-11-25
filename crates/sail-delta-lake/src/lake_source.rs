@@ -104,10 +104,19 @@ impl DataSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            snapshot_pins,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        create_delta_source(ctx, table_url, schema, options, lakehouse_table).await
+        create_delta_source(
+            ctx,
+            table_url,
+            schema,
+            options,
+            lakehouse_table,
+            snapshot_pins.as_deref(),
+        )
+        .await
     }
 
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
@@ -121,6 +130,7 @@ impl DataSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            snapshot_pins: _,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
@@ -264,6 +274,7 @@ impl LakeSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            snapshot_pins: _,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;

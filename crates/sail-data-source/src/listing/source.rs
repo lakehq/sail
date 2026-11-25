@@ -181,6 +181,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             sort_order,
             options,
             read_case_sensitive,
+            snapshot_pins: _,
         } = info;
 
         let recursive = boolean_option(

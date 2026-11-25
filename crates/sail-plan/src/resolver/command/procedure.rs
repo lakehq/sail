@@ -329,6 +329,7 @@ impl PlanResolver<'_> {
                                     items: properties.clone(),
                                 }],
                                 read_case_sensitive: true,
+                                snapshot_pins: None,
                             }),
                             predicates: vec![],
                         },
@@ -731,6 +732,7 @@ fn procedure_path_source(path: String) -> SourceInfo {
         sort_order: vec![],
         options: vec![],
         read_case_sensitive: true,
+        snapshot_pins: None,
     }
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -240,6 +240,49 @@ pub struct SourceInfo {
     /// reconcile a requested schema against files on read (e.g. Parquet); it is
     /// inert for formats that resolve their schema from metadata.
     pub read_case_sensitive: bool,
+    /// The table versions that the reads of the statement share, for a read of the data
+    /// of a table.
+    pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
+}
+
+/// The versions of the lake tables that the reads of one statement read, so that all the
+/// reads of a table in the statement read one version of it, whether they read it by name
+/// or by path and whatever their read options are.
+#[derive(Debug, Default)]
+pub struct LakeSnapshotPins {
+    /// The table ID and the version, by the location of the table and whether the version
+    /// was read with the commits that the catalog ratified.
+    versions: Mutex<HashMap<(String, bool), (String, i64)>>,
+}
+
+impl LakeSnapshotPins {
+    /// Returns the table ID and the version that the first read of the table read.
+    pub fn get(&self, location: &str, catalog_managed: bool) -> Result<Option<(String, i64)>> {
+        let versions = self
+            .versions
+            .lock()
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
+        Ok(versions
+            .get(&(location.to_string(), catalog_managed))
+            .cloned())
+    }
+
+    /// Records the table ID and the version that a read of the table read, unless an
+    /// earlier read recorded them.
+    pub fn insert(
+        &self,
+        location: String,
+        catalog_managed: bool,
+        table_id: String,
+        version: i64,
+    ) -> Result<()> {
+        self.versions
+            .lock()
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?
+            .entry((location, catalog_managed))
+            .or_insert((table_id, version));
+        Ok(())
+    }
 }
 
 impl SourceInfo {

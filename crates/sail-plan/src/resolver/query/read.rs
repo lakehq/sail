@@ -506,6 +506,7 @@ impl PlanResolver<'_> {
                 },
             ],
             read_case_sensitive: origin.read_case_sensitive,
+            snapshot_pins: lake_relation.is_none().then(|| state.lake_snapshot_pins()),
         };
         let table_source = match lake_relation {
             Some((relation_provider, relation)) => {
@@ -947,6 +948,7 @@ impl PlanResolver<'_> {
             // TODO: detect duplicated keys in the set of options
             options: vec![OptionLayer::OptionList { items: options }],
             read_case_sensitive,
+            snapshot_pins: Some(state.lake_snapshot_pins()),
         };
         let source = registry
             .get_data_source(format)?

@@ -305,6 +305,7 @@ async fn execute(
         read_options,
         false,
         info.lakehouse_table.clone(),
+        None,
     )
     .await?;
     validate_snapshot(&snapshot, &call.invocation)?;

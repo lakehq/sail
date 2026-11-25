@@ -12,6 +12,7 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion_common::plan_datafusion_err;
+use futures::future::BoxFuture;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
@@ -38,6 +39,7 @@ use sail_sql_analyzer::statement::from_ast_statement;
 
 use super::{create_memory_catalog, create_session_with_catalogs, plan_shared_ctes};
 
+mod delta_snapshot;
 mod temporary_view;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -54,6 +56,9 @@ struct SnapshotCatalogProvider {
     requests: Mutex<Vec<String>>,
     /// Whether each session has its own catalog of this name, as the memory catalog.
     session_local: bool,
+    /// A table name and what to do once when the table is requested, such as a commit
+    /// to another table in the middle of a statement.
+    on_request: Mutex<Option<(String, BoxFuture<'static, ()>)>>,
 }
 
 /// How a catalog finds a table and which name it returns for the table.
@@ -82,6 +87,7 @@ impl SnapshotCatalogProvider {
             loads: AtomicUsize::new(0),
             requests: Mutex::new(vec![]),
             session_local: false,
+            on_request: Mutex::new(None),
         }
     }
 
@@ -151,6 +157,14 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.record("table", table);
+        let action = self
+            .on_request
+            .lock()
+            .ok()
+            .and_then(|mut x| x.take_if(|(name, _)| name == table));
+        if let Some((_, action)) = action {
+            action.await;
+        }
         let mut status = match self.names {
             TableNames::Exact => self.inner.get_table(database, table).await?,
             TableNames::IgnoreCase => {

@@ -9,6 +9,7 @@ use sail_catalog::lakehouse::LakehouseResolvedTable;
 use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::datasource::LakeSnapshotPins;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -177,6 +178,9 @@ pub(super) struct PlanResolverState {
     /// The sources of the Delta Lake and Iceberg tables read by path so far, so that the
     /// reads of a path in the query read one version of the table.
     lake_path_sources: HashMap<LakePathSourceKey, SharedTableSource>,
+    /// The versions of the lake tables read so far, so that the reads of a table in the
+    /// query read one version of it, by name or by path and with any read options.
+    lake_snapshot_pins: Arc<LakeSnapshotPins>,
     /// The successful catalog table lookups so far, shared by repeated references to
     /// the same table within the query. The key is the fully qualified name of the table
     /// (the catalog, the database, and the table), which is the same for all the ways
@@ -269,6 +273,7 @@ impl PlanResolverState {
             windows: std::collections::HashMap::new(),
             table_sources: HashMap::new(),
             lake_path_sources: HashMap::new(),
+            lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
             session_catalog_table_lookups: HashMap::new(),
             view_definition: None,
@@ -597,6 +602,10 @@ impl PlanResolverState {
     ) {
         self.lake_path_sources
             .insert(key, SharedTableSource(source));
+    }
+
+    pub fn lake_snapshot_pins(&self) -> Arc<LakeSnapshotPins> {
+        Arc::clone(&self.lake_snapshot_pins)
     }
 
     pub fn get_catalog_table_lookup(&self, table: &[String]) -> Option<CatalogTableLookup> {

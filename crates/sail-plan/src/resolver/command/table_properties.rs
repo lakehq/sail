@@ -55,6 +55,7 @@ impl PlanResolver<'_> {
                         sort_order: vec![],
                         options: vec![],
                         read_case_sensitive: self.config.case_sensitive,
+                        snapshot_pins: None,
                     },
                 )
                 .await?;
@@ -101,6 +102,7 @@ impl PlanResolver<'_> {
                                     items: properties.clone(),
                                 }],
                                 read_case_sensitive: self.config.case_sensitive,
+                                snapshot_pins: None,
                             },
                         )
                         .await?

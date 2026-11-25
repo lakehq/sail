@@ -24,6 +24,7 @@ use sail_common_datafusion::catalog::delta::{
 use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableColumnStatus, identity_partition_fields,
 };
+use sail_common_datafusion::datasource::LakeSnapshotPins;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::LakeSourceMetadata;
 use url::Url;
@@ -265,10 +266,19 @@ pub async fn create_delta_source(
     schema: Option<Schema>,
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    pins: Option<&LakeSnapshotPins>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let read_options = options.clone();
-    let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
+    let (snapshot, log_store, scan_config) = load_delta_read_state(
+        ctx,
+        table_url,
+        schema,
+        options,
+        false,
+        lakehouse_table,
+        pins,
+    )
+    .await?;
 
     if read_options.read_change_feed {
         return Ok(Arc::new(
@@ -310,7 +320,7 @@ pub async fn infer_delta_logical_metadata(
 ) -> Result<LakeSourceMetadata> {
     let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table, None).await?;
 
     let schema = if read_options.read_change_feed {
         use datafusion::logical_expr::TableSource;
@@ -353,7 +363,7 @@ pub(crate) async fn delta_table_properties(
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Vec<(String, String)>> {
     let (snapshot, _, _) =
-        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table, None).await?;
     let mut properties = snapshot.metadata().configuration().clone();
     properties.remove("path");
     let protocol = snapshot.protocol();
@@ -808,6 +818,7 @@ pub(crate) async fn load_delta_read_state(
     options: DeltaReadOptions,
     metadata_only: bool,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    pins: Option<&LakeSnapshotPins>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
@@ -831,13 +842,42 @@ pub(crate) async fn load_delta_read_state(
     };
 
     let mut table_config = delta_read_snapshot_config(metadata_only, &options);
+    let catalog_managed = catalog_managed_commits.is_some();
     table_config.catalog_managed_commits = catalog_managed_commits;
     let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
-    // Load the table state according to the provided time travel options.
-    load_table_by_options(&mut deltalake_table, &options).await?;
+    // The reads of a table in a statement read the version that the first of them read,
+    // unless they travel in time or read changes. A table that was created again at the
+    // location has another ID, and the read reads its latest version.
+    let pins = pins.filter(|_| {
+        options.version_as_of.is_none()
+            && options.timestamp_as_of.is_none()
+            && !options.read_change_feed
+    });
+    match pins
+        .map(|pins| pins.get(table_url.as_str(), catalog_managed))
+        .transpose()?
+        .flatten()
+    {
+        Some((table_id, version)) => {
+            deltalake_table.load_version(version).await?;
+            if deltalake_table.snapshot()?.metadata().id() != table_id {
+                deltalake_table.load().await?;
+            }
+        }
+        // Load the table state according to the provided time travel options.
+        None => load_table_by_options(&mut deltalake_table, &options).await?,
+    }
 
     let snapshot = deltalake_table.snapshot()?.clone();
+    if let Some(pins) = pins {
+        pins.insert(
+            table_url.to_string(),
+            catalog_managed,
+            snapshot.metadata().id().to_string(),
+            snapshot.version(),
+        )?;
+    }
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,
