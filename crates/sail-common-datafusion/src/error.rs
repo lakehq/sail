@@ -198,10 +198,7 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<DataFusionError>() {
             return match e {
-                // TODO: Pass `e.as_ref()`. `e` is a `&Box<ArrowError>`, so the downcast to
-                //  `ArrowError` fails and every Arrow error inside a DataFusion error becomes
-                //  `Unknown`, which the client sees as `SparkRuntimeException`.
-                DataFusionError::ArrowError(e, _) => Self::build::<Py>(e, seen),
+                DataFusionError::ArrowError(e, _) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::ParquetError(e) => Self::FormatParquet(e.to_string()),
                 DataFusionError::ObjectStore(e) => Self::Io(e.to_string()),
                 DataFusionError::IoError(e) => Self::Io(e.to_string()),
@@ -214,7 +211,7 @@ impl CommonErrorCause {
                 DataFusionError::ExecutionJoin(e) => Self::Execution(e.to_string()),
                 DataFusionError::ResourcesExhausted(x) => Self::Execution(x.clone()),
                 DataFusionError::External(e) => Self::build::<Py>(e.as_ref(), seen),
-                DataFusionError::Context(_, e) => Self::build::<Py>(e, seen),
+                DataFusionError::Context(_, e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Substrait(x) => Self::Unknown(x.clone()),
                 DataFusionError::Diagnostic(_, e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Collection(errors) => {
