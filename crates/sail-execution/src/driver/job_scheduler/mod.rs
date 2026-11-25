@@ -15,6 +15,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_telemetry::events::SystemEventReporter;
 pub use state::{JobState, TaskState};
 
@@ -25,6 +26,7 @@ use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
+    shutdown: Arc<QueryCancellation>,
     options: JobSchedulerOptions,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
@@ -36,6 +38,7 @@ impl JobScheduler {
     pub fn new(options: JobSchedulerOptions, event_reporter: SystemEventReporter) -> Self {
         Self {
             options,
+            shutdown: Arc::new(QueryCancellation::default()),
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec: Box::new(RemoteExecutionCodec),

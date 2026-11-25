@@ -19,6 +19,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -153,7 +154,7 @@ impl PySparkGroupAggregateUDF {
     }
 
     fn batch_accumulator(&self) -> Result<BatchAggregateAccumulator> {
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = with_blocking_python(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupAggregator {
             udf,
             output_type: self.output_type.clone(),
@@ -206,7 +207,7 @@ struct PySparkGroupAggregator {
 
 impl BatchAggregator for PySparkGroupAggregator {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let data = with_blocking_python(|py| -> PyUdfResult<_> {
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;
