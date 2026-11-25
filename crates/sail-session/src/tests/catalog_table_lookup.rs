@@ -56,9 +56,9 @@ struct SnapshotCatalogProvider {
     requests: Mutex<Vec<String>>,
     /// Whether each session has its own catalog of this name, as the memory catalog.
     session_local: bool,
-    /// A table name and what to do once when the table is requested, such as a commit
-    /// to another table in the middle of a statement.
-    on_request: Mutex<Option<(String, BoxFuture<'static, ()>)>>,
+    /// Table names and what to do once when each table is requested, such as a commit to
+    /// another table in the middle of a statement.
+    on_request: Mutex<Vec<(String, BoxFuture<'static, ()>)>>,
 }
 
 /// How a catalog finds a table and which name it returns for the table.
@@ -87,7 +87,7 @@ impl SnapshotCatalogProvider {
             loads: AtomicUsize::new(0),
             requests: Mutex::new(vec![]),
             session_local: false,
-            on_request: Mutex::new(None),
+            on_request: Mutex::new(vec![]),
         }
     }
 
@@ -157,11 +157,10 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.record("table", table);
-        let action = self
-            .on_request
-            .lock()
-            .ok()
-            .and_then(|mut x| x.take_if(|(name, _)| name == table));
+        let action = self.on_request.lock().ok().and_then(|mut x| {
+            let i = x.iter().position(|(name, _)| name == table)?;
+            Some(x.remove(i))
+        });
         if let Some((_, action)) = action {
             action.await;
         }

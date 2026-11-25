@@ -65,19 +65,28 @@ impl Fixture {
         Ok((fixture, store))
     }
 
-    /// Writes the commits when the statement requests the table `t`.
-    fn commit_on_request(&self, store: &Arc<InMemory>, commits: Vec<(Path, String)>) -> TestResult {
+    /// Writes the commits when the statement requests the table.
+    fn commit_on_request(
+        &self,
+        table: &str,
+        store: &Arc<InMemory>,
+        commits: Vec<(Path, String)>,
+    ) -> TestResult {
         let store = Arc::clone(store);
-        *self.catalog.on_request.lock().map_err(|e| e.to_string())? = Some((
-            "t".to_string(),
-            Box::pin(async move {
-                for commit in commits {
-                    // A failed commit fails the check of the version that a later
-                    // statement reads.
-                    let _ = put(&store, commit).await;
-                }
-            }),
-        ));
+        self.catalog
+            .on_request
+            .lock()
+            .map_err(|e| e.to_string())?
+            .push((
+                table.to_string(),
+                Box::pin(async move {
+                    for commit in commits {
+                        // A failed commit fails the check of the version that a later
+                        // statement reads.
+                        let _ = put(&store, commit).await;
+                    }
+                }),
+            ));
         Ok(())
     }
 
@@ -167,7 +176,7 @@ async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     // The read by name loads version 0, and the commit of version 1 comes before the
     // read by path, which reads version 0 as well.
-    fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
@@ -175,7 +184,7 @@ async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
     // The next statement reads version 1.
-    fixture.commit_on_request(&store, vec![commit(2, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(2, "first")])?;
     let plan = union_all(vec![
         read_path(&[]),
         read_table(&["t"], &[]),
@@ -190,7 +199,7 @@ async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
 #[tokio::test]
 async fn test_delta_reads_with_other_options_read_one_version() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
-    fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
         read_path(&[("metadataAsDataRead", "true")]),
         read_table(&["t"], &[]),
@@ -208,7 +217,7 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     // Reads that travel in time or read changes neither use nor record the version of
     // the statement, so the later read reads the latest version.
-    fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
         read_path(&[("versionAsOf", "0")]),
         select_k_v(read_path(&[
@@ -221,7 +230,7 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1, 0]);
     // A read that travels in time after the first read keeps its version.
-    fixture.commit_on_request(&store, vec![commit(2, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(2, "first")])?;
     let plan = union_all(vec![
         read_path(&[]),
         read_table(&["t"], &[]),
@@ -235,13 +244,18 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
 #[tokio::test]
 async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
-    fixture.commit_on_request(&store, vec![commit(0, "second"), commit(1, "second")])?;
+    fixture.create_table(&["t2"], &["k", "v"]).await?;
+    fixture.commit_on_request("t", &store, vec![commit(0, "second"), commit(1, "second")])?;
+    fixture.commit_on_request("t2", &store, vec![commit(2, "second")])?;
+    // The reads after the table was created again read one version of the new table.
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
         read_path(&[]),
+        read_table(&["t2"], &[]),
+        read_path(&[("deltaLogReplayStrategy", "hash")]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1]);
+    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1, 1]);
     Ok(())
 }
 
@@ -250,7 +264,7 @@ async fn test_delta_merge_target_and_source_read_one_version() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     // The target is read first. The source reads the table by path after a commit, and
     // reads the version of the target, which the write is validated against.
-    fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let sql = "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
         SELECT k, v FROM delta.`memory:///d/`) AS s ON d.k = s.k WHEN MATCHED THEN DELETE";
     let versions = fixture
@@ -270,7 +284,7 @@ async fn test_delta_update_and_delete_target_and_condition_read_one_version() ->
         // The target is read first. The condition reads the table by path after a
         // commit, and reads the version of the target, which the write is validated
         // against.
-        fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+        fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
         let sql = format!(
             "{statement} k IN (SELECT k FROM t UNION ALL SELECT k FROM delta.`memory:///d/`)"
         );

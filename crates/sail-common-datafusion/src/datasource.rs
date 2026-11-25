@@ -268,7 +268,8 @@ impl LakeSnapshotPins {
     }
 
     /// Records the table ID and the version that a read of the table read, unless an
-    /// earlier read recorded them.
+    /// earlier read of the table with the same ID recorded them. A table that was created
+    /// again at the location has another ID, and its first read sets its version.
     pub fn insert(
         &self,
         location: String,
@@ -276,11 +277,16 @@ impl LakeSnapshotPins {
         table_id: String,
         version: i64,
     ) -> Result<()> {
-        self.versions
+        let mut versions = self
+            .versions
             .lock()
-            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
+        let pinned = versions
             .entry((location, catalog_managed))
-            .or_insert((table_id, version));
+            .or_insert_with(|| (table_id.clone(), version));
+        if pinned.0 != table_id {
+            *pinned = (table_id, version);
+        }
         Ok(())
     }
 }
@@ -811,6 +817,11 @@ mod tests {
         assert_eq!(pins.get(location, false)?, Some(("id".to_string(), 1)));
         assert_eq!(pins.get(location, true)?, Some(("id".to_string(), 2)));
         assert_eq!(pins.get("memory:///e/", false)?, None);
+        // A table that was created again has another ID, and its first version replaces
+        // the version of the old table.
+        pins.insert(location.to_string(), false, "other".to_string(), 4)?;
+        pins.insert(location.to_string(), false, "other".to_string(), 5)?;
+        assert_eq!(pins.get(location, false)?, Some(("other".to_string(), 4)));
         Ok(())
     }
 
