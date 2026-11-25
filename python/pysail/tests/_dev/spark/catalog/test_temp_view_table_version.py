@@ -481,6 +481,34 @@ def test_view_reads_a_table_whose_columns_changed(spark, tmp_path, fmt, kind, ca
         table.drop()
 
 
+# DataFrames of the distinct rows of a table `(a, b)` by both columns, which read only `a`.
+DISTINCT_FRAMES = {
+    "distinct": lambda frame: frame.distinct().select("a"),
+    "dropDuplicates": lambda frame: frame.dropDuplicates(["a", "b"]).select("a"),
+}
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("case", DISTINCT_FRAMES)
+def test_data_frame_view_of_distinct_rows_reads_a_table_whose_key_changed(spark, tmp_path, fmt, case):
+    table = Table(spark, tmp_path, fmt, "a INT, b INT")
+    try:
+        table.insert("(1, 10), (1, 20), (2, 30)")
+        view = create_view(spark, "dv", None, DISTINCT_FRAMES[case](spark.table(table.name)))
+        table.views.append(view)
+        # The current values of a column that tells rows apart tell them apart, of whatever type.
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create("a INT, b STRING")
+        table.insert("(1, 'z'), (1, 'y'), (2, 'y')")
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,), (1,), (2,)]
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create("a INT")
+        table.insert("(1), (2)")
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+    finally:
+        table.drop()
+
+
 # The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
 # (1, 10), (1, 20), (2, 30) and (1, 10), (3, 40), when one of them is created again with
 # other columns: the query of the view, the table, its columns and rows, and the rows

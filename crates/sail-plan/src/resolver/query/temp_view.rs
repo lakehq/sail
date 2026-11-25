@@ -1320,6 +1320,22 @@ fn required_columns(
                     add_use(&mut uses, field.name().clone(), &ColumnUse::Identity);
                 }
             }
+            LogicalPlan::Distinct(Distinct::On(on)) if on.sort_expr.is_none() => {
+                for expr in &on.on_expr {
+                    match expr {
+                        Expr::Column(column) => {
+                            add_use(&mut uses, column.name.clone(), &ColumnUse::Identity);
+                        }
+                        expr => add_expression_uses(expr, &mut uses)?,
+                    }
+                }
+                for (expr, field) in on.select_expr.iter().zip(on.schema.fields()) {
+                    derivations
+                        .entry(field.name().clone())
+                        .or_default()
+                        .push(Derivation::of(expr)?);
+                }
+            }
             LogicalPlan::Aggregate(aggregate) => {
                 for expr in &aggregate.group_expr {
                     match expr {
@@ -2346,7 +2362,7 @@ mod tests {
             ])
         );
         // A struct whose fields are read, and that tells rows apart, is read whole.
-        let plan = LogicalPlanBuilder::from(t)
+        let plan = LogicalPlanBuilder::from(t.clone())
             .filter(get(col("t_s"), "x").gt(lit(0)))?
             .distinct()?
             .project(vec![col("t_a")])?
@@ -2354,6 +2370,15 @@ mod tests {
         let mut expected = vec![(0, ColumnUse::Whole)];
         expected.extend(identity(&[1, 2]));
         expected.push((3, ColumnUse::Whole));
+        assert_eq!(uses(&plan, &state, address)?, Some(expected));
+        // `dropDuplicates(["a", "b"])` of a DataFrame.
+        let columns = ["t_a", "t_b", "t_c", "t_s"].map(col).to_vec();
+        let plan = LogicalPlanBuilder::from(t)
+            .distinct_on(vec![col("t_a"), col("t_b")], columns, None)?
+            .project(vec![col("t_a")])?
+            .build()?;
+        let mut expected = vec![(0, ColumnUse::Whole)];
+        expected.extend(identity(&[1]));
         assert_eq!(uses(&plan, &state, address)?, Some(expected));
         Ok(())
     }
@@ -2390,8 +2415,16 @@ mod tests {
     fn test_other_operators_read_all_the_columns_of_their_inputs() -> TestResult {
         let mut state = PlanResolverState::new();
         let (t, address) = read_table(&mut state, "t")?;
+        // `DISTINCT ON` that keeps the first row of each key by an order.
         let plan = LogicalPlanBuilder::from(t.clone())
-            .distinct_on(vec![col("t_a")], vec![col("t_a")], None)?
+            .distinct_on(
+                vec![col("t_a")],
+                vec![col("t_a")],
+                Some(vec![
+                    col("t_a").sort(true, false),
+                    col("t_b").sort(true, false),
+                ]),
+            )?
             .build()?;
         assert_eq!(uses(&plan, &state, address)?, whole(&[0, 1, 2, 3]));
         // A scan that no projection renames, or that has filters, is read whole.
