@@ -138,7 +138,7 @@ async fn few_rows_per_channel_violations(
         // The DataFusion range router keeps copies of the split points and the
         // primitive key values. These fixtures all use one Int64 per split point.
         let router_bytes = match &partitioning {
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) => {
                 range.split_points().len()
                     * (size_of::<SplitPoint>() + size_of::<ScalarValue>() + size_of::<i64>())
             }

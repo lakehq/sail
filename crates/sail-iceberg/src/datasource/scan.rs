@@ -1145,7 +1145,6 @@ impl IcebergScan {
         let (_, parquet_pushdown_filters) = self.separate_filters(&planned.residual_filters());
         let mut clean_parquet = Vec::new();
         let mut clean_avro = Vec::new();
-        let mut clean_orc = Vec::new();
         let mut dirty_units = Vec::new();
         let mut all_data_files = Vec::new();
         for task in &planned.tasks {
@@ -1156,9 +1155,8 @@ impl IcebergScan {
                 match file.file_format {
                     DataFileFormat::Parquet => clean_parquet.push((file, id)),
                     DataFileFormat::Avro => clean_avro.push((file, id)),
-                    DataFileFormat::Orc => clean_orc.push((file, id)),
-                    DataFileFormat::Puffin => {
-                        return plan_err!("Unsupported Iceberg data file format: Puffin");
+                    format => {
+                        return plan_err!("Unsupported Iceberg data file format: {format:?}");
                     }
                 }
             } else {
@@ -1204,7 +1202,7 @@ impl IcebergScan {
             ),
         ));
 
-        if dirty_units.is_empty() && clean_avro.is_empty() && clean_orc.is_empty() {
+        if dirty_units.is_empty() && clean_avro.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
@@ -1255,7 +1253,6 @@ impl IcebergScan {
         for (format, files) in [
             (DataFileFormat::Parquet, clean_parquet),
             (DataFileFormat::Avro, clean_avro),
-            (DataFileFormat::Orc, clean_orc),
         ] {
             if files.is_empty() {
                 continue;
@@ -1265,7 +1262,6 @@ impl IcebergScan {
             } else {
                 Arc::new(super::imported_source::IcebergImportedFileSource::new(
                     TableSchema::from(self.arrow_schema.clone()),
-                    format,
                 ))
             };
             let files = self.create_partitioned_files(&store_ctx, files)?;

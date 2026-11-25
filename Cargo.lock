@@ -189,7 +189,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "strum 0.28.0",
- "thiserror 2.0.21",
+ "thiserror",
  "uuid",
 ]
 
@@ -401,7 +401,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "futures",
- "prost 0.14.6",
+ "prost",
  "prost-types",
  "tonic",
  "tonic-prost",
@@ -1568,7 +1568,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -2647,7 +2647,7 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "object_store",
- "prost 0.14.6",
+ "prost",
 ]
 
 [[package]]
@@ -2658,7 +2658,7 @@ checksum = "fe28ebbacf852b02ec8921189d161fc99637855077910df4a37cfaa0121beaf6"
 dependencies = [
  "arrow",
  "datafusion-common",
- "prost 0.14.6",
+ "prost",
 ]
 
 [[package]]
@@ -2669,7 +2669,7 @@ checksum = "08665dfc4ba98a18c9c835317fa41638c23dbdf9d9db2fc306950253666cefa2"
 dependencies = [
  "datafusion-common",
  "datafusion-proto-common",
- "prost 0.14.6",
+ "prost",
 ]
 
 [[package]]
@@ -2808,7 +2808,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -3081,12 +3081,6 @@ dependencies = [
  "event-listener",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "fallible-streaming-iterator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fancy-regex"
@@ -3580,12 +3574,12 @@ dependencies = [
  "log",
  "md-5",
  "once_cell",
- "prost 0.14.6",
+ "prost",
  "rand 0.10.4",
  "regex",
  "roxmltree",
  "socket2",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "uuid",
  "whoami",
@@ -3665,12 +3659,12 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
- "prost 0.14.6",
+ "prost",
  "rand 0.10.4",
  "regex",
  "roxmltree",
  "socket2",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-util",
  "url",
@@ -3689,7 +3683,7 @@ dependencies = [
  "futures",
  "hdfs-native",
  "object_store",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
 ]
 
@@ -3743,7 +3737,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "windows-sys 0.61.2",
 ]
@@ -4511,7 +4505,7 @@ dependencies = [
  "quote",
  "strum 0.27.2",
  "syn 2.0.119",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -4674,7 +4668,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.21",
+ "thiserror",
  "walkdir",
  "windows-link",
 ]
@@ -4748,7 +4742,7 @@ dependencies = [
  "pest_derive",
  "regex",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -4803,7 +4797,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-util",
  "tower",
@@ -4825,7 +4819,7 @@ dependencies = [
  "serde",
  "serde-value",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -5069,15 +5063,6 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
-version = "0.11.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
-dependencies = [
- "twox-hash",
-]
-
-[[package]]
-name = "lz4_flex"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
@@ -5092,16 +5077,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f56455fff36934a9500d69062aec1c77037179b6f0669e4d5d6b72b84722d6a3"
 dependencies = [
  "twox-hash",
-]
-
-[[package]]
-name = "lzokay-native"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96ab312376eec4f900987620048ff27d8bdc7a8095b717963cafb80ffc873905"
-dependencies = [
- "byteorder",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5464,7 +5439,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tracing",
  "url",
@@ -5502,7 +5477,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.21",
+ "thiserror",
  "tracing",
 ]
 
@@ -5541,10 +5516,10 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
- "prost 0.14.6",
+ "prost",
  "reqwest 0.13.4",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-types",
@@ -5560,7 +5535,7 @@ dependencies = [
  "const-hex",
  "opentelemetry",
  "opentelemetry_sdk",
- "prost 0.14.6",
+ "prost",
  "serde",
  "tonic",
  "tonic-prost",
@@ -5579,7 +5554,7 @@ dependencies = [
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.5",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
 ]
 
@@ -5588,32 +5563,6 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
-
-[[package]]
-name = "orc-rust"
-version = "0.9.0"
-source = "git+https://github.com/jackypan1989/orc-rust.git?rev=ba7af4c5fc87b6235d0001928a87104ddb06b699#ba7af4c5fc87b6235d0001928a87104ddb06b699"
-dependencies = [
- "arrow",
- "async-trait",
- "bytemuck",
- "bytes",
- "chrono",
- "chrono-tz",
- "fallible-streaming-iterator",
- "flate2",
- "futures",
- "futures-util",
- "log",
- "lz4_flex 0.11.7",
- "lzokay-native",
- "num",
- "prost 0.13.5",
- "snafu",
- "snap",
- "tokio",
- "zstd 0.13.3",
-]
 
 [[package]]
 name = "ordered-float"
@@ -5829,7 +5778,7 @@ checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
- "prost 0.14.6",
+ "prost",
  "prost-types",
 ]
 
@@ -5843,7 +5792,7 @@ dependencies = [
  "chrono",
  "pbjson",
  "pbjson-build",
- "prost 0.14.6",
+ "prost",
  "prost-build",
  "serde",
 ]
@@ -6204,22 +6153,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
-]
-
-[[package]]
-name = "prost"
 version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ef0b569d1d907ab3a28596aee62cf1f61dacb0529a4bedcd8e7460e2d5228b4"
 dependencies = [
  "bytes",
- "prost-derive 0.14.6",
+ "prost-derive",
 ]
 
 [[package]]
@@ -6234,26 +6173,13 @@ dependencies = [
  "multimap",
  "petgraph",
  "prettyplease 0.3.0",
- "prost 0.14.6",
+ "prost",
  "prost-types",
  "pulldown-cmark",
  "pulldown-cmark-to-cmark",
  "regex",
  "syn 3.0.10",
  "tempfile",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -6275,7 +6201,7 @@ version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f29a7c4c7a84cef41a53d338a2d10d4f1b043ea5c3dde26db22ee2c9c1b1c75b"
 dependencies = [
- "prost 0.14.6",
+ "prost",
 ]
 
 [[package]]
@@ -6415,7 +6341,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tracing",
  "web-time",
@@ -6438,7 +6364,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.21",
+ "thiserror",
  "tinyvec",
  "tracing",
  "web-time",
@@ -6657,7 +6583,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -7016,7 +6942,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn 3.0.10",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -7032,7 +6958,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-object-store",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -7055,7 +6981,7 @@ dependencies = [
  "serde_arrow",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "url",
 ]
@@ -7121,7 +7047,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tracing",
  "url",
@@ -7191,7 +7117,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "wiremock",
 ]
@@ -7206,10 +7132,10 @@ dependencies = [
  "log",
  "lz4_flex 0.14.2",
  "num_enum",
- "prost 0.14.6",
+ "prost",
  "readonly",
  "sail-common",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-prost-build",
@@ -7259,7 +7185,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
  "tonic",
@@ -7274,6 +7200,7 @@ version = "0.7.3"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "arrow-select",
  "async-trait",
  "chrono",
  "datafusion",
@@ -7294,13 +7221,13 @@ dependencies = [
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
- "prost 0.14.6",
+ "prost",
  "rand 0.10.4",
  "sail-common",
  "serde",
  "serde_arrow",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-prost-build",
@@ -7373,7 +7300,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "url",
@@ -7420,7 +7347,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "url",
  "uuid",
@@ -7451,7 +7378,7 @@ dependencies = [
  "log",
  "object_store",
  "opentelemetry-proto",
- "prost 0.14.6",
+ "prost",
  "prost-build",
  "rand 0.10.4",
  "readonly",
@@ -7474,7 +7401,7 @@ dependencies = [
  "sail-telemetry",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-util",
  "toml 1.2.1+spec-1.1.0",
@@ -7496,7 +7423,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
- "prost 0.14.6",
+ "prost",
  "sail-catalog",
  "sail-catalog-memory",
  "sail-common",
@@ -7507,7 +7434,7 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-sql-parser",
  "sail-telemetry",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-health",
@@ -7523,7 +7450,6 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
- "arrow-select",
  "async-trait",
  "base64 0.23.1",
  "bytes",
@@ -7570,7 +7496,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "url",
  "uuid",
@@ -7615,7 +7541,6 @@ dependencies = [
  "murmur3",
  "object_store",
  "once_cell",
- "orc-rust",
  "ordered-float 5.5.1",
  "parquet",
  "parquet-variant",
@@ -7711,7 +7636,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -7750,6 +7675,7 @@ dependencies = [
  "log",
  "object_store",
  "parquet",
+ "rand 0.10.4",
  "sail-cache",
  "sail-catalog",
  "sail-common-datafusion",
@@ -7806,7 +7732,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "url",
@@ -7854,7 +7780,7 @@ dependencies = [
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tokio-stream",
 ]
@@ -7904,7 +7830,7 @@ dependencies = [
  "sail-telemetry",
  "secrecy",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "uuid",
@@ -7927,7 +7853,7 @@ dependencies = [
  "pbjson-types",
  "phf 0.14.0",
  "prettyplease 0.3.0",
- "prost 0.14.6",
+ "prost",
  "prost-build",
  "prost-types",
  "pyo3",
@@ -7947,7 +7873,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.10",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -7969,7 +7895,7 @@ dependencies = [
  "sail-common-spark",
  "sail-sql-parser",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror",
 ]
 
 [[package]]
@@ -8022,7 +7948,7 @@ dependencies = [
  "smallvec",
  "syn 3.0.10",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
 ]
 
@@ -8053,7 +7979,7 @@ dependencies = [
  "pin-project-lite",
  "prettyplease 0.3.0",
  "proc-macro2",
- "prost 0.14.6",
+ "prost",
  "quote",
  "regex",
  "sail-common",
@@ -8064,7 +7990,7 @@ dependencies = [
  "serde_yaml",
  "syn 3.0.10",
  "tempfile",
- "thiserror 2.0.21",
+ "thiserror",
  "tokio",
  "tonic",
 ]
@@ -8075,7 +8001,7 @@ version = "0.7.3"
 dependencies = [
  "async-trait",
  "num_enum",
- "thiserror 2.0.21",
+ "thiserror",
  "thrift",
  "tokio",
 ]
@@ -8422,27 +8348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snafu"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
-dependencies = [
- "snafu-derive",
-]
-
-[[package]]
-name = "snafu-derive"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "snap"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8701,31 +8606,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-dependencies = [
- "thiserror-impl 1.0.69",
-]
-
-[[package]]
-name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.21",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.69"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "thiserror-impl",
 ]
 
 [[package]]
@@ -9035,7 +8920,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc97d645691d64d96db1afe386d0d2918ac84ab56e2c91e153f22f6349a378cd"
 dependencies = [
- "prost 0.14.6",
+ "prost",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -9049,7 +8934,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba464054e2226f182a34489b8b079bf4c6e3e7ab5fd7fc30e024f24aa92a484"
 dependencies = [
  "bytes",
- "prost 0.14.6",
+ "prost",
  "tonic",
 ]
 
@@ -9075,7 +8960,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eb4700e220803efd45baf3babaa1958c79adc9e0fe6fbd4422f9188d1e57d26"
 dependencies = [
- "prost 0.14.6",
+ "prost",
  "prost-types",
  "tokio",
  "tokio-stream",
@@ -9089,7 +8974,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccbb6c31deb8e99dcdf87df19c5289b7838a600da74a8224baa671e52fe7c5ad"
 dependencies = [
- "prost 0.14.6",
+ "prost",
  "prost-types",
  "tonic",
 ]
@@ -9852,7 +9737,7 @@ dependencies = [
  "rust_decimal",
  "static_assertions",
  "strum 0.27.2",
- "thiserror 2.0.21",
+ "thiserror",
  "v_jsonescape",
  "xee-name",
  "xee-schema-type",
@@ -9909,7 +9794,7 @@ dependencies = [
  "iri-string",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror 2.0.21",
+ "thiserror",
  "xee-interpreter",
  "xee-ir",
  "xee-schema-type",
@@ -9930,7 +9815,7 @@ dependencies = [
  "ibig",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror 2.0.21",
+ "thiserror",
  "xee-name",
  "xee-schema-type",
  "xee-xpath-lexer",
@@ -9949,7 +9834,7 @@ dependencies = [
  "iri-string",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror 2.0.21",
+ "thiserror",
  "xee-interpreter",
  "xee-ir",
  "xee-schema-type",

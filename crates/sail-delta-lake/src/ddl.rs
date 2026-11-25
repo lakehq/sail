@@ -751,7 +751,11 @@ pub(crate) async fn open_table(
     path: &str,
     lakehouse: Option<&LakehouseExecutionContext>,
 ) -> Result<DeltaTable> {
-    let url = crate::lake_source::parse_location_to_url(path)?;
+    let url = if lakehouse.is_some() {
+        crate::lake_source::parse_location_to_url(path)?
+    } else {
+        sail_data_source::resolve_table_url(path.to_string())?
+    };
     let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
     let log_store = create_logstore_with_object_store(store, url.clone(), StorageConfig)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;

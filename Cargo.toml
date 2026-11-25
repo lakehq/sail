@@ -60,7 +60,7 @@ quick-xml = "0.42.0"
 serde_yaml = "0.9.34"
 monostate = "1.0.2"
 regex = "1.12.3"
-fancy-regex = "0.20.0"
+fancy-regex = "0.20.2"
 csv-core = "0.1.13"
 memchr = "2.8.3"
 regex-syntax = "0.8.11"
@@ -215,8 +215,6 @@ arrow-flight = { version = "60.1.0", features = ["flight-sql"] }
 arrow-pyarrow = { version = "60.1.0" }
 arrow-select = { version = "60.1.0" }
 parquet = { version = "60.1.0", features = ["arrow_canonical_extension_types"] }
-# Arrow 60 support is pending in https://github.com/datafusion-contrib/orc-rust/pull/91.
-orc-rust = { git = "https://github.com/jackypan1989/orc-rust.git", rev = "ba7af4c5fc87b6235d0001928a87104ddb06b699", default-features = false }
 parquet-variant = { version = "60.1.0" }
 parquet-variant-compute = { version = "60.1.0" }
 parquet-variant-json = { version = "60.1.0" }

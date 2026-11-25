@@ -86,7 +86,13 @@ message ExtendedPhysicalPlanNode {
     TailExecNode tail = 69;
     IcebergImportedExecNode iceberg_imported = 70;
     bytes unsupported_iceberg_row_scan_schema = 71;
-    HivePartitionWriteExecNode hive_partition_write = 72;
+    RangePartitionSampleExecNode range_partition_sample = 72;
+    RangePartitionResampleExecNode range_partition_resample = 73;
+    RangeSplitPointsExecNode range_split_points = 74;
+    RangeChannelExecNode range_channel = 75;
+    RangeResampleExecNode range_resample = 76;
+    RangeResampleDecisionExecNode range_resample_decision = 77;
+    HivePartitionWriteExecNode hive_partition_write = 78;
   }
 }
 
@@ -1118,6 +1124,46 @@ message SeededRandomColumn {
 enum PartitionSeed {
   PARTITION_SEED_OFFSET = 0;
   PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
+message RangePartitionSampleExecNode {
+  bytes input = 1;
+  uint64 sample_size = 2;
+}
+
+message RangePartitionResampleExecNode {
+  bytes input = 1;
+  double fraction = 2;
+  repeated uint64 partitions = 3;
+}
+
+message RangeSampleOptions {
+  repeated SortOptions sort_options = 1;
+  uint64 num_partitions = 2;
+  double sample_size = 3;
+  uint64 partition_sample_size = 4;
+}
+
+message RangeSplitPointsExecNode {
+  bytes sample = 1;
+  bytes resample = 2;
+  RangeSampleOptions options = 3;
+}
+
+message RangeResampleDecisionExecNode {
+  bytes sample = 1;
+  RangeSampleOptions options = 2;
+}
+
+message RangeResampleExecNode {
+  bytes input = 1;
+  bytes decisions = 2;
+}
+
+message RangeChannelExecNode {
+  bytes input = 1;
+  bytes split_points = 2;
+  LexOrdering ordering = 3;
 }
 
 message CoalesceExecNode {

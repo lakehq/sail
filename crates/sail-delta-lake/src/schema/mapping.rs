@@ -12,10 +12,23 @@ use crate::spec::{
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
 pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
+    annotate_schema(schema, new_physical_name)
+}
+
+fn new_physical_name(_: &StructField) -> String {
+    format!("col-{}", uuid::Uuid::new_v4())
+}
+
+/// Existing files have the logical field names in their Parquet schemas.
+pub(crate) fn annotate_existing_schema(schema: &StructType) -> StructType {
+    annotate_schema(schema, |field| field.name().clone())
+}
+
+fn annotate_schema(schema: &StructType, physical_name: fn(&StructField) -> String) -> StructType {
     let counter = AtomicI64::new(1);
     let annotated_fields: Vec<StructField> = schema
         .fields()
-        .map(|f| annotate_field(f, &counter))
+        .map(|f| annotate_field(f, &counter, physical_name))
         .collect();
     StructType::try_new(annotated_fields).unwrap_or_else(|_| empty_struct_type())
 }
@@ -39,30 +52,53 @@ pub fn annotate_new_fields_for_column_mapping(
     (merged, last_used)
 }
 
-/// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
-pub fn compute_max_column_id(schema: &StructType) -> i64 {
-    fn max_in_data_type(data_type: &DataType) -> i64 {
+fn visit_fields(schema: &StructType, visit: &mut impl FnMut(&StructField)) {
+    fn visit_type(data_type: &DataType, visit: &mut impl FnMut(&StructField)) {
         match data_type {
-            DataType::Struct(struct_type) => struct_type
-                .fields()
-                .map(max_in_field)
-                .max()
-                .unwrap_or_default(),
-            DataType::Array(array_type) => max_in_data_type(array_type.element_type()),
-            DataType::Map(map_type) => {
-                max_in_data_type(map_type.key_type()).max(max_in_data_type(map_type.value_type()))
+            DataType::Struct(nested) => visit_fields(nested, visit),
+            DataType::Array(array) => visit_type(array.element_type(), visit),
+            DataType::Map(map) => {
+                visit_type(map.key_type(), visit);
+                visit_type(map.value_type(), visit);
             }
-            _ => 0,
+            _ => {}
         }
     }
-
-    fn max_in_field(field: &StructField) -> i64 {
-        let field_id = column_mapping_id(field).unwrap_or_default();
-
-        field_id.max(max_in_data_type(field.data_type()))
+    for field in schema.fields() {
+        visit(field);
+        visit_type(field.data_type(), visit);
     }
+}
 
-    schema.fields().map(max_in_field).max().unwrap_or_default()
+pub(crate) fn validate_mapped_schema(schema: &StructType) -> crate::spec::DeltaResult<()> {
+    let mut error = None;
+    visit_fields(schema, &mut |field| {
+        let missing = if column_mapping_id(field).is_none() {
+            Some("column ID")
+        } else if column_mapping_physical_name(field).is_none() {
+            Some("physical name")
+        } else {
+            None
+        };
+        if let Some(missing) = missing {
+            error.get_or_insert_with(|| {
+                crate::spec::DeltaError::schema(format!(
+                    "Missing {missing} for mapped Delta field '{}'",
+                    field.name()
+                ))
+            });
+        }
+    });
+    error.map_or(Ok(()), Err)
+}
+
+/// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
+pub fn compute_max_column_id(schema: &StructType) -> i64 {
+    let mut max_id = 0;
+    visit_fields(schema, &mut |field| {
+        max_id = max_id.max(column_mapping_id(field).unwrap_or_default());
+    });
+    max_id
 }
 
 fn column_mapping_id(field: &StructField) -> Option<i64> {
@@ -110,9 +146,13 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
     merged
 }
 
-fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
+fn annotate_field(
+    field: &StructField,
+    counter: &AtomicI64,
+    physical_name: fn(&StructField) -> String,
+) -> StructField {
     let next_id = counter.fetch_add(1, Ordering::Relaxed);
-    let physical_name = format!("col-{}", uuid::Uuid::new_v4());
+
     let mut annotated = field.clone();
     strip_parquet_field_id_metadata(&mut annotated.metadata);
     let annotated = annotated.add_metadata([
@@ -122,11 +162,11 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
         ),
         (
             ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
-            MetadataValue::String(physical_name),
+            MetadataValue::String(physical_name(field)),
         ),
     ]);
 
-    let new_data_type = merge_types(None, annotated.data_type(), counter);
+    let new_data_type = annotate_nested_type(annotated.data_type(), counter, physical_name);
     StructField {
         name: annotated.name().clone(),
         data_type: new_data_type,
@@ -135,21 +175,27 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     }
 }
 
-fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
+fn annotate_nested_type(
+    data_type: &DataType,
+    counter: &AtomicI64,
+    physical_name: fn(&StructField) -> String,
+) -> DataType {
     match data_type {
         DataType::Struct(st) => {
-            let fields: Vec<StructField> =
-                st.fields().map(|f| annotate_field(f, counter)).collect();
+            let fields: Vec<StructField> = st
+                .fields()
+                .map(|f| annotate_field(f, counter, physical_name))
+                .collect();
             let result = StructType::try_new(fields).unwrap_or_else(|_| empty_struct_type());
             DataType::Struct(Box::new(result))
         }
         DataType::Array(at) => {
-            let new_elem = annotate_nested_type(at.element_type(), counter);
+            let new_elem = annotate_nested_type(at.element_type(), counter, physical_name);
             DataType::Array(Box::new(ArrayType::new(new_elem, at.contains_null())))
         }
         DataType::Map(mt) => {
-            let new_key = annotate_nested_type(mt.key_type(), counter);
-            let new_value = annotate_nested_type(mt.value_type(), counter);
+            let new_key = annotate_nested_type(mt.key_type(), counter, physical_name);
+            let new_value = annotate_nested_type(mt.value_type(), counter, physical_name);
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
@@ -160,36 +206,27 @@ fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
     }
 }
 
-fn merge_types(
-    existing_type: Option<&DataType>,
-    new_type: &DataType,
-    counter: &AtomicI64,
-) -> DataType {
+fn merge_types(existing_type: &DataType, new_type: &DataType, counter: &AtomicI64) -> DataType {
     match (existing_type, new_type) {
-        (Some(DataType::Struct(prev_st)), DataType::Struct(new_st)) => DataType::Struct(Box::new(
+        (DataType::Struct(prev_st), DataType::Struct(new_st)) => DataType::Struct(Box::new(
             merge_struct(prev_st.as_ref(), new_st.as_ref(), counter),
         )),
-        (Some(DataType::Array(prev_arr)), DataType::Array(new_arr)) => {
-            let merged_elem = merge_types(
-                Some(prev_arr.element_type()),
-                new_arr.element_type(),
-                counter,
-            );
+        (DataType::Array(prev_arr), DataType::Array(new_arr)) => {
+            let merged_elem = merge_types(prev_arr.element_type(), new_arr.element_type(), counter);
             DataType::Array(Box::new(ArrayType::new(
                 merged_elem,
                 new_arr.contains_null(),
             )))
         }
-        (Some(DataType::Map(prev_map)), DataType::Map(new_map)) => {
-            let new_key = merge_types(Some(prev_map.key_type()), new_map.key_type(), counter);
-            let new_value = merge_types(Some(prev_map.value_type()), new_map.value_type(), counter);
+        (DataType::Map(prev_map), DataType::Map(new_map)) => {
+            let new_key = merge_types(prev_map.key_type(), new_map.key_type(), counter);
+            let new_value = merge_types(prev_map.value_type(), new_map.value_type(), counter);
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
                 new_map.value_contains_null(),
             )))
         }
-        (None, new_type) => annotate_nested_type(new_type, counter),
         (_, _) => new_type.clone(),
     }
 }
@@ -229,8 +266,7 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
         .map(|nf| {
             let prev = find_matching_field(nf, &existing_fields);
             if let Some(prev_field) = prev {
-                let merged_dtype =
-                    merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+                let merged_dtype = merge_types(prev_field.data_type(), nf.data_type(), counter);
                 let merged_metadata = merge_metadata(prev_field, nf);
                 StructField {
                     name: nf.name().clone(),
@@ -239,7 +275,7 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
                     metadata: merged_metadata,
                 }
             } else {
-                annotate_field(nf, counter)
+                annotate_field(nf, counter, new_physical_name)
             }
         })
         .collect();

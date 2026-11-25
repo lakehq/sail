@@ -498,10 +498,10 @@ pub(super) fn key_partitioning(
                 .into_iter()
                 .map(|point| SplitPoint::new(vec![ScalarValue::Int64(Some(point))]))
                 .collect();
-            ShufflePartitioning::Range(RangePartitioning::try_new(
-                [PhysicalSortExpr::new_default(key)].into(),
-                points,
-            )?)
+            ShufflePartitioning::Range(
+                RangePartitioning::try_new([PhysicalSortExpr::new_default(key)].into(), points)?,
+                channels,
+            )
         }
         "round_robin_batch" => ShufflePartitioning::RoundRobinBatch(channels),
         _ => ShufflePartitioning::RoundRobinRow(channels),

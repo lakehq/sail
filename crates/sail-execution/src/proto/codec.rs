@@ -256,6 +256,7 @@ use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_order_key::SparkOrderKey;
 use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::concat_ws::ConcatWs;
@@ -305,6 +306,7 @@ use sail_function::scalar::xml::to_xml::ToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
 use sail_function::window::{FirstLastValue, FirstLastValueKind, Ntile};
+use sail_iceberg::datasource::imported_source::IcebergImportedFileSource;
 use sail_iceberg::physical_plan::merge_metadata_exec::UnsupportedIcebergRowScanExec;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
@@ -326,6 +328,11 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec};
+use sail_physical_plan::range_split::{
+    RangeChannelExec, RangeResampleDecisionExec, RangeResampleExec, RangeSampleOptions,
+    RangeSplitPointsExec,
+};
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
@@ -862,23 +869,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 format,
             }) => {
-                let format = match format.as_str() {
-                    "avro" => sail_iceberg::spec::DataFileFormat::Avro,
-                    "orc" => sail_iceberg::spec::DataFileFormat::Orc,
-                    _ => return plan_err!("Invalid imported Iceberg file format: {format}"),
-                };
+                if format != "avro" {
+                    return plan_err!("Unsupported imported Iceberg file format: {format}");
+                }
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     proto_converter,
-                    Arc::new(
-                        sail_iceberg::datasource::imported_source::IcebergImportedFileSource::new(
-                            table_schema,
-                            format,
-                        ),
-                    ),
+                    Arc::new(IcebergImportedFileSource::new(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
@@ -1598,6 +1598,80 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                     column_name,
                     Arc::new(schema),
+                )?))
+            }
+            NodeKind::RangePartitionResample(r#gen::RangePartitionResampleExecNode {
+                input,
+                fraction,
+                partitions,
+            }) => Ok(Arc::new(RangePartitionResampleExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                fraction,
+                partitions
+                    .into_iter()
+                    .map(|p| usize::try_from(p).map_err(|e| plan_datafusion_err!("{e}")))
+                    .collect::<Result<Vec<_>>>()?,
+            )?)),
+            NodeKind::RangePartitionSample(r#gen::RangePartitionSampleExecNode {
+                input,
+                sample_size,
+            }) => Ok(Arc::new(RangePartitionSampleExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                usize::try_from(sample_size).map_err(|e| plan_datafusion_err!("{e}"))?,
+            )?)),
+            NodeKind::RangeSplitPoints(r#gen::RangeSplitPointsExecNode {
+                sample,
+                resample,
+                options,
+            }) => Ok(Arc::new(RangeSplitPointsExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &sample)?,
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &resample)?,
+                decode_range_sample_options(options)?,
+            )?)),
+            NodeKind::RangeResample(r#gen::RangeResampleExecNode { input, decisions }) => {
+                Ok(Arc::new(RangeResampleExec::try_new(
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                    try_decode_physical_plan_with_converter(
+                        ctx,
+                        self,
+                        proto_converter,
+                        &decisions,
+                    )?,
+                )?))
+            }
+            NodeKind::RangeResampleDecision(r#gen::RangeResampleDecisionExecNode {
+                sample,
+                options,
+            }) => Ok(Arc::new(RangeResampleDecisionExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &sample)?,
+                decode_range_sample_options(options)?,
+            )?)),
+            NodeKind::RangeChannel(r#gen::RangeChannelExecNode {
+                input,
+                split_points,
+                ordering,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let split_points = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &split_points,
+                )?;
+                let ordering = ordering.ok_or_else(|| {
+                    plan_datafusion_err!("RangeChannelExec is missing its ordering")
+                })?;
+                let ordering = self.try_decode_lex_ordering(
+                    &ordering,
+                    input.schema().as_ref(),
+                    ctx,
+                    proto_converter,
+                )?;
+                Ok(Arc::new(RangeChannelExec::try_new(
+                    input,
+                    split_points,
+                    ordering,
                 )?))
             }
             NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
@@ -2750,9 +2824,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         struct_field_matching: Self::try_encode_struct_field_matching(
                             struct_field_matching,
                         ),
-                        cast_mode: Self::try_encode_schema_evolution_cast_mode(
-                            cast_mode,
-                        ),
+                        cast_mode: Self::try_encode_schema_evolution_cast_mode(cast_mode),
                         virtual_columns: parquet_source
                             .table_schema()
                             .virtual_columns()
@@ -2779,9 +2851,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         proto_converter,
                     )?)?;
                     NodeKind::Arrow(r#gen::ArrowExecNode { base_config })
-                } else if let Some(imported) = file_source.downcast_ref::<sail_iceberg::datasource::imported_source::IcebergImportedFileSource>() {
-                    let base_config = try_encode_message(serialize_file_scan_config(file_scan, self, proto_converter)?)?;
-                    NodeKind::IcebergImported(r#gen::IcebergImportedExecNode { base_config, format: match imported.format() { sail_iceberg::spec::DataFileFormat::Orc => "orc", _ => "avro" }.into() })
+                } else if file_source.is::<IcebergImportedFileSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        proto_converter,
+                    )?)?;
+                    NodeKind::IcebergImported(r#gen::IcebergImportedExecNode {
+                        base_config,
+                        format: "avro".into(),
+                    })
                 } else if file_source.is::<AvroSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
@@ -3251,6 +3330,79 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(resample) = node.downcast_ref::<RangePartitionResampleExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                resample.input().clone(),
+            )?;
+            NodeKind::RangePartitionResample(r#gen::RangePartitionResampleExecNode {
+                input,
+                fraction: resample.fraction(),
+                partitions: resample.partitions().iter().map(|&p| p as u64).collect(),
+            })
+        } else if let Some(sample) = node.downcast_ref::<RangePartitionSampleExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                sample.input().clone(),
+            )?;
+            NodeKind::RangePartitionSample(r#gen::RangePartitionSampleExecNode {
+                input,
+                sample_size: sample.sample_size() as u64,
+            })
+        } else if let Some(split_points) = node.downcast_ref::<RangeSplitPointsExec>() {
+            NodeKind::RangeSplitPoints(r#gen::RangeSplitPointsExecNode {
+                sample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    split_points.sample().clone(),
+                )?,
+                resample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    split_points.resample().clone(),
+                )?,
+                options: Some(encode_range_sample_options(split_points.options())),
+            })
+        } else if let Some(decision) = node.downcast_ref::<RangeResampleDecisionExec>() {
+            NodeKind::RangeResampleDecision(r#gen::RangeResampleDecisionExecNode {
+                sample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    decision.sample().clone(),
+                )?,
+                options: Some(encode_range_sample_options(decision.options())),
+            })
+        } else if let Some(resample) = node.downcast_ref::<RangeResampleExec>() {
+            NodeKind::RangeResample(r#gen::RangeResampleExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    resample.input().clone(),
+                )?,
+                decisions: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    resample.decisions().clone(),
+                )?,
+            })
+        } else if let Some(channel) = node.downcast_ref::<RangeChannelExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                channel.input().clone(),
+            )?;
+            let split_points = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                channel.split_points().clone(),
+            )?;
+            NodeKind::RangeChannel(r#gen::RangeChannelExecNode {
+                input,
+                split_points,
+                ordering: Some(self.try_encode_lex_ordering(channel.ordering(), proto_converter)?),
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -4140,6 +4292,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
+            "normalize_nan_and_zero" => Ok(Arc::new(ScalarUDF::from(
+                NormalizeFloatKeys::nan_and_zero(),
+            ))),
+            "spark_order_key" => Ok(Arc::new(ScalarUDF::from(SparkOrderKey::new(false)))),
+            "spark_order_key_desc" => Ok(Arc::new(ScalarUDF::from(SparkOrderKey::new(true)))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
@@ -4344,6 +4501,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RtrimFunc>()
             || node_inner.is::<ReplaceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
+            || node_inner.is::<SparkOrderKey>()
             || node_inner.is::<MixedNumeric>()
             || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
@@ -6682,6 +6840,45 @@ fn uses_stage_scalar(expr: &Arc<dyn PhysicalExpr>) -> bool {
         .unwrap_or(true)
 }
 
+fn encode_range_sample_options(options: &RangeSampleOptions) -> r#gen::RangeSampleOptions {
+    r#gen::RangeSampleOptions {
+        sort_options: options
+            .sort_options
+            .iter()
+            .map(|x| r#gen::SortOptions {
+                descending: x.descending,
+                nulls_first: x.nulls_first,
+            })
+            .collect(),
+        num_partitions: options.num_partitions as u64,
+        sample_size: options.sample_size,
+        partition_sample_size: options.partition_sample_size as u64,
+    }
+}
+
+fn decode_range_sample_options(
+    options: Option<r#gen::RangeSampleOptions>,
+) -> Result<RangeSampleOptions> {
+    let Some(options) = options else {
+        return plan_err!("range sample options are missing");
+    };
+    Ok(RangeSampleOptions {
+        sort_options: options
+            .sort_options
+            .into_iter()
+            .map(|x| SortOptions {
+                descending: x.descending,
+                nulls_first: x.nulls_first,
+            })
+            .collect(),
+        num_partitions: usize::try_from(options.num_partitions)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+        sample_size: options.sample_size,
+        partition_sample_size: usize::try_from(options.partition_sample_size)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
@@ -8703,6 +8900,19 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::new()))?;
         downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
         assert_eq!(decoded.name(), "normalize_float_keys");
+        let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::nan_and_zero()))?;
+        let decoded = downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
+        assert_eq!(decoded, &NormalizeFloatKeys::nan_and_zero());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_order_key_udf() -> Result<()> {
+        for descending in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkOrderKey::new(descending)))?;
+            let decoded = downcast_udf::<SparkOrderKey>(&decoded, "SparkOrderKey")?;
+            assert_eq!(decoded, &SparkOrderKey::new(descending));
+        }
         Ok(())
     }
 
@@ -10012,6 +10222,113 @@ mod tests {
     }
 
     #[test]
+    fn test_range_partition_sample_round_trip() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let plan = RangePartitionSampleExec::try_new(Arc::new(EmptyExec::new(schema)), 300)?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan.clone()))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RangePartitionSampleExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range partition sample"))?;
+        assert_eq!(decoded.sample_size(), 300);
+        assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partition_resample_round_trip() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use sail_physical_plan::range_sample::RangePartitionResampleExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let input = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(schema)),
+            Partitioning::RoundRobinBatch(4),
+        )?);
+        let plan = RangePartitionResampleExec::try_new(input, 0.25, vec![1, 3])?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan.clone()))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RangePartitionResampleExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range partition resample"))?;
+        assert_eq!(decoded.fraction(), 0.25);
+        assert_eq!(decoded.partitions(), &[1, 3]);
+        assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_split_points_and_channel_round_trip() -> Result<()> {
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::expressions::Column;
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let options = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let sample: Arc<dyn ExecutionPlan> =
+            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 30)?);
+        let sample_options = RangeSampleOptions {
+            sort_options: vec![options],
+            num_partitions: 5,
+            sample_size: 100.0,
+            partition_sample_size: 30,
+        };
+        let resample = Arc::new(RangeResampleExec::try_new(
+            Arc::clone(&input),
+            Arc::new(RangeResampleDecisionExec::try_new(
+                Arc::clone(&sample),
+                sample_options.clone(),
+            )?),
+        )?);
+        let split_points = Arc::new(RangeSplitPointsExec::try_new(
+            sample,
+            resample,
+            sample_options.clone(),
+        )?);
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("key", 0)),
+            options,
+        )])
+        .ok_or_else(|| plan_datafusion_err!("expected an ordering"))?;
+        let plan = RangeChannelExec::try_new(input, split_points, ordering.clone())?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan.clone()))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RangeChannelExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range channel"))?;
+        assert_eq!(decoded.ordering(), &ordering);
+        assert_eq!(decoded.schema(), plan.schema());
+        let split_points = decoded
+            .split_points()
+            .downcast_ref::<RangeSplitPointsExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range split points"))?;
+        assert_eq!(split_points.options(), &sample_options);
+        let resample = split_points
+            .resample()
+            .downcast_ref::<RangeResampleExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range resample"))?;
+        let decision = resample
+            .decisions()
+            .downcast_ref::<RangeResampleDecisionExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range resample decision"))?;
+        assert_eq!(decision.options(), &sample_options);
+        Ok(())
+    }
+
+    #[test]
     fn test_range_output_partitioning_round_trip() -> Result<()> {
         use datafusion::physical_expr::{RangePartitioning, SplitPoint};
 
@@ -10035,7 +10352,9 @@ mod tests {
         let encoded = encode_remote_partitioning(&codec, &Partitioning::Range(expected.clone()))?;
         let wire: task_gen::TaskOutputDistribution = TaskOutputDistribution::Range {
             partitioning: Arc::from(encoded),
-            channels: 3,
+            // Range repartitioning keeps its requested partition count, so a sample
+            // with fewer split points leaves the last channels empty.
+            channels: 4,
         }
         .into();
         let distribution = wire
@@ -10054,11 +10373,12 @@ mod tests {
             .map_err(|error| {
                 plan_datafusion_err!("failed to decode range partitioning: {error}")
             })?;
-        let ShufflePartitioning::Range(actual) = actual else {
+        let ShufflePartitioning::Range(actual, channels) = actual else {
             return plan_err!("expected range partitioning, got {actual}");
         };
 
         assert_eq!(actual, expected);
+        assert_eq!(channels, 4);
         Ok(())
     }
 

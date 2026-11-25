@@ -45,7 +45,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["io-util"] }
 uuid = { workspace = true }
 parquet = { workspace = true }
-orc-rust = { workspace = true, features = ["async"] }
 bytes = { workspace = true }
 # indexmap = { workspace = true }
 log = { workspace = true }
