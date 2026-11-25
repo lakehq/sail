@@ -33,11 +33,10 @@ use sail_common_datafusion::lakesource::{LakeSource, RowLevelOperation};
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_plan::config::PlanConfig;
 use sail_plan::resolver::PlanResolver;
-use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 
-use super::{create_memory_catalog, create_session_with_catalogs};
+use super::{create_memory_catalog, create_session_with_catalogs, plan_shared_ctes};
 
 mod temporary_view;
 
@@ -445,10 +444,23 @@ impl Fixture {
     /// Creates a session like [`Self::try_new_with_names`], which shares the repeated
     /// references to a CTE if `share_ctes` is set.
     async fn try_new_with(names: TableNames, share_ctes: bool, setup: &[&str]) -> TestResult<Self> {
-        let catalog = Arc::new(SnapshotCatalogProvider::new(
-            create_memory_catalog()?,
-            names,
-        ));
+        let catalog = SnapshotCatalogProvider::new(create_memory_catalog()?, names);
+        let fixture = Self::try_new_with_catalog(catalog, share_ctes)?;
+        fixture.create_table(&["t"], &["k", "v"]).await?;
+        for sql in setup {
+            fixture.execute(sql).await?;
+        }
+        Ok(fixture)
+    }
+
+    /// Creates a session without tables, with the catalog `sail` and the catalog `second`,
+    /// which finds and returns table names as `sail` does.
+    fn try_new_with_catalog(
+        catalog: SnapshotCatalogProvider,
+        share_ctes: bool,
+    ) -> TestResult<Self> {
+        let names = catalog.names;
+        let catalog = Arc::new(catalog);
         let second = Arc::new(SnapshotCatalogProvider::new(
             MemoryCatalogProvider::new(
                 "second".to_string(),
@@ -475,18 +487,13 @@ impl Fixture {
         session
             .extension::<DataSourceRegistry>()?
             .register_data_source(Arc::clone(&source) as Arc<dyn DataSource>)?;
-        let fixture = Self {
+        Ok(Self {
             session,
             catalog,
             second,
             source,
             share_ctes,
-        };
-        fixture.create_table(&["t"], &["k", "v"]).await?;
-        for sql in setup {
-            fixture.execute(sql).await?;
-        }
-        Ok(fixture)
+        })
     }
 
     async fn create_table(&self, table: &[&str], columns: &[&str]) -> TestResult {
@@ -533,29 +540,8 @@ impl Fixture {
     }
 
     async fn execute_plan_with_shared_ctes(&self, plan: LogicalPlan) -> TestResult {
-        let state = self.session.state();
-        let mut restart = false;
-        let plan = optimize_and_plan_shared_ctes(
-            plan,
-            &mut |plan, query| {
-                if query && std::mem::replace(&mut restart, true) {
-                    session_state_for_restart(&state).optimize(&plan)
-                } else {
-                    state.optimize(&plan)
-                }
-            },
-            |plan| {
-                let state = &state;
-                async move {
-                    state
-                        .query_planner()
-                        .create_physical_plan(&plan, state)
-                        .await
-                }
-            },
-        )
-        .await?;
-        collect(plan, state.task_ctx()).await?;
+        let plan = plan_shared_ctes(&self.session, plan).await?;
+        collect(plan, self.session.state().task_ctx()).await?;
         Ok(())
     }
 
@@ -980,11 +966,7 @@ async fn test_identifier_read_does_not_see_views() -> TestResult {
 #[tokio::test]
 async fn test_missing_tables_are_not_found() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
-    let not_found = |name: &str| {
-        format!(
-            "analysis error: Table not found: [TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"
-        )
-    };
+    let not_found = |name: &str| format!("{NOT_FOUND}: {name}");
     for (table, error) in [
         ("missing", not_found("missing")),
         ("default.missing", not_found("missing")),
@@ -1453,26 +1435,12 @@ async fn test_writes_to_missing_tables_and_views_are_rejected() -> TestResult {
         "CREATE TEMPORARY VIEW temp AS SELECT 1L AS k, 2L AS v",
     ])
     .await?;
-    for (sql, error) in write_errors() {
-        let resolution = fixture.resolve(sql).await?;
-        assert_eq!(resolution.error, Some(error), "{sql}");
-        assert_eq!(resolution.writes, vec![], "{sql}");
-    }
-    Ok(())
-}
-
-const NOT_FOUND: &str =
-    "analysis error: Table not found: [TABLE_OR_VIEW_NOT_FOUND] Table or view not found";
-const ROW_LEVEL: &str = "not supported: row-level operations are only supported against tables";
-
-/// Writes to things that are not tables, with their errors.
-fn write_errors() -> Vec<(&'static str, String)> {
     let insert = |name: &str| {
         format!(
             "analysis error: [TABLE_OR_VIEW_NOT_FOUND] The table or view `{name}` cannot be found"
         )
     };
-    vec![
+    let errors = vec![
         ("INSERT INTO missing VALUES (1, 2)", insert("missing")),
         ("INSERT INTO missing SELECT * FROM t", insert("missing")),
         ("INSERT INTO tv VALUES (1, 2)", insert("tv")),
@@ -1501,5 +1469,15 @@ fn write_errors() -> Vec<(&'static str, String)> {
                 .to_string(),
         ),
         ("TRUNCATE TABLE missing", format!("{NOT_FOUND}: missing")),
-    ]
+    ];
+    for (sql, error) in errors {
+        let resolution = fixture.resolve(sql).await?;
+        assert_eq!(resolution.error, Some(error), "{sql}");
+        assert_eq!(resolution.writes, vec![], "{sql}");
+    }
+    Ok(())
 }
+
+const NOT_FOUND: &str =
+    "analysis error: Table not found: [TABLE_OR_VIEW_NOT_FOUND] Table or view not found";
+const ROW_LEVEL: &str = "not supported: row-level operations are only supported against tables";

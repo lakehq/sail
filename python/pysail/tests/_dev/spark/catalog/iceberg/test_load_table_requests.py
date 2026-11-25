@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -292,44 +293,30 @@ def _writes(name):
     ]
 
 
-def test_write_loads_the_target_table_once_to_plan_the_statement(spark, recording_catalog):
+@pytest.mark.parametrize("delegation", [None, "vended-credentials"])
+def test_write_loads_the_target_table_once_to_plan_the_statement(
+    spark, recording_catalog, seaweedfs_host_endpoint, delegation
+):
     _, records = recording_catalog
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
-    name = f"{NAMESPACE}.written"
-    load = (f"{NAMESPACE}/tables/written", 200, None)
+    table = "delegated_write" if delegation else "written"
+    name = f"{NAMESPACE}.{table}"
+    load = f"{NAMESPACE}/tables/{table}"
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
-        for sql, expected in _writes(name):
-            start = len(records)
-            spark.sql(sql).collect()
-            # The table is loaded once to plan the statement, and once more when the
-            # statement commits, to detect a concurrent change to the table.
-            assert _requests(records, start) == [load, load], sql
-            assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
-    finally:
-        spark.sql(f"DROP TABLE IF EXISTS {name}")
-
-
-def test_write_asks_for_access_delegation_only_to_plan_the_statement(spark, recording_catalog, seaweedfs_host_endpoint):
-    _, records = recording_catalog
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
-    name = f"{NAMESPACE}.delegated_write"
-    path = f"{NAMESPACE}/tables/delegated_write"
-    try:
-        spark.sql(f"CREATE TABLE {name} (id BIGINT, v BIGINT) USING iceberg")
-        options = ', access_delegation="vended-credentials"'
-        with (
-            _server(recording_catalog, seaweedfs_host_endpoint, options) as server,
-            spark_session_factory(server.remote) as sessions,
-        ):
-            session = sessions.create()
+        with contextlib.ExitStack() as stack:
+            session = spark
+            if delegation:
+                options = f', access_delegation="{delegation}"'
+                server = stack.enter_context(_server(recording_catalog, seaweedfs_host_endpoint, options))
+                session = stack.enter_context(spark_session_factory(server.remote)).create()
             for sql, expected in _writes(name):
                 start = len(records)
                 session.sql(sql).collect()
-                # Only the load that plans the statement asks for access delegation. The
-                # load without it is the one of the commit, so the statement is planned
-                # with one load.
-                assert _requests(records, start) == [(path, 200, "vended-credentials"), (path, 200, None)], sql
+                # The table is loaded once to plan the statement, which is the only load that asks
+                # for access delegation, and once more when the statement commits, to detect a
+                # concurrent change to the table.
+                assert _requests(records, start) == [(load, 200, delegation), (load, 200, None)], sql
                 assert [(row.id, row.v) for row in spark.table(name).orderBy("id").collect()] == expected, sql
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

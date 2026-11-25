@@ -804,12 +804,20 @@ mod tests {
         session: &SessionContext,
         query: &str,
     ) -> Result<Arc<dyn ExecutionPlan>, Box<dyn std::error::Error>> {
-        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
-
         let resolver =
             PlanResolver::new(session, Arc::new(PlanConfig::default())).with_shared_ctes();
         let plan = from_ast_statement(parse_one_statement(query)?)?;
         let plan = resolver.resolve_named_plan(plan).await?.plan;
+        plan_shared_ctes(session, plan).await
+    }
+
+    /// Plans a resolved plan whose CTE definitions are shared, as the session does.
+    async fn plan_shared_ctes(
+        session: &SessionContext,
+        plan: LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>, Box<dyn std::error::Error>> {
+        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+
         let state = session.state();
         let state = &state;
         let mut restart = false;

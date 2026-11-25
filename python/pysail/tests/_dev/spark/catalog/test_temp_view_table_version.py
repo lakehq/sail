@@ -23,6 +23,8 @@ from pysail.tests._dev.spark.catalog.temp_view_utils import (
     NOT_FOUND,
     PLAN_KINDS,
     Table,
+    create_view,
+    drop_view,
     error,
     rows,
 )
@@ -128,18 +130,6 @@ def test_view_reads_a_table_that_is_created_again_in_another_format(spark, table
     assert rows(spark, joined) == [(7, 7)]
 
 
-@pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
-@pytest.mark.parametrize("kind", KINDS)
-def test_view_rejects_a_table_whose_column_type_changed(spark, table, kind):
-    table.insert("(1)")
-    view = table.create_view(kind)
-    spark.sql(f"DROP TABLE {table.name}")
-    table.create("id INT")
-    message = error(spark, f"SELECT * FROM {view}")
-    assert COLUMNS_CHANGED in message
-    assert "- `id` type has changed from BIGINT to INT" in message
-
-
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, tmp_path, kind):
     table = Table(spark, tmp_path, "iceberg", "id BIGINT, extra STRING, other STRING")
@@ -189,27 +179,6 @@ def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tmp_path
         assert rows(spark, f"SELECT id, count(*) FROM {view} GROUP BY id") == [(1, 1)]
         joined = f"SELECT v.id, t.id FROM {view} v JOIN {table.name} t ON v.id = t.id"
         assert rows(spark, joined) == [(1, 1)]
-    finally:
-        table.drop()
-
-
-@pytest.mark.parametrize("fmt", LAKE_FORMATS)
-@pytest.mark.parametrize("kind", KINDS)
-def test_view_of_a_whole_struct_rejects_a_table_whose_struct_gains_a_field(spark, tmp_path, fmt, kind):
-    table = Table(spark, tmp_path, fmt, "id BIGINT, s STRUCT<a: INT>")
-    try:
-        table.insert("(1, named_struct('a', 1))")
-        view = table.create_view(kind)
-        fields = table.create_view(
-            "sv" if kind.startswith("d") else "dv", f"SELECT id, s.a AS a FROM {table.name} WHERE s.a > 0"
-        )
-        spark.sql(f"ALTER TABLE {table.name} ADD COLUMNS (s.b INT)")
-        table.insert("(2, named_struct('a', 2, 'b', 3))")
-        message = error(spark, f"SELECT * FROM {view}")
-        assert COLUMNS_CHANGED in message
-        assert "- `s`.`b` INT has been added" in message
-        # A view that reads only some fields of the struct reads the table.
-        assert rows(spark, f"SELECT * FROM {fields}") == [(1, 1), (2, 2)]
     finally:
         table.drop()
 
@@ -380,6 +349,14 @@ COLUMN_CHANGES = {
         "id INT, s STRUCT<a: INT, b: INT, c: INT>",
         "(2, named_struct('a', 11, 'b', 21, 'c', 31))",
         [(11,)],
+    ),
+    "whole struct gains a field": (
+        "id INT, s STRUCT<a: INT, b: INT>",
+        "(1, named_struct('a', 10, 'b', 20))",
+        "SELECT * FROM {t}",
+        "id INT, s STRUCT<a: INT, b: INT, c: INT>",
+        "(2, named_struct('a', 11, 'b', 21, 'c', 31))",
+        None,
     ),
     "unread struct field retyped": (
         "id INT, s STRUCT<a: INT, b: INT>",
@@ -673,9 +650,7 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
     try:
         write_struct_table(spark, table, struct_schema(INT_FIELDS), [(1, (1, 2)), (2, (3, 4))])
         inner = table.create_view("sv", f"SELECT a, s FROM {table.name}")
-        outer = table.create_view(
-            kind if kind != "sv" else "svc", f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}"
-        )
+        outer = table.create_view(kind, f"SELECT count(a) AS n, count(s.f) AS m FROM {inner}")
         write_struct_table(spark, table, struct_schema(INT_FIELDS, nullable=True), [(None, (None, 2)), (2, None)])
         assert rows(spark, f"SELECT * FROM {outer}") == [(1, 0)]
     finally:
@@ -689,7 +664,7 @@ def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tmp
     try:
         table.insert("(1, 10)")
         inner = table.create_view("sv", query.format(t=table.name))
-        outer = table.create_view(kind if kind != "sv" else "svc", f"SELECT a FROM {inner}")
+        outer = table.create_view(kind, f"SELECT a FROM {inner}")
         spark.sql(f"DROP TABLE {table.name}")
         table.create("a INT, b STRING")
         table.insert("(5, 'x')")
@@ -751,26 +726,16 @@ VIEW_OVER_VIEW_CHANGES = {
 def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, tmp_path, kind, case):
     columns, values, queries, new_columns, new_values, expected = VIEW_OVER_VIEW_CHANGES[case]
     table = Table(spark, tmp_path, "delta", columns)
-    views = []
     try:
         table.insert(values)
         view = None
         for i, query in enumerate(queries):
-            view_kind = kind if i == len(queries) - 1 else "sv"
-            view = f"{view_kind}_{uuid.uuid4().hex}"
-            sql = query.format(t=table.name, v=views[-1] if views else None)
-            if view_kind == "sv":
-                spark.sql(f"CREATE TEMPORARY VIEW {view} AS {sql}")
-            else:
-                spark.sql(sql).createOrReplaceTempView(view)
-            views.append(view)
+            view = table.create_view(kind if i == len(queries) - 1 else "sv", query.format(t=table.name, v=view))
         spark.sql(f"DROP TABLE {table.name}")
         table.create(new_columns)
         table.insert(new_values)
         assert rows(spark, f"SELECT * FROM {view}") == expected
     finally:
-        for view in views:
-            spark.sql(f"DROP VIEW IF EXISTS {view}")
         table.drop()
 
 
@@ -929,10 +894,8 @@ def test_view_reads_the_table_of_the_database_that_it_was_created_in(spark, tmp_
             spark.sql(f"CREATE TABLE {database}.c (id BIGINT) USING delta LOCATION '{tmp_path / database}'")
             spark.sql(f"INSERT INTO {database}.c VALUES ({value})")
         spark.catalog.setCurrentDatabase(first)
-        table = Table.__new__(Table)
-        table.spark, table.views, table.name = spark, {}, "c"
-        view = table.create_view(kind)
-        views.append(table)
+        view = create_view(spark, kind, "SELECT * FROM c")
+        views.append(view)
         spark.catalog.setCurrentDatabase(second)
         spark.sql(f"INSERT INTO {first}.c VALUES (101)")
         assert rows(spark, f"SELECT * FROM {view}") == [(100,), (101,)]
@@ -944,12 +907,8 @@ def test_view_reads_the_table_of_the_database_that_it_was_created_in(spark, tmp_
         assert rows(spark, f"WITH c AS (SELECT 5L AS id) SELECT * FROM {view}") == [(100,), (101,)]
     finally:
         spark.catalog.setCurrentDatabase("default")
-        for table in views:
-            for kind_, name in table.views.items():
-                if kind_ in ("gv", "dgv"):
-                    spark.catalog.dropGlobalTempView(name.removeprefix("global_temp."))
-                else:
-                    spark.catalog.dropTempView(name)
+        for view in views:
+            drop_view(spark, view)
         spark.sql(f"DROP DATABASE {first} CASCADE")
         spark.sql(f"DROP DATABASE {second} CASCADE")
 
@@ -1078,49 +1037,39 @@ def test_view_over_a_python_data_source_table_reads_the_table_of_each_read(spark
             yield (7,)
 
     spark.dataSource.register(Source)
-    table = Table.__new__(Table)
-    table.spark, table.views, table.name = spark, {}, name
+    views = []
     try:
         spark.sql(f"CREATE TABLE {name} USING {name}")
-        view = table.create_view(kind)
+        view = create_view(spark, kind, f"SELECT * FROM {name}")
+        views.append(view)
         assert rows(spark, f"SELECT * FROM {view}") == [(7,)]
         assert rows(spark, f"SELECT a.id, b.id FROM {view} a JOIN {name} b ON a.id = b.id") == [(7, 7)]
         spark.sql(f"DROP TABLE {name}")
         assert NOT_FOUND in error(spark, f"SELECT * FROM {view}")
     finally:
-        table.drop()
+        for view in views:
+            drop_view(spark, view)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-PATH_KINDS = ["sql", "sql_columns", "global_sql", "data_frame", "global_data_frame", "using"]
+PATH_KINDS = [*KINDS, "using"]
 # A view created with `USING iceberg` and a path cannot be created.
 PATH_VIEWS = [(fmt, kind) for fmt in LAKE_FORMATS for kind in PATH_KINDS if (fmt, kind) != ("iceberg", "using")]
 
 
-def create_path_view(spark, kind, fmt, path):
-    """Creates a temporary view of the kind over the Delta Lake or Iceberg table at the path."""
-    view = f"{kind}_{uuid.uuid4().hex}"
-    if kind == "sql":
-        spark.sql(f"CREATE TEMPORARY VIEW {view} AS SELECT * FROM {fmt}.`{path}`")
-    elif kind == "sql_columns":
-        spark.sql(f"CREATE TEMPORARY VIEW {view} (id) AS SELECT id FROM {fmt}.`{path}`")
-    elif kind == "global_sql":
-        spark.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS SELECT * FROM {fmt}.`{path}`")
-    elif kind == "data_frame":
-        spark.read.format(fmt).load(str(path)).createOrReplaceTempView(view)
-    elif kind == "global_data_frame":
-        spark.read.format(fmt).load(str(path)).createOrReplaceGlobalTempView(view)
-    elif kind == "using":
-        spark.sql(f"CREATE TEMPORARY VIEW {view} USING {fmt} OPTIONS (path '{path}')")
-    else:
-        raise ValueError(kind)
-    return f"global_temp.{view}" if kind.startswith("global") else view
-
-
-def drop_path_view(spark, view):
-    if view.startswith("global_temp."):
-        spark.catalog.dropGlobalTempView(view.removeprefix("global_temp."))
-    else:
-        spark.catalog.dropTempView(view)
+def create_path_view(spark, kind, fmt, path, version=None):
+    """Creates a temporary view of the kind over the Delta Lake or Iceberg table at the path, at the version
+    if given. The DataFrame views read the path with the DataFrame reader."""
+    if kind == "using":
+        view = f"using_{uuid.uuid4().hex}"
+        options = f"path '{path}'" + (f", versionAsOf '{version}'" if version is not None else "")
+        spark.sql(f"CREATE TEMPORARY VIEW {view} USING {fmt} OPTIONS ({options})")
+        return view
+    query = f"SELECT * FROM {fmt}.`{path}`" + (f" VERSION AS OF {version}" if version is not None else "")
+    reader = spark.read.format(fmt)
+    if version is not None:
+        reader = reader.option("versionAsOf", str(version))
+    return create_view(spark, kind, query, reader.load(str(path)))
 
 
 @pytest.mark.parametrize(("fmt", "kind"), PATH_VIEWS)
@@ -1138,7 +1087,7 @@ def test_view_over_a_lake_table_path_reads_the_rows_committed_after_its_creation
         spark.sql("SELECT 3L AS id").write.format(fmt).mode("append").save(str(path))
         assert rows(spark, f"SELECT count(*) FROM {view} a JOIN {view} b ON a.id = b.id") == [(3,)]
     finally:
-        drop_path_view(spark, view)
+        drop_view(spark, view)
 
 
 def test_view_created_with_using_reads_the_rows_inserted_through_it(spark, tmp_path):
@@ -1152,26 +1101,14 @@ def test_view_created_with_using_reads_the_rows_inserted_through_it(spark, tmp_p
         spark.sql(f"INSERT INTO {view} SELECT id + 10 FROM {view}")
         assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,), (11,), (12,)]
     finally:
-        drop_path_view(spark, view)
+        drop_view(spark, view)
 
 
 @pytest.mark.parametrize("kind", PATH_KINDS)
 def test_view_over_a_lake_table_path_with_time_travel_reads_its_version(spark, tmp_path, kind):
     path = tmp_path / "t"
     spark.sql("SELECT 1L AS id").write.format("delta").save(str(path))
-    view = f"{kind}_{uuid.uuid4().hex}"
-    if kind in ("sql", "sql_columns", "global_sql"):
-        scope = "GLOBAL TEMPORARY" if kind == "global_sql" else "TEMPORARY"
-        spark.sql(f"CREATE {scope} VIEW {view} AS SELECT * FROM delta.`{path}` VERSION AS OF 0")
-    elif kind == "using":
-        spark.sql(f"CREATE TEMPORARY VIEW {view} USING delta OPTIONS (path '{path}', versionAsOf '0')")
-    else:
-        df = spark.read.format("delta").option("versionAsOf", "0").load(str(path))
-        if kind == "global_data_frame":
-            df.createOrReplaceGlobalTempView(view)
-        else:
-            df.createOrReplaceTempView(view)
-    view = f"global_temp.{view}" if kind.startswith("global") else view
+    view = create_path_view(spark, kind, "delta", path, version=0)
     try:
         spark.sql("SELECT 2L AS id").write.format("delta").mode("append").save(str(path))
         for _ in range(2):
@@ -1179,4 +1116,4 @@ def test_view_over_a_lake_table_path_with_time_travel_reads_its_version(spark, t
         joined = f"SELECT v.id, t.id FROM {view} v FULL OUTER JOIN delta.`{path}` t ON v.id = t.id"
         assert rows(spark, joined) == [(1, 1), (None, 2)]
     finally:
-        drop_path_view(spark, view)
+        drop_view(spark, view)

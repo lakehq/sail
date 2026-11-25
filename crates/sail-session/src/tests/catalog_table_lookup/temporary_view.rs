@@ -533,19 +533,6 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
 }
 
 #[tokio::test]
-async fn test_temporary_view_ignores_the_columns_that_it_does_not_read() -> TestResult {
-    let fixture = Fixture::try_new(&[]).await?;
-    fixture
-        .execute("CREATE TEMPORARY VIEW only_k AS SELECT k FROM t")
-        .await?;
-    fixture.replace_table(&["t"], vec![column("k")]).await?;
-    let sql = "SELECT * FROM only_k";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
-    fixture.execute(sql).await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> TestResult {
     let changes: Vec<(Vec<TestColumn>, &str)> = vec![
         (vec![column("k")], "- `v` BIGINT has been removed"),
@@ -579,35 +566,29 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             assert!(error.contains(change), "{error}");
         }
     }
-    // A column that the views read can have nulls now. The views were created when it had
-    // none, and their definitions were resolved as if it had nulls.
-    let fixture = Fixture::try_new(&[]).await?;
+    // A column that the views read can have nulls now, or none. A view created when it had
+    // none was resolved as if it had nulls.
     let not_null = || TestColumn {
         nullable: false,
         ..column("v")
     };
-    fixture
-        .replace_table(&["t"], vec![column("k"), not_null()])
-        .await?;
-    let views = create_views(&fixture, "nullable").await?;
-    fixture
-        .replace_table(&["t"], vec![column("k"), column("v")])
-        .await?;
-    for view in &views {
-        let sql = format!("SELECT * FROM {view}");
-        fixture.resolve(&sql).await?.expect(1, 1, &sql);
-        fixture.execute(&sql).await?;
-    }
-    // A column that the views read has no nulls now, which they can read.
-    let fixture = Fixture::try_new(&[]).await?;
-    let views = create_views(&fixture, "not_null").await?;
-    fixture
-        .replace_table(&["t"], vec![column("k"), not_null()])
-        .await?;
-    for view in &views {
-        let sql = format!("SELECT * FROM {view}");
-        fixture.resolve(&sql).await?.expect(1, 1, &sql);
-        fixture.execute(&sql).await?;
+    for (prefix, before, after) in [
+        ("nullable", not_null(), column("v")),
+        ("not_null", column("v"), not_null()),
+    ] {
+        let fixture = Fixture::try_new(&[]).await?;
+        fixture
+            .replace_table(&["t"], vec![column("k"), before])
+            .await?;
+        let views = create_views(&fixture, prefix).await?;
+        fixture
+            .replace_table(&["t"], vec![column("k"), after])
+            .await?;
+        for view in &views {
+            let sql = format!("SELECT * FROM {view}");
+            fixture.resolve(&sql).await?.expect(1, 1, &sql);
+            fixture.execute(&sql).await?;
+        }
     }
     Ok(())
 }
@@ -807,36 +788,11 @@ async fn test_temporary_view_over_a_table_with_duplicate_column_names() -> TestR
 /// Creates a session with the catalog `sail`, which each session has its own instance
 /// of, and the catalog `second`, which is the same catalog in every session.
 async fn create_session_fixture() -> TestResult<Fixture> {
-    let catalog = Arc::new(SnapshotCatalogProvider {
+    let catalog = SnapshotCatalogProvider {
         session_local: true,
         ..SnapshotCatalogProvider::new(create_memory_catalog()?, TableNames::Exact)
-    });
-    let second = Arc::new(SnapshotCatalogProvider::new(
-        MemoryCatalogProvider::new(
-            "second".to_string(),
-            vec![Arc::from("default")].try_into()?,
-            None,
-        ),
-        TableNames::Exact,
-    ));
-    let session = create_session_with_catalogs(
-        Arc::clone(&catalog) as Arc<dyn CatalogProvider>,
-        vec![(
-            "second".to_string(),
-            Arc::clone(&second) as Arc<dyn CatalogProvider>,
-        )],
-    )?;
-    let source = RecordingDataSource::new("iceberg");
-    session
-        .extension::<DataSourceRegistry>()?
-        .register_data_source(Arc::clone(&source) as Arc<dyn DataSource>)?;
-    let fixture = Fixture {
-        session,
-        catalog,
-        second,
-        source,
-        share_ctes: false,
     };
+    let fixture = Fixture::try_new_with_catalog(catalog, false)?;
     // Each session sees the same table in the catalog `second`.
     fixture
         .create_table_at(

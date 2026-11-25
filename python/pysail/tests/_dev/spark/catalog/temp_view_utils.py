@@ -21,8 +21,35 @@ COLUMNS_CHANGED = "INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION"
 NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
 
 
+def create_view(spark, kind, query, frame=None):
+    """Creates a temporary view of the kind over the query, or over `frame` for a DataFrame view if given,
+    and returns the name to read the view by."""
+    view = f"{kind}_{uuid.uuid4().hex}"
+    if kind == "sv":
+        spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
+    elif kind == "svc":
+        columns = ", ".join(spark.sql(query).columns)
+        spark.sql(f"CREATE TEMPORARY VIEW {view} ({columns}) AS {query}")
+    elif kind == "gv":
+        spark.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS {query}")
+    elif kind == "dv":
+        (spark.sql(query) if frame is None else frame).createOrReplaceTempView(view)
+    elif kind == "dgv":
+        (spark.sql(query) if frame is None else frame).createOrReplaceGlobalTempView(view)
+    else:
+        raise ValueError(kind)
+    return f"global_temp.{view}" if kind in ("gv", "dgv") else view
+
+
+def drop_view(spark, view):
+    if view.startswith("global_temp."):
+        spark.catalog.dropGlobalTempView(view.removeprefix("global_temp."))
+    else:
+        spark.catalog.dropTempView(view)
+
+
 class Table:
-    """A catalog table with the column `id`, and the temporary views of each kind over it."""
+    """A catalog table with the column `id`, and the temporary views over it."""
 
     def __init__(self, spark, tmp_path, fmt, columns="id BIGINT"):
         self.spark = spark
@@ -30,7 +57,7 @@ class Table:
         self.fmt = fmt
         self.name = f"t_{uuid.uuid4().hex}"
         self.locations = 0
-        self.views = {}
+        self.views = []
         self.create(columns)
 
     def create(self, columns, fmt=None):
@@ -43,30 +70,13 @@ class Table:
 
     def create_view(self, kind, query=None):
         """Creates a view of the kind over the query, which reads all the columns of the table by default."""
-        view = f"{kind}_{uuid.uuid4().hex}"
-        query = query or f"SELECT * FROM {self.name}"
-        if kind == "sv":
-            self.spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
-        elif kind == "svc":
-            columns = ", ".join(self.spark.sql(query).columns)
-            self.spark.sql(f"CREATE TEMPORARY VIEW {view} ({columns}) AS {query}")
-        elif kind == "gv":
-            self.spark.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS {query}")
-        elif kind == "dv":
-            self.spark.sql(query).createOrReplaceTempView(view)
-        elif kind == "dgv":
-            self.spark.sql(query).createOrReplaceGlobalTempView(view)
-        else:
-            raise ValueError(kind)
-        self.views[kind] = f"global_temp.{view}" if kind in ("gv", "dgv") else view
-        return self.views[kind]
+        view = create_view(self.spark, kind, query or f"SELECT * FROM {self.name}")
+        self.views.append(view)
+        return view
 
     def drop(self):
-        for kind, view in self.views.items():
-            if kind in ("gv", "dgv"):
-                self.spark.catalog.dropGlobalTempView(view.removeprefix("global_temp."))
-            else:
-                self.spark.catalog.dropTempView(view)
+        for view in self.views:
+            drop_view(self.spark, view)
         self.spark.sql(f"DROP TABLE IF EXISTS {self.name}")
         self.spark.sql(f"DROP VIEW IF EXISTS {self.name}")
 
