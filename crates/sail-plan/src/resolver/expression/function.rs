@@ -125,7 +125,7 @@ impl PlanResolver<'_> {
         // A function can be resolved to an expression without some columns of its arguments,
         // such as `typeof(a)` to a literal. The definition of a temporary view still reads
         // them, since they can change when the view is read.
-        let mut argument_columns = if state.creating_temporary_view() {
+        let mut argument_columns = if state.view_definition_mut().is_some() {
             expression_columns(&arguments)?
         } else {
             HashSet::new()
@@ -205,7 +205,7 @@ impl PlanResolver<'_> {
                                     }
                                     None => vec![],
                                 };
-                                if state.creating_temporary_view() {
+                                if state.view_definition_mut().is_some() {
                                     let sort = order_by.iter().map(|x| &x.expr);
                                     argument_columns.extend(expression_columns(
                                         filter.as_deref().into_iter().chain(sort),
@@ -268,13 +268,14 @@ impl PlanResolver<'_> {
         let func = coerce_comparison_predicate(func, schema, &self.config)?;
         let func = coerce_ansi_float_widening(func, schema, &self.config)?;
         let func = coerce_conditional_values(func, schema)?;
-        if !argument_columns.is_empty() {
+        if let Some(reads) = state.view_definition_mut()
+            && !argument_columns.is_empty()
+        {
             let columns = expression_columns([&func])?;
-            state.record_folded_columns(
-                argument_columns
-                    .into_iter()
-                    .filter(|x| !columns.contains(x)),
-            );
+            let folded = argument_columns
+                .into_iter()
+                .filter(|x| !columns.contains(x));
+            reads.folded_columns.extend(folded);
         }
 
         // DataFusion lambda variables carry no type until resolved against the schema.

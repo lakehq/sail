@@ -188,23 +188,45 @@ pub(super) struct PlanResolverState {
     /// catalog instance and the fully qualified name of the table.
     session_catalog_table_lookups:
         HashMap<(usize, Vec<String>), (TableStatus, LakehouseResolvedTable)>,
-    /// What the table sources of the scans resolved so far read, by the address of the
-    /// source, for the sources that a temporary view obtains again at each read.
+    /// What the definition of a temporary view reads, while the definition is resolved.
+    view_definition: Option<ViewDefinitionReads>,
+}
+
+/// What the definition of a temporary view reads, which is recorded while the definition is
+/// resolved.
+#[derive(Debug, Default)]
+pub(super) struct ViewDefinitionReads {
+    /// What the table sources of the scans read, by the address of the source, for the
+    /// sources that the view obtains again at each read.
     table_origins: HashMap<usize, (SharedTableSource, Arc<TableOrigin>)>,
-    /// Whether the query that is resolved is the definition of a temporary view.
-    creating_temporary_view: bool,
-    /// The columns that the definition of a temporary view reads although its plan does not
-    /// refer to them: the columns of the arguments of a function that its expression no
-    /// longer refers to, such as the argument of `typeof`.
-    folded_columns: HashSet<String>,
-    /// How the temporary views that the definition of a temporary view reads read the
-    /// columns of their tables, by the address of the source and the position of the column
-    /// in the source. A source whose columns the view does not read has no uses.
-    view_reads: HashMap<usize, HashMap<usize, ColumnUse>>,
-    /// The plans of the temporary views that the definition of a temporary view reads, by
-    /// their schemas and the names that the read gives their outputs. The field IDs in such
-    /// a plan belong to another resolver state.
-    view_plans: Vec<(DFSchemaRef, Vec<String>)>,
+    /// The columns that the definition reads although its plan does not refer to them: the
+    /// columns of the arguments of a function that its expression no longer refers to,
+    /// such as the argument of `typeof`.
+    pub folded_columns: HashSet<String>,
+    /// How the temporary views that the definition reads read the columns of their tables,
+    /// by the address of the source and the position of the column in the source. A source
+    /// whose columns the view does not read has no uses.
+    pub view_reads: HashMap<usize, HashMap<usize, ColumnUse>>,
+    /// The plans of the temporary views that the definition reads, by their schemas and the
+    /// names that the read gives their outputs. The field IDs in such a plan belong to
+    /// another resolver state.
+    pub view_plans: Vec<(DFSchemaRef, Vec<String>)>,
+}
+
+impl ViewDefinitionReads {
+    /// Records what the source of a scan reads. The first record of a source remains.
+    pub fn record_table_origin(&mut self, source: &Arc<dyn TableSource>, origin: Arc<TableOrigin>) {
+        self.table_origins
+            .entry(table_source_address(source))
+            .or_insert_with(|| (SharedTableSource(Arc::clone(source)), origin));
+    }
+
+    /// Returns what the source of a scan reads, if the view obtains it again.
+    pub fn table_origin(&self, source: &Arc<dyn TableSource>) -> Option<&Arc<TableOrigin>> {
+        self.table_origins
+            .get(&table_source_address(source))
+            .map(|(_, origin)| origin)
+    }
 }
 
 /// Returns the address of a table source, which identifies the source while it is alive.
@@ -249,11 +271,7 @@ impl PlanResolverState {
             lake_path_sources: HashMap::new(),
             catalog_table_lookups: HashMap::new(),
             session_catalog_table_lookups: HashMap::new(),
-            table_origins: HashMap::new(),
-            creating_temporary_view: false,
-            folded_columns: HashSet::new(),
-            view_reads: HashMap::new(),
-            view_plans: vec![],
+            view_definition: None,
         }
     }
 
@@ -609,57 +627,19 @@ impl PlanResolverState {
             .insert((table.catalog_id(), name), lookup);
     }
 
-    /// Returns whether the query that is resolved is the definition of a temporary view.
-    pub fn creating_temporary_view(&self) -> bool {
-        self.creating_temporary_view
+    /// Records what the definition of a temporary view reads, while the definition is resolved.
+    pub fn begin_view_definition(&mut self) {
+        self.view_definition = Some(ViewDefinitionReads::default());
     }
 
-    pub fn set_creating_temporary_view(&mut self, value: bool) {
-        self.creating_temporary_view = value;
+    /// Returns what the definition of a temporary view read, once it is resolved.
+    pub fn end_view_definition(&mut self) -> ViewDefinitionReads {
+        self.view_definition.take().unwrap_or_default()
     }
 
-    /// Records columns that the definition of a temporary view reads although its plan
-    /// does not refer to them.
-    pub fn record_folded_columns(&mut self, columns: impl IntoIterator<Item = String>) {
-        self.folded_columns.extend(columns);
-    }
-
-    pub fn folded_columns(&self) -> &HashSet<String> {
-        &self.folded_columns
-    }
-
-    /// Records how a view that the definition of a temporary view reads reads the columns
-    /// of a source.
-    pub fn record_view_reads(&mut self, address: usize, reads: HashMap<usize, ColumnUse>) {
-        self.view_reads.insert(address, reads);
-    }
-
-    pub fn view_reads(&self) -> &HashMap<usize, HashMap<usize, ColumnUse>> {
-        &self.view_reads
-    }
-
-    /// Records the plan of a temporary view that the definition of a temporary view reads,
-    /// by its schema and the names that the read gives its outputs.
-    pub fn record_view_plan(&mut self, schema: &DFSchemaRef, names: &[String]) {
-        self.view_plans.push((Arc::clone(schema), names.to_vec()));
-    }
-
-    pub fn view_plans(&self) -> &[(DFSchemaRef, Vec<String>)] {
-        &self.view_plans
-    }
-
-    /// Records what the source of a scan reads. The first record of a source remains.
-    pub fn record_table_origin(&mut self, source: &Arc<dyn TableSource>, origin: Arc<TableOrigin>) {
-        self.table_origins
-            .entry(table_source_address(source))
-            .or_insert_with(|| (SharedTableSource(Arc::clone(source)), origin));
-    }
-
-    /// Returns what the source of a scan reads, if a temporary view obtains it again.
-    pub fn table_origin(&self, source: &Arc<dyn TableSource>) -> Option<&Arc<TableOrigin>> {
-        self.table_origins
-            .get(&table_source_address(source))
-            .map(|(_, origin)| origin)
+    /// Returns what the definition of a temporary view reads, while it is resolved.
+    pub fn view_definition_mut(&mut self) -> Option<&mut ViewDefinitionReads> {
+        self.view_definition.as_mut()
     }
 
     /// Stores what the catalog returned for the table `name` and returns the lookup that

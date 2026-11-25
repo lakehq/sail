@@ -120,9 +120,9 @@ impl PlanResolver<'_> {
         };
         // The tables that the view reads again at each read can have nulls later in columns
         // that have none now, so the definition is resolved as if all their columns had nulls.
-        state.set_creating_temporary_view(true);
+        state.begin_view_definition();
         let input = self.resolve_query_plan(*input, state).await;
-        state.set_creating_temporary_view(false);
+        let reads = state.end_view_definition();
         let input = input?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
         // that the references to a volatile CTE read one evaluation for each read of the view.
@@ -151,7 +151,7 @@ impl PlanResolver<'_> {
         let input = rename_logical_plan(input, &fields)?;
         // The view reads its tables again at each read, so its plan does not keep the
         // table sources that the definition was resolved with.
-        let input = Self::store_view_plan(input, state)?;
+        let input = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
         let input: CatalogLogicalPlanId = manager.track_logical_plan(Arc::new(input))?;
         let command = CatalogCommand::CreateTemporaryView {

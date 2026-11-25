@@ -389,8 +389,10 @@ impl PlanResolver<'_> {
                 // The future is boxed to keep it out of the recursive resolver futures.
                 let plan = Box::pin(self.resolve_stored_view_plan(plan, &status, state)).await?;
                 let names = state.register_fields(plan.schema().inner().fields());
-                if state.creating_temporary_view() {
-                    state.record_view_plan(plan.schema(), &names);
+                if let Some(reads) = state.view_definition_mut() {
+                    reads
+                        .view_plans
+                        .push((Arc::clone(plan.schema()), names.clone()));
                 }
                 let plan = rename_logical_plan(plan, &names)?;
                 // The stored plan's internal field IDs belong to another resolver
@@ -1001,23 +1003,19 @@ impl PlanResolver<'_> {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
             // TODO: support duplicate column names for other `TableSource` implementations
-            let provider = source_as_provider(&table_source).map_err(|e| {
-                PlanError::unsupported(format!(
-                    "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
-                ))
-            })?;
             let names = state.register_fields(schema.fields());
-            provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
+            rename_source(&table_source, names)?
         } else {
             table_source
         };
-        let table_source = match &origin {
-            Some(_) if state.creating_temporary_view() => view_definition_source(table_source),
+        let table_source = match (origin, state.view_definition_mut()) {
+            (Some(origin), Some(reads)) => {
+                let table_source = view_definition_source(table_source);
+                reads.record_table_origin(&table_source, Arc::new(origin));
+                table_source
+            }
             _ => table_source,
         };
-        if let Some(origin) = origin {
-            state.record_table_origin(&table_source, Arc::new(origin));
-        }
 
         let table_scan = LogicalPlan::TableScan(
             TableScanBuilder::new(table_reference, table_source)
@@ -1038,6 +1036,22 @@ impl PlanResolver<'_> {
             Ok(table_scan)
         }
     }
+}
+
+/// Returns the source that reads the columns of a source under other names, for a source
+/// with duplicate column names.
+pub(super) fn rename_source(
+    source: &Arc<dyn TableSource>,
+    names: Vec<String>,
+) -> PlanResult<Arc<dyn TableSource>> {
+    let provider = source_as_provider(source).map_err(|e| {
+        PlanError::unsupported(format!(
+            "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
+        ))
+    })?;
+    Ok(provider_as_source(Arc::new(RenameTableProvider::try_new(
+        provider, names,
+    )?)))
 }
 
 /// A read of a catalog table: the lookup of the table, and what the read reads.
