@@ -274,6 +274,22 @@ Feature: try_parse_json comprehensive tests
         | at_limit | over_limit | overflow   |
         | true     | true       | "Infinity" |
 
+    @sail-only
+    # On Spark 4.3 this decimal crosses a Jackson reader buffer after 3,500 leading
+    # spaces and is accepted. After 2,000 spaces Spark rejects the same decimal.
+    Scenario: The VARIANT number length limit is independent of reader buffer boundaries
+      When query
+        """
+        SELECT padding, try_parse_json(concat(repeat(' ', padding), '1.', repeat('1', 1000),
+                                              repeat(' ', 50000))) IS NULL AS rejected
+        FROM VALUES (2000), (3500) AS t(padding)
+        ORDER BY padding
+        """
+      Then query result ordered
+        | padding | rejected |
+        | 2000    | true     |
+        | 3500    | true     |
+
     Scenario: Root number and keyword tokens have different boundaries
       When query
         """

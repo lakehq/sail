@@ -63,7 +63,9 @@ fn variant_number(token: &str, at_eof: bool) -> Option<Variant<'static, 'static>
     if token.len() > MAX_NUMBER_DIGITS {
         let digits = token.bytes().filter(u8::is_ascii_digit).count();
         // Jackson's ReaderBasedJsonParser uses -1 for an absent fraction or
-        // exponent on its slow path (a leading zero or a token ending at EOF).
+        // exponent for a leading zero or a token ending at EOF. Its reader can
+        // also take this path at a UTF-16 buffer boundary. Sail applies the same
+        // limit regardless of where the token falls within a reader buffer.
         let slow_path = at_eof || token.trim_start_matches('-').starts_with('0');
         let one_missing_part = token.contains('.') != token.contains(['e', 'E']);
         if digits > MAX_NUMBER_DIGITS + usize::from(slow_path && one_missing_part) {
