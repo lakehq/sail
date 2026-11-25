@@ -23,6 +23,18 @@ Feature: rlike
         | regexp      |
         | regexp_like |
 
+  Rule: Matching evaluates the input expression once per row
+
+    Scenario: A regex alternation covers every value of a volatile input
+      When query
+        """
+        SELECT count(*) AS unmatched FROM range(256)
+        WHERE NOT rlike(if(pmod(xxhash64(uuid()), 2) = 0, 'foo', 'bar'), 'foo|bar')
+        """
+      Then query result
+        | unmatched |
+        | 0         |
+
   @function(nullability)
   Rule: Output schema
 

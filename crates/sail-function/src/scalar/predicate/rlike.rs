@@ -48,8 +48,9 @@ impl ScalarUDFImpl for RLike {
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         // A backslash can be spelled as an escape or selected by a character class.
-        // Keep pushdown for literal patterns that cannot introduce a LIKE escape.
-        if let [_, Expr::Literal(pattern, _)] = args.as_slice()
+        // Keep pushdown on columns. Rewriting alternations can reference the input
+        // more than once, which would repeat a volatile expression.
+        if let [Expr::Column(_), Expr::Literal(pattern, _)] = args.as_slice()
             && let Some(Some(pattern)) = pattern.try_as_str()
             && !pattern.contains(['\\', '['])
         {
