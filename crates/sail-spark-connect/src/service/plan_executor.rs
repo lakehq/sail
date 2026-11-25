@@ -9,7 +9,7 @@ use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
-use futures::{StreamExt, stream};
+use futures::stream::{self, BoxStream, StreamExt};
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -21,8 +21,7 @@ use tonic::codegen::tokio_stream::Stream;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
-    Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, ExecutorOutputStream,
-    to_arrow_batch,
+    Executor, ExecutorBatch, ExecutorMetadata, ExecutorMode, ExecutorOutput, to_arrow_batch,
 };
 use crate::service::config_manager::handle_sql_config;
 use crate::session::SparkSession;
@@ -45,7 +44,7 @@ pub struct ExecutePlanResponseStream {
     session_id: String,
     server_side_session_id: String,
     operation_id: String,
-    inner: Pin<Box<dyn Stream<Item = Result<ExecutorOutput, Status>> + Send>>,
+    inner: BoxStream<'static, Result<ExecutorOutput, Status>>,
 }
 
 impl ExecutePlanResponseStream {
@@ -58,7 +57,7 @@ impl ExecutePlanResponseStream {
         session_id: String,
         server_side_session_id: String,
         operation_id: String,
-        inner: ExecutorOutputStream,
+        inner: BoxStream<'static, SparkResult<ExecutorOutput>>,
     ) -> Self {
         Self {
             session_id,
@@ -281,14 +280,14 @@ pub(crate) async fn handle_execute_sql_command(
             }));
             let mut output = vec![ExecutorOutput::new(result)];
             let operation_id = metadata.operation_id.clone();
-            let rx: ExecutorOutputStream = if metadata.reattachable {
+            let rx = if metadata.reattachable {
                 output.push(ExecutorOutput::complete());
                 let executor = Executor::completed(metadata, output);
                 let rx = executor.start()?;
                 spark.add_executor(executor)?;
                 rx
             } else {
-                Box::pin(stream::iter(output.into_iter().map(Ok)))
+                stream::iter(output.into_iter().map(Ok)).boxed()
             };
             Ok(ExecutePlanResponseStream::new(
                 spark.session_id().to_string(),

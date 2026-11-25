@@ -147,7 +147,6 @@ impl SparkConnectServer {
         sessions: SessionManager,
         request: ExecutePlanRequest,
     ) -> Result<ExecutePlanResponseStream, Status> {
-        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let metadata = ExecutorMetadata {
@@ -191,7 +190,6 @@ impl SparkConnectServer {
         sessions: SessionManager,
         request: ReattachExecuteRequest,
     ) -> Result<ExecutePlanResponseStream, Status> {
-        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = sessions
@@ -213,7 +211,6 @@ impl SparkConnectServer {
     ) -> Result<AnalyzePlanResponse, Status> {
         use crate::spark::connect::analyze_plan_response;
 
-        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = sessions
@@ -283,13 +280,11 @@ impl SparkConnectServer {
                 Some(analyze_plan_response::Result::JsonToDdl(json))
             }
         };
-        let response = AnalyzePlanResponse {
+        Ok(AnalyzePlanResponse {
             session_id: request.session_id.clone(),
             server_side_session_id,
             result,
-        };
-        debug!("{response:?}");
-        Ok(response)
+        })
     }
 }
 
@@ -301,10 +296,12 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
         let stream = shutdown::run(
             cancellation,
-            Self::handle_execute_plan(self.session_manager.clone(), request.into_inner()),
+            Self::handle_execute_plan(self.session_manager.clone(), request),
         )
         .await?;
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
@@ -314,12 +311,15 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
-        shutdown::run(
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let response = shutdown::run(
             self.session_manager.query_cancellation(),
-            Self::handle_analyze_plan(self.session_manager.clone(), request.into_inner()),
+            Self::handle_analyze_plan(self.session_manager.clone(), request),
         )
-        .await
-        .map(Response::new)
+        .await?;
+        debug!("{response:?}");
+        Ok(Response::new(response))
     }
 
     async fn config(
@@ -499,10 +499,12 @@ impl SparkConnectService for SparkConnectServer {
         &self,
         request: Request<ReattachExecuteRequest>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
         let stream = shutdown::run(
             cancellation,
-            Self::handle_reattach_execute(self.session_manager.clone(), request.into_inner()),
+            Self::handle_reattach_execute(self.session_manager.clone(), request),
         )
         .await?;
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
