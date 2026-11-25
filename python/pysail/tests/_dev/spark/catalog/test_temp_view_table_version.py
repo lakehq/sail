@@ -853,6 +853,35 @@ def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in
         table.drop()
 
 
+# Queries over `t (a, b, s STRUCT<x, y>)` whose key `s.x` or `b` only tells rows apart, and the
+# column whose type changes.
+KEY_QUERIES = {
+    "group by struct field": ("SELECT a, count(*) AS n FROM {t} GROUP BY a, s.x", "s.x"),
+    "distinct struct field": ("SELECT a FROM (SELECT DISTINCT a, s.x FROM {t})", "s.x"),
+    "group by column": ("SELECT a, count(*) AS n FROM {t} GROUP BY a, b", "b"),
+}
+
+
+@pytest.mark.parametrize("case", KEY_QUERIES)
+def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tmp_path, case):
+    # A known limit: a struct field that only tells rows apart counts as read, while a
+    # column that only tells rows apart may change its type.
+    query, changed = KEY_QUERIES[case]
+    table = Table(spark, tmp_path, "iceberg", "a INT, b INT, s STRUCT<x: INT, y: INT>")
+    try:
+        table.insert("(1, 1, named_struct('x', 1, 'y', 1)), (1, 2, named_struct('x', 2, 'y', 1))")
+        sql = query.format(t=table.name)
+        view = table.create_view("sv", sql)
+        spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN {changed} TYPE BIGINT")
+        table.insert("(5, 5, named_struct('x', 9, 'y', 1))")
+        if changed == "s.x":
+            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+        else:
+            assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    finally:
+        table.drop()
+
+
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
 # Delta Lake column mapping, as the clause after the columns and the table properties.
 METADATA_FORMATS = {
