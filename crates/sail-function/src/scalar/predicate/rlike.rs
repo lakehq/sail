@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, FieldRef};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::regex::regexp_like;
+use sail_common_datafusion::type_coercion::binary_type_coercion::regex_coercion;
 
 /// Use the regex kernel directly. DataFusion 56 can rewrite a literal backslash
 /// in a regular expression to a LIKE escape and change which strings match.
@@ -20,7 +21,7 @@ pub struct RLike {
 impl Default for RLike {
     fn default() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -32,6 +33,18 @@ impl ScalarUDFImpl for RLike {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [input, pattern] = arg_types else {
+            return plan_err!("RLIKE expects two arguments, got {}", arg_types.len());
+        };
+        let common = regex_coercion(input, pattern).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Cannot infer common argument type for regex operation {input} ~ {pattern}"
+            )
+        })?;
+        Ok(vec![common.clone(), common])
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
