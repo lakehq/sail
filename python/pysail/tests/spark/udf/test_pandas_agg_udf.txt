@@ -1,8 +1,9 @@
->>> from pyspark.sql.functions import PandasUDFType, pandas_udf
+>>> import pandas as pd
+>>> from pyspark.sql.functions import pandas_udf
 >>>
->>> @pandas_udf("int", PandasUDFType.GROUPED_AGG)
-... def least(v):
-...     return v.min()
+>>> @pandas_udf("int")
+... def least(v: pd.Series) -> int:
+...     return int(v.min())
 ...
 >>> df = spark.createDataFrame([(1, "Hello"), (2, "Hi"), (5, "Hello"), (0, "Hello")], ["n", "text"])
 >>> df.groupBy(df.text).agg(least(df.n)).sort("text").show()

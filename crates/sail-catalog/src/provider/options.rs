@@ -45,6 +45,22 @@ pub struct CreateTableOptions {
     pub is_write_precondition: bool,
 }
 
+pub enum StageTableOptions {
+    Definition(CreateTableOptions),
+    ShallowClone {
+        default_location: String,
+        location: Option<String>,
+        mode: CreateTableMode,
+        is_external: bool,
+    },
+}
+
+impl From<CreateTableOptions> for StageTableOptions {
+    fn from(options: CreateTableOptions) -> Self {
+        Self::Definition(options)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,

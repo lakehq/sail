@@ -14,6 +14,7 @@ from pyspark.errors import PySparkException
 from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing._dev.spark.steps.iceberg import _current_snapshot, _find_latest_metadata
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests._dev.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
@@ -128,7 +129,8 @@ def _replace(spark, target, source, api, *, overwrite_schema=None, partition=Fal
         if overwrite_schema is False:
             writer = writer.option("overwriteSchema", "false")
         if partition:
-            writer = writer.partitionedBy(F.bucket(4, "c"))
+            bucket = F.partitioning.bucket if pyspark_version() >= (4,) else F.bucket
+            writer = writer.partitionedBy(bucket(4, "c"))
         for key, value in (properties or {}).items():
             writer = writer.tableProperty(key, value)
         getattr(writer, api)()
@@ -479,3 +481,21 @@ def test_iceberg_replacement_retains_bindable_historical_sort_order(spark, repla
     assert _current_spec(after)["fields"] == []
     source.writeTo(name).append()
     _assert_rows(spark.table(name), [("new", 10)] * 2, ["b", "c"])
+
+
+@pytest.mark.parametrize("api", APIS)
+def test_iceberg_replacement_resets_main_retention(spark, replacement_target, api):
+    # Spark 4.1 / Iceberg 1.12 replacement creates a new main reference, not a retained branch.
+    _create(spark, replacement_target)
+    name, path = replacement_target
+    spark.sql(f"ALTER TABLE {name} REPLACE BRANCH main WITH SNAPSHOT RETENTION 3 SNAPSHOTS 2 DAYS")
+    before = _find_latest_metadata(path)
+    min_snapshots = 3
+    max_snapshot_age_ms = 2 * 24 * 60 * 60 * 1000
+    assert before["refs"]["main"]["min-snapshots-to-keep"] == min_snapshots
+    assert before["refs"]["main"]["max-snapshot-age-ms"] == max_snapshot_age_ms
+    source = spark.createDataFrame([(10,)], "c BIGINT")
+    _replace(spark, replacement_target, source, api)
+    after = _find_latest_metadata(path)
+    assert after["refs"]["main"] == {"snapshot-id": after["current-snapshot-id"], "type": "branch"}
+    _assert_replacement_history(before, after)

@@ -317,6 +317,7 @@ struct SnapshotChanges {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct RewriteStats {
+    removed_bytes: u64,
     parent_live_files: i64,
     parent_live_rows: i64,
     deleted_files: i64,
@@ -325,6 +326,7 @@ struct RewriteStats {
 
 #[derive(Debug, Default)]
 struct RemovedPositionDeletes {
+    removed_bytes: u64,
     equality_delete_files: u64,
     equality_deletes: u64,
     position_delete_files: u64,
@@ -752,6 +754,15 @@ impl<'a> SnapshotProducer<'a> {
                     Self::materialize_inherited_entry(entry.as_ref().clone(), &parent, &mut None)?;
                 entry.data_file.partition_spec_id = parent.partition_spec_id;
                 if removes(&entry.data_file) {
+                    let bytes = match entry.data_file.content_size_in_bytes {
+                        Some(size) => u64::try_from(size)
+                            .map_err(|_| "Invalid Iceberg delete content size")?,
+                        None => entry.data_file.file_size_in_bytes,
+                    };
+                    removed.removed_bytes = removed
+                        .removed_bytes
+                        .checked_add(bytes)
+                        .ok_or("Iceberg removed delete file size overflow")?;
                     let rows = if entry.data_file.content
                         == crate::spec::DataContentType::EqualityDeletes
                     {
@@ -899,6 +910,10 @@ impl<'a> SnapshotProducer<'a> {
                 )?;
                 entry.data_file.partition_spec_id = parent_manifest_file.partition_spec_id;
                 if removed_data_file_paths.contains(&entry.data_file.file_path) {
+                    stats.removed_bytes = stats
+                        .removed_bytes
+                        .checked_add(entry.data_file.file_size_in_bytes)
+                        .ok_or("Iceberg removed data file size overflow")?;
                     stats.deleted_files = stats
                         .deleted_files
                         .checked_add(1)
@@ -1243,6 +1258,16 @@ impl<'a> SnapshotProducer<'a> {
         };
 
         if let Some(stats) = rewrite_stats {
+            let removed_bytes = stats
+                .removed_bytes
+                .checked_add(removed_position_deletes.removed_bytes)
+                .ok_or("Iceberg removed file size overflow")?;
+            if update_kind == SnapshotUpdateKind::RewriteDataFiles && removed_bytes > 0 {
+                summary = summary.with_property(
+                    summary_properties::REMOVED_FILES_SIZE,
+                    removed_bytes.to_string(),
+                );
+            }
             let added_files = i64::try_from(added_data_file_count)
                 .map_err(|_| "Iceberg added data file count exceeds i64".to_string())?;
             let added_rows = i64::try_from(added_records)

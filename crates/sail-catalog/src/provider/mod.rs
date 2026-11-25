@@ -83,7 +83,7 @@ pub trait CatalogProvider: Send + Sync {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let _ = (database, table, options);
         Err(CatalogError::UnsupportedCapability(
@@ -121,20 +121,24 @@ pub trait CatalogProvider: Send + Sync {
         Vec::new()
     }
 
-    async fn resolve_lakehouse_table(
+    /// Returns the table status together with its lakehouse resolution.
+    /// Providers whose resolution needs more than the table status should load both
+    /// from one catalog response.
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
-        Ok(resolve_lakehouse_table_status(
+        let resolved = resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
             &status,
             request.operation,
             &self.lakehouse_capabilities(),
-        ))
+        );
+        Ok((status, resolved))
     }
 
     async fn plan_lakehouse_create(

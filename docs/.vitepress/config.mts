@@ -99,6 +99,7 @@ class Markdown {
   static options(): MarkdownOptions {
     return {
       theme: { light: "min-light", dark: "min-dark" },
+      math: true,
       config: (md) => {
         md.use(markdownItDeflist);
       },

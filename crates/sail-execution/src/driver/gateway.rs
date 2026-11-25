@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use prost::Message;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -148,6 +148,7 @@ impl DriverGateway {
 
         let handle = tokio::spawn(async move {
             ServerBuilder::new("sail_driver", server_options())
+                .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
                 .await
                 .add_service(celeborn_service, None)

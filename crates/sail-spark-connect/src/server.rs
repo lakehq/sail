@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_session::session_manager::SessionManager;
+use sail_session::shutdown;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -141,16 +142,11 @@ fn validated_server_session_id(
     }
 }
 
-#[tonic::async_trait]
-impl SparkConnectService for SparkConnectServer {
-    type ExecutePlanStream = ExecutePlanResponseStream;
-
-    async fn execute_plan(
-        &self,
-        request: Request<ExecutePlanRequest>,
-    ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        let request = request.into_inner();
-        debug!("{request:?}");
+impl SparkConnectServer {
+    async fn handle_execute_plan(
+        sessions: SessionManager,
+        request: ExecutePlanRequest,
+    ) -> Result<ExecutePlanResponseStream, Status> {
         let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let metadata = ExecutorMetadata {
@@ -160,8 +156,7 @@ impl SparkConnectService for SparkConnectServer {
             tags: request.tags,
             reattachable: is_reattachable(&request.request_options),
         };
-        let ctx = self
-            .session_manager
+        let ctx = sessions
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
@@ -171,35 +166,54 @@ impl SparkConnectService for SparkConnectServer {
         )?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
-        let stream = match op {
+        match op {
             plan::OpType::Root(relation) => {
-                service::handle_execute_relation(&ctx, relation, metadata).await?
+                service::handle_execute_relation(&ctx, relation, metadata)
+                    .await
+                    .map_err(Status::from)
             }
             plan::OpType::Command(Command {
                 command_type: command,
             }) => {
                 let command = command.required("command")?;
-                handle_command(&ctx, command, metadata).await?
+                handle_command(&ctx, command, metadata)
+                    .await
+                    .map_err(Status::from)
             }
             plan::OpType::CompressedOperation(_) => {
-                return Err(Status::unimplemented("compressed operation plan"));
+                Err(Status::unimplemented("compressed operation plan"))
             }
-        };
-        Ok(Response::new(stream))
+        }
     }
 
-    async fn analyze_plan(
-        &self,
-        request: Request<AnalyzePlanRequest>,
-    ) -> Result<Response<AnalyzePlanResponse>, Status> {
+    async fn handle_reattach_execute(
+        sessions: SessionManager,
+        request: ReattachExecuteRequest,
+    ) -> Result<ExecutePlanResponseStream, Status> {
+        let session_id = validated_session_id(request.session_id)?;
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let ctx = sessions
+            .get_or_create_session_context(session_id, user_id)
+            .await
+            .map_err(SparkError::from)?;
+        validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
+        service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
+            .await
+            .map_err(Status::from)
+    }
+
+    async fn handle_analyze_plan(
+        sessions: SessionManager,
+        request: AnalyzePlanRequest,
+    ) -> Result<AnalyzePlanResponse, Status> {
         use crate::spark::connect::analyze_plan_response;
 
-        let request = request.into_inner();
-        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
-        let ctx = self
-            .session_manager
+        let ctx = sessions
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
@@ -266,11 +280,44 @@ impl SparkConnectService for SparkConnectServer {
                 Some(analyze_plan_response::Result::JsonToDdl(json))
             }
         };
-        let response = AnalyzePlanResponse {
+        Ok(AnalyzePlanResponse {
             session_id: request.session_id.clone(),
             server_side_session_id,
             result,
-        };
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl SparkConnectService for SparkConnectServer {
+    type ExecutePlanStream = ExecutePlanResponseStream;
+
+    async fn execute_plan(
+        &self,
+        request: Request<ExecutePlanRequest>,
+    ) -> Result<Response<Self::ExecutePlanStream>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let cancellation = self.session_manager.query_cancellation();
+        let stream = shutdown::run(
+            cancellation,
+            Self::handle_execute_plan(self.session_manager.clone(), request),
+        )
+        .await?;
+        Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
+    }
+
+    async fn analyze_plan(
+        &self,
+        request: Request<AnalyzePlanRequest>,
+    ) -> Result<Response<AnalyzePlanResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let response = shutdown::run(
+            self.session_manager.query_cancellation(),
+            Self::handle_analyze_plan(self.session_manager.clone(), request),
+        )
+        .await?;
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -454,21 +501,13 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = validated_session_id(request.session_id)?;
-        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
-        let ctx = self
-            .session_manager
-            .get_or_create_session_context(session_id, user_id)
-            .await
-            .map_err(SparkError::from)?;
-        validated_server_session_id(
-            &ctx,
-            request.client_observed_server_side_session_id.as_deref(),
-        )?;
-        let stream =
-            service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
-                .await?;
-        Ok(Response::new(stream))
+        let cancellation = self.session_manager.query_cancellation();
+        let stream = shutdown::run(
+            cancellation,
+            Self::handle_reattach_execute(self.session_manager.clone(), request),
+        )
+        .await?;
+        Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 
     async fn release_execute(

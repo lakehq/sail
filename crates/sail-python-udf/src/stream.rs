@@ -21,6 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::conversion::TryToPy;
 use crate::error::PyUdfResult;
+use crate::python::with_blocking_python;
 
 struct PyInputStreamState {
     input: SendableRecordBatchStream,
@@ -202,7 +203,7 @@ impl Drop for PyMapStream {
                 // to finish processing all input batches received before the stop signal.
                 // Unfortunately, there is no reliable way to abort the thread cleanly,
                 // so we have to wait for it to finish.
-                let _ = Python::attach(|py| py.detach(|| python_task.join()));
+                let _ = with_blocking_python(|py| py.detach(|| python_task.join()));
             }
             PyMapStreamState::Stopped => {}
         }

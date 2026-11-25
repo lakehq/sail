@@ -165,7 +165,12 @@ impl TaskPreparation {
         let plan = result.data()?;
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, &RemoteExecutionCodec)?;
-        let writer = streams.writer(key.clone(), output.clone(), schema.clone());
+        // The writer encodes the rows as they are written, without a channel column.
+        let writer = streams.writer(
+            key.clone(),
+            output.clone(),
+            partitioning.payload_schema(&schema),
+        );
         Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
     }
 }

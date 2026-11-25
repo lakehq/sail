@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
-    LakeSourceCreateTableColumn, LakeSourceCreateTableInfo, LakeSourceCreateTableResult,
+    CloneMetrics, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
+    LakeSourceCreateTableResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,26 @@ use crate::provider::{
     DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
+
+fn clone_result_schema() -> CatalogResult<SchemaRef> {
+    // Declare every metric nullable even when all six values are populated.
+    let metrics = ArrowSerializer::default().schema::<CloneMetrics>()?;
+    let fields = metrics
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone().with_nullable(true))
+        .collect::<Vec<_>>();
+    Ok(Schema::new(fields).into())
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum CloneTarget {
+    Path(String),
+    Table {
+        name: Vec<String>,
+        default_location: String,
+    },
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -60,6 +81,13 @@ pub enum CatalogCommand {
     CreateTable {
         table: Vec<String>,
         options: CreateTableOptions,
+    },
+    CloneTable {
+        target: CloneTarget,
+        source: Vec<String>,
+        location: Option<String>,
+        mode: sail_common::spec::CreateTableMode,
+        is_external: bool,
     },
     TableExists {
         table: Vec<String>,
@@ -189,6 +217,7 @@ impl CatalogCommand {
             CatalogCommand::ListDatabases { .. } => "ListDatabases",
             CatalogCommand::DropDatabase { .. } => "DropDatabase",
             CatalogCommand::CreateTable { .. } => "CreateTable",
+            CatalogCommand::CloneTable { .. } => "CloneTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
@@ -257,6 +286,7 @@ impl CatalogCommand {
             CatalogCommand::DescribeDatabase { .. } => {
                 ArrowSerializer::default().schema::<DescribeDatabaseRow>()?
             }
+            CatalogCommand::CloneTable { .. } => clone_result_schema()?,
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
@@ -370,6 +400,28 @@ impl CatalogCommand {
                 }
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::CloneTable {
+                target,
+                source,
+                location,
+                mode,
+                is_external,
+            } => {
+                let metrics = super::clone::clone_table(
+                    ctx,
+                    manager,
+                    target,
+                    source,
+                    location,
+                    mode,
+                    is_external,
+                )
+                .await?;
+                ArrowSerializer::build_record_batch_with_schema(
+                    metrics.as_slice(),
+                    clone_result_schema()?,
+                )?
+            }
             CatalogCommand::TableExists { table } => {
                 let value = match manager.get_table_or_view(&table).await {
                     Ok(_) => true,
@@ -470,6 +522,19 @@ impl CatalogCommand {
                 if_exists,
                 options,
             } => {
+                if matches!(
+                    options,
+                    AlterTableOptions::SetTableProperties { .. }
+                        | AlterTableOptions::UnsetTableProperties { .. }
+                ) && let Some(path) = manager.delta_table_path(&table).await?
+                {
+                    ctx.extension::<DataSourceRegistry>()?
+                        .get_lake_source("delta")?
+                        .alter_table(ctx, path, (&options).into(), None)
+                        .await?;
+                    return Ok(display.bools().to_record_batch(vec![true])?);
+                }
+
                 // Fetch the table status before altering so we can propagate
                 // property changes to the underlying storage (e.g. Delta log).
                 let table_status = match manager.get_table_or_view(&table).await {

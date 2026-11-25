@@ -455,20 +455,22 @@ impl PlanResolver<'_> {
             }
             (
                 DataType::Date32 | DataType::Date64,
-                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
             ) => cast_timestamp_ntz_to_ltz(
                 cast(
                     value.clone(),
                     DataType::Timestamp(TimeUnit::Microsecond, None),
                 ),
-                timezone,
+                &self.config.session_timezone,
                 false,
             ),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, timezone),
             ) => ScalarUDF::from(Timestamp::try_new(
-                timezone.clone(),
+                timezone
+                    .as_ref()
+                    .map(|_| Arc::clone(&self.config.session_timezone)),
                 self.config.ansi_mode,
                 false,
             )?)
@@ -477,7 +479,7 @@ impl PlanResolver<'_> {
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             ) => ScalarUDF::from(
-                ToUtf8::new().with_timezone(Some(self.config.session_timezone_label())),
+                ToUtf8::new().with_timezone(Some(Arc::clone(&self.config.session_timezone))),
             )
             .call(vec![value.clone()]),
             _ => return Ok(None),
@@ -493,7 +495,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
         let left_schema = Arc::clone(left.schema());
         let right_schema = Arc::clone(right.schema());
-        let timezone = &self.config.session_timezone_label();
+        let timezone = &self.config.session_timezone;
         let is_mix = |left: &DataType, right: &DataType| {
             session_timestamp_targets(left, right, timezone).is_some()
         };

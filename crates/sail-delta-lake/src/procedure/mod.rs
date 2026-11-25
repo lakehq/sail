@@ -7,7 +7,7 @@
 //! TODO: Consider `CALL delta.checkpoint(...)` and `CALL delta.compact_log(...)` for explicit
 //! log maintenance, `CALL delta.upgrade_table_protocol(...)` for validated protocol upgrades,
 //! and `CALL delta.add_feature_support(...)` / `CALL delta.drop_feature(...)` for feature changes.
-//! TODO: Implement native RESTORE, CONVERT TO DELTA, GENERATE, SHALLOW CLONE, and REORG before
+//! TODO: Implement native RESTORE, CONVERT TO DELTA, GENERATE, and REORG before
 //! considering `CALL delta.restore(...)`, `CALL delta.convert_to_delta(...)`,
 //! `CALL delta.generate(...)`, `CALL delta.clone(...)`, and `CALL delta.reorg(...)` aliases.
 //! Native ALTER TABLE DROP FEATURE also needs feature-removal and history-protection support.

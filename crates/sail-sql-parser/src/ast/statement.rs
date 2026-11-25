@@ -26,10 +26,10 @@ use crate::ast::keywords::{
     Lines, Lite, Load, Local, Location, Map, Matched, Merge, Name, Namespace, Namespaces, Noscan,
     Not, Null, On, Optimize, Options, Or, Outputformat, Overwrite, Partition, Partitioned,
     Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Reset, Restrict, Retain, Row,
-    Run, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start, Statistics,
-    Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time,
-    To, Truncate, Type, Uncache, Unset, Update, Use, User, Using, Vacuum, Values, Verbose, View,
-    Views, When, With, Zone, Zorder,
+    Run, Schema, Schemas, Serde, Serdeproperties, Set, Shallow, Show, Sorted, Source, Start,
+    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
+    Then, Time, To, Truncate, Type, Uncache, Unset, Update, Use, User, Using, Vacuum, Values,
+    Verbose, View, Views, When, With, Zone, Zorder,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -139,6 +139,7 @@ pub enum Statement {
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         columns: Option<ColumnDefinitionList>,
         like: Option<(Like, ObjectName)>,
+        clone: Option<(Shallow, crate::ast::keywords::Clone, ObjectName)>,
         using: Option<(Using, Ident)>,
         #[parser(function = |(_, q, e, d), o| compose((e, q, d), o))]
         clauses: Vec<CreateTableClause>,
@@ -150,6 +151,7 @@ pub enum Statement {
         external: Option<External>,
         table: Table,
         name: ObjectName,
+        clone: Option<(Shallow, crate::ast::keywords::Clone, ObjectName)>,
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         columns: Option<ColumnDefinitionList>,
         using: Option<(Using, Ident)>,
@@ -894,6 +896,7 @@ pub enum AlterTableOperation {
         action: SnapshotReferenceCreateAction,
         kind: SnapshotReferenceKind,
         if_not_exists: Option<(If, Not, Exists)>,
+        #[parser(function = |_, o| NumberLiteral::parser((), o).not().ignore_then(Ident::parser((), o)))]
         name: Ident,
         version: Option<(
             As,
@@ -913,6 +916,7 @@ pub enum AlterTableOperation {
         drop: Drop,
         kind: SnapshotReferenceKind,
         if_exists: Option<(If, Exists)>,
+        #[parser(function = |_, o| NumberLiteral::parser((), o).not().ignore_then(Ident::parser((), o)))]
         name: Ident,
     },
     SetIdentifierFields {

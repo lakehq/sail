@@ -180,6 +180,11 @@ impl Actor for DriverActor {
                 sequence,
             } => self.handle_update_task(ctx, key, status, message, cause, sequence),
             DriverMessage::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
+            DriverMessage::RangeSplitPointsRead {
+                job_id,
+                shuffle,
+                partitions,
+            } => self.handle_range_split_points_read(ctx, job_id, shuffle, partitions),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }

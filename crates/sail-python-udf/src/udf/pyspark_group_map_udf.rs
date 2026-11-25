@@ -19,6 +19,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 /// Mode flags describing the variant of a GroupMap UDF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -148,7 +149,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = get_list_field(&self.output_type)?;
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = with_blocking_python(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupMapper {
             udf,
             field,
@@ -175,7 +176,7 @@ struct PySparkGroupMapper {
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let data = with_blocking_python(|py| -> PyUdfResult<_> {
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;

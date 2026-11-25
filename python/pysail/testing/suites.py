@@ -14,8 +14,8 @@ import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from pysail.testing.bdd import scenario_feature_path
 from pysail.testing.resources import resource_affinity
-from pysail.testing.spark.markers import resolve_spark_markers
 from pysail.testing.spark.utils.common import pyspark_version
 
 # Paths are relative to tests (with the optional _dev prefix removed).
@@ -38,6 +38,7 @@ INTEGRATION_GROUPS = {
     "celeborn": ("celeborn", "spark/execution/test_shuffle_celeborn.py"),
     "glue": ("catalog/glue", "spark/catalog/glue"),
     "jdbc": ("spark/datasource/test_jdbc.py",),
+    "s3": ("spark/datasource/s3",),
 }
 SUITE_PATHS = {
     "udf": ("spark/udf", "spark/function/test_lazy_python_udf.py"),
@@ -93,6 +94,9 @@ def matrix_versions() -> tuple[str | None, list[str]]:
 
 def assigned_versions(item: pytest.Item, affinity: tuple[str, str], seed: str, versions: list[str]) -> list[str]:
     """Assign compatible versions using the affinity and cross-version markers."""
+    # Allow pytest to load the marker plugin with assertion rewriting before using it here.
+    from pysail.testing.spark.markers import resolve_spark_markers  # noqa: PLC0415
+
     try:
         supports = resolve_spark_markers(item.iter_markers("spark"))
     except (TypeError, ValueError) as error:
@@ -127,12 +131,6 @@ def relative_test_path(path: Path, *, strip_dev: bool = True) -> Path:
                 relative = Path("_dev") / relative
             return relative.relative_to("_dev") if strip_dev and relative.parts[0] == "_dev" else relative
     return path
-
-
-def scenario_feature_path(item: pytest.Item) -> Path | None:
-    scenario = getattr(getattr(item, "function", None), "__scenario__", None)
-    filename = getattr(getattr(scenario, "feature", None), "filename", None)
-    return Path(filename).resolve() if filename else None
 
 
 def item_affinity(item: pytest.Item) -> tuple[str, str]:

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::{Expr, Volatility};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
+use datafusion_common::{DataFusionError, GetExt, Result, plan_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_session::Session;
@@ -18,7 +18,10 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_cache::scope::listing_table_ref;
+use sail_common_datafusion::session::config::SessionConfigService;
 
+use crate::listing::partition::{BasePathOptions, PartitionDiscovery};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -154,118 +157,245 @@ pub fn infer_listing_compression(
     Ok(inferred)
 }
 
-/// List up to 10 files per URL into in-memory groups, suitable for schema inference, compression
-/// inference, and partition inference.
-///
-/// File extensions are intentionally ignored since `ListingTableUrl` carries the filtering glob
-/// already, and Spark reads every non-hidden file regardless of extension.
-pub async fn sample_listing_files<'a>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaSampling {
+    Sample,
+    /// Multiline CSV infers types from whole files, including loose files in a partitioned table.
+    MultilineCsv,
+    /// Ordinary Parquet reads use the existing bounded sample when mergeSchema is unset.
+    SampleParquet,
+    /// Prefer a summary footer, falling back to the lexicographically first data file.
+    SingleParquet,
+    MergeParquet {
+        summaries_only: bool,
+    },
+}
+
+/// Collect the files needed for schema and compression inference. Bounded samples are per
+/// original input, and partition discovery examines every leaf directory below basePath.
+pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
-    urls: &'a [ListingTableUrl],
-    path_glob_filter: Option<&'a PathGlobFilter>,
-) -> Result<Vec<ListingFileSample<'a>>> {
-    let mut samples = vec![];
-    for url in urls {
-        let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
-            .await?
-            // Empty files can't contribute to schema / partition inference and may error when read.
-            .try_filter(|meta| futures::future::ready(meta.size > 0))
-            .take(10)
-            .try_collect()
-            .await?;
-        samples.push(ListingFileSample {
-            url,
-            store,
-            objects,
-        });
-    }
-    Ok(samples)
-}
+    inputs: &'a [Vec<ListingTableUrl>],
+    path_glob_filter: Option<&PathGlobFilter>,
+    base_path: Option<&BasePathOptions>,
+    recursive: bool,
+    sampling: SchemaSampling,
+) -> Result<(Vec<ListingFileSample<'a>>, PartitionDiscovery)> {
+    const SAMPLE_SIZE: usize = 10;
+    let merge = matches!(sampling, SchemaSampling::MergeParquet { .. });
+    let all_files = merge || sampling == SchemaSampling::MultilineCsv;
+    let directory_order =
+        sampling == SchemaSampling::MultilineCsv && uses_directory_listing(ctx, inputs)?;
+    let mut discovery = PartitionDiscovery::default();
+    let mut samples = Vec::new();
+    let mut direct_samples = Vec::new();
+    let mut footer = None;
+    let mut direct_footer = None;
 
-pub fn validate_partitions(
-    files: &[ListingFileSample<'_>],
-    table_partition_fields: &[FieldRef],
-) -> Result<()> {
-    if table_partition_fields.is_empty() {
-        return Ok(());
-    }
-    let inferred = infer_partitions(files)?;
-    if inferred.is_empty() {
-        return Ok(());
-    }
-
-    for group in files {
-        if !group.url.is_collection() {
-            return plan_err!(
-                "Can't create a partitioned table backed by a single file, \
-            perhaps the URL is missing a trailing slash?"
-            );
-        }
-
-        let table_partition_names = table_partition_fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-
-        if inferred.len() < table_partition_names.len() {
-            return plan_err!(
-                "Inferred partitions to be {:?}, but got {:?}",
-                inferred,
-                table_partition_names
-            );
-        }
-
-        // Match prefix to allow creating tables with partial partitions.
-        for (idx, col) in table_partition_names.iter().enumerate() {
-            if inferred.get(idx) != Some(col) {
-                return plan_err!(
-                    "Inferred partitions to be {:?}, but got {:?}",
-                    inferred,
-                    table_partition_names
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
-    let mut inferred: Option<Vec<String>> = None;
-    for group in files {
-        for file in &group.objects {
-            let path_parts = group
-                .url
-                .strip_prefix(&file.location)
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "failed to strip listing prefix from object location: {}",
-                        file.location
+    for roots in inputs {
+        let Some(first) = roots.first() else { continue };
+        // Glob alternatives from one input use the same object store.
+        let store = ctx.runtime_env().object_store(first)?;
+        let mut objects = Vec::new();
+        let mut direct = Vec::new();
+        let mut has_listed_file = false;
+        let mut has_direct_file = false;
+        'roots: for url in roots {
+            let start = objects.len();
+            let mut files = list_all_files(url, ctx, store.as_ref(), None).await?;
+            while let Some(file) = files.try_next().await? {
+                let selected = matches_path_glob_filter(path_glob_filter, &file.location);
+                let name = file.location.filename().unwrap_or_default();
+                let metadata_file = is_metadata_file(name);
+                let partitioned = if metadata_file {
+                    true
+                } else if let Some(base) = base_path {
+                    // Even empty and filtered files participate in partition discovery.
+                    discovery.observe(url, &file.location, Some(base))?
+                } else {
+                    if !recursive && selected && file.size > 0 {
+                        discovery.observe(url, &file.location, None)?;
+                    }
+                    true
+                };
+                if !selected {
+                    continue;
+                }
+                let direct_input = base_path.is_some() && is_direct_input(url, &file.location);
+                has_listed_file |= partitioned;
+                has_direct_file |= direct_input;
+                // Spark excludes metadata prefixes from row scans and partition discovery.
+                // Only the two exact filenames receive special treatment when choosing footers.
+                let parquet_summary = matches!(name, "_common_metadata" | "_metadata");
+                if (metadata_file
+                    && matches!(
+                        sampling,
+                        SchemaSampling::Sample | SchemaSampling::MultilineCsv
+                    ))
+                    || (!parquet_summary && file.size == 0)
+                {
+                    continue;
+                }
+                if sampling == SchemaSampling::SingleParquet
+                    || (sampling == SchemaSampling::SampleParquet && parquet_summary)
+                {
+                    if direct_input {
+                        keep_parquet_footer(&mut direct_footer, url, &store, &file);
+                    }
+                    keep_parquet_footer(&mut footer, url, &store, &file);
+                    continue;
+                }
+                if !parquet_summary
+                    && matches!(
+                        sampling,
+                        SchemaSampling::MergeParquet {
+                            summaries_only: true
+                        }
                     )
-                })?
-                .collect::<Vec<_>>();
-
-            let keys = path_parts
-                .into_iter()
-                .rev()
-                .skip(1) // get parents only and skip the file itself
-                .rev()
-                .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>();
-
-            match &mut inferred {
-                None => inferred = Some(keys),
-                Some(x) if x == &keys => {}
-                Some(x) => {
-                    return plan_err!("found mixed partition values {x:?} and {keys:?}");
+                {
+                    continue;
+                }
+                if direct_input && (all_files || direct.len() < SAMPLE_SIZE) {
+                    direct.push(file.clone());
+                }
+                if (partitioned || all_files) && (all_files || objects.len() < SAMPLE_SIZE) {
+                    objects.push(file);
+                }
+                if base_path.is_none() && !all_files && objects.len() == SAMPLE_SIZE {
+                    break 'roots;
                 }
             }
+            if directory_order && url.is_collection() {
+                order_csv_directory_files(&mut objects, start, url.prefix());
+            }
         }
+        samples.push(ListingFileSample {
+            url: first,
+            store,
+            objects,
+            has_listed_file,
+        });
+        direct_samples.push((direct, has_direct_file));
     }
+    if base_path.is_some() && !discovery.has_partitions() {
+        for (sample, (direct, listed)) in samples.iter_mut().zip(direct_samples) {
+            sample.objects = direct;
+            sample.has_listed_file = listed;
+        }
+        footer = direct_footer;
+    }
+    if let Some((url, store, object)) = footer {
+        samples = vec![ListingFileSample {
+            url,
+            store,
+            objects: vec![object],
+            has_listed_file: true,
+        }];
+    }
+    Ok((samples, discovery))
+}
 
-    Ok(inferred.unwrap_or_default())
+/// Spark can use a flat recursive listing for a single root on configured filesystems.
+fn uses_directory_listing(ctx: &dyn Session, inputs: &[Vec<ListingTableUrl>]) -> Result<bool> {
+    let [roots] = inputs else { return Ok(true) };
+    let [url] = roots.as_slice() else {
+        return Ok(true);
+    };
+    let schemes = ctx
+        .config()
+        .get_extension::<SessionConfigService>()
+        .map(|service| service.get_option("spark.sql.sources.useListFilesFileSystemList"))
+        .transpose()?
+        .flatten();
+    Ok(!schemes
+        .as_deref()
+        .unwrap_or("s3a")
+        .split(',')
+        .any(|scheme| scheme.trim().eq_ignore_ascii_case(url.scheme())))
+}
+
+/// Hadoop emits the immediate files in each directory before walking its child directories.
+/// Preserve the listing order of sibling directories and of files in the same directory.
+fn order_csv_directory_files(files: &mut Vec<ObjectMeta>, start: usize, root: &Path) {
+    if files.len() - start < 2 {
+        return;
+    }
+    fn relative<'a>(file: &'a ObjectMeta, root: &Path) -> &'a str {
+        file.location
+            .as_ref()
+            .strip_prefix(root.as_ref())
+            .unwrap_or(file.location.as_ref())
+            .trim_start_matches('/')
+    }
+    if files[start..]
+        .iter()
+        .all(|file| !relative(file, root).contains('/'))
+    {
+        return;
+    }
+    let mut directories = HashMap::<String, usize>::new();
+    let mut entries = Vec::new();
+    for file in files.drain(start..) {
+        let path = relative(&file, root);
+        let mut order = Vec::new();
+        for (end, _) in path.match_indices('/') {
+            let directory = &path[..end];
+            let id = match directories.get(directory) {
+                Some(&id) => id,
+                None => {
+                    let id = directories.len();
+                    directories.insert(directory.to_owned(), id);
+                    id
+                }
+            };
+            order.push(id);
+        }
+        entries.push((order, file));
+    }
+    // Ancestor keys are strict prefixes of their descendants.
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    files.extend(entries.into_iter().map(|(_, file)| file));
+}
+
+/// Spark orders Parquet schemas by Hadoop Path.toString, a qualified, decoded UTF-16 string.
+pub(crate) fn parquet_path_sort_key<'a>(
+    url: &'a ListingTableUrl,
+    path: &'a Path,
+) -> impl Iterator<Item = u16> + 'a {
+    url.get_url()[..url::Position::BeforePath]
+        .encode_utf16()
+        .chain([u16::from(b'/')])
+        .chain(path.as_ref().encode_utf16())
+}
+
+// Spark prefers _common_metadata over _metadata, then the lexicographically first path.
+fn keep_parquet_footer<'a>(
+    current: &mut Option<(&'a ListingTableUrl, Arc<dyn ObjectStore>, ObjectMeta)>,
+    url: &'a ListingTableUrl,
+    store: &Arc<dyn ObjectStore>,
+    file: &ObjectMeta,
+) {
+    let key = |file: &ObjectMeta| match file.location.filename() {
+        Some("_common_metadata") => 0,
+        Some("_metadata") => 1,
+        _ => 2,
+    };
+    if current.as_ref().is_none_or(|(previous_url, _, previous)| {
+        key(file)
+            .cmp(&key(previous))
+            .then_with(|| {
+                parquet_path_sort_key(url, &file.location)
+                    .cmp(parquet_path_sort_key(previous_url, &previous.location))
+            })
+            .is_lt()
+    }) {
+        *current = Some((url, Arc::clone(store), file.clone()));
+    }
+}
+
+pub(super) fn is_direct_input(url: &ListingTableUrl, path: &Path) -> bool {
+    url.strip_prefix(path)
+        .is_some_and(|mut parts| parts.nth(1).is_none())
 }
 
 pub async fn list_all_files<'a>(
@@ -281,8 +411,9 @@ pub async fn list_all_files<'a>(
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
+                // This key must match the one DataFusion uses when listing for a scan.
                 let key = TableScopedPath {
-                    table: None,
+                    table: Some(listing_table_ref(url, ctx.session_id())),
                     path: url.prefix().clone(),
                 };
                 if let Some(res) = cache.get(&key) {
@@ -321,14 +452,21 @@ pub fn matches_path_glob_filter(
     })
 }
 
+fn has_metadata_prefix(name: &str) -> bool {
+    name.starts_with("_common_metadata") || name.starts_with("_metadata")
+}
+
+pub(super) fn is_metadata_file(name: &str) -> bool {
+    !name.contains('=') && has_metadata_prefix(name)
+}
+
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
     let is_hidden = |name: &str| {
         let exclude = (name.starts_with('_') && !name.contains('='))
             || name.starts_with('.')
             || name.ends_with("._COPYING_");
-        let keep = name.starts_with("_common_metadata") || name.starts_with("_metadata");
-        exclude && !keep
+        exclude && !has_metadata_prefix(name)
     };
     url.strip_prefix(location)
         .is_some_and(|mut segments| segments.any(is_hidden))
@@ -385,6 +523,13 @@ pub fn can_be_evaluated_for_partition_pruning(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use datafusion::datasource::listing::helpers::pruned_partition_list;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::internal_datafusion_err;
+    use object_store::PutPayload;
+    use object_store::memory::InMemory;
+    use sail_cache::scope::scoped_listing_url;
 
     use super::*;
 
@@ -603,5 +748,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(merged.field(0).data_type(), &us);
+    }
+
+    #[tokio::test]
+    async fn file_listing_cache_keeps_object_stores_apart() -> Result<()> {
+        let ctx = SessionContext::new();
+        let cache = ctx
+            .runtime_env()
+            .cache_manager
+            .get_list_files_cache()
+            .ok_or_else(|| internal_datafusion_err!("missing file listing cache"))?;
+        let state = ctx.state();
+        let mut listed = vec![];
+        for (bucket, file) in [("bucket-a", "a.parquet"), ("bucket-b", "b.parquet")] {
+            let store = InMemory::new();
+            store
+                .put(
+                    &Path::from(format!("data/{file}")),
+                    PutPayload::from_static(b"x"),
+                )
+                .await?;
+            let url = ListingTableUrl::parse(format!("s3://{bucket}/data/"))?;
+            let files = list_all_files(&url, &state, &store, None)
+                .await?
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect::<Vec<_>>()
+                .await?;
+            listed.push(files);
+            // The scan lists through DataFusion, which must reuse the same cache entry.
+            let scanned = pruned_partition_list(
+                &state,
+                &store,
+                &scoped_listing_url(&url, state.session_id()),
+                &[],
+                "",
+                &[],
+            )
+            .await?
+            .map_ok(|file| file.object_meta.location.to_string())
+            .try_collect::<Vec<_>>()
+            .await?;
+            listed.push(scanned);
+        }
+        assert_eq!(
+            listed,
+            vec![
+                vec!["data/a.parquet".to_string()],
+                vec!["data/a.parquet".to_string()],
+                vec!["data/b.parquet".to_string()],
+                vec!["data/b.parquet".to_string()]
+            ]
+        );
+        assert_eq!(cache.len(), 2);
+        Ok(())
     }
 }

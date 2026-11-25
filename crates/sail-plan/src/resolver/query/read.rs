@@ -12,10 +12,12 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::TableAccessPurpose;
+use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseFormat, LakehouseOperation, TableColumnStatus, TableKind,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::{
@@ -36,7 +38,9 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{PlanResolverState, TableSourceKey};
+use crate::resolver::state::{
+    CatalogTableLookup, CatalogTableLookupKey, PlanResolverState, TableSourceKey,
+};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -125,6 +129,39 @@ impl PlanResolver<'_> {
         .await
     }
 
+    /// Looks up a catalog table or view, reusing earlier successful lookups in the query.
+    /// Data-source identifier reads (with a required format) do not look up views.
+    async fn lookup_catalog_table(
+        manager: &CatalogManager,
+        reference: &[String],
+        required_format: Option<&str>,
+        state: &mut PlanResolverState,
+    ) -> Result<CatalogTableLookup, CatalogError> {
+        let key = CatalogTableLookupKey {
+            reference: reference.to_vec(),
+            required_format: required_format.map(ToString::to_string),
+        };
+        if let Some(lookup) = state.get_catalog_table_lookup(&key) {
+            return Ok(lookup);
+        }
+        let request = ResolveLakehouseTableRequest {
+            catalog_table: reference.to_vec(),
+            operation: LakehouseOperation::Read,
+            requested_format: required_format.map(LakehouseFormat::from_format_name),
+            options: vec![],
+        };
+        let lookup = if required_format.is_some() {
+            let (status, resolved) = manager.get_lakehouse_table(reference, request).await?;
+            (status, Some(resolved))
+        } else {
+            manager
+                .get_lakehouse_table_or_view(reference, request)
+                .await?
+        };
+        state.insert_catalog_table_lookup(key, lookup.clone());
+        Ok(lookup)
+    }
+
     async fn resolve_query_read_catalog_table(
         &self,
         table: spec::ReadNamedTable,
@@ -141,14 +178,9 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        // Data-source identifier reads use the catalog directly, without view shadowing.
-        let lookup = if required_format.is_some() {
-            manager.get_table(&reference).await
-        } else {
-            manager.get_table_or_view(&reference).await
-        };
-        let (status, catalog_reference, lake_relation) = match lookup {
-            Ok(status) => (status, reference.clone(), None),
+        let lookup = Self::lookup_catalog_table(&manager, &reference, required_format, state).await;
+        let ((status, resolved), catalog_reference, lake_relation) = match lookup {
+            Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
             | Err(error @ CatalogError::NotSupported(_)) => {
                 let Some((candidate_name, base_reference)) = reference.split_last() else {
@@ -157,13 +189,11 @@ impl PlanResolver<'_> {
                 if base_reference.is_empty() {
                     return Err(error.into());
                 }
-                let base_lookup = if required_format.is_some() {
-                    manager.get_table(base_reference).await
-                } else {
-                    manager.get_table_or_view(base_reference).await
-                };
-                let base_status = match base_lookup {
-                    Ok(status) => status,
+                let base_lookup =
+                    Self::lookup_catalog_table(&manager, base_reference, required_format, state)
+                        .await;
+                let (base_status, base_resolved) = match base_lookup {
+                    Ok(lookup) => lookup,
                     // A base that names no table, such as `catalog.database` left by
                     // `catalog.database.table`, is not a lake relation either: the
                     // table is what is missing.
@@ -193,7 +223,7 @@ impl PlanResolver<'_> {
                         return Err(PlanError::unsupported(reason));
                     }
                     LakeRelationResolution::Supported(relation) => (
-                        base_status,
+                        (base_status, base_resolved),
                         base_reference.to_vec(),
                         Some((relation_provider, relation)),
                     ),
@@ -270,24 +300,20 @@ impl PlanResolver<'_> {
                 {
                     Some(table_source) => table_source,
                     None => {
-                        let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
-                            self.resolve_lakehouse_table_context_for_access(
-                                &catalog_reference,
-                                LakehouseOperation::Read,
-                                Some(&format),
-                                vec![],
-                                lake_relation_access_purpose(relation.access()),
-                            )
-                            .await?
-                        } else {
-                            self.resolve_lakehouse_table_context(
-                                &catalog_reference,
-                                LakehouseOperation::Read,
-                                Some(&format),
-                                vec![],
-                            )
-                            .await?
+                        let access_purpose = match lake_relation.as_ref() {
+                            Some((_, relation)) => lake_relation_access_purpose(relation.access()),
+                            None => TableAccessPurpose::DataRead,
                         };
+                        let resolved = resolved.ok_or_else(|| {
+                            PlanError::internal("catalog table without lakehouse resolution")
+                        })?;
+                        let lakehouse_table = self
+                            .begin_lakehouse_table_access(
+                                &catalog_reference,
+                                resolved.execution,
+                                access_purpose,
+                            )
+                            .await?;
                         let info = SourceInfo {
                             paths: location.map(|x| vec![x]).unwrap_or_default(),
                             lakehouse_table: Some(lakehouse_table),
@@ -663,14 +689,19 @@ impl PlanResolver<'_> {
                     "iceberg does not support user specified schema",
                 ));
             }
-            // FIXME: Match Spark Connect's precedence for conflicting case-insensitive path
-            // options. HashMap decoding loses wire order, making first-match selection unstable.
-            if let Some(path) = source
+            // Connect options have no stable ordering, so conflicting aliases cannot use
+            // last-option-wins semantics without choosing an unpredictable table.
+            let mut paths = source
                 .options
                 .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
-                .map(|(_, value)| value.clone())
-            {
+                .filter(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value);
+            if let Some(path) = paths.next().cloned() {
+                if paths.any(|value| value != &path) {
+                    return Err(PlanError::invalid(
+                        "Conflicting case-insensitive path options",
+                    ));
+                }
                 if !source.paths.is_empty() {
                     return Err(PlanError::invalid(
                         "Cannot specify both a path option and load paths",

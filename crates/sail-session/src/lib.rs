@@ -10,9 +10,12 @@ mod scalar_subquery;
 pub mod session_factory;
 pub mod session_manager;
 mod shared_cte;
+pub mod shutdown;
 
 #[cfg(test)]
 mod tests {
+    mod clone;
+
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -490,16 +493,13 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         session.execute_logical_plan(plan).await?.collect().await?;
 
-        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM t)";
+        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t)";
         let plan = from_ast_statement(parse_one_statement(sql)?)?;
         let lookups = catalog.lookups.load(Ordering::SeqCst);
         resolver.resolve_named_plan(plan).await?;
         let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
-        // Each reference looks the table up, and the lookups return different orders.
-        assert!(
-            (2..7).contains(&lookups),
-            "unexpected lookup count {lookups}"
-        );
+        // Each spelling looks the table up, and the lookups return different orders.
+        assert_eq!(lookups, 2);
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
         Ok(())
     }

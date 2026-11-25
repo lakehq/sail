@@ -3,6 +3,7 @@
 import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -64,6 +65,23 @@ def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path)
 
     with pytest.raises(Exception, match="Nanosecond"):
         _ = spark.read.parquet(path).schema
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_parquet_rejects_nanos_for_microsecond_timestamp(spark, tmp_path, explicit):
+    for i, unit in enumerate(["us", "ns"]):
+        value = pa.array([123456789], pa.timestamp(unit))
+        nested = pa.StructArray.from_arrays([value, pa.array([i])], names=["ts", "id"])
+        pq.write_table(pa.table({"ts": value, "nested": nested}), tmp_path / f"{i}.parquet", version="2.6")
+
+    reader = spark.read.option("mergeSchema", False)
+    if explicit:
+        reader = reader.schema("ts TIMESTAMP, nested STRUCT<ts:TIMESTAMP_NTZ,id:BIGINT>")
+    df = reader.parquet(str(tmp_path))
+    assert df.select("nested.id").orderBy("id").collect() == [(0,), (1,)]
+    for column in ["ts", "nested.ts"]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.select(column).collect()
 
 
 def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
@@ -285,13 +303,163 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     assert rows == [Row(id=1, missing=None)]
 
 
-def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
-    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
-    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
-    # and reads the column as long, so Sail must too.
-    path = tmp_path / "arrow_second_timestamp.parquet"
+def test_parquet_single_footer_widens_small_integers(spark, tmp_path):
+    for name, ty in [("a", pa.int64()), ("b", pa.int8()), ("c", pa.int16())]:
+        pq.write_table(pa.table({"value": pa.array([42], type=ty)}), tmp_path / f"{name}.parquet")
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<value:bigint>"
+    assert df.collect() == [Row(value=42)] * 3
+
+
+def test_parquet_single_footer_reads_raw_temporal_values(spark, tmp_path):
+    for file, types, value in [
+        ("a", [pa.date32(), pa.int32(), pa.int64(), pa.int64(), pa.int64()], 1),
+        ("b", [pa.int32(), pa.date32(), pa.timestamp("ms", tz="UTC"), pa.timestamp("us"), pa.timestamp("ns")], -42),
+    ]:
+        columns = {
+            name: pa.array([value, None], ty)
+            for name, ty in zip(["day", "days", "millis", "micros", "nanos"], types, strict=True)
+        }
+        if file == "b":
+            columns["days"] = columns["days"].cast(pa.date64())
+            columns["micros"] = columns["micros"].dictionary_encode()
+        columns["nested"] = pa.StructArray.from_arrays([columns["nanos"]], names=["ticks"])
+        columns["unchanged"] = pa.array([1_234, None], pa.timestamp("ms", tz="UTC"))
+        pq.write_table(pa.table(columns), tmp_path / f"{file}.parquet", use_dictionary=False)
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr(
+        "unix_date(day)", "days", "millis", "micros", "nanos", "nested.ticks", "unix_millis(unchanged)"
+    ).orderBy("days").collect() == [
+        (None,) * 7,
+        (None,) * 7,
+        (-42, -42, -42, -42, -42, -42, 1_234),
+        (1, 1, 1, 1, 1, 1, 1_234),
+    ]
+    assert df.selectExpr("unix_date(min(day))", "min(days)", "min(millis)", "min(micros)", "min(nanos)").collect() == [
+        (-42, -42, -42, -42, -42)
+    ]
+    assert df.where("days < 0 AND millis < 0 AND micros < 0").selectExpr("unix_date(day)").collect() == [(-42,)]
+
+
+def test_parquet_single_footer_reads_date_and_time_storage(spark, tmp_path):
+    names = ["tiny", "small", "whole", "wide", "day", "clock"]
+    types = [pa.int8(), pa.int16(), pa.int64(), pa.float64(), pa.date32(), pa.int64()]
+    first = {name: pa.array([1], ty) for name, ty in zip(names, types, strict=True)}
+    first["nested"] = pa.StructArray.from_arrays([first["tiny"], first["clock"]], names=["tiny", "clock"])
+    pq.write_table(pa.table(first), tmp_path / "a.parquet", use_dictionary=False)
+
+    days = pa.array([32768, -42, None], pa.date32())
+    later = dict.fromkeys(names[:4], days)
+    later["day"] = pa.array([123, -42, None], pa.int16())
+    later["clock"] = pa.array([1234, 5678, None], pa.time64("us"))
+    later["nested"] = pa.StructArray.from_arrays([days, later["clock"]], names=["tiny", "clock"])
+    pq.write_table(pa.table(later), tmp_path / "b.parquet", use_dictionary=False)
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("clock").selectExpr(
+        "tiny", "small", "whole", "wide", "unix_date(day)", "clock", "nested.tiny", "nested.clock"
+    ).collect() == [
+        (None,) * 8,
+        (1, 1, 1, 1.0, 1, 1, 1, 1),
+        (0, -32768, 32768, 32768.0, 123, 1234, 0, 1234),
+        (-42, -42, -42, -42.0, -42, 5678, -42, 5678),
+    ]
+    assert df.selectExpr("min(small)", "max(whole)", "max(wide)", "max(clock)").collect() == [
+        (-32768, 32768, 32768.0, 5678)
+    ]
+    assert df.where("small = -32768 AND nested.clock > 1000").selectExpr("unix_date(day)").collect() == [(123,)]
+
+
+def test_parquet_single_footer_rejects_int96_as_bigint(spark, tmp_path):
+    for file, ty in [("a", pa.int64()), ("b", pa.timestamp("us"))]:
+        value = pa.array([42], ty)
+        nested = pa.StructArray.from_arrays([value, pa.array([1])], names=["value", "id"])
+        pq.write_table(
+            pa.table({"value": value, "nested": nested}),
+            tmp_path / f"{file}.parquet",
+            use_deprecated_int96_timestamps=True,
+        )
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.select("nested.id").collect() == [(1,), (1,)]
+    for column in ["value", "nested.value"]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.select(column).collect()
+
+
+def test_parquet_integer_backed_decimals_read_as_unscaled_integers(spark, tmp_path):
+    first = pa.table({"i": pa.array([1], pa.int32()), "l": pa.array([1], pa.int64())})
+    pq.write_table(first, tmp_path / "a.parquet")
+    values = [Decimal("-1234.56"), Decimal("78.90"), None]
+    decimals = pa.table({"i": pa.array(values, pa.decimal128(7, 2)), "l": pa.array(values, pa.decimal128(15, 2))})
+    pq.write_table(decimals, tmp_path / "b.parquet", store_decimal_as_integer=True, use_dictionary=False)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("i").collect() == [(None, None), (-123456, -123456), (1, 1), (7890, 7890)]
+    assert df.selectExpr("min(i)", "max(l)").collect() == [(-123456, 7890)]
+
+    pq.write_table(decimals, tmp_path / "c.parquet", store_decimal_as_integer=False, use_dictionary=False)
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.option("mergeSchema", False).parquet(str(tmp_path)).collect()
+
+
+def test_parquet_requested_integer_from_null_column(spark, tmp_path):
+    pq.write_table(pa.table({"v": pa.array([7], pa.int32())}), tmp_path / "a.parquet")
+    path = tmp_path / "b.parquet"
+    pq.write_table(pa.table({"v": pa.nulls(2)}), path)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("v").collect() == [(None,), (None,), (7,)]
+    assert df.where("v IS NULL").count() == 2
+    assert df.selectExpr("count(v)", "min(v)").collect() == [(1, 7)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema("v STRING").parquet(str(path)).collect()
+
+
+@pytest.mark.parametrize("use_dictionary", [True, False])
+def test_parquet_requested_binary_from_decimal(spark, tmp_path, use_dictionary):
+    path = tmp_path / "decimal.parquet"
+    values = pa.array([Decimal("-1.00"), Decimal("1.00"), None], pa.decimal128(7, 2))
+    items = pa.ListArray.from_arrays([0, 1, 2, 3], values)
+    pq.write_table(pa.table({"v": values, "items": items}), path, use_dictionary=use_dictionary)
+    df = spark.read.schema("v BINARY, items ARRAY<BINARY>").parquet(str(path))
+    assert df.selectExpr("hex(v)").collect() == [("FFFFFF9C",), ("00000064",), (None,)]
+    assert df.selectExpr("hex(items[0])").collect() == [("FFFFFF9C",), ("00000064",), (None,)]
+    assert df.selectExpr("hex(min(v))", "hex(max(v))", "count(v)").collect() == [("00000064", "FFFFFF9C", 2)]
+    assert df.where("v > unhex('7f')").selectExpr("hex(v)").collect() == [("FFFFFF9C",)]
+
+
+def test_parquet_binary_from_mixed_width_decimals(spark, tmp_path):
+    narrow, wide = tmp_path / "narrow.parquet", tmp_path / "wide.parquet"
+    values = pa.array([Decimal("-2.00"), Decimal("2.00"), None], pa.decimal128(7, 2))
+    pq.write_table(pa.table({"v": values}), narrow, store_schema=False)
+    # PyArrow uses the minimum width for each precision. This fixture was written
+    # as DECIMAL(18,2) and both precision fields in the footer were set to 7.
+    wide.write_bytes(
+        base64.b64decode(
+            "UEFSMRUAFSwVLCwVBhUAFQYVBhwAAAACAAAAAwP/////////nAAAAAAAAABkFQQZLDUAGAZzY2hlbWEVAgAVDhUQFQIYAXYlChUE"
+            "FQ4sXBUEFQ4AAAAWBhkcGRwmABwVDhklBgAZGAF2FQAWBhZSFlImCEkcFQAVABUCADwpBhkmAgQAAAAWUhYGJggWUgAoIHBhcnF1"
+            "ZXQtY3BwLWFycm93IHZlcnNpb24gMjQuMC4wGRwcAAAAigAAAFBBUjE="
+        )
+    )
+    assert pq.read_schema(narrow) == pq.read_schema(wide)
+    assert [pq.ParquetFile(path).schema.column(0).length for path in (narrow, wide)] == [4, 8]
+
+    df = spark.read.schema("v BINARY").parquet(str(tmp_path))
+    assert df.selectExpr("hex(v) AS h").orderBy("h").collect() == [
+        (None,),
+        (None,),
+        ("0000000000000064",),
+        ("000000C8",),
+        ("FFFFFF38",),
+        ("FFFFFFFFFFFFFF9C",),
+    ]
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_parquet_arrow_timestamp_hint_on_unannotated_int64_is_bigint(spark, tmp_path, unit):
+    # The footer declares a plain INT64. Spark reads its stored value for every Arrow timestamp hint.
+    path = tmp_path / "arrow_timestamp_hint.parquet"
     encoded_arrow_schema = base64.b64encode(
-        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+        pa.schema([pa.field("ts", pa.timestamp(unit))]).serialize().to_pybytes()
     ).decode()
     table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
     with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
@@ -305,6 +473,141 @@ def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
         Row(ts=-1),
         Row(ts=1704164645),
     ]
+
+
+def test_parquet_explicit_year_month_interval_reads_int32_months(spark, tmp_path):
+    pq.write_table(pa.table({"v": pa.array([-13, None, 14], pa.int32())}), tmp_path / "months.parquet")
+    df = spark.read.schema("v INTERVAL YEAR TO MONTH").parquet(str(tmp_path))
+    assert df.selectExpr("CAST(v AS STRING) AS v").orderBy("v").collect() == [
+        (None,),
+        ("INTERVAL '-1-1' YEAR TO MONTH",),
+        ("INTERVAL '1-2' YEAR TO MONTH",),
+    ]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks interval qualifiers in Sail-written Arrow schema metadata")
+@pytest.mark.parametrize("skip_metadata", [False, True])
+def test_parquet_sail_interval_round_trip(spark, tmp_path, skip_metadata):
+    path = str(tmp_path / "intervals")
+    spark.sql("SELECT INTERVAL '2' HOUR AS v, named_struct('x', INTERVAL '-3' MINUTE) AS s").write.parquet(path)
+    reader = spark.read.option("skipMetadata", skip_metadata)
+
+    inferred = reader.parquet(path)
+    assert inferred.schema.simpleString() == "struct<v:interval hour,s:struct<x:interval day to second>>"
+    assert inferred.collect() == [Row(v=timedelta(hours=2), s=Row(x=timedelta(minutes=-3)))]
+
+    for option, value in [("basePath", path), ("mergeSchema", True)]:
+        inferred = spark.read.option("skipMetadata", skip_metadata).option(option, value).parquet(path)
+        assert inferred.schema.simpleString() == "struct<v:interval hour,s:struct<x:bigint>>"
+        assert inferred.collect() == [Row(v=timedelta(hours=2), s=Row(x=-180_000_000))]
+
+    raw = reader.schema("v BIGINT, s STRUCT<x: BIGINT>").parquet(path)
+    assert raw.collect() == [Row(v=7_200_000_000, s=Row(x=-180_000_000))]
+
+
+def test_parquet_explicit_interval_reads_int64_ticks(spark, tmp_path):
+    for i, ty in enumerate([pa.duration("us"), pa.int64()]):
+        ticks = pa.array([-1, None, 42], ty)
+        nested = pa.StructArray.from_arrays([ticks], names=["x"])
+        pq.write_table(pa.table({"v": ticks, "s": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.schema("v INTERVAL DAY TO SECOND, s STRUCT<x:INTERVAL DAY TO SECOND>").parquet(str(tmp_path))
+    rows = df.select("v", "s.x").orderBy("v").collect()
+    assert rows == [
+        (value, value)
+        for value in [
+            None,
+            None,
+            timedelta(microseconds=-1),
+            timedelta(microseconds=-1),
+            timedelta(microseconds=42),
+            timedelta(microseconds=42),
+        ]
+    ]
+
+
+def test_parquet_intervals_read_annotated_integer_storage(spark, tmp_path):
+    month_count = 14
+    micros = 43
+    columns = {
+        "d": pa.array([month_count], pa.date32()),
+        "t": pa.array([micros], pa.timestamp("ms")),
+        "small": pa.array([month_count], pa.int8()),
+        "u32": pa.array([2**32 - 1], pa.uint32()),
+        "u64": pa.array([2**64 - 1], pa.uint64()),
+        "d32": pa.array([Decimal("0.14")], pa.decimal128(8, 2)),
+        "d64": pa.array([Decimal("0.43")], pa.decimal128(16, 2)),
+    }
+    pq.write_table(
+        pa.table(columns), tmp_path / "annotated.parquet", store_decimal_as_integer=True, use_dictionary=False
+    )
+    year_month = ["d", "small", "u32", "d32"]
+    day_time = ["t", "u64", "d64"]
+    schema = [f"{col} INTERVAL YEAR TO MONTH" for col in year_month] + [
+        f"{col} INTERVAL DAY TO SECOND" for col in day_time
+    ]
+    df = spark.read.schema(", ".join(schema)).parquet(str(tmp_path))
+    expressions = [f"CAST({col} AS STRING)" for col in year_month] + day_time
+    positive = "INTERVAL '1-2' YEAR TO MONTH"
+    negative = "INTERVAL '-0-1' YEAR TO MONTH"
+    assert df.selectExpr(*expressions).collect() == [
+        (
+            positive,
+            positive,
+            negative,
+            positive,
+            timedelta(microseconds=micros),
+            timedelta(microseconds=-1),
+            timedelta(microseconds=micros),
+        )
+    ]
+    assert df.selectExpr("CAST(min(u32) AS STRING)", "max(u64)", "min(d64)").collect() == [
+        (negative, timedelta(microseconds=-1), timedelta(microseconds=micros))
+    ]
+
+
+def test_parquet_single_footer_interval_reads_annotated_ticks(spark, tmp_path):
+    written = tmp_path / "written"
+    spark.sql("SELECT INTERVAL '1' SECOND AS v").coalesce(1).write.parquet(str(written))
+    next(written.glob("*.parquet")).rename(tmp_path / "a.parquet")
+    pq.write_table(pa.table({"v": pa.array([42], pa.timestamp("ms"))}), tmp_path / "b.parquet")
+    pq.write_table(pa.table({"v": pa.array([3], pa.uint64())}), tmp_path / "c.parquet", use_dictionary=False)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path / "*.parquet"))
+    assert df.orderBy("v").collect() == [(timedelta(microseconds=n),) for n in [3, 42, 1_000_000]]
+
+
+@pytest.mark.parametrize(
+    ("physical", "requested", "int96"),
+    [
+        (pa.date32(), "DAY TO SECOND", False),
+        (pa.timestamp("us"), "YEAR TO MONTH", False),
+        (pa.timestamp("us"), "DAY TO SECOND", True),
+    ],
+)
+def test_parquet_interval_rejects_other_storage_widths(spark, tmp_path, physical, requested, int96):
+    path = tmp_path / "wrong.parquet"
+    pq.write_table(pa.table({"v": pa.array([1], physical)}), path, use_deprecated_int96_timestamps=int96)
+    df = spark.read.schema(f"v INTERVAL {requested}").parquet(str(path))
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.selectExpr("CAST(v AS STRING)").collect()
+
+
+def test_parquet_explicit_schema_uses_unannotated_integer_storage(spark, tmp_path):
+    path = tmp_path / "data.parquet"
+    values = pa.array([-1, 42], pa.int64())
+    table = pa.table({"v": values, "nested": pa.StructArray.from_arrays([values], names=["x"])})
+    hint = pa.schema([("v", pa.timestamp("s")), ("nested", pa.struct([("x", pa.timestamp("us"))]))])
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": base64.b64encode(hint.serialize()).decode()})
+        writer.write_table(table)
+
+    for field, column in [("v TIMESTAMP_NTZ", "v"), ("nested STRUCT<x:TIMESTAMP_NTZ>", "nested.x")]:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            spark.read.schema(field).parquet(str(path)).select(column).collect()
+
+    df = spark.read.schema("v DECIMAL(20,0), nested STRUCT<x:DECIMAL(20,0)>").parquet(str(path))
+    assert df.select("v", "nested.x").orderBy("v").collect() == [(Decimal(-1), Decimal(-1)), (Decimal(42), Decimal(42))]
+    assert df.selectExpr("min(v)", "max(v)").collect() == [(Decimal(-1), Decimal(42))]
 
 
 @pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
@@ -379,6 +682,22 @@ def test_parquet_int96_with_arrow_schema_hint_before_1677(spark, tmp_path):
         Row(id=1, week=1, day="Mon", month="Jan", month_start="0001-01-01 00:00:00"),
         Row(id=2, week=24, day="Sun", month="Jun", month_start="2020-06-01 00:00:00"),
     ]
+
+
+def test_parquet_int96_in_legacy_list(spark, tmp_path):
+    path = tmp_path / "legacy_list.parquet"
+    values = [datetime(year, 6, 15, tzinfo=UTC) for year in [1600, 2500]]
+    array = pa.array([values], type=pa.list_(pa.timestamp("us", tz="UTC")))
+    pq.write_table(pa.table({"ts": array}), path, use_deprecated_int96_timestamps=True, store_schema=False)
+
+    # Rename the repeated LIST wrapper in the footer, preserving its byte length and all page offsets.
+    data = path.read_bytes()
+    footer_start = len(data) - 8 - int.from_bytes(data[-8:-4], "little")
+    path.write_bytes(data[:footer_start] + data[footer_start:].replace(b"\x04list", b"\x04bags"))
+    assert pq.ParquetFile(path).schema.column(0).path == "ts.bags.element"
+
+    rows = spark.read.parquet(str(path)).selectExpr("year(ts[0])", "year(ts[1])").collect()
+    assert rows == [(1600, 2500)]
 
 
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
@@ -1152,3 +1471,522 @@ def test_parquet_int96_timestamp_window_precision(spark, tmp_path):
     frame = spark.read.option("coerce_int96", "ns").parquet(str(path))
     assert frame.filter("id = 1 AND ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == []
     assert frame.filter("ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == [(2,)]
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_parquet_merge_schema_field_case(spark, tmp_path, case_sensitive):
+    for filename, name, value in [("a", "id", 1), ("b", "ID", 2)]:
+        nested = pa.array([{name: value}], type=pa.struct([(name, pa.int64())]))
+        pq.write_table(pa.table({name: [value], "nested": nested}), tmp_path / f"{filename}.parquet")
+
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+        if case_sensitive:
+            assert df.columns == ["id", "nested", "ID"]
+            assert df.orderBy(df["ID"].asc_nulls_first()).selectExpr(
+                "id", "ID", "nested.id AS first_id", "nested.ID AS second_id"
+            ).collect() == [
+                (1, None, 1, None),
+                (None, 2, None, 2),
+            ]
+        else:
+            assert df.columns == ["id", "nested"]
+            assert df.orderBy(df.id).selectExpr("id", "nested.id AS nested_id").collect() == [(1, 1), (2, 2)]
+            assert df.where("id = 2").select("nested.id").collect() == [(2,)]
+            assert df.selectExpr("min(id)", "max(id)", "count(id)").collect() == [(1, 2, 2)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_merge_schema_decimal_precision(spark, tmp_path):
+    for filename, precision, value in [("a", 5, "11.11"), ("b", 12, "12345678.90")]:
+        price = pa.array([Decimal(value)], type=pa.decimal128(precision, 2))
+        pq.write_table(pa.table({"price": price}), tmp_path / f"{filename}.parquet")
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<price:decimal(12,2)>"
+    assert df.orderBy("price").collect() == [(Decimal("11.11"),), (Decimal("12345678.90"),)]
+
+
+def test_parquet_merge_schema_interval_qualifiers(spark, tmp_path):
+    paths = []
+    for i, (day_time, year_month) in enumerate([("HOUR", "MONTH"), ("MINUTE", "YEAR")]):
+        path = str(tmp_path / str(i))
+        spark.sql(f"SELECT INTERVAL '2' {day_time} AS dt, INTERVAL '1' {year_month} AS ym").write.parquet(path)
+        paths.append(path)
+
+    df = spark.read.option("mergeSchema", True).parquet(*paths)
+    assert df.schema.simpleString() == "struct<dt:interval hour to minute,ym:interval year to month>"
+    assert df.selectExpr("dt", "EXTRACT(YEAR FROM ym) AS yr", "EXTRACT(MONTH FROM ym) AS mon").orderBy(
+        "yr"
+    ).collect() == [
+        (timedelta(hours=2), 0, 1),
+        (timedelta(minutes=2), 1, 0),
+    ]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Reads Spark interval qualifiers embedded in Arrow field metadata")
+def test_parquet_merge_schema_nested_interval_qualifiers(spark, tmp_path):
+    for i, qualifier in enumerate(["hour", "minute"]):
+        metadata = {
+            "SAIL::spark::interval": f'{{"unit":"dayTime","startField":"{qualifier}","endField":"{qualifier}"}}'
+        }
+        leaf = pa.field("value", pa.duration("us"), metadata=metadata)
+        schema = pa.schema([("s", pa.struct([leaf])), ("a", pa.list_(leaf)), ("m", pa.map_(pa.string(), leaf))])
+        value = timedelta(hours=1) if i == 0 else timedelta(minutes=2)
+        table = pa.Table.from_pylist([{"s": {"value": value}, "a": [value], "m": {"k": value}}], schema=schema)
+        pq.write_table(table, tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == (
+        "struct<s:struct<value:interval hour to minute>,a:array<interval hour to minute>,"
+        "m:map<string,interval hour to minute>>"
+    )
+    assert df.selectExpr("s.value", "a[0]", "m['k']").orderBy("value").collect() == [
+        (value, value, value) for value in [timedelta(minutes=2), timedelta(hours=1)]
+    ]
+
+
+def test_parquet_merge_schema_statistics_cache_field_case(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"ID": [2]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        for case_sensitive, expected in [(True, (1, 1)), (False, (2, 2)), (True, (1, 1))]:
+            spark.conf.set(key, str(case_sensitive).lower())
+            df = spark.read.schema("id BIGINT").option("mergeSchema", True).parquet(str(tmp_path))
+            assert df.selectExpr("count(id)", "max(id)").collect() == [expected]
+    finally:
+        spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize("merge_schema", [True, False])
+def test_parquet_mixed_arrow_offset_widths(spark, tmp_path, merge_schema):
+    for i, (text, binary, list_type) in enumerate(
+        [
+            (pa.large_string(), pa.large_binary(), lambda item: pa.list_(item, 2)),
+            (pa.string(), pa.binary(), pa.list_),
+            (pa.large_string(), pa.binary(1), pa.large_list),
+        ]
+    ):
+        label = str(i)
+        nested_type = pa.struct([("labels", list_type(text)), ("payload", binary)])
+        nested = pa.array([{"labels": [label, None], "payload": label.encode()}], type=nested_type)
+        pq.write_table(pa.table({"label": pa.array([label], type=text), "nested": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<label:string,nested:struct<labels:array<string>,payload:binary>>"
+    assert df.orderBy("label").select("label", "nested.labels", "nested.payload").collect() == [
+        (str(i), [str(i), None], str(i).encode()) for i in range(3)
+    ]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_merge_schema_nested_timestamp_timezones(spark, tmp_path):
+    for i, timezone in enumerate(["UTC", "America/New_York"]):
+        ty = pa.struct([("ts", pa.timestamp("us", tz=timezone))])
+        instant = datetime(2024, 1, 2, 3, 4, i, tzinfo=UTC)
+        nested = pa.array([{"ts": instant}], type=ty)
+        pq.write_table(pa.table({"nested": nested}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<nested:struct<ts:timestamp>>"
+    assert df.selectExpr("cast(nested.ts AS STRING) AS value").orderBy("value").collect() == [
+        Row(value="2024-01-01 19:04:00"),
+        Row(value="2024-01-01 19:04:01"),
+    ]
+
+
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_parquet_single_footer_ambiguous_field_projection(spark, tmp_path, case_sensitive):
+    pq.write_table(pa.table({"id": [1], "q": [10]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2], "q": [20], "Q": [30]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(case_sensitive).lower())
+        df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+        assert df.columns == ["id", "q"]
+        assert df.select("id").orderBy("id").collect() == [(1,), (2,)]
+        assert df.count() == 2
+        if case_sensitive:
+            assert df.select("q").orderBy("q").collect() == [(10,), (20,)]
+        else:
+            for projection in ["q", "count(q)"]:
+                with pytest.raises(
+                    Exception,
+                    match=r"Multiple physical fields match 'q'|FAILED_READ_FILE\.NO_HINT|Found duplicate field",
+                ):
+                    df.selectExpr(projection).collect()
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_single_footer_missing_required_fields(spark, tmp_path):
+    required = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("q", pa.int64(), nullable=False)])
+    pq.write_table(pa.table({"id": [1], "q": [42]}, schema=required), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path))
+    assert df.schema["q"].nullable
+    assert df.orderBy("id").collect() == [Row(id=1, q=42), Row(id=2, q=None)]
+
+
+@pytest.mark.parametrize("use_dictionary", [False, True])
+def test_parquet_int32_reads_as_byte_and_short(spark, tmp_path, use_dictionary):
+    def write(name, tiny, small, nested, ids):
+        # The JVM vectorized reader calls decodeToLong on a UINT32 dictionary
+        # when the requested type is SMALLINT. Use plain pages for that column.
+        dictionary = ["id", "tiny", "items"] if use_dictionary and small.type == pa.uint32() else use_dictionary
+        pq.write_table(
+            pa.table({"id": ids, "tiny": tiny, "small": small, "items": nested}),
+            tmp_path / name,
+            use_dictionary=dictionary,
+        )
+
+    write(
+        "a.parquet",
+        pa.array([1], pa.int8()),
+        pa.array([2], pa.int16()),
+        pa.array([[3]], pa.list_(pa.int8())),
+        [0],
+    )
+    write(
+        "b.parquet",
+        pa.array([-129, -128, 128, None], pa.int32()),
+        pa.array([-32769, -32768, 32768, None], pa.int32()),
+        pa.array([[255, None], [-257], [], None], pa.list_(pa.int16())),
+        [1, 2, 3, 4],
+    )
+    write(
+        "c.parquet",
+        pa.array([255], pa.uint8()),
+        pa.array([2**32 - 1], pa.uint32()),
+        pa.array([[65535]], pa.list_(pa.uint16())),
+        [5],
+    )
+
+    frame = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert frame.schema.simpleString() == "struct<id:bigint,tiny:tinyint,small:smallint,items:array<tinyint>>"
+    assert frame.orderBy("id").collect() == [
+        (0, 1, 2, [3]),
+        (1, 127, 32767, [-1, None]),
+        (2, -128, -32768, [-1]),
+        (3, -128, -32768, []),
+        (4, None, None, None),
+        (5, -1, -1, [-1]),
+    ]
+    assert frame.where("tiny = -128").select("id").orderBy("id").collect() == [(2,), (3,)]
+    assert frame.selectExpr("min(tiny)", "max(tiny)", "min(small)", "max(small)", "count(tiny)").collect() == [
+        (-128, 127, -32768, 32767, 5)
+    ]
+
+
+def test_parquet_scan_validates_projected_fields_per_file(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1], "q": [42]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2], "q": ["7"]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("basePath", str(tmp_path)).parquet(str(tmp_path))
+    assert df.select("id").orderBy("id").collect() == [Row(id=1), Row(id=2)]
+    assert df.count() == 2
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.select("q").collect()
+
+
+def test_parquet_explicit_schema_skips_unrequested_merge_conflicts(spark, tmp_path):
+    for i, value in enumerate([2, "two"]):
+        pq.write_table(pa.table({"id": [i], "other": [value]}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", True).schema("id BIGINT").parquet(str(tmp_path))
+    assert df.orderBy("id").collect() == [Row(id=0), Row(id=1)]
+
+
+def test_parquet_validates_case_insensitive_nested_field(spark, tmp_path):
+    pq.write_table(pa.table({"item": [{"x": 42, "value": 7}]}), tmp_path / "data.parquet")
+
+    df = (
+        spark.read.option("basePath", str(tmp_path)).schema("item STRUCT<x:BIGINT,VALUE:STRING>").parquet(str(tmp_path))
+    )
+    assert df.select("item.x").collect() == [Row(x=42)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.select("item.VALUE").collect()
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.collect()
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("is_map", [False, True])
+def test_parquet_projected_collection_struct_field(spark, tmp_path, is_map, nested):
+    column = "s.items" if nested else "items"
+    element = f"{column}['k']" if is_map else f"{column}[0]"
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        item_type = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        item = {"good": i, "bad": "two" if i else 1}
+        if is_map:
+            values = pa.array([[("k", item)]], pa.map_(pa.string(), item_type))
+        else:
+            values = pa.array([[item]], pa.list_(item_type))
+        table = (
+            pa.table({"s": pa.StructArray.from_arrays([values], names=["items"])})
+            if nested
+            else pa.table({"items": values})
+        )
+        pq.write_table(table, tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr(f"{element}.good AS v").orderBy("v").collect() == [(0,), (1,)]
+    invalid = [f"{element}.bad", column]
+    if not is_map:
+        for array in [column, f"reverse({column})", f"shuffle({column})", f"slice({column}, 1, 1)"]:
+            assert sorted(df.selectExpr(f"{array}.good").collect()) == [([0],), ([1],)]
+        assert sorted(df.selectExpr(f"get({column}, 0).good").collect()) == [(0,), (1,)]
+        assert df.selectExpr(f"try_element_at({column}, 2).good").collect() == [(None,), (None,)]
+        invalid.append(f"{column}.bad")
+    key = "'k'" if is_map else "1"
+    assert sorted(df.selectExpr(f"try_element_at({column}, {key}).good").collect()) == [(0,), (1,)]
+    for expression in invalid:
+        with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+            df.selectExpr(expression).collect()
+
+
+@pytest.mark.parametrize("accessor", ["map_keys", "map_values"])
+def test_parquet_projected_map_struct_field(spark, tmp_path, accessor):
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        struct = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        item = {"good": i, "bad": "two" if i else 1}
+        if accessor == "map_keys":
+            entries = pa.array([[(item, "v")]], pa.map_(struct, pa.string()))
+        else:
+            entries = pa.array([[("k", item)]], pa.map_(pa.string(), struct))
+        pq.write_table(pa.table({"items": entries}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert sorted(df.selectExpr(f"{accessor}(items).good").collect()) == [([0],), ([1],)]
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.selectExpr(f"{accessor}(items)").collect()
+
+
+def test_parquet_projected_chained_collection_access(spark, tmp_path):
+    for i, bad_type in enumerate([pa.int64(), pa.string()]):
+        leaf = pa.struct([("good", pa.int64()), ("bad", bad_type)])
+        group = pa.struct([("members", pa.map_(pa.string(), leaf))])
+        value = {"good": i, "bad": "two" if i else 1}
+        groups = pa.array([[{"members": [("k", value)]}]], pa.list_(group))
+        pq.write_table(pa.table({"groups": groups}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr("groups[0].members['k'].good AS v").orderBy("v").collect() == [(0,), (1,)]
+    assert df.selectExpr("groups[0].members['absent'].good").collect() == [(None,), (None,)]
+    with pytest.raises(Exception, match="INVALID_ARRAY_INDEX"):
+        df.selectExpr("groups[1].members['k'].good").collect()
+
+
+def test_parquet_user_case_reads_condition_and_result_fields(spark, tmp_path):
+    ty = pa.list_(pa.struct([("v", pa.int64()), ("flag", pa.bool_())]))
+    items = pa.array([[{"v": 1, "flag": True}], [{"v": 2, "flag": False}]], ty)
+    pq.write_table(pa.table({"items": items}), tmp_path / "items.parquet")
+    df = spark.read.parquet(str(tmp_path))
+    key = "spark.sql.ansi.enabled"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "false")
+        selected = df.selectExpr(
+            "(CASE WHEN items[0].flag THEN named_struct('v', -1L, 'flag', true) ELSE items[0] END).v AS v"
+        )
+        assert selected.orderBy("v").collect() == [(-1,), (2,)]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_merge_dictionary_with_plain_string(spark, tmp_path):
+    pq.write_table(pa.table({"color": pa.array(["red"]).dictionary_encode()}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"color": ["blue"]}), tmp_path / "b.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<color:string>"
+    assert df.orderBy("color").collect() == [Row(color="blue"), Row(color="red")]
+
+
+def test_parquet_disjoint_struct_children(spark, tmp_path):
+    pq.write_table(pa.table({"id": [1], "item": [{"x": 4}]}), tmp_path / "a.parquet")
+    pq.write_table(pa.table({"id": [2, 3], "item": [{"y": 5}, None]}), tmp_path / "b.parquet")
+    key = "spark.sql.caseSensitive"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+        assert [r.item for r in df.orderBy("id").collect()] == [Row(x=4), Row(x=None), None]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_reads_nested_unannotated_int64_with_seconds_hint(spark, tmp_path):
+    path = tmp_path / "data.parquet"
+
+    def schema(leaf):
+        return pa.schema(
+            [("item", pa.struct([("x", leaf), ("arr", pa.list_(leaf)), ("m", pa.map_(pa.string(), leaf))]))]
+        )
+
+    table = pa.Table.from_pylist([{"item": {"x": 7, "arr": [-1], "m": {"k": 42}}}], schema=schema(pa.int64()))
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata(
+            {"ARROW:schema": base64.b64encode(schema(pa.timestamp("s")).serialize()).decode()}
+        )
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+    assert df.schema.simpleString() == "struct<item:struct<x:bigint,arr:array<bigint>,m:map<string,bigint>>>"
+    assert df.collect() == [Row(item=Row(x=7, arr=[-1], m={"k": 42}))]
+
+
+def test_parquet_merge_schema_decimal_widths(spark, tmp_path):
+    for index, make_type in enumerate([pa.decimal32, pa.decimal64, pa.decimal128, pa.decimal256]):
+        amount = pa.array([Decimal(f"{index}.12")], type=make_type(8, 2))
+        pq.write_table(pa.table({"amount": amount}), tmp_path / f"{index}.parquet")
+
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<amount:decimal(8,2)>"
+    assert [row.amount for row in df.orderBy("amount").collect()] == [Decimal(f"{i}.12") for i in range(4)]
+
+
+def test_parquet_merge_schema_unsigned_integers(spark, tmp_path):
+    maxima = [2**width - 1 for width in (8, 16, 32, 64)]
+    unsigned = [pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64()]
+    widened = [pa.int16(), pa.int32(), pa.int64(), pa.decimal128(20, 0)]
+    names = ["u8", "u16", "u32", "u64"]
+
+    def write(name, types, values):
+        columns = {key: pa.array([value], type=ty) for key, value, ty in zip(names, values, types, strict=True)}
+        columns["nested"] = pa.StructArray.from_arrays([columns["u32"]], names=["value"])
+        pq.write_table(pa.table(columns), tmp_path / name)
+
+    write("a.parquet", unsigned, maxima)
+    write("b.parquet", widened, [-1, -1, -1, Decimal(-1)])
+    df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+    assert (
+        df.schema.simpleString()
+        == "struct<u8:smallint,u16:int,u32:bigint,u64:decimal(20,0),nested:struct<value:bigint>>"
+    )
+    assert df.orderBy("u32").select(*names, "nested.value").collect() == [
+        (-1, -1, -1, Decimal(-1), -1),
+        (*maxima[:3], Decimal(maxima[3]), maxima[2]),
+    ]
+    assert df.selectExpr("max(u32)", "max(u64)").collect() == [(maxima[2], Decimal(maxima[3]))]
+
+
+def test_parquet_merge_schema_binary_as_string(spark, tmp_path):
+    for index, value in enumerate([b"first", "second"]):
+        pq.write_table(
+            pa.table({"value": [value], "nested": [{"value": value}]}),
+            tmp_path / f"{index}.parquet",
+            store_schema=False,
+        )
+
+    key = "spark.sql.parquet.binaryAsString"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, "true")
+        df = spark.read.option("mergeSchema", True).parquet(str(tmp_path))
+        assert df.schema.simpleString() == "struct<value:string,nested:struct<value:string>>"
+        assert df.selectExpr("value", "nested.value AS nested_value").orderBy("value").collect() == [
+            ("first", "first"),
+            ("second", "second"),
+        ]
+    finally:
+        spark.conf.set(key, previous)
+
+
+@pytest.mark.parametrize(("ty", "precision"), [(pa.uint32(), 20), (pa.uint64(), 21)])
+def test_parquet_unsigned_explicit_decimal(spark, tmp_path, ty, precision):
+    pq.write_table(pa.table({"value": pa.array([1], type=ty)}), tmp_path / "data.parquet")
+    df = spark.read.schema(f"value DECIMAL({precision}, 0)").parquet(str(tmp_path))
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        df.collect()
+
+
+def test_parquet_single_footer_reads_unsigned_storage(spark, tmp_path):
+    pq.write_table(
+        pa.table({"i": pa.array([1], pa.int32()), "d": [1.0], "l": pa.array([1], pa.int64())}), tmp_path / "a.parquet"
+    )
+    u32 = pa.array([2**32 - 1, 42], pa.uint32())
+    u64 = pa.array([2**64 - 1, 42], pa.uint64())
+    pq.write_table(pa.table({"i": u32, "d": u32, "l": u64}), tmp_path / "b.parquet", use_dictionary=False)
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.orderBy("i").collect() == [(-1, -1.0, -1), (1, 1.0, 1), (42, 42.0, 42)]
+    assert df.selectExpr("min(i)", "min(d)", "min(l)").collect() == [(-1, -1.0, -1)]
+
+
+@pytest.mark.parametrize("binary_as_string", [False, True])
+def test_parquet_requested_byte_array_type(spark, tmp_path, binary_as_string):
+    pq.write_table(pa.table({"value": ["café"]}), tmp_path / "a.parquet", store_schema=False)
+    pq.write_table(pa.table({"value": [b"row"]}), tmp_path / "b.parquet", store_schema=False)
+    key = "spark.sql.parquet.binaryAsString"
+    previous = spark.conf.get(key)
+    try:
+        spark.conf.set(key, str(binary_as_string).lower())
+        reader = spark.read.option("mergeSchema", False)
+        assert sorted(row.value for row in reader.parquet(str(tmp_path)).collect()) == ["café", "row"]
+        binary_rows = reader.schema("value BINARY").parquet(str(tmp_path)).collect()
+        assert sorted(bytes(row.value) for row in binary_rows) == ["café".encode(), b"row"]
+    finally:
+        spark.conf.set(key, previous)
+
+
+def test_parquet_fixed_binary_rejects_string_schema(spark, tmp_path):
+    path = tmp_path / "fixed.parquet"
+    pq.write_table(pa.table({"value": pa.array([b"abc"], type=pa.binary(3))}), path)
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema("value STRING").parquet(str(path)).collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks Sail preservation of Arrow UUID metadata")
+@pytest.mark.parametrize("skip_metadata", [False, True])
+@pytest.mark.parametrize("store_schema", [False, True])
+def test_parquet_uuid_storage_round_trip(spark, tmp_path, skip_metadata, store_schema):
+    value = pa.array([bytes(range(16))], type=pa.uuid())
+    nested = pa.StructArray.from_arrays([value], names=["u"])
+    source = tmp_path / "in.parquet"
+    output = tmp_path / "out"
+    pq.write_table(pa.table({"v": value, "s": nested}), source, store_schema=store_schema)
+
+    spark.read.option("skipMetadata", skip_metadata).parquet(str(source)).write.parquet(str(output))
+    parquet = pq.ParquetFile(next(output.glob("*.parquet")))
+    assert parquet.schema.column(1).logical_type.type == "UUID"
+    restored = parquet.read()
+    assert restored["s"].combine_chunks().field("u").equals(value)
+    if not skip_metadata:
+        assert parquet.schema.column(0).logical_type.type == "UUID"
+        assert restored["v"].combine_chunks().equals(value)
+
+
+def test_parquet_single_footer_preserves_epoch_across_timestamp_families(spark, tmp_path):
+    for i, zone in enumerate(["Asia/Shanghai", None]):
+        values = pa.array([i], type=pa.timestamp("us", tz=zone))
+        pq.write_table(pa.table({"id": [i], "v": values}), tmp_path / f"{i}.parquet")
+
+    df = spark.read.option("mergeSchema", False).parquet(str(tmp_path))
+    assert df.selectExpr("id", "unix_micros(v)").orderBy("id").collect() == [(0, 0), (1, 1)]
+    assert df.where("unix_micros(v) = 1").select("id").collect() == [(1,)]
+    assert df.selectExpr("unix_micros(min(v))", "unix_micros(max(v))").collect() == [(0, 1)]
+
+
+@pytest.mark.parametrize("merge_schema", [False, True])
+def test_parquet_reads_legacy_map_child_names(spark, tmp_path, merge_schema):
+    for i in range(2):
+        values = pa.array([[("x", i)]], type=pa.map_(pa.string(), pa.int64()))
+        path = tmp_path / f"{i}.parquet"
+        pq.write_table(pa.table({"id": [i], "m": values}), path, store_schema=False)
+        if i == 1:
+            # PyArrow emits standard map names. Rename the length-prefixed footer
+            # strings to same-length legacy names, keeping the footer length and offsets.
+            data = path.read_bytes()
+            path.write_bytes(data.replace(b"\x03key", b"\x03abc").replace(b"\x05value", b"\x05entry"))
+
+    df = spark.read.option("mergeSchema", merge_schema).parquet(str(tmp_path))
+    assert df.schema.simpleString() == "struct<id:bigint,m:map<string,bigint>>"
+    assert df.orderBy("id").collect() == [(0, {"x": 0}), (1, {"x": 1})]
