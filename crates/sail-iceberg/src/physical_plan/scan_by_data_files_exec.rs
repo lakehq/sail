@@ -467,15 +467,16 @@ impl ScanByDataFilesState {
                 )
                 .await?
             }
-            DataFileFormat::Avro | DataFileFormat::Orc => (
+            DataFileFormat::Avro => (
                 file_groups,
-                Arc::new(IcebergImportedFileSource::new(
-                    TableSchema::from(self.file_schema.clone()),
-                    format,
-                )),
+                Arc::new(IcebergImportedFileSource::new(TableSchema::from(
+                    self.file_schema.clone(),
+                ))),
             ),
-            DataFileFormat::Puffin => {
-                return datafusion_common::exec_err!("Cannot read Puffin as an Iceberg data file");
+            format => {
+                return datafusion_common::exec_err!(
+                    "Unsupported Iceberg data file format: {format:?}"
+                );
             }
         };
         let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, source)

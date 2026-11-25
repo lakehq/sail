@@ -45,7 +45,7 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         (keys, values)
     };
-    let timezone = &input.function_context.plan_config.session_timezone_label();
+    let timezone = &input.function_context.plan_config.session_timezone;
     let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
     let values = coerce_timestamp_ntz_values(values, schema, timezone)?;
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
@@ -314,7 +314,7 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments = coerce_timestamp_ntz_values(
         input.arguments,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone_label(),
+        &input.function_context.plan_config.session_timezone,
     )?;
 
     // Build the result expression
@@ -365,7 +365,7 @@ fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         expr_fn::map_keys(map),
         key,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone_label(),
+        &input.function_context.plan_config.session_timezone,
     )?;
     Ok(expr_fn::array_has(keys, key))
 }

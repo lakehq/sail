@@ -13,5 +13,5 @@ pub use json_as_text::{JsonAsText, json_as_text_udf};
 pub use json_length::{JsonLength, json_length_udf};
 pub use json_object_keys::{JsonObjectKeys, json_object_keys_udf};
 pub use schema_of_json::SchemaOfJson;
-pub use to_json::{ToJson, to_json_udf};
+pub use to_json::ToJson;
 pub use utils::union::{JSON_UNION_DATA_TYPE, JsonUnionEncoder, JsonUnionValue};

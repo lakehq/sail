@@ -12,7 +12,7 @@ use crate::function::common::ScalarFunction;
 
 fn variant_get(safe: bool) -> ScalarFunction {
     crate::function::common::ScalarFunctionBuilder::custom(move |input| {
-        let timezone = input.function_context.plan_config.session_timezone_label();
+        let timezone = input.function_context.plan_config.session_timezone.clone();
         Ok(ScalarUDF::from(VariantGet::new(safe, timezone)).call(input.arguments))
     })
 }
@@ -30,6 +30,14 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
         ("try_parse_json", F::udf(ParseJson::new(true))),
         ("try_variant_get", variant_get(true)),
         ("variant_get", variant_get(false)),
-        ("variant_to_json", F::udf(VariantToJsonUdf::new())),
+        (
+            "variant_to_json",
+            F::custom(|input| {
+                Ok(ScalarUDF::from(VariantToJsonUdf::new(
+                    input.function_context.plan_config.session_timezone.clone(),
+                ))
+                .call(input.arguments))
+            }),
+        ),
     ]
 }

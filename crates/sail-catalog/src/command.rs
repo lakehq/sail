@@ -522,6 +522,19 @@ impl CatalogCommand {
                 if_exists,
                 options,
             } => {
+                if matches!(
+                    options,
+                    AlterTableOptions::SetTableProperties { .. }
+                        | AlterTableOptions::UnsetTableProperties { .. }
+                ) && let Some(path) = manager.delta_table_path(&table).await?
+                {
+                    ctx.extension::<DataSourceRegistry>()?
+                        .get_lake_source("delta")?
+                        .alter_table(ctx, path, (&options).into(), None)
+                        .await?;
+                    return Ok(display.bools().to_record_batch(vec![true])?);
+                }
+
                 // Fetch the table status before altering so we can propagate
                 // property changes to the underlying storage (e.g. Delta log).
                 let table_status = match manager.get_table_or_view(&table).await {

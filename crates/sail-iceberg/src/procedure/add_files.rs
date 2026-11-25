@@ -131,7 +131,7 @@ impl AddFiles {
                 }
             }
         };
-        if !["parquet", "avro", "orc"].contains(&format.as_str()) {
+        if !["parquet", "avro"].contains(&format.as_str()) {
             return plan_err!("Unsupported add_files source format: {format}");
         }
         let catalog_source = declared_parts.is_some();
@@ -204,7 +204,7 @@ impl AddFiles {
         let mut candidates = vec![];
         let mut inferred_names = declared_parts;
         for (location, format, registered_partition) in sources {
-            if !["parquet", "avro", "orc"].contains(&format.as_str()) {
+            if !["parquet", "avro"].contains(&format.as_str()) {
                 return plan_err!("Unsupported add_files partition format: {format}");
             }
             let source_url = if catalog_source {
@@ -507,12 +507,6 @@ async fn import_record_count(
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok((DataFileFormat::Parquet, rows))
         }
-        "orc" => {
-            let metadata = orc_rust::reader::metadata::read_metadata_async(&mut reader)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            Ok((DataFileFormat::Orc, metadata.number_of_rows()))
-        }
         "avro" => tokio::task::spawn_blocking(move || {
             let reader = tokio_util::io::SyncIoBridge::new(reader);
             let rows = datafusion::arrow_avro::reader::ReaderBuilder::new()
@@ -806,10 +800,6 @@ mod tests {
         let mut writer = parquet::arrow::ArrowWriter::try_new(&mut parquet, batch.schema(), None)?;
         writer.write(&batch)?;
         writer.close()?;
-        let mut orc = Vec::new();
-        let mut writer = orc_rust::ArrowWriterBuilder::new(&mut orc, batch.schema()).try_build()?;
-        writer.write(&batch)?;
-        writer.close()?;
         let schema = apache_avro::Schema::parse_str(
             r#"{"type":"record","name":"row","fields":[{"name":"value","type":"string"}]}"#,
         )?;
@@ -821,7 +811,7 @@ mod tests {
             )]))?;
         }
         let avro = writer.into_inner()?;
-        for (format, bytes) in [("parquet", parquet), ("orc", orc), ("avro", avro)] {
+        for (format, bytes) in [("parquet", parquet), ("avro", avro)] {
             let size = bytes.len();
             assert!(size > DEFAULT_BUFFER_SIZE);
             let inner = Arc::new(InMemory::new());

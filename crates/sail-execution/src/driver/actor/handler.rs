@@ -11,6 +11,7 @@ use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_physical_plan::range_split::range_split_from_batches;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -295,6 +296,25 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_range_split_points_read(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        shuffle: usize,
+        partitions: ExecutionResult<usize>,
+    ) -> ActorAction {
+        for action in self
+            .job_scheduler
+            .resolve_range_shuffle(job_id, shuffle, partitions)
+        {
+            self.run_job_action(ctx, action);
+        }
+        self.refresh_job(ctx, job_id);
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_probe_pending_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -520,6 +540,50 @@ impl DriverActor {
             JobAction::FailJobOutput { handle, cause } => {
                 ctx.spawn(async move {
                     handle.send(JobOutputItem::Error { cause }).await;
+                });
+            }
+            JobAction::ReadRangeSplitPoints {
+                job_id,
+                shuffle,
+                key,
+                schema,
+            } => {
+                // The split points are picked on the driver, so their stream is local.
+                let task_runner = self.task_runner.clone();
+                let driver = ctx.handle().clone();
+                ctx.spawn(async move {
+                    let partitions = async {
+                        let task_runner = task_runner.ok_or_else(|| {
+                            ExecutionError::InternalError("task runner is not started".to_string())
+                        })?;
+                        let (result, receiver) = oneshot::channel();
+                        task_runner
+                            .send(TaskRunnerMessage::FetchDriverStream {
+                                key,
+                                schema,
+                                result,
+                            })
+                            .await?;
+                        let batches =
+                            receiver
+                                .await??
+                                .try_collect::<Vec<_>>()
+                                .await
+                                .map_err(|e| {
+                                    ExecutionError::InternalError(format!(
+                                        "cannot read the range split points: {e}"
+                                    ))
+                                })?;
+                        Ok(range_split_from_batches(&batches)?.partitions())
+                    }
+                    .await;
+                    let _ = driver
+                        .send(DriverMessage::RangeSplitPointsRead {
+                            job_id,
+                            shuffle,
+                            partitions,
+                        })
+                        .await;
                 });
             }
             JobAction::CleanUpJob {

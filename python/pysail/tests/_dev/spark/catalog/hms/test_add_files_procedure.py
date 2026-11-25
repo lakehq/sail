@@ -357,15 +357,14 @@ def test_incremental_hive_partitions(catalog, source, target, spark):
 
 
 @pytest.mark.parametrize("parts", [(), ("id",)])
-@pytest.mark.parametrize("file_format", ["orc", "avro"])
-def test_external_file_formats(catalog, jvm_spark, database, target, spark, parts, file_format):
+def test_external_avro_files(catalog, jvm_spark, database, target, spark, parts):
     uri = f"s3://hms-warehouse/{database}/data_{uuid.uuid4().hex}"
-    writer = jvm_spark.createDataFrame(ROWS, SCHEMA).coalesce(1).write.format(file_format).mode("append")
+    writer = jvm_spark.createDataFrame(ROWS, SCHEMA).coalesce(1).write.format("avro").mode("append")
     if parts:
         writer = writer.partitionBy(*parts)
     for _ in range(SOURCE_WRITES):
         writer.save(uri)
-    path = f"{file_format}.`{uri}`"
+    path = f"avro.`{uri}`"
     with target(parts) as tables:
         assert call(spark, tables[0], path) == catalog.manifest_counts(8 if parts else 2, 4 if parts else 1)
         assert_rows(catalog, spark, tables, ROWS * 2)

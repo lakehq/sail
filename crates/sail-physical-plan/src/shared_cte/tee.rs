@@ -448,7 +448,7 @@ impl Tee {
     }
 
     #[cfg(test)]
-    fn kept(&self) -> (usize, usize) {
+    pub(crate) fn kept(&self) -> (usize, usize) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let spilled = state
             .batches

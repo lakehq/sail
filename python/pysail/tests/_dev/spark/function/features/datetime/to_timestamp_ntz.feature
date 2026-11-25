@@ -30,7 +30,6 @@ Feature: to_timestamp_ntz
 
     # The inline-table TIMESTAMP column is non-nullable and the conversion cannot fail, so
     # Spark keeps the result non-nullable. Sail widens it.
-    @sail-bug
     @function(nullability)
     Scenario: to_timestamp_ntz doctest #3 (schema)
       Given config spark.sql.session.timeZone = Europe/Amsterdam

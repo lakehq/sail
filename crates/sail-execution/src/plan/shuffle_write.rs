@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::array::AsArray;
-use datafusion::arrow::datatypes::{Schema, UInt64Type};
+use datafusion::arrow::datatypes::{Schema, SchemaRef, UInt64Type};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::hash_utils::create_hashes;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -36,9 +36,14 @@ use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWrit
 #[derive(Debug, Clone)]
 pub(crate) enum ShufflePartitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    Range(RangePartitioning),
+    /// Range partitioning into the given number of channels, which can be more than
+    /// the number of range partitions. The extra channels receive no rows.
+    Range(RangePartitioning, usize),
     RoundRobinBatch(usize),
     RoundRobinRow(usize),
+    /// Each row names its channel in the last column, which is not written. The
+    /// channels of a range repartitioning are computed this way in a job.
+    Channel(usize),
 }
 
 impl ShufflePartitioning {
@@ -63,11 +68,32 @@ impl ShufflePartitioning {
         }
     }
 
+    /// The schema of the rows written for input of the given schema, which the
+    /// writer of each channel must use as well.
+    pub(crate) fn payload_schema(&self, input: &SchemaRef) -> SchemaRef {
+        match self {
+            Self::Channel(_) => {
+                let fields = input.fields();
+                let fields = &fields[..fields.len().saturating_sub(1)];
+                Arc::new(Schema::new_with_metadata(
+                    fields.to_vec(),
+                    input.metadata().clone(),
+                ))
+            }
+            Self::Hash(..)
+            | Self::Range(..)
+            | Self::RoundRobinBatch(_)
+            | Self::RoundRobinRow(_) => Arc::clone(input),
+        }
+    }
+
     fn partition_count(&self) -> usize {
         match self {
             Self::Hash(_, partitions) => *partitions,
-            Self::Range(partitioning) => partitioning.partition_count(),
-            Self::RoundRobinBatch(partitions) | Self::RoundRobinRow(partitions) => *partitions,
+            Self::Range(_, channels) => *channels,
+            Self::RoundRobinBatch(partitions)
+            | Self::RoundRobinRow(partitions)
+            | Self::Channel(partitions) => *partitions,
         }
     }
 }
@@ -82,11 +108,12 @@ impl Display for ShufflePartitioning {
                     Partitioning::Hash(expressions.clone(), *partitions)
                 )
             }
-            Self::Range(partitioning) => write!(f, "{partitioning}"),
+            Self::Range(partitioning, channels) => write!(f, "{partitioning}, channels={channels}"),
             Self::RoundRobinBatch(partitions) => {
                 write!(f, "{}", Partitioning::RoundRobinBatch(*partitions))
             }
             Self::RoundRobinRow(partitions) => write!(f, "RoundRobinRow({partitions})"),
+            Self::Channel(partitions) => write!(f, "Channel({partitions})"),
         }
     }
 }
@@ -188,6 +215,10 @@ enum Router {
         channels: usize,
         next: usize,
     },
+    /// The last column of each row is its channel, and is dropped.
+    Channel {
+        channels: usize,
+    },
 }
 
 impl Router {
@@ -206,12 +237,14 @@ impl Router {
                 partition_reducer: StrengthReducedU64::new(*channels as u64),
                 hash_buffer: vec![],
             },
-            ShufflePartitioning::Range(range) if range.split_points().is_empty() => Self::Batch {
-                channels: 1,
-                next: 0,
-                expressions: vec![],
-            },
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) if range.split_points().is_empty() => {
+                Self::Batch {
+                    channels: 1,
+                    next: 0,
+                    expressions: vec![],
+                }
+            }
+            ShufflePartitioning::Range(range, _) => {
                 let keys = range
                     .ordering()
                     .iter()
@@ -246,6 +279,12 @@ impl Router {
                     next: (partition * channels) / num_input_partitions,
                 }
             }
+            ShufflePartitioning::Channel(0) => {
+                return internal_err!("channel repartition requires at least one channel");
+            }
+            ShufflePartitioning::Channel(channels) => Self::Channel {
+                channels: *channels,
+            },
         };
         // With one channel there is nothing to compute for the rows.
         Ok(match router {
@@ -335,6 +374,27 @@ impl Router {
                 }
                 *next = channel;
             }
+            Self::Channel { channels } => {
+                let Some(last) = batch.num_columns().checked_sub(1) else {
+                    return internal_err!("channel repartition requires a channel column");
+                };
+                let Some(rows) = batch.column(last).as_primitive_opt::<UInt64Type>() else {
+                    return internal_err!("the channel column must be UInt64");
+                };
+                indices.resize(*channels, vec![]);
+                for (row, channel) in rows.values().iter().enumerate() {
+                    let Some(indices) = usize::try_from(*channel)
+                        .ok()
+                        .and_then(|channel| indices.get_mut(channel))
+                    else {
+                        return internal_err!("channel {channel} is not less than {channels}");
+                    };
+                    indices.push(row as u32);
+                }
+                let mut batch = batch;
+                batch.remove_column(last);
+                return buffer.push_rows(batch, indices, flush);
+            }
         }
         buffer.push_rows(batch, indices, flush)
     }
@@ -405,12 +465,12 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<TreeNodeRecursion> {
         match &self.partitioning {
             ShufflePartitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) => {
                 apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
             }
-            ShufflePartitioning::RoundRobinBatch(_) | ShufflePartitioning::RoundRobinRow(_) => {
-                Ok(TreeNodeRecursion::Continue)
-            }
+            ShufflePartitioning::RoundRobinBatch(_)
+            | ShufflePartitioning::RoundRobinRow(_)
+            | ShufflePartitioning::Channel(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -464,7 +524,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let buffer = ShuffleBuffer::try_new(
-            &stream.schema(),
+            &self.partitioning.payload_schema(&stream.schema()),
             channels,
             batch_size,
             buffer_size,
@@ -552,7 +612,7 @@ mod tests {
         FixedSizeBinaryArray, FixedSizeListArray, GenericListViewArray, Int8Array, Int16Array,
         Int32Array, Int64Array, LargeListArray, ListArray, ListBuilder, ListViewArray, MapArray,
         NullArray, OffsetSizeTrait, RunArray, StringArray, StringViewArray, StringViewBuilder,
-        StructArray, UInt32Array, UnionArray, make_array,
+        StructArray, UInt32Array, UInt64Array, UnionArray, make_array,
     };
     use datafusion::arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use datafusion::arrow::compute::{
@@ -571,7 +631,7 @@ mod tests {
     use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion::prelude::SessionConfig;
     use futures::FutureExt;
-    use sail_function::aggregate::array_agg::compact_payload;
+    use sail_common_datafusion::array::compact::compact_array;
     use tokio::sync::Mutex;
 
     use super::*;
@@ -993,7 +1053,7 @@ mod tests {
                 assert_uses_values(field.name(), &column.to_data());
                 let retained = column.get_array_memory_size();
                 // `take` still shares view payloads, so they are compacted separately.
-                let compact = compact_payload(Arc::clone(copy))?.get_array_memory_size();
+                let compact = compact_array(Arc::clone(copy))?.get_array_memory_size();
                 assert!(
                     retained <= 2 * compact,
                     "column {} of batch {i} of channel {channel} retains {retained} bytes for {compact} bytes of rows",
@@ -1162,6 +1222,44 @@ mod tests {
             batches[0].schema(),
             None,
         )?)
+    }
+
+    #[tokio::test]
+    async fn channel_shuffle_writes_each_row_to_its_channel_without_the_channel() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("__channel", DataType::UInt64, false),
+        ]));
+        let batch = |a: Vec<i64>, channels: Vec<u64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(a)),
+                    Arc::new(UInt64Array::from(channels)),
+                ],
+            )
+        };
+        let input = [
+            batch(vec![10, 11, 12], vec![2, 0, 2])?,
+            batch(vec![13], vec![1])?,
+        ];
+        let capture = shuffle_with(
+            memory(&input)?,
+            ShufflePartitioning::Channel(4),
+            TaskStreamWriteState::Active,
+        )
+        .await?;
+        let mut rows = vec![];
+        for batches in &capture.channels {
+            let mut channel: Vec<i64> = vec![];
+            for batch in batches {
+                assert_eq!(batch.schema().fields().len(), 1);
+                channel.extend(batch.column(0).as_primitive::<Int64Type>().values());
+            }
+            rows.push(channel);
+        }
+        assert_eq!(rows, vec![vec![11], vec![13], vec![10, 12], vec![]]);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1863,10 +1961,13 @@ mod tests {
                         ))])
                     })
                     .collect();
-                ShufflePartitioning::Range(RangePartitioning::try_new(
-                    [PhysicalSortExpr::new_default(key)].into(),
-                    points,
-                )?)
+                ShufflePartitioning::Range(
+                    RangePartitioning::try_new(
+                        [PhysicalSortExpr::new_default(key)].into(),
+                        points,
+                    )?,
+                    channels,
+                )
             }
             "round_robin_batch" => ShufflePartitioning::RoundRobinBatch(channels),
             _ => ShufflePartitioning::RoundRobinRow(channels),

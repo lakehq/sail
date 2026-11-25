@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::execution::memory_pool::MemoryLimit;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
@@ -26,6 +26,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{NullEquality, Result, Statistics, internal_datafusion_err, internal_err};
 use futures::StreamExt;
 
+use crate::range_repartition::{apply_with_samples, transform_up_with_samples};
 use crate::shared_cte::tee::{Tee, TeeReader};
 
 pub mod blocking;
@@ -199,6 +200,16 @@ impl SharedCte {
         Ok(output)
     }
 
+    /// The number of batches that the output keeps for its readers, or `None` if there
+    /// is no output.
+    #[cfg(test)]
+    pub(crate) fn kept(&self) -> Option<usize> {
+        self.state()
+            .ok()
+            .and_then(|state| state.output.clone())
+            .map(|output| output.iter().map(|tee| tee.kept().0).sum())
+    }
+
     /// Releases the output and stops producing it. The output is produced again if it
     /// is read after that.
     fn release(&self) {
@@ -323,14 +334,15 @@ impl SharedCteExec {
             .map(|(cte, _)| {
                 let mut count = 0;
                 for plan in std::iter::once(&input).chain(ctes.iter().map(|(_, plan)| plan)) {
-                    // The closure never fails.
-                    let _ = plan.apply(|plan| {
+                    // The closure never fails. The samples of range repartitionings read
+                    // the CTEs too.
+                    let _ = apply_with_samples(plan, &mut |plan| {
                         if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
                             && Arc::ptr_eq(&scan.cte, cte)
                         {
                             count = count.max(scan.reference + 1);
                         }
-                        Ok(TreeNodeRecursion::Continue)
+                        Ok(())
                     });
                 }
                 count
@@ -361,6 +373,18 @@ impl SharedCteExec {
 
     pub fn ctes(&self) -> &[(Arc<SharedCte>, Arc<dyn ExecutionPlan>)] {
         &self.ctes
+    }
+
+    /// Sets the plans that produce the shared CTEs, which is done when the node is
+    /// executed, or before that if a reference is read before the plan is executed (see
+    /// [`crate::range_repartition::resolve_range_partitions`]).
+    pub fn produce(&self, context: &Arc<TaskContext>) -> Result<()> {
+        for (((cte, plan), references), rereadable) in
+            self.ctes.iter().zip(&self.references).zip(&self.rereadable)
+        {
+            cte.produce(plan, context, &self.metrics, *references, *rereadable)?;
+        }
+        Ok(())
     }
 }
 
@@ -443,11 +467,7 @@ impl ExecutionPlan for SharedCteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        for (((cte, plan), references), rereadable) in
-            self.ctes.iter().zip(&self.references).zip(&self.rereadable)
-        {
-            cte.produce(plan, &context, &self.metrics, *references, *rereadable)?;
-        }
+        self.produce(&context)?;
         let guard = SharedCteOutputGuard {
             ctes: self.ctes.iter().map(|(cte, _)| Arc::clone(cte)).collect(),
             finished: Arc::clone(&self.finished),
@@ -563,6 +583,15 @@ impl SharedCteScanExec {
 
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
+    }
+
+    /// Finishes the reader of the reference in every partition without reading it, so
+    /// that the shared CTE keeps no rows for it.
+    pub fn skip(&self) -> Result<()> {
+        for tee in self.cte.output()?.iter() {
+            drop(tee.reader(self.reference)?);
+        }
+        Ok(())
     }
 
     /// Returns the plan that takes the place of the reference when each reference
@@ -712,13 +741,15 @@ pub fn share_ctes(
     let mut plan = plan;
     let mut ctes = ctes;
     loop {
+        // The samples of range repartitionings are references too, which the plan reads
+        // before it runs (see `resolve_range_partitions`).
         let mut references: HashMap<usize, usize> = HashMap::new();
         for plan in std::iter::once(&plan).chain(ctes.iter().map(|(_, plan)| plan)) {
-            plan.apply(|plan| {
+            apply_with_samples(plan, &mut |plan| {
                 if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
                     *references.entry(scan.cte().id()).or_default() += 1;
                 }
-                Ok(TreeNodeRecursion::Continue)
+                Ok(())
             })?;
         }
         let count = |cte: &SharedCte| references.get(&cte.id()).copied().unwrap_or(0);
@@ -730,14 +761,15 @@ pub fn share_ctes(
             continue;
         }
         let inline = |plan: Arc<dyn ExecutionPlan>| {
-            plan.transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
+            transform_up_with_samples(plan, &mut |plan| match plan
+                .downcast_ref::<SharedCteScanExec>()
+            {
                 Some(scan) if scan.cte().id() == single.id() => Ok(Transformed::yes(project(
                     Arc::clone(&body),
                     scan.projection(),
                 )?)),
                 _ => Ok(Transformed::no(plan)),
             })
-            .data()
         };
         plan = inline(plan)?;
         for (_, cte) in &mut ctes {
@@ -750,16 +782,18 @@ pub fn share_ctes(
     // Each reference reads the output of its shared CTE as one of its numbered readers.
     let mut references: HashMap<usize, usize> = HashMap::new();
     let mut number = |plan: Arc<dyn ExecutionPlan>| {
-        plan.transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
-            Some(scan) => {
-                let count = references.entry(scan.cte().id()).or_default();
-                let scan = scan.with_reference(*count);
-                *count += 1;
-                Ok(Transformed::yes(Arc::new(scan) as Arc<dyn ExecutionPlan>))
-            }
-            None => Ok(Transformed::no(plan)),
-        })
-        .data()
+        transform_up_with_samples(
+            plan,
+            &mut |plan| match plan.downcast_ref::<SharedCteScanExec>() {
+                Some(scan) => {
+                    let count = references.entry(scan.cte().id()).or_default();
+                    let scan = scan.with_reference(*count);
+                    *count += 1;
+                    Ok(Transformed::yes(Arc::new(scan) as Arc<dyn ExecutionPlan>))
+                }
+                None => Ok(Transformed::no(plan)),
+            },
+        )
     };
     let plan = number(plan)?;
     let ctes = ctes
