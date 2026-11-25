@@ -699,6 +699,81 @@ def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tmp
         table.drop()
 
 
+# Views over views of a table: the columns and rows of the table, the query of each view
+# (over the table `{t}` and the view before it `{v}`), the new columns and rows of the
+# table, and the rows of the last view then, which reads only what its inner views read.
+VIEW_OVER_VIEW_CHANGES = {
+    "unread struct field retyped": (
+        "a INT, s STRUCT<f: INT, g: INT>",
+        "(1, named_struct('f', 1, 'g', 2))",
+        ["SELECT a, s.f AS f FROM {t}", "SELECT a, f FROM {v}"],
+        "a INT, s STRUCT<f: INT, g: STRING>",
+        "(2, named_struct('f', 7, 'g', 'x'))",
+        [(2, 7)],
+    ),
+    "struct gains a field": (
+        "a INT, s STRUCT<f: INT, g: INT>",
+        "(1, named_struct('f', 1, 'g', 2))",
+        ["SELECT a, s.f AS f FROM {t}", "SELECT a, f FROM {v}"],
+        "a INT, s STRUCT<f: INT, g: INT, h: INT>",
+        "(2, named_struct('f', 7, 'g', 8, 'h', 9))",
+        [(2, 7)],
+    ),
+    "grouping column retyped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        ["SELECT a FROM {t} GROUP BY a, b", "SELECT a FROM {v}"],
+        "a INT, b STRING",
+        "(1, 'z'), (1, 'z'), (2, 'y')",
+        [(1,), (2,)],
+    ),
+    "column unread in a subquery retyped": (
+        "a INT, b INT",
+        "(1, 10)",
+        ["SELECT a FROM (SELECT a, b FROM {t})", "SELECT a FROM {v}"],
+        "a INT, b STRING",
+        "(5, 'x')",
+        [(5,)],
+    ),
+    "column unread by all views retyped": (
+        "a INT, b INT, c INT",
+        "(1, 10, 100)",
+        ["SELECT a, c FROM {t}", "SELECT a FROM {v}", "SELECT a FROM {v}"],
+        "a INT, b STRING, c INT",
+        "(5, 'x', 500)",
+        [(5,)],
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("case", VIEW_OVER_VIEW_CHANGES)
+def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, tmp_path, kind, case):
+    columns, values, queries, new_columns, new_values, expected = VIEW_OVER_VIEW_CHANGES[case]
+    table = Table(spark, tmp_path, "delta", columns)
+    views = []
+    try:
+        table.insert(values)
+        view = None
+        for i, query in enumerate(queries):
+            view_kind = kind if i == len(queries) - 1 else "sv"
+            view = f"{view_kind}_{uuid.uuid4().hex}"
+            sql = query.format(t=table.name, v=views[-1] if views else None)
+            if view_kind == "sv":
+                spark.sql(f"CREATE TEMPORARY VIEW {view} AS {sql}")
+            else:
+                spark.sql(sql).createOrReplaceTempView(view)
+            views.append(view)
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create(new_columns)
+        table.insert(new_values)
+        assert rows(spark, f"SELECT * FROM {view}") == expected
+    finally:
+        for view in views:
+            spark.sql(f"DROP VIEW IF EXISTS {view}")
+        table.drop()
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tmp_path, kind):
     table = Table(spark, tmp_path, "delta", "id INT, extra INT")

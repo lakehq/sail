@@ -1197,7 +1197,7 @@ fn scan_lineage(
                 .collect();
             Some((table_source_address(&scan.source), outputs))
         }
-        LogicalPlan::Projection(projection) => {
+        LogicalPlan::Projection(projection) if !state.is_view_plan(projection.input.schema()) => {
             let (address, inputs) = scan_lineage(&projection.input, state)?;
             let mut outputs = HashMap::new();
             for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
@@ -1271,6 +1271,13 @@ fn required_columns(
     let mut whole = HashSet::new();
     visit_nodes(plan, &mut |node| {
         match node {
+            // The plan of a view that the plan reads has the field IDs of another resolver
+            // state, and the view reads the columns that it read when it was created.
+            LogicalPlan::Projection(projection)
+                if state.is_view_plan(projection.input.schema()) =>
+            {
+                return Ok(TreeNodeRecursion::Jump);
+            }
             LogicalPlan::Projection(projection) => {
                 if let Some(lineage) = scan_lineage(node, state) {
                     // The projections below it and the scan are part of the lineage.
@@ -1374,11 +1381,8 @@ fn required_columns(
             lineage.add_reads(used, columns);
         }
     }
-    // A view that the plan reads reads the columns that it read when it was created.
     for (address, position, used) in state.view_reads() {
-        if let Some(columns) = required.get_mut(address) {
-            add_use(columns, *position, used);
-        }
+        add_use(required.entry(*address).or_default(), *position, used);
     }
     for address in whole {
         required.remove(&address);
