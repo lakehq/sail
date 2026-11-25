@@ -57,19 +57,24 @@ class KafkaDataSourceReader(DataSourceReader):
             raise TypeError(msg)
 
         planned = partition.offset_range
-        with open_consumer(
-            self.options.client_config, self.options.isolation_level, planned.topic_partition
-        ) as consumer:
+        # Like Spark's KafkaSourceRDD, an empty range with concrete offsets never creates a consumer,
+        # so consumer-only configuration errors cannot fail it.
+        if planned.is_bound and planned.size == 0:
+            return
+        with open_consumer(self.options.client_config, planned.topic_partition) as consumer:
             offset_range = bind_offset_range(consumer, planned, timeout_s=self.options.admin_timeout_s)
             if offset_range.size == 0:
                 return
             cursor = PartitionCursor(consumer, offset_range, self.options)
-            yield from self.read_batches(cursor)
-            if cursor.partial_read:
-                LOGGER.warning(
-                    "Kafka partial read on %s: skipped unavailable offsets; failOnDataLoss=false",
-                    offset_range.topic_partition,
-                )
+            try:
+                yield from self.read_batches(cursor)
+            finally:
+                # Also log when the read stops early (e.g. a LIMIT closes the generator) after skipping offsets.
+                if cursor.partial_read:
+                    LOGGER.warning(
+                        "Kafka partial read on %s: skipped unavailable offsets; failOnDataLoss=false",
+                        offset_range.topic_partition,
+                    )
 
     def read_batches(self, cursor: PartitionCursor) -> Iterator[pa.RecordBatch]:
         """Buffer the cursor's records into batches bounded by ``maxBatchRows`` and ``maxBatchBytes``."""

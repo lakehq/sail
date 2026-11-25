@@ -13,11 +13,29 @@ pytestmark = pytest.mark.spark(version=">=4.0", reason="Uses the Python DataSour
 TS_MS = 1700000000000
 
 
-@pytest.mark.parametrize("option", ["startingOffsets", "startingOffsetsByTimestamp"])
-@pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
-def test_partition_limit_value_width(option, value, parse_read_options):
-    with pytest.raises(ValueError, match="signed 64-bit"):
-        parse_read_options(**{option: json.dumps({"t": {"0": value}})})
+@pytest.mark.parametrize("option", ["startingOffsets", "endingOffsetsByTimestamp"])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("null", 0),
+        ("1.9", 1),
+        ("-1.9", -1),
+        ("-0.9", 0),
+        ("1e30", 2**63 - 1),
+        ("-1e30", -(2**63)),
+        ("1e400", 2**63 - 1),
+        ("-1e400", -(2**63)),
+        (str(2**63), -(2**63)),
+        (str(-(2**63) - 1), 2**63 - 1),
+        (str(2**64), 0),
+        ("9007199254740993.0", 9007199254740992),
+    ],
+)
+def test_partition_values_use_spark_json_numeric_coercion(option, raw, expected, kafka_options, partition_of_t):
+    # Expected values come from Spark 4.1.1 JsonUtils on the JVM, including
+    # the different overflow rules for integer and floating-point literals.
+    parsed = kafka_options.parse_topic_partition_mapping('{"t": {"0": ' + raw + "}}", option)
+    assert parsed == {partition_of_t(0): expected}
 
 
 @pytest.mark.parametrize("option", ["startingOffsets", "startingOffsetsByTimestamp"])
@@ -27,10 +45,44 @@ def test_partition_limit_id_width(option, partition, parse_read_options):
         parse_read_options(**{option: json.dumps({"t": {str(partition): 0}})})
 
 
-@pytest.mark.parametrize("partition", [-(2**31) - 1, 2**31])
-def test_assignment_partition_id_width(partition, kafka_options, case_insensitive):
-    with pytest.raises(ValueError, match="signed 32-bit"):
-        kafka_options.parse_subscription(case_insensitive({"assign": json.dumps({"t": [partition]})}))
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("null", 0),
+        ("1.9", 1),
+        ("-1.9", -1),
+        (str(2**31), -(2**31)),
+        (str(-(2**31) - 1), 2**31 - 1),
+        ("1e30", 2**31 - 1),
+        ("-1e30", -(2**31)),
+    ],
+)
+def test_assignment_uses_spark_json_numeric_coercion(raw, expected, kafka_options, partition_of_t):
+    assert kafka_options.parse_assignment('{"t": [' + raw + "]}") == frozenset({partition_of_t(expected)})
+
+
+@pytest.mark.parametrize(
+    "option", ["startingOffsets", "endingOffsets", "startingOffsetsByTimestamp", "endingOffsetsByTimestamp"]
+)
+@pytest.mark.parametrize(("raw", "expected"), [("null", 0), ("1.9", 1)])
+def test_coerced_values_reach_the_read_options(option, raw, expected, parse_read_options, partition_of_t):
+    options = parse_read_options(**{option: '{"t": {"0": ' + raw + "}}"})
+    limit = options.starting if option.startswith("starting") else options.ending
+    values = limit.timestamps if option.endswith("ByTimestamp") else limit.offsets
+    assert values == {partition_of_t(0): expected}
+
+
+def test_coerced_offsets_still_obey_batch_sentinel_rules(parse_read_options):
+    with pytest.raises(ValueError, match="does not support offset -1"):
+        parse_read_options(startingOffsets='{"t": {"0": -1.9}}')
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+def test_nonstandard_json_numbers_are_rejected(raw, kafka_options):
+    with pytest.raises(ValueError, match="Invalid JSON numeric constant"):
+        kafka_options.parse_assignment('{"t": [' + raw + "]}")
+    with pytest.raises(ValueError, match="Invalid JSON numeric constant"):
+        kafka_options.parse_topic_partition_mapping('{"t": {"0": ' + raw + "}}", "startingOffsets")
 
 
 @pytest.mark.parametrize(
@@ -71,8 +123,8 @@ def test_partition_map_normalizes_integer_keys(option, key, kafka_models, parse_
     [
         ([1, 2, 3], "must be an object"),
         ({"t": 5}, "topic 't' must be an object"),
-        ({"t": {"0": "x"}}, "partition '0' must be an integer"),
-        ({"t": {"0": True}}, "must be an integer"),
+        ({"t": {"0": "x"}}, "partition '0' must be a number or null"),
+        ({"t": {"0": True}}, "must be a number or null"),
         ({"t": {"zero": 1}}, "must be an integer"),
         ({"t": {"1_0": 5}}, "must be an integer"),
         ({"t": {" 0": 5}}, "must be an integer"),
@@ -211,21 +263,28 @@ def test_isolation_defaults_to_read_uncommitted(parse_read_options):
     assert parse_read_options().isolation_level == IsolationLevel.READ_UNCOMMITTED
 
 
-def test_isolation_follows_the_user_setting_in_any_case(parse_read_options):
+@pytest.mark.parametrize(
+    ("raw", "level_name"),
+    [
+        ("read_committed", "READ_COMMITTED"),
+        ("read_uncommitted", "READ_UNCOMMITTED"),
+        ("READ_COMMITTED", "READ_COMMITTED"),
+        ("Read_Committed", "READ_COMMITTED"),
+    ],
+)
+def test_isolation_planning_accepts_any_letter_case(raw, level_name, parse_read_options):
     from confluent_kafka import IsolationLevel
 
-    # Spark derives `ListOffsetsOptions` from the driver Kafka params, so a
-    # user asking for `read_committed` gets last-stable-offset semantics
-    # when a "latest" boundary or a timestamp is resolved.
-    assert parse_read_options(**{"kafka.isolation.level": "READ_COMMITTED"}).isolation_level == (
-        IsolationLevel.READ_COMMITTED
-    )
+    # Spark's KafkaOffsetReaderAdmin upper-cases the value before parsing it, so
+    # planning (`ListOffsetsOptions` for "latest" and timestamp lookups) accepts
+    # any case. The consumers' stricter check is in `build_consumer_config`.
+    assert parse_read_options(**{"kafka.isolation.level": raw}).isolation_level == IsolationLevel[level_name]
 
 
-def test_isolation_is_not_left_in_the_client_config(parse_read_options):
-    # Planning and the consumers both take it from `isolation_level`, so
-    # a raw spelling cannot reach librdkafka.
-    assert "isolation.level" not in parse_read_options(**{"kafka.isolation.level": "read_committed"}).client_config
+def test_isolation_raw_value_is_kept_for_the_consumers(parse_read_options):
+    # As in Spark, consumers receive the property as the user wrote it.
+    config = parse_read_options(**{"kafka.isolation.level": "READ_COMMITTED"}).client_config
+    assert config["isolation.level"] == "READ_COMMITTED"
 
 
 @pytest.mark.parametrize("raw", ["read_everything", " READ_COMMITTED ", "read_uncommitted ", "\tread_committed\n"])
@@ -278,7 +337,7 @@ def test_subscription_assign_invalid_json_raises(kafka_options, case_insensitive
 
 
 def test_subscription_assign_bool_partition_raises(kafka_options, case_insensitive):
-    with pytest.raises(ValueError, match="must be an integer"):
+    with pytest.raises(ValueError, match="must be a number or null"):
         kafka_options.parse_subscription(case_insensitive({"assign": '{"t": [true]}'}))
 
 
@@ -606,11 +665,7 @@ def test_admin_timeout_must_be_whole_milliseconds(timeout, parse_read_options):
 
 
 def test_consumer_config_defaults_applied(kafka_client):
-    from confluent_kafka import IsolationLevel
-
-    config = kafka_client.build_consumer_config(
-        {"bootstrap.servers": "localhost:9092"}, IsolationLevel.READ_UNCOMMITTED
-    )
+    config = kafka_client.build_consumer_config({"bootstrap.servers": "localhost:9092"})
     assert config["bootstrap.servers"] == "localhost:9092"
     assert config["group.id"] == "sail-kafka-reader"
     assert config["enable.auto.commit"] is False
@@ -619,42 +674,47 @@ def test_consumer_config_defaults_applied(kafka_client):
 
 
 def test_consumer_config_user_group_id_overrides_default(kafka_client):
-    from confluent_kafka import IsolationLevel
-
     settings = {"bootstrap.servers": "localhost:9092", "group.id": "my-group"}
-    config = kafka_client.build_consumer_config(settings, IsolationLevel.READ_UNCOMMITTED)
+    config = kafka_client.build_consumer_config(settings)
     assert config["group.id"] == "my-group"
 
 
 def test_consumer_config_source_owned_settings_win(kafka_client):
-    from confluent_kafka import IsolationLevel
-
     # Option validation rejects these before we get here; the merge order is
     # the second line of defence, and Spark likewise keeps its own consumer
     # settings authoritative.
     config = kafka_client.build_consumer_config(
-        {"enable.auto.commit": "true", "auto.offset.reset": "earliest", "enable.partition.eof": "false"},
-        IsolationLevel.READ_UNCOMMITTED,
+        {"enable.auto.commit": "true", "auto.offset.reset": "earliest", "enable.partition.eof": "false"}
     )
     assert config["enable.auto.commit"] is False
     assert config["auto.offset.reset"] == "error"
     assert config["enable.partition.eof"] is True
 
 
-@pytest.mark.parametrize(
-    ("level_name", "expected"),
-    [("READ_UNCOMMITTED", "read_uncommitted"), ("READ_COMMITTED", "read_committed")],
-)
-def test_consumer_config_isolation_level_uses_the_librdkafka_spelling(level_name, expected, kafka_client):
-    from confluent_kafka import IsolationLevel
+def test_consumer_config_isolation_level_defaults_to_read_uncommitted(kafka_client):
+    # The Java client's default, which Spark's executor consumers inherit.
+    assert kafka_client.build_consumer_config({})["isolation.level"] == "read_uncommitted"
 
-    # librdkafka only accepts the lowercase values.
-    assert kafka_client.build_consumer_config({}, IsolationLevel[level_name])["isolation.level"] == expected
+
+@pytest.mark.parametrize("raw", ["read_committed", "read_uncommitted"])
+def test_consumer_config_isolation_level_passes_through(raw, kafka_client):
+    assert kafka_client.build_consumer_config({"isolation.level": raw})["isolation.level"] == raw
+
+
+@pytest.mark.parametrize("raw", ["READ_COMMITTED", "Read_Committed", "READ_UNCOMMITTED"])
+def test_consumer_config_isolation_level_is_case_sensitive(raw, kafka_client):
+    # Spark's executor consumers validate the raw value with the Java client's
+    # exact-match check; librdkafka would accept any case, so Sail checks it.
+    with pytest.raises(ValueError, match=r"Invalid value .* for configuration isolation\.level"):
+        kafka_client.build_consumer_config({"isolation.level": raw})
+
+
+def test_admin_config_strips_isolation_level(kafka_client):
+    # Planning passes the level to list_offsets; the admin handle must not warn about it.
+    assert kafka_client.build_admin_config({"isolation.level": "read_committed"}) == {}
 
 
 def test_admin_config_connection_settings_pass_through(kafka_client, parse_read_options):
-    from confluent_kafka import IsolationLevel
-
     settings = {
         "bootstrap.servers": "localhost:9092",
         "security.protocol": "SASL_SSL",
@@ -666,7 +726,7 @@ def test_admin_config_connection_settings_pass_through(kafka_client, parse_read_
     }
     config = parse_read_options(**{f"KAFKA.{key.upper()}": value for key, value in settings.items()}).client_config
     assert kafka_client.build_admin_config(config) == settings
-    consumer_config = kafka_client.build_consumer_config(config, IsolationLevel.READ_UNCOMMITTED)
+    consumer_config = kafka_client.build_consumer_config(config)
     assert all(consumer_config[key] == value for key, value in settings.items())
 
 
@@ -674,14 +734,14 @@ def test_admin_config_connection_settings_pass_through(kafka_client, parse_read_
 def test_admin_config_invalid_security_protocol_fails_without_plaintext_fallback(
     kind, kafka_client, parse_read_options
 ):
-    from confluent_kafka import Consumer, IsolationLevel, KafkaException
+    from confluent_kafka import Consumer, KafkaException
     from confluent_kafka.admin import AdminClient
 
     config = parse_read_options(**{"kafka.security.protocol": "not-a-protocol"}).client_config
     client, client_config = (
         (AdminClient, kafka_client.build_admin_config(config))
         if kind == "admin"
-        else (Consumer, kafka_client.build_consumer_config(config, IsolationLevel.READ_UNCOMMITTED))
+        else (Consumer, kafka_client.build_consumer_config(config))
     )
     # Real librdkafka validation fails before it can open a connection.
     with pytest.raises(KafkaException, match=r"security\.protocol"):

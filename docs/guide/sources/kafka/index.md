@@ -104,10 +104,13 @@ Unknown options outside `kafka.*` are ignored, including streaming-only options 
 Exactly one of `assign`, `subscribe`, and `subscribePattern` is required.
 
 When multiple range options are set for the same endpoint, Spark's precedence applies: global timestamp
-beats per-partition timestamps, which beat offsets, and lower-priority values are not parsed. Partition
-IDs must fit signed 32-bit integers; offsets and timestamps must fit signed 64-bit integers. Present blank
-values are rejected; booleans accept only case-insensitive `true`/`false`; timeouts must be positive whole
-numbers of milliseconds, as in Spark.
+beats per-partition timestamps, which beat offsets, and lower-priority values are not parsed. Partition-map
+keys must fit signed 32-bit integers; global timestamp strings must fit signed 64-bit integers.
+JSON values follow Spark's numeric conversion: `null` becomes zero, fractions truncate toward zero,
+floating-point overflow clamps to the integer bounds, and integer overflow wraps to 32 bits for `assign`
+or 64 bits for offsets and timestamps. Strings and booleans are not accepted as JSON numbers.
+Present blank options are rejected; boolean options accept only case-insensitive `true`/`false`;
+timeouts must be positive whole numbers of milliseconds.
 :::
 
 ::: warning
@@ -217,6 +220,8 @@ Following Spark, splitting is decided on unresolved endpoint values (`earliest`/
 with size 1), so `maxRecordsPerPartition` alone does not split an `earliest`–`latest` read; use explicit
 offsets or `minPartitions` when splitting is needed. Outer endpoints remain late-bound, so log growth or
 retention can affect outer chunks — use explicit numeric endpoints for reproducible splits.
+As in Spark, split planning drops ranges whose resolved end is at or before their start. An inverted
+range still raises if specified explicitly or resolved by a task without splitting.
 
 ```python
 df = (
@@ -273,7 +278,9 @@ With `failOnDataLoss=false`, out-of-range recovery or truncated EOF logs one par
 - `kafkaConsumer.pollTimeoutMs` defaults to a fixed `120000` ms and does not inherit `spark.network.timeout`.
 - `isolation.level` defaults to `read_uncommitted` (matching Spark rather than `librdkafka`'s
   `read_committed` default). Pass `kafka.isolation.level=read_committed` to read committed records only;
-  planning-time timestamp and split lookups honor the same setting.
+  planning-time timestamp and split lookups honor the same setting. As in Spark, planning accepts the value
+  in any letter case, but a task that creates a consumer fails unless it is spelled exactly `read_committed`
+  or `read_uncommitted`. A task whose range is already bound and empty creates no consumer.
 
 ## Limitations
 

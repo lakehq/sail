@@ -256,6 +256,11 @@ def resolve_sentinels(
         bound_end = (
             highs[offset_range.topic_partition] if offset_range.end == SpecialOffset.LATEST else offset_range.end
         )
+        # Spark's KafkaOffsetRangeCalculator drops non-positive ranges after resolving
+        # sentinels for splitting. Do this before OffsetRange validates the bounds;
+        # the unsplit path still rejects inverted bounds when the task binds them.
+        if bound_end <= bound_start:
+            continue
         out.append(replace(offset_range, start=bound_start, end=bound_end))
     return out
 

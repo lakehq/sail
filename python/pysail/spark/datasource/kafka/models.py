@@ -122,7 +122,7 @@ class OffsetRange:
 
     def __post_init__(self) -> None:
         """Validate ordering when both endpoints are concrete."""
-        if self.start >= 0 and self.end >= 0 and self.end < self.start:
+        if self.is_bound and self.end < self.start:
             msg = (
                 f"Inverted offset range for {self.topic_partition}: "
                 f"start {self.start} is past end {self.end}. "
@@ -130,6 +130,11 @@ class OffsetRange:
                 f"while the range was being resolved."
             )
             raise ValueError(msg)
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether both offsets are concrete, i.e. neither is an ``earliest``/``latest`` sentinel."""
+        return self.start >= 0 and self.end >= 0
 
     @property
     def size(self) -> int:

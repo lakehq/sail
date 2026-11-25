@@ -9,7 +9,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, TypeVar
 
-from confluent_kafka import Consumer, KafkaError, KafkaException, TopicCollection, TopicPartition
+from confluent_kafka import Consumer, IsolationLevel, KafkaError, KafkaException, TopicCollection, TopicPartition
 from confluent_kafka.admin import AdminClient
 
 from pysail.spark.datasource.kafka.models import TopicPartitionKey, Watermarks
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
     from concurrent.futures import Future
 
-    from confluent_kafka import IsolationLevel
     from confluent_kafka.admin import OffsetSpec, TopicDescription
 
 LOGGER = logging.getLogger(__name__)
@@ -33,11 +32,11 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_GROUP_ID = "sail-kafka-reader"
 
 # Consumer-only properties stripped from AdminClient (producer-backed in librdkafka)
-# to avoid CONFWARN logs. isolation.level is never in client_config: it is parsed
-# into an IsolationLevel and passed to list_offsets and the consumer explicitly.
+# to avoid CONFWARN logs. Planning passes the isolation level to list_offsets explicitly.
 CONSUMER_ONLY_CONFIGS = frozenset(
     {
         "group.id",
+        "isolation.level",
         "enable.auto.commit",
         "auto.offset.reset",
         "enable.partition.eof",
@@ -66,17 +65,35 @@ def build_admin_config(client_config: Mapping[str, str]) -> dict[str, str]:
     return {k: v for k, v in client_config.items() if k not in CONSUMER_ONLY_CONFIGS}
 
 
-def build_consumer_config(client_config: Mapping[str, str], isolation_level: IsolationLevel) -> dict[str, str | bool]:
+# The Java client's default isolation level and the only spellings its ConsumerConfig accepts:
+# kafka-clients 3.9 defines isolation.level with ConfigDef.ValidString.in("read_committed",
+# "read_uncommitted"), an exact, case-sensitive match, and Spark's executor consumers inherit it.
+# librdkafka accepts any letter case, so the check is done here
+# (see options.ISOLATION_LEVEL_OPTION for the planning side).
+DEFAULT_ISOLATION_LEVEL = IsolationLevel.READ_UNCOMMITTED.name.lower()
+ISOLATION_LEVEL_VALUES = tuple(sorted(level.name.lower() for level in IsolationLevel))
+
+
+def build_consumer_config(client_config: Mapping[str, str]) -> dict[str, str | bool]:
     """Return the effective librdkafka config for a batch-read consumer.
 
-    Source-owned settings are applied last: ``auto.offset.reset=error`` keeps
-    unserviceable offsets visible to the read loop's ``failOnDataLoss`` logic.
+    ``isolation.level`` is the user's raw value, validated as Spark's executor
+    consumers validate it, so e.g. ``READ_COMMITTED`` fails here even though
+    planning accepted it. Source-owned settings are applied last:
+    ``auto.offset.reset=error`` keeps unserviceable offsets visible to the read
+    loop's ``failOnDataLoss`` logic.
     """
+    isolation_level = client_config.get("isolation.level", DEFAULT_ISOLATION_LEVEL)
+    if isolation_level not in ISOLATION_LEVEL_VALUES:
+        msg = (
+            f"Invalid value {isolation_level} for configuration isolation.level: "
+            f"String must be one of: {', '.join(ISOLATION_LEVEL_VALUES)}"
+        )
+        raise ValueError(msg)
     return {
         "group.id": DEFAULT_GROUP_ID,
         **client_config,
-        # librdkafka spells the property value as the lowercase enum name.
-        "isolation.level": isolation_level.name.lower(),
+        "isolation.level": isolation_level,
         "enable.auto.commit": False,
         "auto.offset.reset": "error",
         "enable.partition.eof": True,
@@ -97,14 +114,12 @@ def create_admin_client(client_config: Mapping[str, str]) -> AdminClient:
 
 
 @contextmanager
-def open_consumer(
-    client_config: Mapping[str, str], isolation_level: IsolationLevel, topic_partition: TopicPartitionKey
-) -> Iterator[Consumer]:
+def open_consumer(client_config: Mapping[str, str], topic_partition: TopicPartitionKey) -> Iterator[Consumer]:
     """Open a consumer and close it without leaking credentials or masking read errors.
 
     A failed close is re-raised only when the read itself succeeded.
     """
-    consumer = Consumer(build_consumer_config(client_config, isolation_level))
+    consumer = Consumer(build_consumer_config(client_config))
     read_failed = False
     try:
         yield consumer

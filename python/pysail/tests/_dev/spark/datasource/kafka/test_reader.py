@@ -650,3 +650,58 @@ def test_strict_gaps_fall_back_to_live_query_when_cached_watermark_is_invalid(
     rows = read_all(reader, reader.partitions()[0])
     assert [r["offset"] for r in rows] == [3, 4]
     assert calls == [True, False]
+
+
+def forbid_consumer_creation(monkeypatch):
+    """Fail the test if a task creates a Kafka consumer."""
+    from pysail.spark.datasource.kafka import client as kafka_client
+
+    def fail_on_create(_config):
+        pytest.fail("the task created a Kafka consumer")
+
+    monkeypatch.setattr(kafka_client, "Consumer", fail_on_create)
+
+
+def test_read_empty_concrete_range_creates_no_consumer(consumer_factory, monkeypatch):
+    # Spark's KafkaSourceRDD returns an empty iterator for a bound, empty range
+    # without ever creating the underlying KafkaConsumer.
+    consumer = FakeConsumer(watermarks={(TOPIC, 0): (0, 10)})
+    reader = make_reader(
+        consumer_factory, consumer, startingOffsets='{"orders":{"0":4}}', endingOffsets='{"orders":{"0":4}}'
+    )
+    partition = reader.partitions()[0]
+    forbid_consumer_creation(monkeypatch)
+    assert read_all(reader, partition) == []
+
+
+def test_read_uppercase_isolation_level_fails_when_a_consumer_is_created(consumer_factory):
+    # Spark plans with any letter case, then its executor consumer rejects the raw value.
+    consumer = FakeConsumer(watermarks={(TOPIC, 0): (0, 3)})
+    reader = make_reader(consumer_factory, consumer, **{"kafka.isolation.level": "READ_COMMITTED"})
+    partition = read_planned_partition(reader, consumer, [FakeMessage(i) for i in range(3)])
+    with pytest.raises(ValueError, match=r"Invalid value READ_COMMITTED for configuration isolation\.level"):
+        read_all(reader, partition)
+
+
+def test_read_uppercase_isolation_level_is_not_checked_without_a_consumer(consumer_factory, monkeypatch):
+    # An empty concrete range creates no consumer, so under Spark the bad spelling never surfaces.
+    consumer = FakeConsumer(watermarks={(TOPIC, 0): (0, 10)})
+    reader = make_reader(
+        consumer_factory,
+        consumer,
+        startingOffsets='{"orders":{"0":4}}',
+        endingOffsets='{"orders":{"0":4}}',
+        **{"kafka.isolation.level": "READ_COMMITTED"},
+    )
+    partition = reader.partitions()[0]
+    forbid_consumer_creation(monkeypatch)
+    assert read_all(reader, partition) == []
+
+
+def test_read_uppercase_isolation_level_fails_while_binding_sentinels(consumer_factory):
+    # A sentinel range needs a consumer to bind, even when the bound range turns out empty.
+    consumer = FakeConsumer(watermarks={(TOPIC, 0): (5, 5)})
+    reader = make_reader(consumer_factory, consumer, **{"kafka.isolation.level": "READ_COMMITTED"})
+    partition = reader.partitions()[0]
+    with pytest.raises(ValueError, match=r"Invalid value READ_COMMITTED for configuration isolation\.level"):
+        read_all(reader, partition)

@@ -33,7 +33,7 @@ class ReadAction(Enum):
 
 def bind_offset_range(consumer: Consumer, planned: OffsetRange, *, timeout_s: float) -> OffsetRange:
     """Late-bind ``earliest``/``latest`` sentinels at task start, mirroring ``KafkaSourceRDD.resolveRange``."""
-    if planned.start >= 0 and planned.end >= 0:
+    if planned.is_bound:
         return planned
     watermarks = query_watermarks(consumer, planned.topic_partition, timeout_s=timeout_s)
     start = watermarks.low if planned.start == SpecialOffset.EARLIEST else planned.start

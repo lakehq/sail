@@ -242,18 +242,48 @@ def test_planning_concrete_inverted_range_with_splitting_raises_before_planning(
         )
 
 
-def test_planning_sentinel_inverted_range_raises_during_planning_when_splitting(consumer_factory):
-    # `minPartitions` forces an early resolve, so a sentinel end is caught
-    # on the driver during planning instead of waiting for task execution.
+@pytest.mark.parametrize(
+    ("watermarks", "starting", "ending", "split_hint"),
+    [
+        ((0, 3), '{"orders": {"0": 8}}', "latest", {"minPartitions": "4"}),
+        ((8, 12), "earliest", '{"orders": {"0": 3}}', {"minPartitions": "4"}),
+        ((8, 12), "earliest", '{"orders": {"0": 3}}', {"maxRecordsPerPartition": "2"}),
+        ((0, 3), '{"orders": {"0": 3}}', "latest", {"minPartitions": "4"}),
+    ],
+)
+def test_planning_splitting_drops_non_positive_resolved_ranges(
+    consumer_factory, watermarks, starting, ending, split_hint
+):
+    # Verified with Spark 4.1.1's KafkaOffsetReaderAdmin: its split calculator
+    # discards these ranges, although the unsplit task would reject an inversion.
     reader = make_reader(
         consumer_factory,
-        FakeConsumer(watermarks={(TOPIC, 0): (0, 3)}),
-        startingOffsets='{"orders": {"0": 8}}',
+        FakeConsumer(watermarks={(TOPIC, 0): watermarks}),
+        startingOffsets=starting,
+        endingOffsets=ending,
+        **split_hint,
+    )
+    assert reader.partitions() == []
+
+
+def test_planning_splitting_keeps_valid_partitions_when_another_range_inverts(consumer_factory):
+    consumer = FakeConsumer(
+        topics={TOPIC: FakeTopicMeta([0, 1])},
+        watermarks={(TOPIC, 0): (0, 3), (TOPIC, 1): (0, 6)},
+    )
+    reader = make_reader(
+        consumer_factory,
+        consumer,
+        startingOffsets='{"orders": {"0": 8, "1": 0}}',
         endingOffsets="latest",
         minPartitions="4",
     )
-    with pytest.raises(ValueError, match="Inverted offset range"):
-        reader.partitions()
+    assert planned_ranges(reader.partitions()) == [
+        (TOPIC, 1, 0, 1),
+        (TOPIC, 1, 1, 2),
+        (TOPIC, 1, 2, 4),
+        (TOPIC, 1, 4, LATEST),
+    ]
 
 
 @pytest.mark.parametrize(("initial_parts", "updated_parts"), [([0], [0, 1]), ([0, 1], [0])])
@@ -364,7 +394,8 @@ def test_planning_defaults_to_read_uncommitted(consumer_factory):
     assert set(consumer.admin.isolation_levels) == {IsolationLevel.READ_UNCOMMITTED}
 
 
-def test_planning_follows_the_configured_isolation_level(consumer_factory):
+@pytest.mark.parametrize("raw", ["read_committed", "READ_COMMITTED"])
+def test_planning_follows_the_configured_isolation_level(consumer_factory, raw):
     from confluent_kafka import IsolationLevel
 
     from pysail.spark.datasource.kafka import KafkaDataSource
@@ -380,7 +411,8 @@ def test_planning_follows_the_configured_isolation_level(consumer_factory):
         options={
             "kafka.bootstrap.servers": "localhost:9092",
             "subscribe": TOPIC,
-            "kafka.isolation.level": "read_committed",
+            # Spark's planning upper-cases the value, so any letter case plans the same.
+            "kafka.isolation.level": raw,
             "minPartitions": "8",
         }
     ).reader(None)

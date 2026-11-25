@@ -31,6 +31,7 @@ from pysail.spark.datasource.kafka.models import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+    from typing import NoReturn
 
     from pysail.spark.datasource.kafka.models import RangeBoundary, RangeLimit, Subscription
 
@@ -96,6 +97,20 @@ PROTECTED_KAFKA_CONFIGS = {
     "enable.partition.eof": None,
 }
 
+# The one kafka.* property the source also interprets itself. Spark reads it in two places,
+# with two rules, and Sail keeps both (hence the raw value in client_config plus the parsed
+# KafkaReadOptions.isolation_level):
+# - Planning parses it in any letter case: Spark 4.1's KafkaOffsetReaderAdmin.isolationLevel
+#   (connector/kafka-0-10-sql/.../kafka010/KafkaOffsetReaderAdmin.scala) upper-cases the value
+#   for the ListOffsetsOptions it passes to listOffsets.
+# - Consumers get the raw value: KafkaSourceProvider.kafkaParamsForExecutors leaves it as is,
+#   and Kafka's ConsumerConfig validates it with an exact, lowercase-only match
+#   (ConfigDef.ValidString), when a task creates its consumer (see client.build_consumer_config).
+# Sail differs in one way, on purpose: a value invalid in every letter case (e.g. read_everything)
+# fails when the options are parsed, like every other option, instead of only when Spark's lazy
+# isolationLevel is first evaluated.
+ISOLATION_LEVEL_OPTION = "kafka.isolation.level"
+
 STRICT_INT_RE = re.compile(r"[+-]?\d+")
 
 
@@ -113,6 +128,8 @@ class KafkaReadOptions:
     starting_ts_strategy: TimestampStrategy
     # Excluded from repr: it may hold SASL/SSL secrets.
     client_config: Mapping[str, str] = field(repr=False)
+    # Planning's reading of kafka.isolation.level; consumers take the raw value from client_config
+    # (see ISOLATION_LEVEL_OPTION for why Spark, and so Sail, keeps both).
     isolation_level: IsolationLevel
     include_headers: bool
     poll_timeout_s: float
@@ -128,7 +145,11 @@ def parse_options(raw_options: Mapping[str, str]) -> KafkaReadOptions:
     """Parse and validate the Spark options of a Kafka read (keys are case-insensitive)."""
     options = CaseInsensitiveDict(raw_options)
 
-    client_config, isolation_level = parse_client_config(options)
+    client_config = parse_client_config(options)
+    # Default matches the Java client Spark uses, not librdkafka's read_committed.
+    isolation_level = parse_option(
+        options, ISOLATION_LEVEL_OPTION, parse_isolation_level, IsolationLevel.READ_UNCOMMITTED
+    )
     subscription = parse_subscription(options)
     starting = parse_range_limit(options, boundary="starting")
     ending = parse_range_limit(options, boundary="ending")
@@ -158,7 +179,9 @@ def parse_options(raw_options: Mapping[str, str]) -> KafkaReadOptions:
             options, "maxRecordsPerPartition", parse_positive_int, None, max_value=INT64_MAX
         ),
         # Consumer.poll converts seconds to a signed C int in milliseconds.
-        poll_timeout_s=parse_option(options, poll_option, parse_positive_ms, DEFAULT_POLL_TIMEOUT_S, max_value=INT32_MAX),
+        poll_timeout_s=parse_option(
+            options, poll_option, parse_positive_ms, DEFAULT_POLL_TIMEOUT_S, max_value=INT32_MAX
+        ),
         # librdkafka admin request timeouts accept 1 ms to 1 hour.
         admin_timeout_s=parse_option(
             options, "adminTimeoutMs", parse_positive_ms, DEFAULT_ADMIN_TIMEOUT_S, max_value=MAX_ADMIN_TIMEOUT_MS
@@ -177,9 +200,14 @@ def parse_option(
     return parse(opts[option_name], option_name, **parse_kwargs) if option_name in opts else default
 
 
-def parse_client_config(options: CaseInsensitiveDict) -> tuple[dict[str, str], IsolationLevel]:
-    """Extract and validate ``kafka.*`` client properties and the effective isolation level."""
-    client_config = {k[len("kafka.") :]: v for k, v in options.items() if k.startswith("kafka.")}
+def parse_client_config(options: CaseInsensitiveDict) -> dict[str, str]:
+    """Extract and validate the ``kafka.*`` client properties passed to librdkafka unchanged.
+
+    As in Spark, ``kafka.isolation.level`` stays in: consumers receive the raw value
+    (checked by ``client.build_consumer_config``), while planning reads it separately
+    with ``parse_isolation_level``.
+    """
+    client_config = {key[len("kafka.") :]: value for key, value in options.items() if key.startswith("kafka.")}
     if not client_config.get("bootstrap.servers", "").strip():
         msg = "Option 'kafka.bootstrap.servers' is required and must not be blank for the kafka data source"
         raise ValueError(msg)
@@ -189,21 +217,20 @@ def parse_client_config(options: CaseInsensitiveDict) -> tuple[dict[str, str], I
             if alternative:
                 msg += f"; use the source option(s) '{alternative}' instead"
             raise ValueError(msg)
-    # Default matches the Java client Spark uses, not librdkafka's read_committed.
-    isolation_level = (
-        parse_isolation_level(client_config.pop("isolation.level"))
-        if "isolation.level" in client_config
-        else IsolationLevel.READ_UNCOMMITTED
-    )
-    return client_config, isolation_level
+    return client_config
 
 
-def parse_isolation_level(option_value: str) -> IsolationLevel:
-    """Parse ``kafka.isolation.level`` case-insensitively (``read_uncommitted`` or ``read_committed``)."""
+def parse_isolation_level(option_value: str, option_name: str) -> IsolationLevel:
+    """Parse ``kafka.isolation.level`` for planning, in any letter case.
+
+    Matches Spark's ``KafkaOffsetReaderAdmin``, which upper-cases the value before
+    parsing it. Consumers apply the Java client's stricter, lowercase-only check
+    when a task creates one (see ``client.build_consumer_config``).
+    """
     try:
         return IsolationLevel[option_value.upper()]
     except KeyError:
-        msg = f"'kafka.isolation.level' must be 'read_uncommitted' or 'read_committed', got {option_value!r}"
+        msg = f"'{option_name}' must be 'read_uncommitted' or 'read_committed', got {option_value!r}"
         raise ValueError(msg) from None
 
 
@@ -252,7 +279,7 @@ def parse_assignment(option_value: str) -> frozenset[TopicPartitionKey]:
     int32 ids; ``list_topic_partitions`` intersects them with broker metadata.
     Shape errors raise ValueError, as in ``parse_topic_partition_mapping``.
     """
-    parsed = json.loads(option_value)
+    parsed = json.loads(option_value, parse_constant=reject_json_constant)
     if not isinstance(parsed, dict):
         msg = f"'assign' JSON must be an object of {{topic: [partition, ...]}}, got: {option_value!r}"
         raise ValueError(msg)  # noqa: TRY004
@@ -262,7 +289,7 @@ def parse_assignment(option_value: str) -> frozenset[TopicPartitionKey]:
             msg = f"'assign' entry for topic {topic!r} must be an array of partition ids"
             raise ValueError(msg)  # noqa: TRY004
         for partition in partitions:
-            partition_id = require_json_int(partition, bits=32, label=f"'assign' partition id for topic {topic!r}")
+            partition_id = coerce_json_int(partition, bits=32, label=f"'assign' partition id for topic {topic!r}")
             assigned.add(TopicPartitionKey(topic, partition_id))
     return frozenset(assigned)
 
@@ -310,7 +337,7 @@ def parse_topic_partition_mapping(option_value: str, option_name: str) -> dict[T
     """
     # Shape errors raise ValueError like json.loads does: the option string is
     # well typed, its content is malformed (hence the TRY004 suppressions).
-    parsed = json.loads(option_value)
+    parsed = json.loads(option_value, parse_constant=reject_json_constant)
     if not isinstance(parsed, dict):
         msg = f"'{option_name}' JSON must be an object, got: {type(parsed).__name__}"
         raise ValueError(msg)  # noqa: TRY004
@@ -326,7 +353,7 @@ def parse_topic_partition_mapping(option_value: str, option_name: str) -> dict[T
             label = f"'{option_name}' partition id for topic {topic!r}"
             partition_id = check_integer_width(parse_strict_int(partition, label=label), bits=32, label=label)
             value_label = f"'{option_name}' value for topic {topic!r} partition {partition!r}"
-            normalized[TopicPartitionKey(topic, partition_id)] = require_json_int(value, bits=64, label=value_label)
+            normalized[TopicPartitionKey(topic, partition_id)] = coerce_json_int(value, bits=64, label=value_label)
     return normalized
 
 
@@ -454,9 +481,24 @@ def check_integer_width(value: int, *, bits: int, label: str) -> int:
     return value
 
 
-def require_json_int(value: object, *, bits: int, label: str) -> int:
-    """Validate a JSON integer and its Kafka width, excluding JSON booleans."""
-    if not isinstance(value, int) or isinstance(value, bool):
-        msg = f"{label} must be an integer, got: {type(value).__name__}"
+def reject_json_constant(value: str) -> NoReturn:
+    """Reject nonstandard NaN/Infinity tokens, which Python's JSON decoder accepts but Spark's rejects."""
+    msg = f"Invalid JSON numeric constant: {value}"
+    raise ValueError(msg)
+
+
+def coerce_json_int(value: object, *, bits: int, label: str) -> int:
+    """Match Spark 4.1.1 JsonUtils/json4s conversion of JSON values to Int or Long."""
+    # These are compatibility rules, not strict integer validation: json4s maps
+    # null to zero, truncates floating-point numbers toward zero (clamping on
+    # overflow), and narrows integer literals by keeping their low 32/64 bits.
+    # Partition-map keys and global timestamp strings use strict parsers instead.
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"{label} must be a number or null, got: {type(value).__name__}"
         raise ValueError(msg)  # noqa: TRY004
-    return check_integer_width(value, bits=bits, label=label)
+    limit = 1 << (bits - 1)
+    if isinstance(value, float):
+        return int(min(max(value, -limit), limit - 1))
+    return (value + limit) % (2 * limit) - limit
