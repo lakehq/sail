@@ -509,6 +509,44 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_key_changed(spark,
         table.drop()
 
 
+# DataFrames of the distinct rows of a table `(k, a, b)`, which read only `a`, and whether `k`
+# tells their rows apart.
+DUPLICATE_FRAMES = {
+    "dropDuplicates(a)": (lambda frame: frame.dropDuplicates(["a"]).select("a"), False),
+    "dropDuplicates(a, b)": (lambda frame: frame.dropDuplicates(["a", "b"]).select("a"), False),
+    "dropDuplicates()": (lambda frame: frame.dropDuplicates().select("a"), True),
+}
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("change", ["retyped", "dropped"])
+@pytest.mark.parametrize("case", DUPLICATE_FRAMES)
+def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_changed(
+    spark, tmp_path, case, change, nested
+):
+    query, key = DUPLICATE_FRAMES[case]
+    table = Table(spark, tmp_path, "parquet", "k INT, a INT, b INT")
+    try:
+        table.insert("(1, 1, 10), (2, 1, 20), (3, 2, 30)")
+        view = create_view(spark, "dv", None, query(spark.table(table.name)))
+        table.views.append(view)
+        if nested:
+            view = table.create_view("sv", f"SELECT a FROM {view}")
+        spark.sql(f"DROP TABLE {table.name}")
+        if change == "retyped":
+            table.create("k BIGINT, a INT, b INT")
+            table.insert("(1, 1, 10), (9, 5, 50)")
+        else:
+            table.create("a INT, b INT")
+            table.insert("(1, 10), (5, 50)")
+        if key and change == "dropped":
+            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+        else:
+            assert rows(spark, f"SELECT * FROM {view}") == [(1,), (5,)]
+    finally:
+        table.drop()
+
+
 # The cases of a view over the union of two tables `t` and `w (a INT, b INT)`, with the rows
 # (1, 10), (1, 20), (2, 30) and (1, 10), (3, 40), when one of them is created again with
 # other columns: the query of the view, the table, its columns and rows, and the rows
