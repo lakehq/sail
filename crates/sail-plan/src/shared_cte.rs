@@ -433,8 +433,9 @@ pub fn renew_cte_definitions_with_scans(
 pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
     plan.transform_up_with_subqueries(|plan| match plan {
         LogicalPlan::TableScan(_) => Ok(Transformed::no(plan)),
-        // DataFusion keeps the schema of a union of the same width, and an output of a
-        // union has nulls if the column of any input has nulls.
+        // DataFusion keeps the schema of a union of the same width. An output of a union
+        // has nulls if the column of any input has nulls, and the metadata of the columns
+        // of all the inputs, as the physical plan of the union.
         LogicalPlan::Union(Union { inputs, schema })
             if inputs
                 .iter()
@@ -444,8 +445,14 @@ pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
                 .iter()
                 .enumerate()
                 .map(|(i, (qualifier, field))| {
-                    let nullable = inputs.iter().any(|x| x.schema().field(i).is_nullable());
-                    let field = field.as_ref().clone().with_nullable(nullable);
+                    let fields = inputs.iter().map(|x| x.schema().field(i));
+                    let nullable = fields.clone().any(|x| x.is_nullable());
+                    let metadata = fields.flat_map(|x| x.metadata().clone()).collect();
+                    let field = field
+                        .as_ref()
+                        .clone()
+                        .with_nullable(nullable)
+                        .with_metadata(metadata);
                     (qualifier.cloned(), Arc::new(field))
                 })
                 .collect();

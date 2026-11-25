@@ -685,6 +685,45 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
         table.drop()
 
 
+# Table formats whose columns carry different field metadata, such as Iceberg field IDs and
+# Delta Lake column mapping, as the clause after the columns and the table properties.
+METADATA_FORMATS = {
+    "iceberg": ("iceberg", ""),
+    "delta": ("delta", ""),
+    "delta_cm": ("delta", " TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"),
+    "parquet": ("parquet", ""),
+}
+
+
+def create_metadata_table(spark, table, fmt):
+    using, properties = METADATA_FORMATS[fmt]
+    table.locations += 1
+    location = table.tmp_path / f"{table.name}_{table.locations}"
+    spark.sql(f"DROP TABLE IF EXISTS {table.name}")
+    spark.sql(f"CREATE TABLE {table.name} (k INT, c STRING) USING {using} LOCATION '{location}'{properties}")
+    table.insert("(1, 'a'), (2, 'b')")
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("iceberg", "delta"), ("delta_cm", "iceberg"), ("delta_cm", "parquet"), ("delta", "delta_cm"), ("delta", None)],
+)
+def test_view_of_a_union_reads_a_table_whose_column_metadata_changed(spark, tmp_path, kind, before, after):
+    table = Table(spark, tmp_path, "delta")
+    try:
+        create_metadata_table(spark, table, before)
+        sql = f"SELECT c FROM {table.name} UNION SELECT 'z'"
+        view = table.create_view(kind, sql)
+        if after is None:
+            spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN c COMMENT 'the column'")
+        else:
+            create_metadata_table(spark, table, after)
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    finally:
+        table.drop()
+
+
 # Queries over `t (a INT NOT NULL, u INT NOT NULL)` whose outputs have no nulls.
 NOT_NULL_QUERIES = {
     "union": "SELECT a FROM {t} UNION SELECT u FROM {t}",
@@ -704,6 +743,22 @@ def test_view_reports_the_nullability_of_the_columns_that_it_computes(spark, tmp
         sql = NOT_NULL_QUERIES[query].format(t=table.name)
         view = table.create_view(kind, sql)
         assert spark.table(view).schema == spark.sql(sql).schema
+    finally:
+        table.drop()
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tmp_path, kind):
+    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT NOT NULL")
+    try:
+        table.insert("(1, 2)")
+        sql = f"SELECT map(a, u) AS m FROM {table.name}"
+        view = table.create_view(kind, sql)
+        # The definition of a view is resolved as if its columns had nulls, which they can have
+        # when the view is read, and the type of a map records whether its values have nulls.
+        assert spark.sql(sql).schema["m"].dataType.valueContainsNull is False
+        assert spark.table(view).schema["m"].dataType.valueContainsNull is True
+        assert spark.table(view).collect() == spark.sql(sql).collect()
     finally:
         table.drop()
 
