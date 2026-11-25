@@ -342,21 +342,22 @@ impl PlanResolver<'_> {
                     temporal_options: temporal_options.clone(),
                     read_case_sensitive: self.config.case_sensitive,
                 });
-                let table_source = self
-                    .resolve_catalog_table_source(
-                        CatalogTableRead {
-                            status,
-                            resolved,
-                            reference: &catalog_reference,
-                            session_table: None,
-                            lake_relation,
-                            options,
-                            temporal_options,
-                            read_case_sensitive: self.config.case_sensitive,
-                        },
-                        state,
-                    )
-                    .await?;
+                // The source has a large future, which the future of every read would
+                // otherwise hold, also in the recursion of the query resolver.
+                let table_source = Box::pin(self.resolve_catalog_table_source(
+                    CatalogTableRead {
+                        status,
+                        resolved,
+                        reference: &catalog_reference,
+                        session_table: None,
+                        lake_relation,
+                        options,
+                        temporal_options,
+                        read_case_sensitive: self.config.case_sensitive,
+                    },
+                    state,
+                ))
+                .await?;
                 self.resolve_table_source_with_rename(
                     table_source,
                     table_reference,
