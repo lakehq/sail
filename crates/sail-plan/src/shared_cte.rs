@@ -14,7 +14,7 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, 
 use datafusion_expr::utils::{conjunction, disjunction};
 use datafusion_expr::{
     Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
-    TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource,
+    TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource, Union,
 };
 use indexmap::IndexMap;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
@@ -433,6 +433,28 @@ pub fn renew_cte_definitions_with_scans(
 pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
     plan.transform_up_with_subqueries(|plan| match plan {
         LogicalPlan::TableScan(_) => Ok(Transformed::no(plan)),
+        // DataFusion keeps the schema of a union of the same width, and an output of a
+        // union has nulls if the column of any input has nulls.
+        LogicalPlan::Union(Union { inputs, schema })
+            if inputs
+                .iter()
+                .all(|x| x.schema().fields().len() == schema.fields().len()) =>
+        {
+            let fields = schema
+                .iter()
+                .enumerate()
+                .map(|(i, (qualifier, field))| {
+                    let nullable = inputs.iter().any(|x| x.schema().field(i).is_nullable());
+                    let field = field.as_ref().clone().with_nullable(nullable);
+                    (qualifier.cloned(), Arc::new(field))
+                })
+                .collect();
+            let schema = DFSchema::new_with_metadata(fields, schema.metadata().clone())?;
+            Ok(Transformed::yes(LogicalPlan::Union(Union {
+                inputs,
+                schema: Arc::new(schema),
+            })))
+        }
         plan => Ok(Transformed::yes(plan.recompute_schema()?)),
     })
     .data()

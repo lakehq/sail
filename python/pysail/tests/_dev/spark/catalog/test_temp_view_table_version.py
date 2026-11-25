@@ -685,6 +685,29 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
         table.drop()
 
 
+# Queries over `t (a INT NOT NULL, u INT NOT NULL)` whose outputs have no nulls.
+NOT_NULL_QUERIES = {
+    "union": "SELECT a FROM {t} UNION SELECT u FROM {t}",
+    "union all": "SELECT a FROM {t} UNION ALL SELECT u FROM {t}",
+    "struct": "SELECT struct(a, u) AS s FROM {t}",
+    "array": "SELECT array(a, u) AS r FROM {t}",
+    "case": "SELECT CASE WHEN a > 0 THEN a ELSE u END AS c FROM {t}",
+    "coalesce": "SELECT coalesce(a, u) AS c FROM {t}",
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("query", NOT_NULL_QUERIES)
+def test_view_reports_the_nullability_of_the_columns_that_it_computes(spark, tmp_path, kind, query):
+    table = Table(spark, tmp_path, "delta", "a INT NOT NULL, u INT NOT NULL")
+    try:
+        sql = NOT_NULL_QUERIES[query].format(t=table.name)
+        view = table.create_view(kind, sql)
+        assert spark.table(view).schema == spark.sql(sql).schema
+    finally:
+        table.drop()
+
+
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("query", ["SELECT a, b FROM {t}", "SELECT a, typeof(b) AS tb FROM {t}"])
 def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tmp_path, kind, query):
