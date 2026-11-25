@@ -215,7 +215,6 @@ arrow-flight = { version = "59.3.3", features = ["flight-sql-experimental"] }
 arrow-pyarrow = { version = "59.3.3" }
 arrow-select = { version = "59.3.3" }
 parquet = { version = "59.3.3", features = ["arrow_canonical_extension_types"] }
-orc-rust = { version = "0.9.0", default-features = false }
 parquet-variant = { version = "59.3.3" }
 parquet-variant-compute = { version = "59.3.3" }
 parquet-variant-json = { version = "59.3.3" }
