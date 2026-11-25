@@ -7,7 +7,7 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_common::server::{ServerBuilder, ServerBuilderOptions};
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder, ServerBuilderOptions};
 use tokio::net::TcpListener;
 
 use crate::service::SailFlightSqlService;
@@ -29,6 +29,7 @@ where
         let flight_service = FlightServiceServer::new(service);
 
         ServerBuilder::new("flight_sql", ServerBuilderOptions::default())
+            .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
             .add_service(flight_service, None)
             .await
     };

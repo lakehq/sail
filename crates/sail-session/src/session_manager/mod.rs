@@ -8,13 +8,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::common::runtime::SpawnedTask;
 use datafusion::prelude::SessionContext;
-use futures::Stream;
 use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
-use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
+use sail_common::server::ServerBuilder;
 use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
@@ -86,38 +84,8 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
 
-    fn query_cancelled() -> tonic::Status {
-        tonic::Status::cancelled("query cancelled because the server is shutting down")
-    }
-
-    pub fn cancel_query_stream<T, S>(
-        &self,
-        stream: S,
-    ) -> impl Stream<Item = Result<T, tonic::Status>> + use<T, S>
-    where
-        S: Stream<Item = Result<T, tonic::Status>> + Unpin,
-    {
-        self.shutdown
-            .clone()
-            .cancel_stream(stream, || Err(Self::query_cancelled()))
-    }
-
-    /// Cancel work inside a query RPC, including execution needed to resolve its plan.
-    pub async fn run_query<T: Send + 'static>(
-        &self,
-        query: impl Future<Output = Result<T, tonic::Status>> + Send + 'static,
-    ) -> Result<T, tonic::Status> {
-        // Run query work in its own task so the RPC can observe shutdown independently.
-        let run = async move {
-            SpawnedTask::spawn(query)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("query task failed: {e}")))?
-        };
-        tokio::select! {
-            biased;
-            () = self.shutdown.cancelled() => Err(Self::query_cancelled()),
-            result = run => result,
-        }
+    pub fn query_cancellation(&self) -> &Arc<QueryCancellation> {
+        &self.shutdown
     }
 
     /// Shut down sessions as the server starts draining active requests.
@@ -134,7 +102,6 @@ impl SessionManager {
                 let _ = tx.send(());
             };
             builder
-                .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
                 .serve(listener, signal)
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
@@ -12,9 +13,9 @@ use futures::{StreamExt, stream};
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::JobService;
+use sail_common_datafusion::session::job::{JobService, QueryCancellation};
 use sail_plan::resolve_and_execute_plan;
-use sail_session::session_manager::SessionManager;
+use sail_session::shutdown;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
@@ -48,8 +49,8 @@ pub struct ExecutePlanResponseStream {
 }
 
 impl ExecutePlanResponseStream {
-    pub(crate) fn cancel_on_shutdown(mut self, sessions: &SessionManager) -> Self {
-        self.inner = Box::pin(sessions.cancel_query_stream(self.inner));
+    pub(crate) fn cancel_on_shutdown(mut self, cancellation: &Arc<QueryCancellation>) -> Self {
+        self.inner = Box::pin(shutdown::cancel_stream(cancellation, self.inner));
         self
     }
 

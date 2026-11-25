@@ -6,7 +6,7 @@ use std::sync::Arc;
 use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
 use sail_common::runtime::RuntimeHandle;
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 pub use sail_session::session_manager::{ServerSessionFactoryFn, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
@@ -63,6 +63,7 @@ where
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
         ServerBuilder::new("sail_spark_connect", Default::default())
+            .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
             .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
             .await
     };
