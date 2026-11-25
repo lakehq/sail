@@ -2,11 +2,12 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, ScalarUDF, SortExpr};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::spark_order_key::SparkOrderKey;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
@@ -112,20 +113,21 @@ impl PlanResolver<'_> {
             let sorts = sorts
                 .into_iter()
                 .map(|sort| {
-                    let data_type = sort.expr.get_type(input.schema())?;
+                    let (_, field) = sort.expr.to_field(input.schema())?;
+                    let data_type = field.data_type();
                     // Spark rejects a key it cannot order before it reads any row.
-                    if !is_orderable(&data_type) {
+                    if !is_orderable_field(&field) {
                         let service = self.ctx.extension::<PlanService>()?;
                         let data_type = service
                             .plan_formatter()
-                            .data_type_to_simple_string(&data_type)?;
+                            .field_to_simple_string(&field)?;
                         return Err(PlanError::AnalysisError(format!(
                             "[DATATYPE_MISMATCH.INVALID_ORDERING_TYPE] The `sortorder` does not support ordering on type \"{data_type}\"."
                         )));
                     }
                     // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
-                    let expr = normalize_range_floats(sort.expr.clone(), &data_type);
-                    if !SparkOrderKey::is_needed(&data_type) {
+                    let expr = normalize_range_floats(sort.expr.clone(), data_type);
+                    if !SparkOrderKey::is_needed(data_type) {
                         return Ok(sort.with_expr(expr));
                     }
                     // The sample, the split points, and the partitioning compare keys
@@ -154,6 +156,10 @@ impl PlanResolver<'_> {
 }
 
 /// Whether Spark can order values of the type, as in `RowOrdering.isOrderable`.
+fn is_orderable_field(field: &Field) -> bool {
+    !is_variant_storage_field(field) && is_orderable(field.data_type())
+}
+
 fn is_orderable(data_type: &DataType) -> bool {
     match data_type {
         DataType::Map(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) => false,
@@ -161,8 +167,8 @@ fn is_orderable(data_type: &DataType) -> bool {
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _)
         | DataType::ListView(field)
-        | DataType::LargeListView(field) => is_orderable(field.data_type()),
-        DataType::Struct(fields) => fields.iter().all(|field| is_orderable(field.data_type())),
+        | DataType::LargeListView(field) => is_orderable_field(field),
+        DataType::Struct(fields) => fields.iter().all(|field| is_orderable_field(field)),
         DataType::Dictionary(_, value) => is_orderable(value),
         _ => true,
     }

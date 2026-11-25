@@ -12,10 +12,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, AsArray, BooleanArray, RecordBatch, UInt64Array, new_empty_array,
+    ArrayRef, AsArray, BooleanArray, Float64Array, RecordBatch, UInt64Array, new_empty_array,
 };
 use datafusion::arrow::compute::kernels::sort::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Float64Type, Schema, SchemaRef, UInt64Type};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -258,31 +258,152 @@ impl ExecutionPlan for RangeSplitPointsExec {
     }
 }
 
+/// Reduces the first sample to one (partition, fraction) row per imbalanced
+/// partition before the result is broadcast to the resampling tasks.
+#[derive(Debug, Clone)]
+pub struct RangeResampleDecisionExec {
+    sample: Arc<dyn ExecutionPlan>,
+    options: RangeSampleOptions,
+    properties: Arc<PlanProperties>,
+}
+
+fn resample_decision_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("partition", DataType::UInt64, false),
+        Field::new("fraction", DataType::Float64, false),
+    ]))
+}
+
+impl RangeResampleDecisionExec {
+    pub fn try_new(sample: Arc<dyn ExecutionPlan>, options: RangeSampleOptions) -> Result<Self> {
+        options.check_sample(&sample)?;
+        if sample.output_partitioning().partition_count() != 1 {
+            return internal_err!("range resampling decisions require a single sample partition");
+        }
+        let properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(resample_decision_schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        Ok(Self {
+            sample,
+            options,
+            properties,
+        })
+    }
+
+    pub fn sample(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.sample
+    }
+
+    pub fn options(&self) -> &RangeSampleOptions {
+        &self.options
+    }
+}
+
+impl DisplayAs for RangeResampleDecisionExec {
+    fn fmt_as(&self, _: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "RangeResampleDecisionExec")
+    }
+}
+
+impl ExecutionPlan for RangeResampleDecisionExec {
+    fn name(&self) -> &'static str {
+        "RangeResampleDecisionExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.sample]
+    }
+
+    fn apply_expressions(
+        &self,
+        _: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let [sample] = children.as_slice() else {
+            return internal_err!("{} requires one child", self.name());
+        };
+        Ok(Arc::new(Self::try_new(
+            Arc::clone(sample),
+            self.options.clone(),
+        )?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let sample = self.sample.execute(partition, Arc::clone(&context))?;
+        let schema = self.schema();
+        let options = self.options.clone();
+        let stream = futures::stream::once(async move {
+            let (fraction, partitions) = options.imbalance(sample, context.memory_pool()).await?;
+            let fractions = Float64Array::from_value(fraction, partitions.len());
+            let partitions =
+                UInt64Array::from_iter_values(partitions.into_iter().map(|id| id as u64));
+            Ok(RecordBatch::try_new(
+                schema,
+                vec![Arc::new(partitions), Arc::new(fractions)],
+            )?)
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
+    }
+}
+
 /// Samples again the imbalanced partitions of the first sample of a range
 /// repartitioning, like [`crate::range_sample::RangePartitionResampleExec`], for a job
 /// that cannot plan the resample after the first sample.
 ///
-/// The first child computes the range keys again, and the second child is the whole
-/// output of the first sample in one partition. Each task picks the imbalanced
-/// partitions from the first sample, which gives the same partitions in every task.
+/// The first child computes the range keys again. The second broadcasts the
+/// decisions from RangeResampleDecisionExec.
 /// If no partition is imbalanced, no task reads the keys.
 #[derive(Debug, Clone)]
 pub struct RangeResampleExec {
     input: Arc<dyn ExecutionPlan>,
-    sample: Arc<dyn ExecutionPlan>,
-    options: RangeSampleOptions,
+    decisions: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
 }
 
 impl RangeResampleExec {
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
-        sample: Arc<dyn ExecutionPlan>,
-        options: RangeSampleOptions,
+        decisions: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        options.check_sample(&sample)?;
-        if sample.output_partitioning().partition_count() != 1 {
-            return internal_err!("a range resample needs the first sample in one partition");
+        if decisions.schema() != resample_decision_schema()
+            || decisions.output_partitioning().partition_count() != 1
+        {
+            return internal_err!(
+                "a range resample requires a single partition of resampling decisions"
+            );
         }
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(input.schema()),
@@ -292,8 +413,7 @@ impl RangeResampleExec {
         ));
         Ok(Self {
             input,
-            sample,
-            options,
+            decisions,
             properties,
         })
     }
@@ -302,12 +422,8 @@ impl RangeResampleExec {
         &self.input
     }
 
-    pub fn sample(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.sample
-    }
-
-    pub fn options(&self) -> &RangeSampleOptions {
-        &self.options
+    pub fn decisions(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.decisions
     }
 }
 
@@ -327,7 +443,7 @@ impl ExecutionPlan for RangeResampleExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input, &self.sample]
+        vec![&self.input, &self.decisions]
     }
 
     fn apply_expressions(
@@ -354,13 +470,12 @@ impl ExecutionPlan for RangeResampleExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let [input, sample] = children.as_slice() else {
+        let [input, decisions] = children.as_slice() else {
             return internal_err!("{} requires exactly two children", self.name());
         };
         Ok(Arc::new(Self::try_new(
             Arc::clone(input),
-            Arc::clone(sample),
-            self.options.clone(),
+            Arc::clone(decisions),
         )?))
     }
 
@@ -370,13 +485,20 @@ impl ExecutionPlan for RangeResampleExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = Arc::clone(&self.input);
-        let sample = Arc::clone(&self.sample);
-        let options = self.options.clone();
+        let decisions = self.decisions.execute(0, Arc::clone(&context))?;
         let schema = self.schema();
         let output = futures::stream::once(async move {
-            let sample = execute_stream(sample, Arc::clone(&context))?;
-            let (fraction, imbalanced) = options.imbalance(sample, context.memory_pool()).await?;
-            if imbalanced.is_empty() {
+            let mut decisions = decisions;
+            let mut has_imbalance = false;
+            let mut fraction = None;
+            while let Some(batch) = decisions.try_next().await? {
+                has_imbalance |= batch.num_rows() > 0;
+                let ids = batch.column(0).as_primitive::<UInt64Type>();
+                if let Ok(index) = ids.values().binary_search(&(partition as u64)) {
+                    fraction = Some(batch.column(1).as_primitive::<Float64Type>().value(index));
+                }
+            }
+            if !has_imbalance {
                 let empty: SendableRecordBatchStream =
                     Box::pin(EmptyRecordBatchStream::new(input.schema()));
                 return Ok::<_, DataFusionError>(empty);
@@ -385,7 +507,6 @@ impl ExecutionPlan for RangeResampleExec {
                 input.execute(partition, context)?,
                 partition,
                 fraction,
-                imbalanced.contains(&partition),
             ))
         })
         .try_flatten();
@@ -795,8 +916,13 @@ mod tests {
 
         let resample = RangeResampleExec::try_new(
             input(),
-            Arc::new(CoalescePartitionsExec::new(sample())),
-            options.clone(),
+            Arc::new(
+                RangeResampleDecisionExec::try_new(
+                    Arc::new(CoalescePartitionsExec::new(sample())),
+                    options.clone(),
+                )
+                .unwrap(),
+            ),
         )
         .unwrap();
         let exec = RangeSplitPointsExec::try_new(sample(), Arc::new(resample), options).unwrap();
@@ -850,8 +976,13 @@ mod tests {
         // The keys fail if they are read.
         let resample = RangeResampleExec::try_new(
             Arc::new(ErrorExec::new()),
-            Arc::new(CoalescePartitionsExec::new(sample)),
-            options,
+            Arc::new(
+                RangeResampleDecisionExec::try_new(
+                    Arc::new(CoalescePartitionsExec::new(sample)),
+                    options,
+                )
+                .unwrap(),
+            ),
         )
         .unwrap();
         let ctx = SessionContext::new();

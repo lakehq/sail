@@ -45,7 +45,9 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
-use sail_physical_plan::range_split::{RangeChannelExec, RangeResampleExec, RangeSplitPointsExec};
+use sail_physical_plan::range_split::{
+    RangeChannelExec, RangeResampleDecisionExec, RangeResampleExec, RangeSplitPointsExec,
+};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
@@ -102,8 +104,8 @@ impl JobGraph {
 /// scalar subqueries of the input, which are computed once for the sample and the
 /// shuffle.
 ///
-/// The first sample is read twice: by the resample, each task of which picks the
-/// imbalanced partitions from the whole first sample, and by the split points. So it
+/// The first sample is read twice: to select the imbalanced partitions once,
+/// and to pick the split points. So it
 /// is a shared CTE, which the job computes once.
 ///
 /// The sample of a range repartitioning computes its input again, so it has copies of
@@ -183,7 +185,8 @@ impl RangeProducers {
         let keys = self.plan(reset_plan_states(Arc::clone(sample.resample_input()))?)?;
         let first_sample = self.share("range_sample", first_sample);
         let first_sample = || Arc::new(CoalescePartitionsExec::new(Arc::clone(&first_sample)));
-        let resample = RangeResampleExec::try_new(keys, first_sample(), options.clone())?;
+        let decisions = RangeResampleDecisionExec::try_new(first_sample(), options.clone())?;
+        let resample = RangeResampleExec::try_new(keys, Arc::new(decisions))?;
         let split_points = RangeSplitPointsExec::try_new(
             first_sample(),
             Arc::new(CoalescePartitionsExec::new(Arc::new(resample))),
@@ -774,7 +777,7 @@ fn plan_job_graph_stages(
         ]
     } else if plan.is::<RangeChannelExec>() || plan.is::<RangeResampleExec>() {
         // Every task reads all of the second child, which is computed once: the split
-        // points of the shuffle, or the first sample of the resample.
+        // points of the shuffle, or the resampling decisions.
         let (input, read_in_full) = plan.children().two()?;
         let read_in_full = if plan.is::<RangeChannelExec>() {
             create_split_points_input(read_in_full)?
@@ -3095,7 +3098,29 @@ mod tests {
                 stage("RangeSplitPointsExec"),
                 stage("RangeChannelExec"),
             );
-            assert!(sample < resample && resample < split_points && split_points < shuffle);
+            let decision = stage("RangeResampleDecisionExec");
+            assert!(
+                sample < decision
+                    && decision < resample
+                    && resample < split_points
+                    && split_points < shuffle
+            );
+            let decision_plan = &graph.stages()[decision].plan;
+            assert_eq!(decision_plan.output_partitioning().partition_count(), 1);
+            // A blocking backend materializes the broadcast and forwards it to the resample.
+            let only_input = |stage: usize| {
+                let inputs = &graph.stages()[stage].inputs;
+                assert_eq!(inputs.len(), 1, "expected one input in\n{graph}");
+                &inputs[0]
+            };
+            let input = only_input(resample);
+            let source = if matches!(input.mode, InputMode::Forward) {
+                only_input(input.stage)
+            } else {
+                input
+            };
+            assert_eq!(source.stage, decision);
+            assert!(matches!(source.mode, InputMode::Broadcast));
             // The first sample is computed once for the resample and the split points.
             assert_eq!(reader_modes(&graph, sample).len(), 2, "in\n{graph}");
             // Every task of the shuffle reads all the split points, which are picked once.

@@ -894,3 +894,19 @@ def test_repartition_rejects_attribute_removed_before_view(spark, repartition_so
             spark.table("repartition_view").repartition("b").collect()
     finally:
         spark.catalog.dropTempView("repartition_view")
+
+
+@pytest.mark.spark(version=">=4.0")
+@pytest.mark.parametrize(
+    ("key", "type_name"),
+    [
+        ("parse_json(CAST(id AS STRING))", "variant"),
+        ("array(parse_json(CAST(id AS STRING)))", "array<variant>"),
+        ("named_struct('v', parse_json(CAST(id AS STRING)))", "struct<v:variant>"),
+    ],
+)
+def test_range_repartition_rejects_variant(spark, key, type_name):
+    source = spark.range(12).selectExpr(f"{key} AS k")
+    with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.INVALID_ORDERING_TYPE") as exc:
+        source.repartitionByRange(3, "k").selectExpr("spark_partition_id()").collect()
+    assert type_name in str(exc.value).lower().replace(" not null", "").replace(": ", ":")

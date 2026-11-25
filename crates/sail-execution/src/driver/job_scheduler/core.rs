@@ -85,14 +85,7 @@ impl JobScheduler {
                     job_id: u64::from(job_id),
                     stage: s as u64,
                     partitions: stage.plan.output_partitioning().partition_count() as u64,
-                    inputs: stage
-                        .inputs
-                        .iter()
-                        .map(|input| sail_system_store::types::StageInput {
-                            stage: input.stage as u64,
-                            mode: input.mode.to_string(),
-                        })
-                        .collect(),
+                    inputs: stage.inputs.iter().map(Into::into).collect(),
                     group: stage.group.clone(),
                     mode: stage.mode.to_string(),
                     distribution: stage.distribution.to_string(),
@@ -300,14 +293,28 @@ impl JobScheduler {
         {
             return vec![];
         }
-        let Err(error) =
-            partitions.and_then(|partitions| job.resolve_range_shuffle(shuffle, partitions))
-        else {
-            debug!(
-                "job {job_id} job graph after range shuffle {shuffle}\n{}",
-                job.graph
-            );
-            return vec![];
+        let error = match partitions
+            .and_then(|partitions| job.resolve_range_shuffle(shuffle, partitions))
+        {
+            Err(error) => error,
+            Ok(changed) => {
+                for s in changed {
+                    let stage = &job.graph.stages()[s];
+                    self.event_reporter.report(SystemEvent::StageResized {
+                        session_id: self.options.session_id.clone(),
+                        job_id: u64::from(job_id),
+                        stage: s as u64,
+                        partitions: stage.plan.output_partitioning().partition_count() as u64,
+                        inputs: stage.inputs.iter().map(Into::into).collect(),
+                        distribution: stage.distribution.to_string(),
+                    });
+                }
+                debug!(
+                    "job {job_id} job graph after range shuffle {shuffle}\n{}",
+                    job.graph
+                );
+                return vec![];
+            }
         };
         let mut actions = vec![];
         if let JobState::Running { output, .. } = &job.state {
