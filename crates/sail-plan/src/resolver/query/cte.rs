@@ -23,6 +23,7 @@ use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 
+use super::temp_view::executable_plan;
 use crate::error::PlanResult;
 use crate::plan_with_shared_ctes;
 use crate::resolver::PlanResolver;
@@ -372,7 +373,7 @@ impl PlanResolver<'_> {
         // Keep auxiliary execution out of the recursive resolver futures, including
         // the ordinary planning path used when there are no shared references.
         Box::pin(async move {
-            let plan = inline_deterministic_references(plan)?;
+            let plan = executable_plan(inline_deterministic_references(plan)?)?;
             if !contains_reference(&plan)? {
                 return Ok(self.ctx.execute_logical_plan(plan).await?.collect().await?);
             }

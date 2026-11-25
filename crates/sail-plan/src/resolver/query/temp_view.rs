@@ -1462,6 +1462,44 @@ impl TableSource for ViewDefinitionSource {
     }
 }
 
+/// Returns the plan with the source that each [`ViewDefinitionSource`] wraps in its place,
+/// for a plan that the resolver executes while the definition of a temporary view is
+/// resolved, such as the plan that finds the values of a pivot.
+pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    let mut found = false;
+    visit_scans(&plan, &mut |scan| {
+        found |= scan.source.downcast_ref::<ViewDefinitionSource>().is_some();
+        Ok(())
+    })?;
+    if !found {
+        return Ok(plan);
+    }
+    let mut index = 0;
+    let plan = renew_cte_definitions_with_scans(
+        plan,
+        &mut || {
+            index += 1;
+            index - 1
+        },
+        &mut |_| {},
+        &mut |scan| {
+            let Some(source) = scan.source.downcast_ref::<ViewDefinitionSource>() else {
+                return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+            };
+            let scan = TableScanBuilder::new(scan.table_name, Arc::clone(&source.inner))
+                .with_projection(scan.projection)
+                .with_filters(scan.filters)
+                .with_fetch(scan.fetch)
+                .build()?;
+            Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
+        },
+        // The scans have the nullability of the tables, which the plan above them was
+        // resolved without.
+        true,
+    )?;
+    Ok(plan)
+}
+
 pub(in crate::resolver) fn view_definition_source(
     source: Arc<dyn TableSource>,
 ) -> Arc<dyn TableSource> {

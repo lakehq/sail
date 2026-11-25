@@ -739,6 +739,41 @@ def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, tmp_p
         table.drop()
 
 
+# DataFrames whose definitions run a query to find their columns, over a table `(id, s)` with the
+# rows (1, 'a'), (2, 'b'): the DataFrame, and its rows before and after the row (1, 'b') is added.
+QUERYING_FRAMES = {
+    "pivot without values": (
+        lambda frame: frame.groupBy("s").pivot("id").count(),
+        [("a", 1, None), ("b", None, 1)],
+        [("a", 1, None), ("b", 1, 1)],
+    ),
+    "crosstab": (
+        lambda frame: frame.crosstab("s", "id"),
+        [("a", 1, 0), ("b", 0, 1)],
+        [("a", 1, 0), ("b", 1, 1)],
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["dv", "dgv"])
+@pytest.mark.parametrize("case", QUERYING_FRAMES)
+def test_data_frame_view_whose_definition_runs_a_query_reads_the_current_rows(spark, tmp_path, kind, case):
+    query, before, after = QUERYING_FRAMES[case]
+    table = Table(spark, tmp_path, "delta", "id BIGINT, s STRING")
+    try:
+        table.insert("(1, 'a'), (2, 'b')")
+        frame = query(spark.table(table.name))
+        view = create_view(spark, kind, None, frame)
+        table.views.append(view)
+        # The columns of the values are in no particular order.
+        sql = f"SELECT `{frame.columns[0]}`, `1`, `2` FROM {view}"
+        assert rows(spark, sql) == before
+        table.insert("(1, 'b')")
+        assert rows(spark, sql) == after
+    finally:
+        table.drop()
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_table_whose_unread_column_was_retyped_by_a_write(spark, tmp_path, kind):
     table = Table(spark, tmp_path, "delta", "id INT, extra INT")
