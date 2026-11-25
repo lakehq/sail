@@ -436,10 +436,31 @@ def test_import_hive_file_table(spark, jvm_spark, database, procedure, file_form
         else:
             target = src
             args = f"table => '{src}', backup_table_name => 'original'"
-        assert tuple(spark.sql(f"CALL sail.system.{procedure}({args})").first()) == (1,)
+        call = f"CALL sail.system.{procedure}({args})"
+        if file_format == "orc":
+            with pytest.raises(PySparkException, match="Unsupported migration source format: orc"):
+                spark.sql(call).collect()
+            assert tuple(jvm_spark.table(src).first()) == (42, "a")
+            assert not spark.catalog.tableExists(snapshot)
+            assert not spark.catalog.tableExists(backup)
+            return
+        assert tuple(spark.sql(call).first()) == (1,)
         assert tuple(spark.table(target).first()) == (42, "a")
         assert tuple(jvm_spark.table(f"iceberg.{target}").first()) == (42, "a")
         assert tuple(jvm_spark.table(src if procedure == "snapshot" else backup).first()) == (42, "a")
     finally:
         for name in [snapshot, src, backup]:
             spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_migrate_bucketed_hive_table(spark, jvm_spark, database):
+    src = f"{database}.bucketed_source"
+    jvm_spark.sql(f"CREATE TABLE {src} (id BIGINT, data STRING) CLUSTERED BY (id) INTO 4 BUCKETS STORED AS parquet")
+    try:
+        jvm_spark.sql(f"INSERT INTO {src} VALUES (1, 'a')")  # noqa: S608
+        with pytest.raises(PySparkException, match=r"bucketed source table: 4 buckets, bucket columns: \[id\]"):
+            spark.sql(f"CALL sail.system.migrate('{src}')").collect()
+        assert tuple(jvm_spark.table(src).first()) == (1, "a")
+        assert not spark.catalog.tableExists(f"{src}_BACKUP_")
+    finally:
+        jvm_spark.sql(f"DROP TABLE IF EXISTS {src}")

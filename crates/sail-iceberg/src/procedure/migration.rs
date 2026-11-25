@@ -16,7 +16,7 @@ use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableKind, Tabl
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureCall;
 
-use super::add_files::{AddFiles, ImportOutput};
+use super::add_files::{AddFiles, ImportOutput, supports_import_format};
 use super::arguments::{
     optional_bool, optional_i32, optional_string, optional_string_map, required_string,
 };
@@ -86,14 +86,15 @@ pub(crate) async fn execute(
     else {
         return plan_err!("Migration source must be a stored file table");
     };
-    if !matches!(
-        format.to_ascii_lowercase().as_str(),
-        "parquet" | "avro" | "orc"
-    ) {
+    if !supports_import_format(format) {
         return plan_err!("Unsupported migration source format: {format}");
     }
-    if bucket_by.is_some() {
-        return plan_err!("Cannot migrate a bucketed table");
+    if let Some(bucket) = bucket_by {
+        return plan_err!(
+            "Cannot create an Iceberg table from a bucketed source table: {} buckets, bucket columns: [{}]",
+            bucket.num_buckets,
+            bucket.columns.join(", ")
+        );
     }
     let mut properties = properties.iter().cloned().collect::<BTreeMap<_, _>>();
     for key in [
@@ -129,6 +130,9 @@ pub(crate) async fn execute(
         .map(sail_data_source::resolve_table_url)
         .transpose()?;
     let source_url = sail_data_source::resolve_table_url(source_location.clone())?;
+    // Spark file-table schemas place partition columns after the data columns, in spec order.
+    let mut columns = columns.iter().collect::<Vec<_>>();
+    columns.sort_by_cached_key(|column| partition_by.iter().position(|p| p.column == column.name));
     let iceberg_schema = SchemaEvolver::assign_schema_field_ids(&arrow_schema_to_iceberg(
         &Schema::new(columns.iter().map(|c| c.field()).collect::<Vec<_>>()),
     )?)?;

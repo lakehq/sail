@@ -457,6 +457,12 @@ impl PlanResolver<'_> {
             if matches!(parameter.name.as_str(), "source_table" | "table")
                 && let LakeProcedureValue::Utf8(name) = value
             {
+                if name.is_empty() {
+                    return Err(PlanError::invalid(format!(
+                        "Cannot handle an empty identifier for argument {}",
+                        parameter.name
+                    )));
+                }
                 let parsed = sail_sql_analyzer::expression::from_ast_object_name(
                     sail_sql_analyzer::parser::parse_object_name(name)?,
                 )?;
@@ -518,11 +524,21 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LakeProcedureValue> {
         let schema = Arc::new(DFSchema::empty());
-        if data_type == LakeProcedureDataType::Boolean {
+        if matches!(
+            data_type,
+            LakeProcedureDataType::Boolean | LakeProcedureDataType::Utf8
+        ) {
             let expression = self
                 .resolve_expression(argument.clone(), &schema, state)
                 .await?;
-            validate_procedure_boolean_argument_type(&expression.get_type(&schema)?)?;
+            let source = expression.get_type(&schema)?;
+            if data_type == LakeProcedureDataType::Boolean {
+                validate_procedure_boolean_argument_type(&source)?;
+            } else if source.is_nested() {
+                return Err(PlanError::invalid(format!(
+                    "Procedure argument cannot be implicitly cast from {source} to String"
+                )));
+            }
         }
         if data_type == LakeProcedureDataType::Int64Array {
             let expression = self

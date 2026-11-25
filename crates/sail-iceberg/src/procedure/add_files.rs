@@ -20,6 +20,10 @@ use crate::spec::*;
 use crate::table::files::{ManifestScope, SnapshotScope, collect_live_files, scan_manifests};
 use crate::table::metadata_loader::table_metadata_location;
 
+pub(super) fn supports_import_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("parquet") || format.eq_ignore_ascii_case("avro")
+}
+
 pub(crate) enum ImportOutput {
     AddFiles(SchemaRef),
     FileCount(SchemaRef),
@@ -131,7 +135,7 @@ impl AddFiles {
                 }
             }
         };
-        if !["parquet", "avro"].contains(&format.as_str()) {
+        if !supports_import_format(&format) {
             return plan_err!("Unsupported add_files source format: {format}");
         }
         let catalog_source = declared_parts.is_some();
@@ -204,7 +208,7 @@ impl AddFiles {
         let mut candidates = vec![];
         let mut inferred_names = declared_parts;
         for (location, format, registered_partition) in sources {
-            if !["parquet", "avro"].contains(&format.as_str()) {
+            if !supports_import_format(&format) {
                 return plan_err!("Unsupported add_files partition format: {format}");
             }
             let source_url = if catalog_source {
@@ -613,7 +617,14 @@ async fn prepare_append(
             metadata.format_version,
             ManifestContentType::Data,
         );
-        let mut writer = ManifestWriter::new(Some(snapshot_id), None, header);
+        // Spark imports partition manifests directly when snapshot IDs can be inherited.
+        let entry_snapshot_id =
+            if !spec.is_unpartitioned() && metadata.format_version >= FormatVersion::V2 {
+                None
+            } else {
+                Some(snapshot_id)
+            };
+        let mut writer = ManifestWriter::new(entry_snapshot_id, None, header);
         for file in files {
             writer.add(file);
         }
