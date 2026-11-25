@@ -84,7 +84,30 @@ pub(crate) fn table_to_status(
         .as_ref()
         .ok_or_else(|| CatalogError::External("Table is missing a name".to_string()))?
         .to_string();
-    let properties = filter_spark_properties(map_to_vec(table.parameters.as_ref()));
+    let mut properties = filter_spark_properties(map_to_vec(table.parameters.as_ref()));
+    // Spark persists file-source OPTIONS in the storage descriptor's SerDe parameters.
+    if let Some(parameters) = table
+        .sd
+        .as_ref()
+        .and_then(|sd| sd.serde_info.as_ref())
+        .and_then(|serde| serde.parameters.as_ref())
+    {
+        for (key, value) in parameters {
+            if matches!(
+                key.to_ascii_lowercase().as_str(),
+                "pathglobfilter" | "path_glob_filter" | "recursivefilelookup"
+            ) {
+                let option = format!("option.{key}");
+                if !properties
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case(&option))
+                {
+                    properties.push((option, value.clone()));
+                }
+            }
+        }
+        properties.sort();
+    }
     let comment = extract_property(table.parameters.as_ref(), COMMENT_KEY);
     let storage = table.sd.as_ref();
     let partition_columns = table

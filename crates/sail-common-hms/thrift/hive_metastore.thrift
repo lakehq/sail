@@ -295,6 +295,8 @@ struct Table {
   14: optional bool temporary=false,
   15: optional bool rewriteEnabled,     // rewrite enabled or not
   16: optional string catName
+  // Sail pins the Hive 2.3.10 IDL and includes this optional field from Hive 4.0.0.
+  25: optional i64 id, // read-only persistent table ID
 }
 
 struct Partition {

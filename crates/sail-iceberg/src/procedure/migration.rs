@@ -96,6 +96,24 @@ pub(crate) async fn execute(
             bucket.columns.join(", ")
         );
     }
+    if columns.is_empty() {
+        return plan_err!("Migration requires an explicit source schema");
+    }
+    for (key, value) in properties {
+        let key = key.to_ascii_lowercase();
+        if key == "transactional" && value.eq_ignore_ascii_case("true") {
+            return plan_err!("Cannot import a transactional source table");
+        }
+        match key.as_str() {
+            "option.pathglobfilter" | "option.path_glob_filter" if !value.is_empty() => {
+                return plan_err!("Migration does not support source option {key}");
+            }
+            "option.recursivefilelookup" if !value.eq_ignore_ascii_case("false") => {
+                return plan_err!("Migration does not support source option {key}");
+            }
+            _ => {}
+        }
+    }
     let mut properties = properties.iter().cloned().collect::<BTreeMap<_, _>>();
     for key in [
         "path",

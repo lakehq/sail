@@ -352,6 +352,13 @@ impl AddFiles {
         if !catalog_source && !spec.is_unpartitioned() && candidates.is_empty() {
             return plan_err!("Cannot find any matching partitions in table");
         }
+        let expected = if matches!(output_schema, ImportOutput::FileCount(_)) {
+            let arrow = crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?;
+            Some(parquet::arrow::ArrowSchemaConverter::new().convert(&arrow)?)
+        } else {
+            None
+        };
+        let expected = expected.as_ref().map(|schema| schema.root_schema());
         let files = futures::stream::iter(
             candidates
                 .into_iter()
@@ -379,21 +386,26 @@ impl AddFiles {
                                     .map_err(DataFusionError::Plan)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let (file_format, record_count) =
-                            match import_record_count(source_store.clone(), &object, &format).await
+                        let (file_format, record_count) = match import_record_count(
+                            source_store.clone(),
+                            &object,
+                            &format,
+                            expected,
+                        )
+                        .await
+                        {
+                            Ok(metrics) => metrics,
+                            Err(_)
+                                if self.ignore_missing_files
+                                    && matches!(
+                                        source_store.head(&object.location).await,
+                                        Err(object_store::Error::NotFound { .. })
+                                    ) =>
                             {
-                                Ok(metrics) => metrics,
-                                Err(_)
-                                    if self.ignore_missing_files
-                                        && matches!(
-                                            source_store.head(&object.location).await,
-                                            Err(object_store::Error::NotFound { .. })
-                                        ) =>
-                                {
-                                    return Ok(None);
-                                }
-                                Err(error) => return Err(error),
-                            };
+                                return Ok(None);
+                            }
+                            Err(error) => return Err(error),
+                        };
                         let file_path = format!(
                             "{}/{}",
                             &source_url[..url::Position::BeforePath],
@@ -497,16 +509,56 @@ fn validate_source_store(source_url: &url::Url, table_url: &url::Url) -> Result<
     Ok(())
 }
 
+// Files without IDs use the table's name mapping. Once IDs are present, check every
+// physical field against the same named field in the target, including nested groups.
+fn has_field_ids(field: &parquet::schema::types::Type) -> bool {
+    field.get_basic_info().has_id()
+        || (field.is_group() && field.get_fields().iter().any(|child| has_field_ids(child)))
+}
+
+fn validate_field_ids(
+    field: &parquet::schema::types::Type,
+    expected: Option<&parquet::schema::types::Type>,
+    path: &object_store::path::Path,
+) -> Result<()> {
+    let id = |field: &parquet::schema::types::Type| {
+        let info = field.get_basic_info();
+        info.has_id().then(|| info.id())
+    };
+    if id(field) != expected.and_then(id) {
+        return plan_err!(
+            "Incompatible Parquet field ID for {} in {path}",
+            field.name()
+        );
+    }
+    if field.is_group() {
+        for child in field.get_fields() {
+            let target = expected
+                .filter(|f| f.is_group())
+                .and_then(|f| f.get_fields().iter().find(|e| e.name() == child.name()));
+            validate_field_ids(child, target.map(AsRef::as_ref), path)?;
+        }
+    }
+    Ok(())
+}
+
 async fn import_record_count(
     store: Arc<dyn object_store::ObjectStore>,
     object: &object_store::ObjectMeta,
     format: &str,
+    expected: Option<&parquet::schema::types::Type>,
 ) -> Result<(DataFileFormat, u64)> {
     let mut reader = object_store::buffered::BufReader::new(store, object);
     match format {
         "parquet" => {
             use parquet::arrow::async_reader::AsyncFileReader;
             let metadata = reader.get_metadata(None).await?;
+            if let Some(expected) = expected {
+                let actual = metadata.file_metadata().schema_descr().root_schema();
+                if has_field_ids(actual) {
+                    validate_field_ids(actual, Some(expected), &object.location)?;
+                }
+            }
             let rows = u64::try_from(metadata.file_metadata().num_rows())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok((DataFileFormat::Parquet, rows))
@@ -830,7 +882,7 @@ mod tests {
             inner.put(&path, bytes.into()).await?;
             let meta = inner.head(&path).await?;
             let store = Arc::new(TestStore::new(inner));
-            let (_, rows) = import_record_count(store.clone(), &meta, format).await?;
+            let (_, rows) = import_record_count(store.clone(), &meta, format, None).await?;
             assert_eq!(rows, batch.num_rows() as u64);
             if format == "avro" {
                 assert!(store.largest_read.load(Ordering::Relaxed) <= DEFAULT_BUFFER_SIZE);

@@ -94,10 +94,10 @@ pub(super) async fn import(ctx: &TaskContext, mut request: Import) -> Result<Rec
                     Err(CatalogError::NotFound(_, _))
                 ) && let Err(restore) = manager.rename_table(&source, &request.destination).await
                 {
-                    return Err(DataFusionError::Execution(format!(
-                        "Migration failed ({error}); could not restore {}: {restore}",
+                    return Err(catalog_error(CatalogError::CommitStateUnknown(format!(
+                        "Migration failed ({error}); could not confirm restoration of {}: {restore}",
                         source.join(".")
-                    )));
+                    ).into())));
                 }
             }
         }
@@ -140,11 +140,7 @@ async fn register(
         0,
         MetadataFileStyle::Unique,
     )?;
-    let mut cleanup = stage_manifests(&store, &prepared.manifests).await?;
-    if publication.write(&store).await? == MetadataWriteOutcome::Conflict {
-        return plan_err!("Import metadata file already exists");
-    }
-    cleanup.register(publication.path().clone());
+    let mut cleanup = stage_import_metadata(&store, &publication, &prepared.manifests).await?;
     let mut options = request.options.clone();
     options.properties = request
         .metadata
@@ -156,7 +152,6 @@ async fn register(
         ICEBERG_METADATA_LOCATION_UNDERSCORE_KEY.into(),
         publication.location().to_owned(),
     ));
-    cleanup.publication_started();
     let created = manager.create_table(&request.destination, options).await;
     let registered = match created {
         Ok(status) => status,
@@ -193,4 +188,72 @@ async fn register(
         return plan_err!("Destination changed during import registration");
     }
     Ok(batch)
+}
+
+async fn stage_import_metadata(
+    store: &StoreContext,
+    publication: &MetadataFileCommit,
+    manifests: &[(String, Vec<u8>)],
+) -> Result<crate::operations::snapshot::CreatedPathCleanup> {
+    let mut cleanup = stage_manifests(store, manifests).await?;
+    cleanup.publication_started();
+    match publication.write(store).await {
+        Ok(MetadataWriteOutcome::Written) => {}
+        Ok(MetadataWriteOutcome::Conflict) => {
+            cleanup.cleanup().await;
+            return plan_err!("Import metadata file already exists");
+        }
+        Err(error) => {
+            return Err(catalog_error(CatalogError::CommitStateUnknown(
+                format!(
+                    "Could not confirm metadata write at {}: {error}",
+                    publication.location()
+                )
+                .into(),
+            )));
+        }
+    }
+    cleanup.register(publication.path().clone());
+    Ok(cleanup)
+}
+
+#[cfg(test)]
+mod tests {
+    use object_store::ObjectStoreExt;
+
+    use super::*;
+    use crate::io::test_store::{PutFault, TestStore};
+
+    #[tokio::test]
+    async fn uncertain_metadata_put_preserves_staged_manifests() -> Result<()> {
+        let url = url::Url::parse("memory://bucket/table/")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut fault = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+        fault.fault = Some((".metadata.json".into(), PutFault::LostAckUnreadable));
+        let fault = Arc::new(fault);
+        let store = StoreContext::new(fault.clone(), &url)?;
+        let schema = crate::spec::Schema::builder()
+            .build()
+            .map_err(DataFusionError::Execution)?;
+        let metadata = empty_table_metadata(
+            &url,
+            schema,
+            crate::spec::PartitionSpec::unpartitioned_spec(),
+            &[],
+        )?;
+        let publication =
+            MetadataFileCommit::prepare(&url, &metadata, 0, MetadataFileStyle::Unique)?;
+        let manifest = "metadata/test.avro";
+        let Err(error) =
+            stage_import_metadata(&store, &publication, &[(manifest.into(), vec![1])]).await
+        else {
+            return datafusion_common::exec_err!("Expected a lost acknowledgement");
+        };
+        assert!(is_unknown_commit(&error));
+        tokio::task::yield_now().await;
+        let durable = StoreContext::new(fault.inner.clone(), &url)?;
+        durable.prefixed.head(publication.path()).await?;
+        durable.prefixed.head(&manifest.into()).await?;
+        Ok(())
+    }
 }

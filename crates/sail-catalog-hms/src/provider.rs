@@ -1322,25 +1322,31 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
         let target_db = validate_namespace(destination_database)?;
-        self.with_failover(|client| {
-            let db_name = db_name.clone();
-            let target_db = target_db.clone();
-            let table = table.to_string();
-            let target_table = destination_table.to_string();
-            async move {
-                let mut metadata = Self::get_table_with_client(
-                    &client,
-                    &db_name,
-                    &table,
-                    "Failed to fetch HMS table for rename",
-                )
-                .await?;
-                metadata.db_name = Some(target_db);
-                metadata.table_name = Some(target_table);
-                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+        let mut metadata = self.fetch_hms_table(database, table).await?;
+        let table_id = metadata.id;
+        metadata.db_name = Some(target_db);
+        metadata.table_name = Some(destination_table.to_string());
+        // Replaying ALTER after losing its acknowledgement can rename a different table
+        // that has since acquired the old name. Retry only the readback.
+        let (_, client) = self.current_client().await?;
+        match Self::alter_table_with_client(&client, &db_name, table, metadata).await {
+            Err(error) if Self::should_retry(&error) => {
+                let original = self.fetch_hms_table(database, table).await;
+                let renamed = self
+                    .fetch_hms_table(destination_database, destination_table)
+                    .await;
+                if matches!(original, Err(CatalogError::NotFound(_, _)))
+                    && let Ok(renamed) = renamed
+                    && table_id.is_some_and(|id| id > 0 && renamed.id == Some(id))
+                {
+                    return Ok(());
+                }
+                Err(CatalogError::CommitStateUnknown(format!(
+                    "Could not confirm HMS rename of {db_name}.{table} to {destination_table}: {error}"
+                ).into()))
             }
-        })
-        .await
+            result => result,
+        }
     }
 
     async fn alter_table(

@@ -246,3 +246,76 @@ def test_migrate_empty_partitioned(spark, tmp_path):
         assert not spark.catalog.tableExists("src_BACKUP_")
     finally:
         spark.sql("DROP TABLE IF EXISTS src")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("transactional", "transactional source"),
+        ("inferred", "explicit source schema"),
+        ("glob", "pathglobfilter"),
+        ("recursive", "recursivefilelookup"),
+        ("swapped_ids", "Parquet field ID"),
+        ("nested_ids", "Parquet field ID"),
+        ("matching_ids", None),
+    ],
+)
+def test_source_import_safety(spark, tmp_path, procedure, case, error):
+    source = tmp_path / "src"
+    source.mkdir()
+    columns = "" if case == "inferred" else "(a BIGINT, b BIGINT)"
+    if case == "nested_ids":
+        columns = "(a STRUCT<x: BIGINT>, b BIGINT)"
+    options = {"glob": "OPTIONS (pathGlobFilter 'keep*')", "recursive": "OPTIONS (recursiveFileLookup 'true')"}
+    properties = (
+        "TBLPROPERTIES ('transactional'='true', 'transactional_properties'='insert_only')"
+        if case == "transactional"
+        else ""
+    )
+    schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+    values = [10]
+    if case.endswith("_ids"):
+        a, b = (2, 1) if case == "swapped_ids" else (1, 2)
+        dtype = pa.int64()
+        if case == "nested_ids":
+            dtype = pa.struct([pa.field("x", pa.int64(), metadata={"PARQUET:field_id": "99"})])
+            values = [{"x": 10}]
+        schema = pa.schema(
+            [
+                pa.field("a", dtype, metadata={"PARQUET:field_id": str(a)}),
+                pa.field("b", pa.int64(), metadata={"PARQUET:field_id": str(b)}),
+            ]
+        )
+    data = pa.Table.from_arrays([pa.array(values, type=schema.field(0).type), pa.array([20])], schema=schema)
+    directory = source / {"transactional": "delta_0000001_0000001_0000", "recursive": "nested"}.get(case, "")
+    directory.mkdir(exist_ok=True)
+    pq.write_table(data, directory / "keep.parquet")
+    if case == "glob":
+        pq.write_table(data, directory / "excluded.parquet")
+    spark.sql(
+        f"CREATE TABLE src {columns} USING parquet {options.get(case, '')} LOCATION '{escape_sql_string_literal(str(source))}' {properties}"
+    )
+    dest = tmp_path / "target"
+    call = (
+        "CALL system.migrate('src')"
+        if procedure == "migrate"
+        else f"CALL system.snapshot('src','dest','{escape_sql_string_literal(str(dest))}')"
+    )
+    try:
+        before = spark.table("src").collect()
+        assert len(before) == 1
+        if error:
+            with pytest.raises(PySparkException, match=error):
+                spark.sql(call).collect()
+            assert spark.table("src").collect() == before
+            assert not spark.catalog.tableExists("src_BACKUP_")
+            assert not spark.catalog.tableExists("dest")
+            assert not (source / "metadata").exists()
+            assert not (dest / "metadata").exists()
+        else:
+            assert spark.sql(call).first()[0] == 1
+            assert tuple(spark.table("src" if procedure == "migrate" else "dest").first()) == (10, 20)
+    finally:
+        for name in ["src", "src_BACKUP_", "dest"]:
+            spark.sql(f"DROP TABLE IF EXISTS {name}")

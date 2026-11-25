@@ -464,3 +464,75 @@ def test_migrate_bucketed_hive_table(spark, jvm_spark, database):
         assert not spark.catalog.tableExists(f"{src}_BACKUP_")
     finally:
         jvm_spark.sql(f"DROP TABLE IF EXISTS {src}")
+
+
+def test_migrate_hms_rename_lost_reply(hms_s3_metastore_endpoint, hms_s3_env, jvm_spark, database):
+    import select
+    import socket
+    import socketserver
+    import threading
+
+    from pysail.testing.spark.session import spark_session_factory
+
+    host, port = hms_s3_metastore_endpoint.rsplit(":", 1)
+    dropped = threading.Event()
+
+    class DropRenameReply(socketserver.BaseRequestHandler):
+        def handle(self):
+            with socket.create_connection((host, int(port))) as upstream:
+                while True:
+                    for sock in select.select([upstream, self.request], [], [])[0]:
+                        data = sock.recv(65536)
+                        if not data:
+                            return
+                        if sock is upstream:
+                            if b"alter_table" in data and not dropped.is_set():
+                                dropped.set()
+                                return
+                            self.request.sendall(data)
+                        else:
+                            upstream.sendall(data)
+
+    src = f"{database}.lost_reply"
+    jvm_spark.sql(
+        f"CREATE TABLE {src} (id BIGINT) STORED AS parquet LOCATION 's3://hms-warehouse/{database}/lost_reply'"
+    )
+    try:
+        jvm_spark.sql(f"INSERT INTO {src} VALUES (42)")  # noqa: S608
+        with socketserver.ThreadingTCPServer(("127.0.0.1", 0), DropRenameReply) as proxy:
+            proxy.daemon_threads = True
+            thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+            thread.start()
+            uri = f"127.0.0.1:{proxy.server_address[1]}"
+            env = {
+                "SAIL_CATALOG__LIST": f'[{{name="sail",type="hms",uris=["{uri}","{hms_s3_metastore_endpoint}"]}}]',
+                "SAIL_CATALOG__DEFAULT_CATALOG": "sail",
+                **hms_s3_env,
+            }
+            try:
+                with spark_connect_server(envs=env) as server, spark_session_factory(server.remote) as sessions:
+                    session = sessions.create()
+                    assert session.sql(f"CALL sail.system.migrate('{src}')").first()[0] == 1
+                    assert dropped.is_set()
+                    assert session.table(src).first().id == 42
+                    assert jvm_spark.table(f"{src}_BACKUP_").first().id == 42
+            finally:
+                proxy.shutdown()
+                thread.join()
+    finally:
+        for name in [src, f"{src}_BACKUP_"]:
+            jvm_spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_hive_source_file_filter(spark, jvm_spark, database):
+    src = f"{database}.filtered_src"
+    path = f"s3://hms-warehouse/{database}/filtered_src"
+    jvm_spark.sql(f"CREATE TABLE {src} (id BIGINT) USING parquet OPTIONS (pathGlobFilter 'part-*') LOCATION '{path}'")
+    try:
+        jvm_spark.sql(f"INSERT INTO {src} VALUES (7)")  # noqa: S608
+        with pytest.raises(PySparkException, match="pathglobfilter"):
+            spark.sql(f"CALL sail.system.migrate('{src}')").collect()
+        assert jvm_spark.table(src).first().id == 7
+        assert not spark.catalog.tableExists(f"{src}_BACKUP_")
+    finally:
+        jvm_spark.sql(f"DROP TABLE IF EXISTS {src}")
