@@ -201,9 +201,10 @@ pub(super) struct PlanResolverState {
     /// columns of their tables, by the address of the source and the position of the column
     /// in the source. A source whose columns the view does not read has no uses.
     view_reads: HashMap<usize, HashMap<usize, ColumnUse>>,
-    /// The schemas of the plans of the temporary views that the definition of a temporary
-    /// view reads. The field IDs in such a plan belong to another resolver state.
-    view_plans: Vec<DFSchemaRef>,
+    /// The plans of the temporary views that the definition of a temporary view reads, by
+    /// their schemas and the names that the read gives their outputs. The field IDs in such
+    /// a plan belong to another resolver state.
+    view_plans: Vec<(DFSchemaRef, Vec<String>)>,
 }
 
 /// Returns the address of a table source, which identifies the source while it is alive.
@@ -638,15 +639,13 @@ impl PlanResolverState {
     }
 
     /// Records the plan of a temporary view that the definition of a temporary view reads,
-    /// by its schema.
-    pub fn record_view_plan(&mut self, schema: &DFSchemaRef) {
-        self.view_plans.push(Arc::clone(schema));
+    /// by its schema and the names that the read gives its outputs.
+    pub fn record_view_plan(&mut self, schema: &DFSchemaRef, names: &[String]) {
+        self.view_plans.push((Arc::clone(schema), names.to_vec()));
     }
 
-    /// Returns whether a plan with the schema is the plan of a temporary view that the
-    /// definition of a temporary view reads.
-    pub fn is_view_plan(&self, schema: &DFSchemaRef) -> bool {
-        self.view_plans.iter().any(|x| Arc::ptr_eq(x, schema))
+    pub fn view_plans(&self) -> &[(DFSchemaRef, Vec<String>)] {
+        &self.view_plans
     }
 
     /// Records what the source of a scan reads. The first record of a source remains.

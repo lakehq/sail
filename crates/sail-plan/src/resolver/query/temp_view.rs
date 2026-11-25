@@ -1174,6 +1174,29 @@ impl<K: Eq + Hash + Clone> Derivation<K> {
     }
 }
 
+/// Returns whether the projection gives names of the query to the outputs of the plan of a
+/// temporary view that the plan reads. A rewrite of the plan, such as type coercion, can
+/// compute the schema of the plan of the view again, with the same names. The names of
+/// the query are new, so another projection gives them to the same inputs only if they
+/// are the names of the inputs.
+fn reads_view_plan(projection: &Projection, state: &PlanResolverState) -> bool {
+    let input = projection.input.schema();
+    state.view_plans().iter().any(|(schema, names)| {
+        Arc::ptr_eq(schema, input)
+            || (!schema.fields().iter().map(|x| x.name()).eq(names)
+                && schema
+                    .iter()
+                    .map(|(q, f)| (q, f.name()))
+                    .eq(input.iter().map(|(q, f)| (q, f.name())))
+                && projection
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|x| x.name())
+                    .eq(names))
+    })
+}
+
 /// Returns the address of the source of a scan that a view obtains again, and how each
 /// output reads the source, for the scan itself or for projections over it that compute
 /// their outputs from the scan alone. A scan with filters is not described, and all its
@@ -1198,7 +1221,7 @@ fn scan_lineage(
                 .collect();
             Some((table_source_address(&scan.source), outputs))
         }
-        LogicalPlan::Projection(projection) if !state.is_view_plan(projection.input.schema()) => {
+        LogicalPlan::Projection(projection) if !reads_view_plan(projection, state) => {
             let (address, inputs) = scan_lineage(&projection.input, state)?;
             let mut outputs = HashMap::new();
             for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
@@ -1274,9 +1297,7 @@ fn required_columns(
         match node {
             // The plan of a view that the plan reads has the field IDs of another resolver
             // state, and the view reads the columns that it read when it was created.
-            LogicalPlan::Projection(projection)
-                if state.is_view_plan(projection.input.schema()) =>
-            {
+            LogicalPlan::Projection(projection) if reads_view_plan(projection, state) => {
                 return Ok(TreeNodeRecursion::Jump);
             }
             LogicalPlan::Projection(projection) => {
