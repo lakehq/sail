@@ -723,6 +723,25 @@ def test_view_over_a_view_reads_a_struct_whose_fields_had_no_nulls(spark, tmp_pa
         table.drop()
 
 
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize(
+    ("before", "after"), [("iceberg", "parquet"), ("parquet", "iceberg"), ("iceberg", "delta"), ("delta", "iceberg")]
+)
+def test_view_reads_a_table_created_again_with_the_same_columns_in_another_format(spark, tmp_path, kind, before, after):
+    # The formats store strings, binary values and lists in Arrow types of other encodings.
+    columns = "k INT, b BINARY, c STRING, s STRUCT<x: STRING, y: BINARY>, a ARRAY<STRING>, m MAP<STRING, BINARY>"
+    table = Table(spark, tmp_path, before, columns)
+    try:
+        table.insert("(1, X'0A', 'p', named_struct('x', 'q', 'y', X'0B'), array('r'), map('s', X'0C'))")
+        view = table.create_view(kind)
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create(columns, after)
+        table.insert("(2, X'FF', 'u', named_struct('x', 'v', 'y', X'EE'), array('w'), map('z', X'DD'))")
+        assert spark.table(view).collect() == spark.table(table.name).collect()
+    finally:
+        table.drop()
+
+
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
 # Delta Lake column mapping, as the clause after the columns and the table properties.
 METADATA_FORMATS = {

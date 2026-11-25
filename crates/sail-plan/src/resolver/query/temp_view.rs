@@ -246,6 +246,7 @@ impl ViewTableReference {
             current.is_some_and(|current| {
                 stored.name() == current.name()
                     && !user_metadata_differs(stored, current)
+                    && !encoding_changed(stored.data_type(), current.data_type())
                     && !rebuilt(stored, current, *used)
             })
         });
@@ -274,7 +275,11 @@ impl ViewTableReference {
                         let target = nullable_field(stored).with_nullable(current.is_nullable());
                         Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
                     }
-                    _ if user_metadata_differs(stored, current) => {
+                    // A column whose values are stored in another way, such as `LargeUtf8`
+                    // instead of `Utf8`, is read in the type of the view.
+                    _ if user_metadata_differs(stored, current)
+                        || encoding_changed(stored.data_type(), current.data_type()) =>
+                    {
                         // The fields of a struct can have nulls now that had none.
                         let data_type = if stored.data_type() == current.data_type() {
                             stored.data_type().clone()
@@ -593,12 +598,16 @@ fn column_changes(
                 }
             }
         }
-        (DataType::List(stored), DataType::List(current))
-        | (DataType::LargeList(stored), DataType::LargeList(current))
-        | (DataType::ListView(stored), DataType::ListView(current))
-        | (DataType::LargeListView(stored), DataType::LargeListView(current)) => {
-            nested(stored, current, "element", changes)
-        }
+        (
+            DataType::List(stored)
+            | DataType::LargeList(stored)
+            | DataType::ListView(stored)
+            | DataType::LargeListView(stored),
+            DataType::List(current)
+            | DataType::LargeList(current)
+            | DataType::ListView(current)
+            | DataType::LargeListView(current),
+        ) => nested(stored, current, "element", changes),
         (DataType::FixedSizeList(stored, n), DataType::FixedSizeList(current, m)) if n == m => {
             nested(stored, current, "element", changes)
         }
@@ -641,13 +650,58 @@ fn column_changes(
                 nested(stored, current, stored.name(), changes);
             }
         }
-        _ if stored != current => changes.push(format!(
+        _ if stored != current && !same_values(stored, current) => changes.push(format!(
             "{} type has changed from {} to {}",
             quote_names(path),
             type_name(stored),
             type_name(current)
         )),
         _ => {}
+    }
+}
+
+/// Returns whether two string types or two binary types store the same values in other ways.
+fn same_values(a: &DataType, b: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (a, b),
+        (Utf8 | LargeUtf8 | Utf8View, Utf8 | LargeUtf8 | Utf8View)
+            | (
+                Binary | LargeBinary | BinaryView,
+                Binary | LargeBinary | BinaryView
+            )
+    )
+}
+
+/// Returns whether a type that has no column change stores its values in another way than
+/// the stored type at any level, as a string, binary or list type of another encoding.
+fn encoding_changed(stored: &DataType, current: &DataType) -> bool {
+    use DataType::*;
+    match (stored, current) {
+        (Struct(stored), Struct(current)) => stored.iter().any(|field| {
+            current
+                .iter()
+                .find(|x| same_name(x.name(), field.name(), false))
+                .is_some_and(|x| encoding_changed(field.data_type(), x.data_type()))
+        }),
+        (
+            List(a) | LargeList(a) | ListView(a) | LargeListView(a),
+            List(b) | LargeList(b) | ListView(b) | LargeListView(b),
+        ) => {
+            std::mem::discriminant(stored) != std::mem::discriminant(current)
+                || encoding_changed(a.data_type(), b.data_type())
+        }
+        (FixedSizeList(a, _), FixedSizeList(b, _))
+        | (Map(a, _), Map(b, _))
+        | (RunEndEncoded(_, a), RunEndEncoded(_, b)) => {
+            encoding_changed(a.data_type(), b.data_type())
+        }
+        (Dictionary(_, a), Dictionary(_, b)) => encoding_changed(a, b),
+        (Union(a, _), Union(b, _)) => a
+            .iter()
+            .zip(b.iter())
+            .any(|((_, a), (_, b))| encoding_changed(a.data_type(), b.data_type())),
+        _ => stored != current && same_values(stored, current),
     }
 }
 
@@ -1720,17 +1774,37 @@ mod tests {
         types
     }
 
+    /// Returns the type with one encoding for each kind of string, binary and list.
+    fn one_encoding(data_type: &DataType) -> DataType {
+        let field = |field: &Arc<Field>| {
+            let data_type = one_encoding(field.data_type());
+            Arc::new(field.as_ref().clone().with_data_type(data_type))
+        };
+        match data_type {
+            DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
+            DataType::LargeBinary | DataType::BinaryView => DataType::Binary,
+            DataType::List(element)
+            | DataType::LargeList(element)
+            | DataType::ListView(element)
+            | DataType::LargeListView(element) => DataType::List(field(element)),
+            DataType::FixedSizeList(element, n) => DataType::FixedSizeList(field(element), *n),
+            DataType::Struct(fields) => DataType::Struct(fields.iter().map(field).collect()),
+            DataType::Map(entries, sorted) => DataType::Map(field(entries), *sorted),
+            data_type => data_type.clone(),
+        }
+    }
+
     #[test]
-    fn test_columns_of_each_type_match_themselves_and_no_other_type() {
+    fn test_columns_of_each_type_match_the_encodings_of_the_type_and_no_other_type() {
         let types = data_types();
-        for (i, stored) in types.iter().enumerate() {
-            for (j, current) in types.iter().enumerate() {
+        for stored in &types {
+            for current in &types {
                 let result = match_columns(
                     &Schema::new(vec![field("c", stored.clone())]),
                     &Schema::new(vec![field("c", current.clone())]),
                     true,
                 );
-                if i == j {
+                if one_encoding(stored) == one_encoding(current) {
                     assert_eq!(result, Ok(vec![0]), "{stored}");
                 } else {
                     assert!(result.is_err(), "{stored} and {current}");
