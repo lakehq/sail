@@ -34,7 +34,7 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
 
     let mut files: Vec<String> = vec![];
     // List each (path, filter) once so a repeated scan (e.g. `df.union(df)`) isn't re-listed.
-    let mut listed: HashSet<(String, Option<String>, bool)> = HashSet::new();
+    let mut listed: HashSet<(String, Option<String>, bool, bool)> = HashSet::new();
 
     for source in &listing_sources {
         let path_glob_filter = source.config().path_glob_filter.as_ref();
@@ -45,16 +45,23 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
                 table_path.as_str().to_string(),
                 path_glob_filter.map(|filter| filter.as_str().to_string()),
                 direct_only,
+                source.config().partition_directories_only,
             )) {
                 continue;
             }
             let store = ctx.runtime_env().object_store(table_path)?;
             let base = Url::parse(table_path.object_store().as_str())
                 .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;
-            let metas = list_all_files(table_path, &state, store.as_ref(), path_glob_filter)
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?;
+            let metas = list_all_files(
+                table_path,
+                &state,
+                store.as_ref(),
+                path_glob_filter,
+                source.config().partition_directories_only,
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
             for meta in metas {
                 if direct_only && !is_direct_input(table_path, &meta.location) {
                     continue;

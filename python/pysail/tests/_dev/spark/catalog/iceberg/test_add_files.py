@@ -72,3 +72,20 @@ def test_rest_add_files(spark, reference, version, catalog_source):
         if catalog_source:
             spark.sql(f"DROP TABLE {source_table}")
         spark.sql(f"DROP TABLE {target}")
+
+
+def test_rest_snapshot_file_table(spark, reference):
+    source = "files.default.snapshot_input"
+    target = "rest.add_files.snapshot_target"
+    path = "s3://icebergdata/snapshot-input"
+    spark.range(3).coalesce(1).write.mode("overwrite").parquet(path)
+    spark.sql(f"CREATE TABLE {source} (id BIGINT) USING parquet LOCATION '{path}'")
+    try:
+        assert tuple(spark.sql(f"CALL rest.system.snapshot('{source}', '{target}')").first()) == (1,)
+        snapshot = reference.load_table("add_files.snapshot_target")
+        assert snapshot.properties["gc.enabled"] == "false"
+        assert sorted(snapshot.scan().to_arrow()["id"].to_pylist()) == [0, 1, 2]
+        assert spark.table(source).count() == 3
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {target}")
+        spark.sql(f"DROP TABLE {source}")

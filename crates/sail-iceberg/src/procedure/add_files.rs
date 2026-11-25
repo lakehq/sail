@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Int64Array, RecordBatch};
+use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion::execution::TaskContext;
@@ -20,24 +20,66 @@ use crate::spec::*;
 use crate::table::files::{ManifestScope, SnapshotScope, collect_live_files, scan_manifests};
 use crate::table::metadata_loader::table_metadata_location;
 
+pub(crate) enum ImportOutput {
+    AddFiles(SchemaRef),
+    FileCount(SchemaRef),
+}
+
+impl ImportOutput {
+    fn batch(self, count: i64, partitions: Option<i64>) -> Result<RecordBatch> {
+        let mut columns: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(vec![count]))];
+        let schema = match self {
+            Self::FileCount(schema) => schema,
+            Self::AddFiles(schema) => {
+                columns.push(Arc::new(Int64Array::from(vec![partitions])));
+                schema
+            }
+        };
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+}
+
 pub(crate) struct AddFiles {
-    source: String,
+    source: Vec<String>,
     filter: BTreeMap<String, String>,
     check_duplicates: bool,
     parallelism: usize,
+    ignore_missing_files: bool,
 }
 
 impl AddFiles {
+    pub(super) fn for_migration(
+        source: Vec<String>,
+        parallelism: usize,
+        ignore_missing_files: bool,
+    ) -> Self {
+        Self {
+            source,
+            filter: BTreeMap::new(),
+            check_duplicates: true,
+            parallelism,
+            ignore_missing_files,
+        }
+    }
+
     pub(super) fn from_invocation(invocation: &LakeProcedureInvocation) -> Result<Self> {
         let parallelism = optional_i32(invocation, "parallelism")?.unwrap_or(1);
         if parallelism <= 0 {
             return plan_err!("Parallelism should be larger than 0");
         }
+        let name = sail_sql_analyzer::parser::parse_object_name(&required_string(
+            invocation,
+            "source_table",
+        )?)
+        .and_then(sail_sql_analyzer::expression::from_ast_object_name)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+
         Ok(Self {
-            source: required_string(invocation, "source_table")?,
+            source: name.into(),
             filter: optional_string_map(invocation, "partition_filter")?.unwrap_or_default(),
             check_duplicates: optional_bool(invocation, "check_duplicate_files")?.unwrap_or(true),
             parallelism: parallelism as usize,
+            ignore_missing_files: false,
         })
     }
 
@@ -47,41 +89,44 @@ impl AddFiles {
         store: &StoreContext,
         table_url: &url::Url,
         metadata: &TableMetadata,
-        output_schema: SchemaRef,
+        output_schema: ImportOutput,
     ) -> Result<PreparedSnapshotOperation> {
-        let name = sail_sql_analyzer::parser::parse_object_name(&self.source)
-            .and_then(sail_sql_analyzer::expression::from_ast_object_name)
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-        let parts: Vec<String> = name.into();
+        let parts = &self.source;
         let filter = self
             .filter
             .iter()
             .map(|(key, value)| (key.to_lowercase(), value))
             .collect::<HashMap<_, _>>();
-        let (format, location, declared_parts) = match parts.as_slice() {
+        let (format, location, declared_parts, managed_source) = match parts.as_slice() {
             [format, location]
                 if ["parquet", "avro", "orc"].contains(&format.to_lowercase().as_str()) =>
             {
-                (format.to_lowercase(), location.clone(), None)
+                (format.to_lowercase(), location.clone(), None, false)
             }
             _ => {
                 let manager = ctx.extension::<CatalogManager>()?;
                 let source = manager
-                    .get_table(&parts)
+                    .get_table(parts)
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let partition_names = source
-                    .kind
-                    .partition_columns()
-                    .iter()
-                    .map(|c| c.name.clone())
-                    .collect::<Vec<_>>();
                 match source.kind {
                     TableKind::Table {
                         format,
                         location: Some(location),
+                        partition_by,
+                        is_external,
                         ..
-                    } => (format.to_lowercase(), location, Some(partition_names)),
+                    } => (
+                        format.to_lowercase(),
+                        location,
+                        Some(
+                            partition_by
+                                .into_iter()
+                                .map(|field| field.column)
+                                .collect::<Vec<_>>(),
+                        ),
+                        !is_external,
+                    ),
                     _ => return plan_err!("add_files source must be a stored file table"),
                 }
             }
@@ -104,7 +149,7 @@ impl AddFiles {
                 })
                 .collect::<Vec<_>>();
             ctx.extension::<CatalogManager>()?
-                .list_file_partitions(&parts, &values)
+                .list_file_partitions(parts, &values)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
         } else {
@@ -162,8 +207,14 @@ impl AddFiles {
             if !["parquet", "avro", "orc"].contains(&format.as_str()) {
                 return plan_err!("Unsupported add_files partition format: {format}");
             }
-            let source_url =
-                crate::lake_source::IcebergLakeSource::parse_table_url(vec![location]).await?;
+            let source_url = if catalog_source {
+                match sail_data_source::parse_absolute_directory_url(&location) {
+                    Some(url) => url,
+                    None => sail_data_source::resolve_table_url(location)?,
+                }
+            } else {
+                crate::lake_source::IcebergLakeSource::parse_table_url(vec![location]).await?
+            };
             validate_source_store(&source_url, table_url)?;
             let source_store = ctx
                 .runtime_env()
@@ -221,7 +272,14 @@ impl AddFiles {
                 let path = source_url.to_file_path().map_err(|_| {
                     DataFusionError::Plan(format!("Invalid local source: {source_url}"))
                 })?;
-                tokio::fs::metadata(path).await?;
+                // A managed file table may have no warehouse directory until its first write.
+                let allow_missing =
+                    self.ignore_missing_files || (managed_source && registered_partition.is_none());
+                if let Err(error) = tokio::fs::metadata(path).await
+                    && !(allow_missing && error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    return Err(error.into());
+                }
             }
             for object in objects {
                 let Some(relative) = object
@@ -318,13 +376,26 @@ impl AddFiles {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         let (file_format, record_count) =
-                            import_record_count(source_store, &object, &format).await?;
+                            match import_record_count(source_store.clone(), &object, &format).await
+                            {
+                                Ok(metrics) => metrics,
+                                Err(_)
+                                    if self.ignore_missing_files
+                                        && matches!(
+                                            source_store.head(&object.location).await,
+                                            Err(object_store::Error::NotFound { .. })
+                                        ) =>
+                                {
+                                    return Ok(None);
+                                }
+                                Err(error) => return Err(error),
+                            };
                         let file_path = format!(
                             "{}/{}",
                             &source_url[..url::Position::BeforePath],
                             object.location
                         );
-                        Ok::<_, DataFusionError>(DataFile {
+                        Ok::<_, DataFusionError>(Some(DataFile {
                             content: DataContentType::Data,
                             file_path,
                             file_format,
@@ -347,13 +418,14 @@ impl AddFiles {
                             referenced_data_file: None,
                             content_offset: None,
                             content_size_in_bytes: None,
-                        })
+                        }))
                     }
                     .boxed()
                 })
                 .collect::<Vec<_>>(),
         )
         .buffer_unordered(self.parallelism)
+        .try_filter_map(futures::future::ok)
         .try_collect::<Vec<_>>()
         .await?;
         if self.check_duplicates {
@@ -483,7 +555,7 @@ async fn prepare_append(
     spec: &PartitionSpec,
     files: Vec<DataFile>,
     report_partitions: bool,
-    output_schema: SchemaRef,
+    output_schema: ImportOutput,
 ) -> Result<PreparedSnapshotOperation> {
     let schema = metadata
         .current_schema()
@@ -686,13 +758,7 @@ async fn prepare_append(
         ],
         updates,
         manifests,
-        output: RecordBatch::try_new(
-            output_schema,
-            vec![
-                Arc::new(Int64Array::from(vec![count])),
-                Arc::new(Int64Array::from(vec![partitions])),
-            ],
-        )?,
+        output: output_schema.batch(count, partitions)?,
     })
 }
 

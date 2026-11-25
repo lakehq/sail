@@ -413,6 +413,8 @@ async fn list_files_for_scan<'a>(
             futures::future::ready(
                 (!direct_only || is_direct_input(table_path, location))
                     && !location.filename().is_some_and(is_metadata_file)
+                    && (!source.config().partition_directories_only
+                        || super::utils::in_partition_directories(table_path, location))
                     && !has_hidden_path_component(table_path, location)
                     && matches_path_glob_filter(path_glob_filter, location),
             )

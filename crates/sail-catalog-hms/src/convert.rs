@@ -125,7 +125,14 @@ pub(crate) fn table_to_status(
             format,
             partition_by,
             sort_by: vec![],
-            bucket_by: None,
+            bucket_by: storage.and_then(|sd| {
+                let columns = sd.bucket_cols.as_ref().filter(|cols| !cols.is_empty())?;
+                Some(sail_common_datafusion::catalog::CatalogTableBucketBy {
+                    columns: columns.clone(),
+                    num_buckets: usize::try_from(sd.num_buckets.unwrap_or_default())
+                        .unwrap_or_default(),
+                })
+            }),
             properties,
             is_external,
         },

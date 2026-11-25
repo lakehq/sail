@@ -47,6 +47,11 @@ pub struct CreateTableOptions {
 
 pub enum StageTableOptions {
     Definition(CreateTableOptions),
+    IcebergMigration {
+        definition: CreateTableOptions,
+        source: Box<sail_common_datafusion::catalog::TableKind>,
+        backup: sail_common_datafusion::catalog::MigrationBackup,
+    },
     ShallowClone {
         default_location: String,
         location: Option<String>,

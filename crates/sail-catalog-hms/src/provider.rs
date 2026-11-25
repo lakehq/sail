@@ -926,6 +926,10 @@ fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<
 
 #[async_trait::async_trait]
 impl CatalogProvider for HmsCatalogProvider {
+    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
+        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergImportRegistration]
+    }
+
     fn get_name(&self) -> &str {
         &self.name
     }

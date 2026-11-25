@@ -31,6 +31,7 @@ pub enum LakehouseCapability {
     DeltaRatifiedCommits,
     IcebergRestCommit,
     IcebergRestScanPlanning,
+    IcebergImportRegistration,
     VersionedCatalogReferences,
     CrossFormatMetadata,
     GovernancePolicies,

@@ -83,6 +83,11 @@ impl StageTableOptions {
     pub fn resolve(self, existing: Option<&TableStatus>) -> CatalogResult<CreateTableOptions> {
         let (default_location, location, mode, is_external) = match self {
             Self::Definition(options) => return Ok(options),
+            Self::IcebergMigration { .. } => {
+                return Err(CatalogError::NotSupported(
+                    "Iceberg migration staging".into(),
+                ));
+            }
             Self::ShallowClone {
                 default_location,
                 location,

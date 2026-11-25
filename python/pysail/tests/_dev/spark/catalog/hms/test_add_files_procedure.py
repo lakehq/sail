@@ -417,3 +417,30 @@ def test_all_registered_partitions_with_parallelism(catalog, source, target, spa
     with target(("id",)) as tables:
         assert call(spark, tables[0], registered, ", parallelism => 2") == catalog.manifest_counts(8, 4)
         assert_rows(catalog, spark, tables, ROWS * 2)
+
+
+@pytest.mark.parametrize("procedure", ["snapshot", "migrate"])
+@pytest.mark.parametrize("file_format", ["parquet", "orc", "avro"])
+def test_import_hive_file_table(spark, jvm_spark, database, procedure, file_format):
+    src = f"{database}.src_{procedure}_{file_format}"
+    snapshot = f"{database}.snap_{file_format}"
+    backup = f"{database}.original"
+    path = f"s3://hms-warehouse/{database}/src_{procedure}_{file_format}"
+    jvm_spark.sql(
+        f"CREATE EXTERNAL TABLE {src} (id BIGINT) PARTITIONED BY (p STRING) STORED AS {file_format} LOCATION '{path}'"
+    )
+    jvm_spark.sql(f"INSERT INTO {src} PARTITION (p='a') SELECT CAST(42 AS BIGINT)")
+    try:
+        if procedure == "snapshot":
+            target = snapshot
+            args = f"'{src}', '{target}'"
+        else:
+            target = src
+            args = f"table => '{src}', backup_table_name => 'original'"
+        assert tuple(spark.sql(f"CALL sail.system.{procedure}({args})").first()) == (1,)
+        assert tuple(spark.table(target).first()) == (42, "a")
+        assert tuple(jvm_spark.table(f"iceberg.{target}").first()) == (42, "a")
+        assert tuple(jvm_spark.table(src if procedure == "snapshot" else backup).first()) == (42, "a")
+    finally:
+        for name in [snapshot, src, backup]:
+            spark.sql(f"DROP TABLE IF EXISTS {name}")

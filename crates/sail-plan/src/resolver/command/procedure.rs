@@ -226,10 +226,16 @@ impl PlanResolver<'_> {
                 None => LakeProcedureValue::Null,
             });
         }
-        let invocation = LakeProcedureInvocation {
+        let mut invocation = LakeProcedureInvocation {
             arguments: values,
             procedure,
         };
+        if lake_source_name == "iceberg"
+            && matches!(invocation.procedure.name.as_str(), "migrate" | "snapshot")
+        {
+            self.bind_migration_tables(&manager, &mut invocation)
+                .await?;
+        }
         let (target, mut planning_target) = match &invocation.procedure.target {
             LakeProcedureTarget::Catalog => (
                 None,
@@ -433,6 +439,76 @@ impl PlanResolver<'_> {
                 plan.root_placement,
             )?),
         }))
+    }
+
+    async fn bind_migration_tables(
+        &self,
+        manager: &CatalogManager,
+        invocation: &mut LakeProcedureInvocation,
+    ) -> PlanResult<()> {
+        // Spark resolves both names in the caller's current namespace. Bind them before execution.
+        let mut destination = None;
+        for (parameter, value) in invocation
+            .procedure
+            .parameters
+            .iter()
+            .zip(&mut invocation.arguments)
+        {
+            if matches!(parameter.name.as_str(), "source_table" | "table")
+                && let LakeProcedureValue::Utf8(name) = value
+            {
+                let parsed = sail_sql_analyzer::expression::from_ast_object_name(
+                    sail_sql_analyzer::parser::parse_object_name(name)?,
+                )?;
+                let parts =
+                    manager.resolve_fully_qualified_object_name(&Vec::<String>::from(parsed))?;
+                *name = parts
+                    .iter()
+                    .map(|part| format!("`{}`", part.replace('`', "``")))
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if parameter.name == "table" {
+                    destination = Some(parts);
+                }
+            }
+        }
+        if !matches!(
+            invocation.argument("location"),
+            Some(LakeProcedureValue::Null)
+        ) {
+            return Ok(());
+        }
+        let Some(parts) = destination else {
+            return Ok(());
+        };
+        let Some(catalog) = parts.first() else {
+            return Err(PlanError::invalid("Missing destination catalog"));
+        };
+        let location = match invocation.argument("properties") {
+            Some(LakeProcedureValue::StringMap(properties)) => properties.get("location").cloned(),
+            _ => None,
+        };
+        let location = if let Some(location) = location {
+            location
+        } else if manager
+            .catalog_capabilities(catalog)?
+            .contains(&sail_catalog::lakehouse::LakehouseCapability::IcebergRestCommit)
+        {
+            return Ok(());
+        } else {
+            self.resolve_default_table_location(&spec::ObjectName::from(parts))
+                .await?
+        };
+        if let Some((_, value)) = invocation
+            .procedure
+            .parameters
+            .iter()
+            .zip(&mut invocation.arguments)
+            .find(|(param, _)| param.name == "location")
+        {
+            *value = LakeProcedureValue::Utf8(location);
+        }
+        Ok(())
     }
 
     async fn evaluate_procedure_argument(
