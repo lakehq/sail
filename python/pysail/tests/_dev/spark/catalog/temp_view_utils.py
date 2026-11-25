@@ -51,26 +51,30 @@ def drop_view(spark, view):
 class Table:
     """A catalog table with the column `id`, and the temporary views over it."""
 
-    def __init__(self, spark, tmp_path, fmt, columns="id BIGINT"):
+    def __init__(self, spark, tmp_path, fmt, columns="id BIGINT", properties=""):
         self.spark = spark
         self.tmp_path = tmp_path
         self.fmt = fmt
         self.name = f"t_{uuid.uuid4().hex}"
         self.locations = 0
         self.views = []
-        self.create(columns)
+        self.create(columns, properties=properties)
 
-    def create(self, columns, fmt=None):
+    def create(self, columns, fmt=None, properties=""):
+        """Creates the table with the columns, and the clause of the table properties if given."""
         self.locations += 1
         location = self.tmp_path / f"{self.name}_{self.locations}"
-        self.spark.sql(f"CREATE TABLE {self.name} ({columns}) USING {fmt or self.fmt} LOCATION '{location}'")
+        self.spark.sql(
+            f"CREATE TABLE {self.name} ({columns}) USING {fmt or self.fmt} LOCATION '{location}'{properties}"
+        )
 
     def insert(self, values):
         self.spark.sql(f"INSERT INTO {self.name} VALUES {values}")
 
-    def create_view(self, kind, query=None):
-        """Creates a view of the kind over the query, which reads all the columns of the table by default."""
-        view = create_view(self.spark, kind, query or f"SELECT * FROM {self.name}")
+    def create_view(self, kind, query=None, frame=None):
+        """Creates a view of the kind over the query, which reads all the columns of the table by default,
+        or over `frame` for a DataFrame view if given."""
+        view = create_view(self.spark, kind, query or f"SELECT * FROM {self.name}", frame)
         self.views.append(view)
         return view
 

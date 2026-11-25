@@ -664,6 +664,20 @@ fn read_table(parts: &[&str], options: &[(&str, &str)]) -> spec::QueryPlan {
     })
 }
 
+/// A read of a path in the format, as `spark.read.format(..).options(..).load(..)` sends it.
+fn read_path(format: &str, path: &str, options: &[(&str, &str)]) -> spec::QueryPlan {
+    spec::QueryPlan::new(spec::QueryNode::Read {
+        is_streaming: false,
+        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
+            format: Some(format.to_string()),
+            schema: None,
+            options: owned(options),
+            paths: vec![path.to_string()],
+            predicates: vec![],
+        })),
+    })
+}
+
 /// A read of a table by identifier, as `spark.read.format("iceberg").load(..)` sends it.
 fn read_identifier(identifier: &str) -> spec::QueryPlan {
     spec::QueryPlan::new(spec::QueryNode::Read {

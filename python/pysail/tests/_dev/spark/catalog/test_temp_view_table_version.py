@@ -510,8 +510,7 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_key_changed(spark,
     table = Table(spark, tmp_path, fmt, "a INT, b INT")
     try:
         table.insert("(1, 10), (1, 20), (2, 30)")
-        view = create_view(spark, "dv", None, DISTINCT_FRAMES[case](spark.table(table.name)))
-        table.views.append(view)
+        view = table.create_view("dv", frame=DISTINCT_FRAMES[case](spark.table(table.name)))
         # The current values of a column that tells rows apart tell them apart, of whatever type.
         spark.sql(f"DROP TABLE {table.name}")
         table.create("a INT, b STRING")
@@ -544,8 +543,7 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_chang
     table = Table(spark, tmp_path, "parquet", "k INT, a INT, b INT")
     try:
         table.insert("(1, 1, 10), (2, 1, 20), (3, 2, 30)")
-        view = create_view(spark, "dv", None, query(spark.table(table.name)))
-        table.views.append(view)
+        view = table.create_view("dv", frame=query(spark.table(table.name)))
         if nested:
             view = table.create_view("sv", f"SELECT a FROM {view}")
         spark.sql(f"DROP TABLE {table.name}")
@@ -865,30 +863,24 @@ METADATA_FORMATS = {
 }
 
 
-def create_metadata_table(spark, table, fmt):
-    using, properties = METADATA_FORMATS[fmt]
-    table.locations += 1
-    location = table.tmp_path / f"{table.name}_{table.locations}"
-    spark.sql(f"DROP TABLE IF EXISTS {table.name}")
-    spark.sql(f"CREATE TABLE {table.name} (k INT, c STRING) USING {using} LOCATION '{location}'{properties}")
-    table.insert("(1, 'a'), (2, 'b')")
-
-
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize(
     ("before", "after"),
     [("iceberg", "delta"), ("delta_cm", "iceberg"), ("delta_cm", "parquet"), ("delta", "delta_cm"), ("delta", None)],
 )
 def test_view_of_a_union_reads_a_table_whose_column_metadata_changed(spark, tmp_path, kind, before, after):
-    table = Table(spark, tmp_path, "delta")
+    using, properties = METADATA_FORMATS[before]
+    table = Table(spark, tmp_path, using, "k INT, c STRING", properties)
     try:
-        create_metadata_table(spark, table, before)
+        table.insert("(1, 'a'), (2, 'b')")
         sql = f"SELECT c FROM {table.name} UNION SELECT 'z'"
         view = table.create_view(kind, sql)
         if after is None:
             spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN c COMMENT 'the column'")
         else:
-            create_metadata_table(spark, table, after)
+            spark.sql(f"DROP TABLE {table.name}")
+            table.create("k INT, c STRING", *METADATA_FORMATS[after])
+            table.insert("(1, 'a'), (2, 'b')")
         assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
     finally:
         table.drop()
@@ -1087,8 +1079,7 @@ def test_data_frame_view_whose_definition_runs_a_query_reads_the_current_rows(sp
     try:
         table.insert("(1, 'a'), (2, 'b')")
         frame = query(spark.table(table.name))
-        view = create_view(spark, kind, None, frame)
-        table.views.append(view)
+        view = table.create_view(kind, frame=frame)
         # The columns of the values are in no particular order.
         sql = f"SELECT `{frame.columns[0]}`, `1`, `2` FROM {view}"
         assert rows(spark, sql) == before

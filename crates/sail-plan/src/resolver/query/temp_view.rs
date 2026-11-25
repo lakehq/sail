@@ -22,7 +22,7 @@ use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::source_as_provider;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::Cast;
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource, lit, when,
@@ -49,8 +49,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::{PlanResolverState, ViewDefinitionReads, table_source_address};
 use crate::shared_cte::{
-    CteReference, recompute_plan_schemas, renew_cte_definitions_with_scans, visit_nodes,
-    visit_scans,
+    CteReference, recompute_plan_schemas, replace_scans, visit_nodes, visit_scans,
 };
 
 /// What the source of a table scan reads, for the sources that a temporary view obtains
@@ -248,8 +247,7 @@ impl ViewTableReference {
         let same = columns.iter().all(|(stored, current, used)| {
             current.is_some_and(|current| {
                 stored.name() == current.name()
-                    && !user_metadata_differs(stored, current)
-                    && !encoding_changed(stored.data_type(), current.data_type())
+                    && !needs_cast(stored, current)
                     && !rebuilt(stored, current, *used)
             })
         });
@@ -278,11 +276,10 @@ impl ViewTableReference {
                         let target = nullable_field(stored).with_nullable(current.is_nullable());
                         Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
                     }
-                    // A column whose values are stored in another way, such as `LargeUtf8`
-                    // instead of `Utf8`, is read in the type of the view.
-                    _ if user_metadata_differs(stored, current)
-                        || encoding_changed(stored.data_type(), current.data_type()) =>
-                    {
+                    // A column keeps the metadata of the view, and a column whose values are
+                    // stored in another way, such as `LargeUtf8` instead of `Utf8`, is read
+                    // in the type of the view.
+                    _ if needs_cast(stored, current) => {
                         // The fields of a struct can have nulls now that had none.
                         let data_type = if stored.data_type() == current.data_type() {
                             stored.data_type().clone()
@@ -319,40 +316,6 @@ const LOGICAL_TYPE_METADATA_KEYS: [&str; 5] = [
     EXTENSION_TYPE_METADATA_KEY,
     VARIANT_METADATA_MARKER_KEY,
 ];
-
-/// Returns whether the metadata that clients see in a schema differs, at any level.
-fn user_metadata_differs(stored: &Field, current: &Field) -> bool {
-    if stored.metadata().get(SPARK_METADATA_JSON_KEY)
-        != current.metadata().get(SPARK_METADATA_JSON_KEY)
-    {
-        return true;
-    }
-    match (stored.data_type(), current.data_type()) {
-        (DataType::Struct(stored), DataType::Struct(current)) => stored.iter().any(|field| {
-            current
-                .iter()
-                .find(|x| same_name(x.name(), field.name(), false))
-                .is_some_and(|x| user_metadata_differs(field, x))
-        }),
-        (DataType::List(stored), DataType::List(current))
-        | (DataType::LargeList(stored), DataType::LargeList(current))
-        | (DataType::ListView(stored), DataType::ListView(current))
-        | (DataType::LargeListView(stored), DataType::LargeListView(current))
-        | (DataType::FixedSizeList(stored, _), DataType::FixedSizeList(current, _)) => {
-            user_metadata_differs(stored, current)
-        }
-        (DataType::Map(stored, _), DataType::Map(current, _)) => {
-            match (stored.data_type(), current.data_type()) {
-                (DataType::Struct(stored), DataType::Struct(current)) => stored
-                    .iter()
-                    .zip(current.iter())
-                    .any(|(a, b)| user_metadata_differs(a, b)),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
 
 /// Adds the change of the logical type of a field whose Arrow type can be the same.
 fn logical_type_changes(
@@ -692,34 +655,37 @@ fn same_values(a: &DataType, b: &DataType) -> bool {
     )
 }
 
-/// Returns whether a type that has no column change stores its values in another way than
-/// the stored type at any level, as a string, binary or list type of another encoding.
-fn encoding_changed(stored: &DataType, current: &DataType) -> bool {
+/// Returns whether a column that has no column change is read with a cast to the stored
+/// field: when the metadata that clients see differs, or the values are stored in another
+/// encoding, such as a string, binary or list type of another encoding, at any level.
+fn needs_cast(stored: &Field, current: &Field) -> bool {
+    stored.metadata().get(SPARK_METADATA_JSON_KEY)
+        != current.metadata().get(SPARK_METADATA_JSON_KEY)
+        || type_needs_cast(stored.data_type(), current.data_type())
+}
+
+/// Returns whether a type needs a cast to the stored type, as [`needs_cast`] for fields.
+fn type_needs_cast(stored: &DataType, current: &DataType) -> bool {
     use DataType::*;
     match (stored, current) {
         (Struct(stored), Struct(current)) => stored.iter().any(|field| {
             current
                 .iter()
                 .find(|x| same_name(x.name(), field.name(), false))
-                .is_some_and(|x| encoding_changed(field.data_type(), x.data_type()))
+                .is_some_and(|x| needs_cast(field, x))
         }),
         (
             List(a) | LargeList(a) | ListView(a) | LargeListView(a),
             List(b) | LargeList(b) | ListView(b) | LargeListView(b),
-        ) => {
-            std::mem::discriminant(stored) != std::mem::discriminant(current)
-                || encoding_changed(a.data_type(), b.data_type())
-        }
+        ) => std::mem::discriminant(stored) != std::mem::discriminant(current) || needs_cast(a, b),
         (FixedSizeList(a, _), FixedSizeList(b, _))
         | (Map(a, _), Map(b, _))
-        | (RunEndEncoded(_, a), RunEndEncoded(_, b)) => {
-            encoding_changed(a.data_type(), b.data_type())
-        }
-        (Dictionary(_, a), Dictionary(_, b)) => encoding_changed(a, b),
+        | (RunEndEncoded(_, a), RunEndEncoded(_, b)) => needs_cast(a, b),
+        (Dictionary(_, a), Dictionary(_, b)) => type_needs_cast(a, b),
         (Union(a, _), Union(b, _)) => a
             .iter()
             .zip(b.iter())
-            .any(|((_, a), (_, b))| encoding_changed(a.data_type(), b.data_type())),
+            .any(|((_, a), (_, b))| needs_cast(a, b)),
         _ => stored != current && same_values(stored, current),
     }
 }
@@ -742,40 +708,21 @@ impl PlanResolver<'_> {
         plan: LogicalPlan,
         reads: &ViewDefinitionReads,
     ) -> PlanResult<LogicalPlan> {
-        let mut found = false;
-        visit_scans(&plan, &mut |scan| {
-            found |= reads.table_origin(&scan.source).is_some();
-            Ok(())
-        })?;
-        if !found {
-            return Ok(plan);
-        }
         let required = required_columns(&plan, reads)?;
-        // The stored plan has its own CTE definitions, in the order of the definitions.
-        let mut index = 0;
-        let plan = renew_cte_definitions_with_scans(
+        // The stored plan has its own CTE definitions, and the stored scans have the
+        // nullability of the tables, which the plan above them was resolved without.
+        let plan = replace_scans(
             plan,
-            &mut || {
-                index += 1;
-                index - 1
-            },
-            &mut |_| {},
+            &|scan| reads.table_origin(&scan.source).is_some(),
             &mut |scan| {
-                Ok(match reads.table_origin(&scan.source) {
-                    Some(origin) => {
-                        let required = required.get(&table_source_address(&scan.source));
-                        Transformed::yes(LogicalPlan::TableScan(
-                            ViewTableReference::store(scan, origin, required).map_err(|e| {
-                                datafusion_common::DataFusionError::External(e.into())
-                            })?,
-                        ))
-                    }
-                    None => Transformed::no(LogicalPlan::TableScan(scan)),
-                })
+                let Some(origin) = reads.table_origin(&scan.source) else {
+                    return Ok(LogicalPlan::TableScan(scan));
+                };
+                let required = required.get(&table_source_address(&scan.source));
+                let scan = ViewTableReference::store(scan, origin, required)
+                    .map_err(|e| datafusion_common::DataFusionError::External(e.into()))?;
+                Ok(LogicalPlan::TableScan(scan))
             },
-            // The stored scans have the nullability of the tables, which the plan above
-            // them was resolved without.
-            true,
         )?;
         Ok(plan)
     }
@@ -1169,6 +1116,38 @@ fn add_expression_uses(
     Ok(())
 }
 
+/// Adds the uses of the keys of `DISTINCT` or `GROUP BY`. A key that is a column only tells
+/// rows apart.
+fn add_key_uses(
+    exprs: &[Expr],
+    uses: &mut HashMap<String, ColumnUse>,
+) -> datafusion_common::Result<()> {
+    for expr in exprs {
+        match expr {
+            Expr::Column(column) => {
+                add_use(uses, column.name.clone(), &ColumnUse::Identity);
+            }
+            expr => add_expression_uses(expr, uses)?,
+        }
+    }
+    Ok(())
+}
+
+/// Adds how each output of a projection reads the columns of its input.
+fn add_derivations(
+    exprs: &[Expr],
+    schema: &DFSchemaRef,
+    derivations: &mut HashMap<String, Vec<Derivation<String>>>,
+) -> datafusion_common::Result<()> {
+    for (expr, field) in exprs.iter().zip(schema.fields()) {
+        derivations
+            .entry(field.name().clone())
+            .or_default()
+            .push(Derivation::of(expr)?);
+    }
+    Ok(())
+}
+
 /// How an output of a projection or of a scan reads the columns that it comes from, by
 /// their names or by their positions in a source.
 #[derive(Debug, Clone)]
@@ -1351,12 +1330,7 @@ fn required_columns(
                     lineages.push(lineage);
                     return Ok(TreeNodeRecursion::Jump);
                 }
-                for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
-                    derivations
-                        .entry(field.name().clone())
-                        .or_default()
-                        .push(Derivation::of(expr)?);
-                }
+                add_derivations(&projection.expr, &projection.schema, &mut derivations)?;
             }
             LogicalPlan::TableScan(scan) => {
                 if let Some(reference) = CteReference::try_from_scan(scan) {
@@ -1388,30 +1362,11 @@ fn required_columns(
                 }
             }
             LogicalPlan::Distinct(Distinct::On(on)) if on.sort_expr.is_none() => {
-                for expr in &on.on_expr {
-                    match expr {
-                        Expr::Column(column) => {
-                            add_use(&mut uses, column.name.clone(), &ColumnUse::Identity);
-                        }
-                        expr => add_expression_uses(expr, &mut uses)?,
-                    }
-                }
-                for (expr, field) in on.select_expr.iter().zip(on.schema.fields()) {
-                    derivations
-                        .entry(field.name().clone())
-                        .or_default()
-                        .push(Derivation::of(expr)?);
-                }
+                add_key_uses(&on.on_expr, &mut uses)?;
+                add_derivations(&on.select_expr, &on.schema, &mut derivations)?;
             }
             LogicalPlan::Aggregate(aggregate) => {
-                for expr in &aggregate.group_expr {
-                    match expr {
-                        Expr::Column(column) => {
-                            add_use(&mut uses, column.name.clone(), &ColumnUse::Identity);
-                        }
-                        expr => add_expression_uses(expr, &mut uses)?,
-                    }
-                }
+                add_key_uses(&aggregate.group_expr, &mut uses)?;
                 for expr in &aggregate.aggr_expr {
                     add_expression_uses(expr, &mut uses)?;
                 }
@@ -1562,36 +1517,22 @@ impl TableSource for ViewDefinitionSource {
 /// for a plan that the resolver executes while the definition of a temporary view is
 /// resolved, such as the plan that finds the values of a pivot.
 pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-    let mut found = false;
-    visit_scans(&plan, &mut |scan| {
-        found |= scan.source.downcast_ref::<ViewDefinitionSource>().is_some();
-        Ok(())
-    })?;
-    if !found {
-        return Ok(plan);
-    }
-    let mut index = 0;
-    let plan = renew_cte_definitions_with_scans(
+    // The scans have the nullability of the tables, which the plan above them was resolved
+    // without.
+    let plan = replace_scans(
         plan,
-        &mut || {
-            index += 1;
-            index - 1
-        },
-        &mut |_| {},
+        &|scan| scan.source.downcast_ref::<ViewDefinitionSource>().is_some(),
         &mut |scan| {
             let Some(source) = scan.source.downcast_ref::<ViewDefinitionSource>() else {
-                return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+                return Ok(LogicalPlan::TableScan(scan));
             };
             let scan = TableScanBuilder::new(scan.table_name, Arc::clone(&source.inner))
                 .with_projection(scan.projection)
                 .with_filters(scan.filters)
                 .with_fetch(scan.fetch)
                 .build()?;
-            Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
+            Ok(LogicalPlan::TableScan(scan))
         },
-        // The scans have the nullability of the tables, which the plan above them was
-        // resolved without.
-        true,
     )?;
     Ok(plan)
 }
@@ -1667,7 +1608,7 @@ mod tests {
     use datafusion_functions::core::get_field;
 
     use super::{
-        ColumnUse, TableOrigin, ViewTableReference, required_columns, user_metadata_differs,
+        ColumnUse, TableOrigin, ViewTableReference, needs_cast, required_columns,
         view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
@@ -2068,18 +2009,15 @@ mod tests {
                 value.to_string(),
             )]))
         };
-        assert!(user_metadata_differs(&user("{}"), &user("{\"x\":1}")));
-        assert!(!user_metadata_differs(
+        assert!(needs_cast(&user("{}"), &user("{\"x\":1}")));
+        assert!(!needs_cast(
             &with_metadata(field("a", DataType::Int32)),
             &field("a", DataType::Int32)
         ));
         let nested = |x: Field| field("s", DataType::Struct(vec![x].into()));
-        assert!(user_metadata_differs(
-            &nested(user("{}")),
-            &nested(user("{\"x\":1}"))
-        ));
+        assert!(needs_cast(&nested(user("{}")), &nested(user("{\"x\":1}"))));
         let in_list = |x: Field| field("l", list(x));
-        assert!(user_metadata_differs(
+        assert!(needs_cast(
             &in_list(user("{}")),
             &in_list(user("{\"x\":1}"))
         ));

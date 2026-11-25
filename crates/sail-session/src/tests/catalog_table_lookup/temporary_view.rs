@@ -900,21 +900,6 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
     Ok(())
 }
 
-/// A read of a path in the format of the test data source, as
-/// `spark.read.format("iceberg").options(..).load(..)` sends it.
-fn read_path(path: &str, options: &[(&str, &str)]) -> spec::QueryPlan {
-    spec::QueryPlan::new(spec::QueryNode::Read {
-        is_streaming: false,
-        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
-            format: Some("iceberg".to_string()),
-            schema: None,
-            options: owned(options),
-            paths: vec![path.to_string()],
-            predicates: vec![],
-        })),
-    })
-}
-
 impl Fixture {
     /// Resolves the statement and returns the number of sources that it created for
     /// reads of paths.
@@ -938,13 +923,13 @@ async fn test_temporary_view_reads_the_lake_table_path_again() -> TestResult {
         ];
         let fixture = Fixture::try_new_with(TableNames::Exact, share_ctes, &setup).await?;
         fixture
-            .create_data_frame_view("p_df", false, read_path("memory:///p", &[]))
+            .create_data_frame_view("p_df", false, read_path("iceberg", "memory:///p", &[]))
             .await?;
         fixture
             .create_data_frame_view(
                 "p_opt",
                 false,
-                read_path("memory:///p", &[("b", "2"), ("a", "1")]),
+                read_path("iceberg", "memory:///p", &[("b", "2"), ("a", "1")]),
             )
             .await?;
         for view in ["p_sql", "p_old", "p_df", "p_opt"] {
@@ -981,7 +966,7 @@ async fn test_temporary_view_reads_the_lake_table_path_again() -> TestResult {
         // The order of the options of a read does not matter.
         let before = fixture.source.path_sources.load(Ordering::SeqCst);
         let plan = union(
-            read_path("memory:///p", &[("a", "1"), ("b", "2")]),
+            read_path("iceberg", "memory:///p", &[("a", "1"), ("b", "2")]),
             read_table(&["p_opt"], &[]),
         );
         let resolution = fixture.resolve_plan(plan).await?;

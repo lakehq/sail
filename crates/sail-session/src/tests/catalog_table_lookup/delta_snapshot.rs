@@ -132,21 +132,6 @@ fn collect_delta_versions(
     Ok(())
 }
 
-/// A read of the table `d` by path, as `spark.read.format("delta").options(..).load(..)`
-/// sends it.
-fn read_path(options: &[(&str, &str)]) -> spec::QueryPlan {
-    spec::QueryPlan::new(spec::QueryNode::Read {
-        is_streaming: false,
-        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
-            format: Some("delta".to_string()),
-            schema: None,
-            options: owned(options),
-            paths: vec![LOCATION.to_string()],
-            predicates: vec![],
-        })),
-    })
-}
-
 /// The columns `k` and `v` of the read.
 fn select_k_v(input: spec::QueryPlan) -> spec::QueryPlan {
     let column = |name: &str| spec::Expr::UnresolvedAttribute {
@@ -180,35 +165,28 @@ async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
-        read_path(&[]),
+        read_path("delta", LOCATION, &[]),
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
     // The next statement reads version 1.
     fixture.commit_on_request("t", &store, vec![commit(2, "first")])?;
     let plan = union_all(vec![
-        read_path(&[]),
+        read_path("delta", LOCATION, &[]),
         read_table(&["t"], &[]),
         read_table(&["d"], &[]),
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![1, 1]);
-    let plan = read(read_table(&["d"], &[]));
-    assert_eq!(fixture.delta_versions(plan).await?, vec![2]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_delta_reads_with_other_options_read_one_version() -> TestResult {
-    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
-    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
+    // Reads with other options read one version as well.
+    fixture.commit_on_request("t", &store, vec![commit(3, "first")])?;
     let plan = union_all(vec![
-        read_path(&[("metadataAsDataRead", "true")]),
+        read_path("delta", LOCATION, &[("metadataAsDataRead", "true")]),
         read_table(&["t"], &[]),
-        read_path(&[("deltaLogReplayStrategy", "hash")]),
+        read_path("delta", LOCATION, &[("deltaLogReplayStrategy", "hash")]),
         read_table(&["d"], &[("metadataAsDataRead", "true")]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0, 0]);
-    let plan = read(read_path(&[]));
-    assert_eq!(fixture.delta_versions(plan).await?, vec![1]);
+    assert_eq!(fixture.delta_versions(plan).await?, vec![2, 2, 2]);
+    let plan = read(read_table(&["d"], &[]));
+    assert_eq!(fixture.delta_versions(plan).await?, vec![3]);
     Ok(())
 }
 
@@ -219,11 +197,12 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
     // the statement, so the later read reads the latest version.
     fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
-        read_path(&[("versionAsOf", "0")]),
-        select_k_v(read_path(&[
-            ("readChangeFeed", "true"),
-            ("startingVersion", "0"),
-        ])),
+        read_path("delta", LOCATION, &[("versionAsOf", "0")]),
+        select_k_v(read_path(
+            "delta",
+            LOCATION,
+            &[("readChangeFeed", "true"), ("startingVersion", "0")],
+        )),
         read_table(&["t"], &[]),
         read_table(&["d"], &[]),
         read_table(&["d"], &[("versionAsOf", "0")]),
@@ -232,9 +211,9 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
     // A read that travels in time after the first read keeps its version.
     fixture.commit_on_request("t", &store, vec![commit(2, "first")])?;
     let plan = union_all(vec![
-        read_path(&[]),
+        read_path("delta", LOCATION, &[]),
         read_table(&["t"], &[]),
-        read_path(&[("versionAsOf", "2")]),
+        read_path("delta", LOCATION, &[("versionAsOf", "2")]),
         read_table(&["d"], &[]),
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![1, 2, 1]);
@@ -251,9 +230,9 @@ async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestR
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
-        read_path(&[]),
+        read_path("delta", LOCATION, &[]),
         read_table(&["t2"], &[]),
-        read_path(&[("deltaLogReplayStrategy", "hash")]),
+        read_path("delta", LOCATION, &[("deltaLogReplayStrategy", "hash")]),
     ])?;
     assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1, 1]);
     Ok(())
@@ -272,7 +251,7 @@ async fn test_delta_merge_target_and_source_read_one_version() -> TestResult {
         .await?;
     assert!(versions.len() >= 2, "{versions:?}");
     assert!(versions.iter().all(|v| *v == 0), "{versions:?}");
-    let plan = read(read_path(&[]));
+    let plan = read(read_path("delta", LOCATION, &[]));
     assert_eq!(fixture.delta_versions(plan).await?, vec![1]);
     Ok(())
 }
@@ -293,7 +272,7 @@ async fn test_delta_update_and_delete_target_and_condition_read_one_version() ->
             .await?;
         assert!(versions.len() >= 2, "{sql}: {versions:?}");
         assert!(versions.iter().all(|v| *v == 0), "{sql}: {versions:?}");
-        let plan = read(read_path(&[]));
+        let plan = read(read_path("delta", LOCATION, &[]));
         assert_eq!(fixture.delta_versions(plan).await?, vec![1], "{sql}");
     }
     Ok(())

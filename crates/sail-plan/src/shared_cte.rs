@@ -427,6 +427,42 @@ pub fn renew_cte_definitions_with_scans(
     bind(plan, &renewed, map_scan, recompute_schemas)
 }
 
+/// Returns the plan in which `replace` replaces each scan that `replaced` selects, in the
+/// plan, in its subqueries, and in the CTE definitions that it refers to, which the plan
+/// then refers to copies of. The schemas are computed again from the new scans. A plan
+/// without such a scan is returned as it is.
+pub fn replace_scans(
+    plan: LogicalPlan,
+    replaced: &dyn Fn(&TableScan) -> bool,
+    replace: &mut dyn FnMut(TableScan) -> Result<LogicalPlan>,
+) -> Result<LogicalPlan> {
+    let mut found = false;
+    visit_scans(&plan, &mut |scan| {
+        found |= replaced(scan);
+        Ok(())
+    })?;
+    if !found {
+        return Ok(plan);
+    }
+    let mut index = 0;
+    renew_cte_definitions_with_scans(
+        plan,
+        &mut || {
+            index += 1;
+            index - 1
+        },
+        &mut |_| {},
+        &mut |scan| {
+            if replaced(&scan) {
+                Ok(Transformed::yes(replace(scan)?))
+            } else {
+                Ok(Transformed::no(LogicalPlan::TableScan(scan)))
+            }
+        },
+        true,
+    )
+}
+
 /// Returns the plan in which each node, also in the subqueries, has the schema that it
 /// computes from its inputs, for a plan in which a scan was replaced by a scan with
 /// another schema.
