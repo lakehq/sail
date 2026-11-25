@@ -800,6 +800,21 @@ mod tests {
     impl LakeSource for TestLakeSource {}
 
     #[test]
+    fn lake_snapshot_pins_keep_the_first_version_of_each_table_and_commit_kind() -> Result<()> {
+        let pins = LakeSnapshotPins::default();
+        let location = "memory:///d/";
+        pins.insert(location.to_string(), false, "id".to_string(), 1)?;
+        // A load of the same location with the commits that the catalog ratified is
+        // another table version, and a later load does not replace the first.
+        pins.insert(location.to_string(), true, "id".to_string(), 2)?;
+        pins.insert(location.to_string(), false, "id".to_string(), 3)?;
+        assert_eq!(pins.get(location, false)?, Some(("id".to_string(), 1)));
+        assert_eq!(pins.get(location, true)?, Some(("id".to_string(), 2)));
+        assert_eq!(pins.get("memory:///e/", false)?, None);
+        Ok(())
+    }
+
+    #[test]
     fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
         let registry = DataSourceRegistry::new();
 

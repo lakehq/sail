@@ -817,6 +817,44 @@ def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, tmp_p
         table.drop()
 
 
+# Queries that read a field of a struct inside an array or a map, over a table `(k, c)`, and the
+# type of `c` with the field `a`.
+NESTED_STRUCT_QUERIES = {
+    "array": (
+        "SELECT c[0].a AS y FROM {t}",
+        "ARRAY<STRUCT<{a}: INT, b: INT>>",
+        "array(named_struct('{a}', 1, 'b', 2))",
+    ),
+    "map": (
+        "SELECT c['x'].a AS y FROM {t}",
+        "MAP<STRING, STRUCT<{a}: INT, b: INT>>",
+        "map('x', named_struct('{a}', 1, 'b', 2))",
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("case", NESTED_STRUCT_QUERIES)
+def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(
+    spark, tmp_path, kind, case
+):
+    # A known limit: the view reads the array or the map whole, and does not give the fields
+    # of the structs in it the names of the view, so the access to the field fails.
+    query, data_type, value = NESTED_STRUCT_QUERIES[case]
+    table = Table(spark, tmp_path, "parquet", f"k INT, c {data_type.format(a='a')}")
+    try:
+        table.insert(f"(1, {value.format(a='a')})")
+        view = table.create_view(kind, query.format(t=table.name))
+        assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+        spark.sql(f"DROP TABLE {table.name}")
+        table.create(f"k INT, c {data_type.format(a='A')}")
+        table.insert(f"(2, {value.format(a='A')})")
+        with pytest.raises(Exception, match="not found"):
+            spark.sql(f"SELECT * FROM {view}").collect()
+    finally:
+        table.drop()
+
+
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
 # Delta Lake column mapping, as the clause after the columns and the table properties.
 METADATA_FORMATS = {

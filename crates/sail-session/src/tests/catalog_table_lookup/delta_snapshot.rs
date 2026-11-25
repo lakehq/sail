@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::expr::InSubquery;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use sail_delta_lake::{DeltaLakeSource, DeltaTableSource};
+use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use super::*;
 
@@ -82,16 +85,42 @@ impl Fixture {
     async fn delta_versions(&self, plan: spec::Plan) -> TestResult<Vec<i64>> {
         let plan = self.resolver().resolve_named_plan(plan).await?.plan;
         let mut versions = vec![];
-        plan.apply(|node| {
-            if let LogicalPlan::TableScan(scan) = node
-                && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
-            {
-                versions.push(source.snapshot().version());
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        collect_delta_versions(&plan, &mut versions)?;
         Ok(versions)
     }
+}
+
+/// Adds the versions of the Delta table that the plan reads, also in the target and in the
+/// condition of a row-level write, which are not inputs of the write.
+fn collect_delta_versions(
+    plan: &LogicalPlan,
+    versions: &mut Vec<i64>,
+) -> datafusion_common::Result<()> {
+    plan.apply(|node| {
+        match node {
+            LogicalPlan::TableScan(scan) => {
+                if let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() {
+                    versions.push(source.snapshot().version());
+                }
+            }
+            LogicalPlan::Extension(extension) => {
+                if let Some(write) = extension.node.as_any().downcast_ref::<RowLevelWriteNode>() {
+                    collect_delta_versions(write.raw_target(), versions)?;
+                    if let Some(condition) = write.condition() {
+                        condition.expr.apply(|expr| {
+                            if let Expr::InSubquery(InSubquery { subquery, .. }) = expr {
+                                collect_delta_versions(&subquery.subquery, versions)?;
+                            }
+                            Ok(TreeNodeRecursion::Continue)
+                        })?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }
 
 /// A read of the table `d` by path, as `spark.read.format("delta").options(..).load(..)`
@@ -231,5 +260,27 @@ async fn test_delta_merge_target_and_source_read_one_version() -> TestResult {
     assert!(versions.iter().all(|v| *v == 0), "{versions:?}");
     let plan = read(read_path(&[]));
     assert_eq!(fixture.delta_versions(plan).await?, vec![1]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delta_update_and_delete_target_and_condition_read_one_version() -> TestResult {
+    for statement in ["UPDATE d SET v = 1 WHERE", "DELETE FROM d WHERE"] {
+        let (fixture, store) = Fixture::try_new_with_delta_table().await?;
+        // The target is read first. The condition reads the table by path after a
+        // commit, and reads the version of the target, which the write is validated
+        // against.
+        fixture.commit_on_request(&store, vec![commit(1, "first")])?;
+        let sql = format!(
+            "{statement} k IN (SELECT k FROM t UNION ALL SELECT k FROM delta.`memory:///d/`)"
+        );
+        let versions = fixture
+            .delta_versions(from_ast_statement(parse_one_statement(&sql)?)?)
+            .await?;
+        assert!(versions.len() >= 2, "{sql}: {versions:?}");
+        assert!(versions.iter().all(|v| *v == 0), "{sql}: {versions:?}");
+        let plan = read(read_path(&[]));
+        assert_eq!(fixture.delta_versions(plan).await?, vec![1], "{sql}");
+    }
     Ok(())
 }
