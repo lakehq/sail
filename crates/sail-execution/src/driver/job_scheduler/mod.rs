@@ -65,6 +65,14 @@ pub enum JobAction {
         handle: JobOutputHandle,
         cause: CommonErrorCause,
     },
+    /// Reads the split points of a range shuffle on the driver, for the number of
+    /// partitions of the shuffle (see [`crate::job_graph::RangeShuffle`]).
+    ReadRangeSplitPoints {
+        job_id: JobId,
+        shuffle: usize,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    },
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
