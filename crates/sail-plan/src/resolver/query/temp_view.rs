@@ -1108,7 +1108,8 @@ fn add_use<K: Eq + Hash>(uses: &mut HashMap<K, ColumnUse>, key: K, used: &Column
     }
 }
 
-/// Returns the column and the path of fields of a chain of struct field accesses.
+/// Returns the column and the path of fields of a chain of struct field accesses, also of a
+/// column of an outer query.
 fn field_access(expr: &Expr) -> Option<(&Column, Vec<String>)> {
     let Expr::ScalarFunction(function) = expr else {
         return None;
@@ -1121,7 +1122,7 @@ fn field_access(expr: &Expr) -> Option<(&Column, Vec<String>)> {
     };
     let name = name.try_as_str().flatten()?.to_string();
     match base {
-        Expr::Column(column) => Some((column, vec![name])),
+        Expr::Column(column) | Expr::OuterReferenceColumn(_, column) => Some((column, vec![name])),
         base => {
             let (column, mut path) = field_access(base)?;
             path.push(name);
@@ -2596,6 +2597,46 @@ mod tests {
             .project(vec![col("t_a"), col("z")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_outer_references_read_the_struct_fields_that_they_access() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        let (u, _) = read_table(&mut reads, "u")?;
+        let fields = Fields::from(vec![
+            field("x", DataType::Int32),
+            field("y", DataType::Int32),
+        ]);
+        let outer = Expr::OuterReferenceColumn(
+            Arc::new(field("t_s", DataType::Struct(fields))),
+            Column::from_name("t_s"),
+        );
+        // `SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.s.x)`.
+        let subquery = LogicalPlanBuilder::from(u)
+            .filter(col("u_a").eq(get(outer.clone(), "x")))?
+            .project(vec![lit(1)])?
+            .build()?;
+        let exists = Expr::Exists(Exists::new(
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns: vec![outer],
+                spans: Default::default(),
+            },
+            false,
+        ));
+        let plan = LogicalPlanBuilder::from(t)
+            .filter(exists)?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(
+            uses(&plan, &reads, address)?,
+            Some(vec![
+                (0, ColumnUse::Whole),
+                (3, ColumnUse::path(&["x".to_string()]))
+            ])
+        );
         Ok(())
     }
 

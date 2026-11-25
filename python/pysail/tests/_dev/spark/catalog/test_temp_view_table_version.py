@@ -742,6 +742,33 @@ def test_view_reads_a_table_created_again_with_the_same_columns_in_another_forma
         table.drop()
 
 
+# Queries over `t (k, s STRUCT<x, b>)` and `u (c0)` that read the field `x` of `s` only.
+CORRELATED_FIELD_QUERIES = {
+    "exists": "SELECT k FROM {t} WHERE EXISTS (SELECT 1 FROM {u} WHERE {u}.c0 = {t}.s.x)",
+    "scalar subquery": "SELECT k, (SELECT count(*) FROM {u} WHERE {u}.c0 = {t}.s.x) AS n FROM {t}",
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("change", ["DROP COLUMN s.b", "ADD COLUMNS (s.g INT)"])
+@pytest.mark.parametrize("query", CORRELATED_FIELD_QUERIES)
+def test_view_reads_a_struct_whose_unread_field_changed_through_a_correlated_subquery(
+    spark, tmp_path, kind, change, query
+):
+    table = Table(spark, tmp_path, "iceberg", "k INT, s STRUCT<x: BIGINT, b: STRING>")
+    other = Table(spark, tmp_path, "parquet", "c0 BIGINT")
+    try:
+        table.insert("(1, named_struct('x', 1, 'b', 'p')), (2, named_struct('x', 5, 'b', 'q'))")
+        other.insert("(1), (2)")
+        sql = CORRELATED_FIELD_QUERIES[query].format(t=table.name, u=other.name)
+        view = table.create_view(kind, sql)
+        spark.sql(f"ALTER TABLE {table.name} {change}")
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    finally:
+        table.drop()
+        other.drop()
+
+
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
 # Delta Lake column mapping, as the clause after the columns and the table properties.
 METADATA_FORMATS = {
