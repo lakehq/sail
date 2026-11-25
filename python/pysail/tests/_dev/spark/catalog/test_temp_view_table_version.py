@@ -769,6 +769,38 @@ def test_view_reads_a_struct_whose_unread_field_changed_through_a_correlated_sub
         other.drop()
 
 
+# Queries over `t (k, s STRUCT<a, b>)` that read the struct `s` whole and its field `a`.
+STRUCT_AND_FIELD_QUERIES = [
+    "SELECT s, s.a AS y FROM {t}",
+    "SELECT s.b AS x, s, s.a AS y FROM {t}",
+    "SELECT s FROM {t} WHERE s.a > 0",
+    "SELECT s.a AS y FROM {t} WHERE s IS NOT NULL",
+]
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("fmt", ["iceberg", "parquet"])
+@pytest.mark.parametrize("query", STRUCT_AND_FIELD_QUERIES)
+def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, tmp_path, kind, fmt, query):
+    table = Table(spark, tmp_path, fmt, "k INT, s STRUCT<a: INT, b: INT>")
+    try:
+        table.insert("(1, named_struct('a', 1, 'b', 2))")
+        sql = query.format(t=table.name)
+        view = table.create_view(kind, sql)
+        schema = spark.table(view).schema
+        if fmt == "iceberg":
+            spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN s.a TO A")
+        else:
+            spark.sql(f"DROP TABLE {table.name}")
+            table.create("k INT, s STRUCT<A: INT, b: INT>")
+        table.insert("(2, named_struct('A', 3, 'b', 4))")
+        # The view keeps the names of the fields that it was created with.
+        assert sorted(spark.table(view).collect()) == sorted(spark.sql(sql).collect())
+        assert spark.table(view).schema.simpleString() == schema.simpleString()
+    finally:
+        table.drop()
+
+
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
 # Delta Lake column mapping, as the clause after the columns and the table properties.
 METADATA_FORMATS = {

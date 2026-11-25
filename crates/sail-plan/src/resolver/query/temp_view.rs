@@ -239,8 +239,11 @@ impl ViewTableReference {
                 (stored, current, self.required[i].as_ref())
             })
             .collect::<Vec<_>>();
-        let rebuilt = |stored: &Field, current: &Field, used: Option<&ColumnUse>| {
-            matches!(used, Some(ColumnUse::Fields(_))) && stored.data_type() != current.data_type()
+        let rebuilt = |stored: &Field, current: &Field, used: Option<&ColumnUse>| match used {
+            Some(ColumnUse::Fields(_)) => stored.data_type() != current.data_type(),
+            // The fields of a struct that is read whole keep the names of the view.
+            Some(ColumnUse::Whole) => field_names_changed(stored.data_type(), current.data_type()),
+            _ => false,
         };
         let same = columns.iter().all(|(stored, current, used)| {
             current.is_some_and(|current| {
@@ -658,6 +661,22 @@ fn column_changes(
         )),
         _ => {}
     }
+}
+
+/// Returns whether a field of a struct, or of a struct in a struct, has a name of another
+/// letter case than the stored field that it matches.
+fn field_names_changed(stored: &DataType, current: &DataType) -> bool {
+    let (DataType::Struct(stored), DataType::Struct(current)) = (stored, current) else {
+        return false;
+    };
+    stored.iter().any(|field| {
+        current
+            .iter()
+            .find(|x| same_name(x.name(), field.name(), false))
+            .is_some_and(|x| {
+                x.name() != field.name() || field_names_changed(field.data_type(), x.data_type())
+            })
+    })
 }
 
 /// Returns whether two string types or two binary types store the same values in other ways.
@@ -1458,8 +1477,8 @@ fn required_columns(
 }
 
 /// Returns the value of a struct with the type that the view was created with, from the
-/// current value of a struct that the view reads only through some of its fields. A field
-/// that the view does not read is null, so every field of the value can have nulls.
+/// current value of a struct that the view reads through some of its fields or whole. A
+/// field that the view does not read is null, so every field of the value can have nulls.
 fn rebuild_struct(
     expr: Expr,
     stored: &Field,
@@ -1467,13 +1486,23 @@ fn rebuild_struct(
     used: &ColumnUse,
     case_sensitive: bool,
 ) -> PlanResult<Expr> {
-    let (
-        ColumnUse::Fields(fields),
-        DataType::Struct(stored_fields),
-        DataType::Struct(current_fields),
-    ) = (used, stored.data_type(), current.data_type())
+    let (DataType::Struct(stored_fields), DataType::Struct(current_fields)) =
+        (stored.data_type(), current.data_type())
     else {
         return Ok(expr);
+    };
+    // A struct that is read whole reads all its fields.
+    let whole;
+    let fields = match used {
+        ColumnUse::Fields(fields) => fields,
+        ColumnUse::Whole => {
+            whole = stored_fields
+                .iter()
+                .map(|x| (x.name().clone(), ColumnUse::Whole))
+                .collect();
+            &whole
+        }
+        ColumnUse::Identity => return Ok(expr),
     };
     if stored.data_type() == current.data_type() {
         return Ok(expr);
