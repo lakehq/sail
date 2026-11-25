@@ -382,6 +382,22 @@ COLUMN_CHANGES = {
         "(1, 'z'), (1, 'y'), (2, 'y')",
         [(1,), (1,), (2,)],
     ),
+    "aliased distinct row column retyped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT h0 FROM (SELECT DISTINCT a AS h0, b AS h1 FROM {t}) dh",
+        "a INT, b BIGINT",
+        "(1, 10), (1, 10), (5, 30)",
+        [(1,), (5,)],
+    ),
+    "aliased grouping column retyped": (
+        "a INT, b INT",
+        "(1, 10), (1, 20), (2, 30)",
+        "SELECT h0 FROM (SELECT a AS h0, b AS h1 FROM {t} GROUP BY a, b) dh",
+        "a INT, b BIGINT",
+        "(1, 10), (1, 10), (5, 30)",
+        [(1,), (5,)],
+    ),
     "distinct row column retyped with fewer distinct rows": (
         "a INT, b INT",
         "(1, 10), (1, 20), (2, 30)",

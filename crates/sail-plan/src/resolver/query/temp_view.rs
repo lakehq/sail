@@ -1183,12 +1183,12 @@ enum Derivation<K> {
 
 impl Derivation<String> {
     fn of(expr: &Expr) -> datafusion_common::Result<Self> {
-        // An output that passes a column on as it is, under its name or another one.
-        let passed = match expr {
-            Expr::Alias(alias) => alias.expr.try_as_col(),
-            expr => expr.try_as_col(),
-        };
-        Ok(match passed {
+        // An output that passes a column on as it is, under its name or other ones.
+        let mut passed = expr;
+        while let Expr::Alias(alias) = passed {
+            passed = &alias.expr;
+        }
+        Ok(match passed.try_as_col() {
             Some(column) => Derivation::Column(column.name.clone()),
             None => {
                 let mut reads = HashMap::new();
@@ -2475,12 +2475,23 @@ mod tests {
         assert_eq!(uses(&plan, &reads, address)?, Some(expected));
         // `dropDuplicates(["a", "b"])` of a DataFrame.
         let columns = ["t_a", "t_b", "t_c", "t_s"].map(col).to_vec();
-        let plan = LogicalPlanBuilder::from(t)
+        let plan = LogicalPlanBuilder::from(t.clone())
             .distinct_on(vec![col("t_a"), col("t_b")], columns, None)?
             .project(vec![col("t_a")])?
             .build()?;
         let mut expected = vec![(0, ColumnUse::Whole)];
         expected.extend(identity(&[1]));
+        assert_eq!(uses(&plan, &reads, address)?, Some(expected.clone()));
+        // `SELECT h0 FROM (SELECT DISTINCT a AS h0, b AS h1 FROM t)`, with the aliases of
+        // the resolver around the aliases of the query.
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![
+                col("t_a").alias("h0").alias("x0"),
+                col("t_b").alias("h1").alias("x1"),
+            ])?
+            .distinct()?
+            .project(vec![col("x0")])?
+            .build()?;
         assert_eq!(uses(&plan, &reads, address)?, Some(expected));
         Ok(())
     }
