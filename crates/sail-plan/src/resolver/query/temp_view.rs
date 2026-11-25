@@ -714,6 +714,7 @@ impl PlanResolver<'_> {
         let plan = replace_scans(
             plan,
             &|scan| reads.table_origin(&scan.source).is_some(),
+            &|scan| ViewDefinitionSource::changes_nullability(&scan.source),
             &mut |scan| {
                 let Some(origin) = reads.table_origin(&scan.source) else {
                     return Ok(LogicalPlan::TableScan(scan));
@@ -1522,6 +1523,7 @@ pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<Logi
     let plan = replace_scans(
         plan,
         &|scan| scan.source.downcast_ref::<ViewDefinitionSource>().is_some(),
+        &|scan| ViewDefinitionSource::changes_nullability(&scan.source),
         &mut |scan| {
             let Some(source) = scan.source.downcast_ref::<ViewDefinitionSource>() else {
                 return Ok(LogicalPlan::TableScan(scan));
@@ -1535,6 +1537,16 @@ pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<Logi
         },
     )?;
     Ok(plan)
+}
+
+impl ViewDefinitionSource {
+    /// Returns whether the source is a definition source whose schema allows nulls that
+    /// the schema of the source that it wraps does not allow.
+    fn changes_nullability(source: &Arc<dyn TableSource>) -> bool {
+        source
+            .downcast_ref::<Self>()
+            .is_some_and(|source| source.schema != source.inner.schema())
+    }
 }
 
 pub(in crate::resolver) fn view_definition_source(
