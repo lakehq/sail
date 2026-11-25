@@ -7,6 +7,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::predicate::rlike::RLike;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -115,8 +116,8 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
-        ("regexp", F::binary_op(Operator::RegexMatch)),
-        ("regexp_like", F::binary_op(Operator::RegexMatch)),
-        ("rlike", F::binary_op(Operator::RegexMatch)),
+        ("regexp", F::udf(RLike::default())),
+        ("regexp_like", F::udf(RLike::default())),
+        ("rlike", F::udf(RLike::default())),
     ]
 }

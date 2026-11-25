@@ -2,7 +2,7 @@
 // SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::{Array, ArrayRef, StringViewArray, StructArray, new_null_array};
 use arrow::compute::cast;
@@ -20,6 +20,7 @@ use parquet_variant::{
     VariantDecimal16,
 };
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
+use regex::Regex;
 use sail_common_datafusion::variant::{
     VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME, variant_metadata_field,
 };
@@ -57,7 +58,18 @@ impl Default for ParseJson {
 }
 
 /// Spark chooses the variant type from the JSON token before rounding to a double.
-fn variant_number(token: &str) -> Option<Variant<'static, 'static>> {
+fn variant_number(token: &str, at_eof: bool) -> Option<Variant<'static, 'static>> {
+    const MAX_NUMBER_DIGITS: usize = 1000;
+    if token.len() > MAX_NUMBER_DIGITS {
+        let digits = token.bytes().filter(u8::is_ascii_digit).count();
+        // Jackson's ReaderBasedJsonParser uses -1 for an absent fraction or
+        // exponent on its slow path (a leading zero or a token ending at EOF).
+        let slow_path = at_eof || token.trim_start_matches('-').starts_with('0');
+        let one_missing_part = token.contains('.') != token.contains(['e', 'E']);
+        if digits > MAX_NUMBER_DIGITS + usize::from(slow_path && one_missing_part) {
+            return None;
+        }
+    }
     if let Ok(i) = token.parse::<i64>() {
         return Some(if let Ok(n) = i8::try_from(i) {
             n.into()
@@ -93,14 +105,22 @@ fn variant_number(token: &str) -> Option<Variant<'static, 'static>> {
     token.parse::<f64>().ok().map(Into::into)
 }
 
-fn primitive_token(parser: &mut Jiter<'_>, peek: Peek) -> Option<Variant<'static, 'static>> {
+fn primitive_token(
+    parser: &mut Jiter<'_>,
+    peek: Peek,
+    document_len: Option<usize>,
+) -> Option<Variant<'static, 'static>> {
     match peek {
         Peek::Null => {
             parser.known_null().ok()?;
             Some(Variant::Null)
         }
         Peek::True | Peek::False => Some(parser.known_bool(peek).ok()?.into()),
-        _ => variant_number(std::str::from_utf8(parser.known_number_bytes(peek).ok()?).ok()?),
+        _ => {
+            let start = parser.current_index();
+            let token = std::str::from_utf8(parser.known_number_bytes(peek).ok()?).ok()?;
+            variant_number(token, document_len == Some(start + token.len()))
+        }
     }
 }
 
@@ -141,7 +161,7 @@ fn append_json_value(
             }
             object.finish();
         }
-        _ => builder.append_value(primitive_token(parser, peek)?),
+        _ => builder.append_value(primitive_token(parser, peek, None)?),
     }
     Some(())
 }
@@ -153,18 +173,32 @@ fn try_append_json(builder: &mut VariantArrayBuilder, json: &str) -> Option<()> 
     if matches!(peek, Peek::Array | Peek::Object | Peek::String) {
         return append_json_value(&mut parser, peek, builder, 0);
     }
-    // Primitive tokens must end at a delimiter before any trailing content.
-    let value = primitive_token(&mut parser, peek)?;
-    if let Some(&next) = json.as_bytes().get(parser.current_index())
-        && !matches!(
-            next,
-            b' ' | b'\n' | b'\t' | b'\r' | b'"' | b'[' | b']' | b'{' | b'}' | b',' | b':'
-        )
-    {
-        return None;
+    let value = primitive_token(&mut parser, peek, Some(json.len()))?;
+    if let Some(next) = json[parser.current_index()..].chars().next() {
+        let terminated = match peek {
+            Peek::True | Peek::False | Peek::Null => !continues_json_keyword(next),
+            _ => matches!(next, ' ' | '\t' | '\r' | '\n'),
+        };
+        if !terminated {
+            return None;
+        }
     }
     builder.append_value(value);
     Some(())
+}
+
+/// Jackson rejects a keyword followed by a Java identifier part at or above '0'.
+/// It checks one UTF-16 code unit, so supplementary characters terminate the token.
+fn continues_json_keyword(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_alphanumeric() || c == '_' || c == '\u{7f}';
+    }
+    #[expect(clippy::expect_used)]
+    static IDENTIFIER_PART: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\u0080-\u009f]$")
+            .expect("valid Java identifier part pattern")
+    });
+    c.len_utf16() == 1 && IDENTIFIER_PART.is_match(c.encode_utf8(&mut [0; 4]))
 }
 
 /// Wrap a JSON-parse failure with Spark's canonical error code so feature
@@ -587,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_parse_json_scientific_notation_is_numeric() -> Result<()> {
-        assert_eq!(variant_number("1.5e-1"), Some(Variant::Double(0.15)));
+        assert_eq!(variant_number("1.5e-1", true), Some(Variant::Double(0.15)));
         Ok(())
     }
 }

@@ -263,6 +263,28 @@ Feature: try_parse_json comprehensive tests
         | NaN string is invalid JSON            | 'NaN'      |
         | hex number is invalid JSON            | '0xff'     |
 
+    Scenario: try_parse_json applies the numeric length limit inside arrays
+      When query
+        """
+        SELECT try_parse_json(repeat('9', 1000)) IS NOT NULL AS at_limit,
+               try_parse_json(concat('[', repeat('9', 1001), ']')) IS NULL AS over_limit,
+               to_json(try_parse_json('1e400')) AS overflow
+        """
+      Then query result
+        | at_limit | over_limit | overflow   |
+        | true     | true       | "Infinity" |
+
+    Scenario: Root number and keyword tokens have different boundaries
+      When query
+        """
+        SELECT try_parse_json('1,') IS NULL AS comma, try_parse_json('1]') IS NULL AS bracket,
+               to_json(try_parse_json('true!')) AS bang, to_json(try_parse_json('null/')) AS slash,
+               try_parse_json('true_') IS NULL AS identifier
+        """
+      Then query result
+        | comma | bracket | bang | slash | identifier |
+        | true  | true    | true | null  | true       |
+
     Scenario Outline: Number edge case (to_json): <case>
       When query
         """
@@ -384,8 +406,6 @@ Feature: try_parse_json comprehensive tests
         | NULL    |
         | NULL    |
 
-    @sail-bug
-    # Sail renders 1e10 as 10000000000 instead of Spark's 1.0E10 (scientific notation).
     Scenario: multi-row with number edge cases
       When query
         """

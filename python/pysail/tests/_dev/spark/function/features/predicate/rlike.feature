@@ -1,6 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
-Feature: rlike output schema
+Feature: rlike
+
+  Rule: A literal backslash in a regular expression matches a backslash
+
+    Scenario Outline: <function> keeps a literal backslash when matching a column
+      When query
+        """
+        SELECT id, <function>(x, r'a\\b') AS result
+        FROM VALUES (1, r'a\b'), (2, 'ab'), (3, CAST(NULL AS STRING)) AS t(id, x)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 1  | true   |
+        | 2  | false  |
+        | 3  | NULL   |
+
+      Examples:
+        | function    |
+        | rlike       |
+        | regexp      |
+        | regexp_like |
 
   @function(nullability)
   Rule: Output schema

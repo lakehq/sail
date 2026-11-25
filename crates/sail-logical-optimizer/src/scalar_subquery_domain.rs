@@ -163,6 +163,8 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
                 if volatile_correlation {
+                    // TODO: Share outer row identity to support duplicate bindings, larger
+                    // VALUES inputs and nonliteral relations without replaying volatile work.
                     if !has_window
                         || !unique_literal_bindings(
                             &input,
