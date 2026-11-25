@@ -222,6 +222,9 @@ pub(crate) fn map_deduplicate_keys(
             for entry_index in 0..num_keys_entries {
                 let key = ScalarValue::try_from_array(flat_keys, cur_keys_offset + entry_index)?
                     .compacted();
+                if key.is_null() {
+                    return exec_err!("[NULL_MAP_KEY] Cannot use null as map key.");
+                }
                 let value_index = (cur_values_offset + entry_index) as i32;
 
                 if let Some(&output_index) = key_to_output_index.get(&key) {

@@ -1187,7 +1187,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Regular expression did not compile: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {
@@ -1253,7 +1253,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Regular expression did not compile: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {
@@ -1319,7 +1319,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Regular expression did not compile: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {
