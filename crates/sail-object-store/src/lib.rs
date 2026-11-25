@@ -10,3 +10,5 @@ pub use path::{
     ResolvedObjectStorePath, delete_object_store_prefix_objects, resolve_object_store_path,
 };
 pub use registry::DynamicObjectStoreRegistry;
+
+pub mod access;

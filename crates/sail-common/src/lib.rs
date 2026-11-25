@@ -10,3 +10,5 @@ pub mod spec;
 pub mod telemetry;
 pub mod tests;
 pub mod utils;
+
+pub mod storage;

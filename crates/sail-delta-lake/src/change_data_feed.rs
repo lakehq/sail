@@ -91,6 +91,7 @@ struct ChangeFiles {
 }
 
 pub(crate) struct ChangeDataFeedSource {
+    pub(crate) storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
     snapshot: Arc<DeltaSnapshot>,
     log_store: LogStoreRef,
     schema: SchemaRef,
@@ -208,6 +209,7 @@ impl ChangeDataFeedSource {
         }
         if empty_range {
             return Ok(Self {
+                storage_access: None,
                 schema: feed_schema(snapshot.schema()),
                 snapshot,
                 log_store,
@@ -358,6 +360,7 @@ impl ChangeDataFeedSource {
             }
         }
         Ok(Self {
+            storage_access: None,
             schema: feed_schema(snapshot.schema()),
             snapshot,
             log_store,

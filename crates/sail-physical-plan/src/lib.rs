@@ -19,4 +19,8 @@ pub mod shared_cte;
 pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;
+
+pub mod storage_access;
+
+pub mod catalog_write;
 pub mod tail;

@@ -285,6 +285,13 @@ impl LakeSource for DeltaLakeSource {
             replace,
             lakehouse_table,
         } = info;
+        let runtime_env = match lakehouse_table
+            .as_ref()
+            .and_then(|table| table.storage_access.as_deref())
+        {
+            Some(spec) => sail_object_store::access::storage_runtime(&runtime_env, spec)?,
+            None => runtime_env,
+        };
         let catalog_table = lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table().to_vec());
@@ -561,7 +568,15 @@ impl LakeSource for DeltaLakeSource {
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
-        let runtime_env = ctx.runtime_env();
+        let scoped = lakehouse_table
+            .as_ref()
+            .and_then(|t| t.storage_access.as_deref())
+            .map(|spec| {
+                sail_object_store::access::storage_runtime(&ctx.runtime_env(), spec)
+                    .map(|runtime| sail_object_store::access::storage_task_context(ctx, runtime))
+            })
+            .transpose()?;
+        let ctx = scoped.as_deref().unwrap_or(ctx);
         match operation {
             LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
                 not_impl_err!("Snapshot references require an Iceberg table")
@@ -650,8 +665,14 @@ impl LakeSource for DeltaLakeSource {
             LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
                 let commit_properties =
                     CommitProperties::from_session_config(ctx.session_config())?;
-                self.add_check_constraint(runtime_env, path, &name, &expression, commit_properties)
-                    .await
+                self.add_check_constraint(
+                    ctx.runtime_env(),
+                    path,
+                    &name,
+                    &expression,
+                    commit_properties,
+                )
+                .await
             }
         }?;
         Ok(
@@ -796,6 +817,29 @@ pub(crate) async fn plan_delta_write(
         options,
         lakehouse_table,
     } = node.options().clone();
+
+    let storage_access = lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.clone());
+    let physical_input: Arc<dyn ExecutionPlan> = if storage_access.is_some() {
+        Arc::new(
+            sail_physical_plan::storage_access::StorageAccessExec::query_input(
+                physical_input,
+                ctx.runtime_env().clone(),
+            ),
+        )
+    } else {
+        physical_input
+    };
+    let storage_session = storage_access
+        .as_deref()
+        .map(|spec| sail_object_store::access::storage_session(ctx, spec))
+        .transpose()?;
+    let ctx: &dyn Session = storage_session
+        .as_ref()
+        .map(|session| session as &dyn Session)
+        .unwrap_or(ctx);
+    let source_input = physical_input.clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
         return not_impl_err!("writing streaming data to Delta table");
@@ -1016,9 +1060,15 @@ pub(crate) async fn plan_delta_write(
     .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
-    planner
+    let plan = planner
         .create_plan(physical_input, mode, physical_sort)
-        .await
+        .await?;
+    match storage_access.as_deref() {
+        Some(spec) => {
+            crate::storage_access::bind_storage(plan, spec, ctx.runtime_env(), &[source_input])
+        }
+        None => Ok(plan),
+    }
 }
 
 async fn open_delta_write_planning_table(

@@ -63,7 +63,7 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
 
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2]
-        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, None)]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, "vended-credentials")]
 
         start = len(records)
         # Repeated references to a table also load it once.
@@ -77,35 +77,35 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
         )
         assert [row.id for row in rows] == [2]
         assert sorted(_requests(records, start)) == [
-            (f"{NAMESPACE}/tables/first", 200, None),
-            (f"{NAMESPACE}/tables/second", 200, None),
+            (f"{NAMESPACE}/tables/first", 200, "vended-credentials"),
+            (f"{NAMESPACE}/tables/second", 200, "vended-credentials"),
         ]
 
         # Each statement loads the table again and sees its latest version.
         spark.sql(f"INSERT INTO {first} VALUES (3)")
         start = len(records)
         assert [row.id for row in spark.read.table(first).orderBy("id").collect()] == [1, 2, 3]
-        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, None)]
+        assert _requests(records, start) == [(f"{NAMESPACE}/tables/first", 200, "vended-credentials")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {first}")
         spark.sql(f"DROP TABLE IF EXISTS {second}")
 
 
-def test_read_sends_configured_access_delegation_once(spark, recording_catalog, seaweedfs_host_endpoint):
+def test_read_disables_access_delegation(spark, recording_catalog, seaweedfs_host_endpoint):
     _, records = recording_catalog
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     name = f"{NAMESPACE}.delegated"
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
         spark.sql(f"INSERT INTO {name} VALUES (1)")
-        options = ', access_delegation="vended-credentials"'
+        options = ', access_delegation="none"'
         with (
             _server(recording_catalog, seaweedfs_host_endpoint, options) as server,
             spark_session_factory(server.remote) as sessions,
         ):
             start = len(records)
             assert [row.id for row in sessions.create().table(name).collect()] == [1]
-            assert _requests(records, start) == [(f"{NAMESPACE}/tables/delegated", 200, "vended-credentials")]
+            assert _requests(records, start) == [(f"{NAMESPACE}/tables/delegated", 200, None)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
@@ -122,9 +122,9 @@ def test_metadata_table_read_loads_the_table_once(spark, recording_catalog):
         assert [row.operation for row in rows] == ["append"]
         # The metadata table name is not a table or a view, so the base table is loaded.
         assert _requests(records, start) == [
-            (f"{NAMESPACE}\x1fmetadata/tables/snapshots", 404, None),
+            (f"{NAMESPACE}\x1fmetadata/tables/snapshots", 404, "vended-credentials"),
             (f"{NAMESPACE}\x1fmetadata/views/snapshots", 404, None),
-            (f"{NAMESPACE}/tables/metadata", 200, None),
+            (f"{NAMESPACE}/tables/metadata", 200, "vended-credentials"),
         ]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
@@ -142,9 +142,9 @@ def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
         start = len(records)
         assert [row.id for row in spark.table(view).collect()] == [2]
         assert _requests(records, start) == [
-            (f"{NAMESPACE}/tables/filtered", 404, None),
+            (f"{NAMESPACE}/tables/filtered", 404, "vended-credentials"),
             (f"{NAMESPACE}/views/filtered", 200, None),
-            (f"{NAMESPACE}/tables/base", 200, None),
+            (f"{NAMESPACE}/tables/base", 200, "vended-credentials"),
         ]
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view}")

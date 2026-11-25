@@ -30,11 +30,23 @@ pub async fn create_row_level_write_physical_plan(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let storage_access = node
+        .target()
+        .lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.as_deref());
+    let storage_session = storage_access
+        .map(|spec| sail_object_store::access::storage_session(ctx, spec))
+        .transpose()?;
+    let ctx: &dyn Session = storage_session
+        .as_ref()
+        .map(|session| session as &dyn Session)
+        .unwrap_or(ctx);
     let target_snapshot = find_target_snapshot(node.raw_target())?;
     let effects = collect_physical_effects(node.effects(), physical_inputs)?;
     let target = node.target().clone();
 
-    match node.command() {
+    let plan = match node.command() {
         RowLevelCommand::Truncate | RowLevelCommand::Delete => {
             let info = RowLevelWriteInfo {
                 command: node.command(),
@@ -131,6 +143,12 @@ pub async fn create_row_level_write_physical_plan(
             )
             .await
         }
+    }?;
+    match storage_access {
+        Some(spec) => {
+            crate::storage_access::bind_storage(plan, spec, ctx.runtime_env(), physical_inputs)
+        }
+        None => Ok(plan),
     }
 }
 

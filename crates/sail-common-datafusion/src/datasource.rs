@@ -251,7 +251,7 @@ impl SourceInfo {
 }
 
 /// Information required to create a data writer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
     /// Target identities omitted by this write, independent of input field metadata.

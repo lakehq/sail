@@ -285,6 +285,22 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         Ok(status)
     }
 
+    async fn create_table_for_write(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let result = self
+            .inner
+            .create_table_for_write(database, table, request)
+            .await?;
+        if let Some(cache) = &self.table_cache {
+            cache.invalidate(database).await;
+        }
+        Ok(result)
+    }
+
     async fn stage_table_replacement(
         &self,
         database: &Namespace,

@@ -2,8 +2,6 @@
 
 use std::fmt::{Debug, Formatter};
 
-use sail_common::utils::debug::DebugBinary;
-
 use crate::worker::r#gen::RunTaskBatchRequest;
 
 impl Debug for RunTaskBatchRequest {
@@ -19,7 +17,7 @@ impl Debug for RunTaskBatchRequest {
             .field("job_id", job_id)
             .field("stage", stage)
             .field("tasks", tasks)
-            .field("definition", &DebugBinary::from(definition))
+            .field("definition_bytes", &definition.len())
             .field("peers", peers)
             .finish()
     }

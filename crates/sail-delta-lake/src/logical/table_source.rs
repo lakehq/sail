@@ -44,6 +44,7 @@ pub struct DeltaTableSource {
     config: DeltaScanConfig,
     schema: SchemaRef,
     file_selection: DeltaFileSelection,
+    pub(crate) storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,7 @@ impl DeltaTableSource {
             config,
             schema,
             file_selection: DeltaFileSelection::Snapshot,
+            storage_access: None,
         })
     }
 
@@ -183,6 +185,7 @@ impl MergeCapableSource for DeltaTableSource {
         )
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         new_source.file_selection = self.file_selection.clone();
+        new_source.storage_access = self.storage_access.clone();
         Ok(Arc::new(new_source))
     }
 
@@ -200,6 +203,7 @@ impl MergeCapableSource for DeltaTableSource {
         )
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         new_source.file_selection = self.file_selection.clone();
+        new_source.storage_access = self.storage_access.clone();
         Ok(Arc::new(new_source))
     }
 }

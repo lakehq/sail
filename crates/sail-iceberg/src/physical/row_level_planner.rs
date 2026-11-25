@@ -33,7 +33,17 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if node.command() == RowLevelCommand::Truncate {
+    let access = node
+        .target_lakehouse_table()
+        .and_then(|table| table.storage_access.as_deref());
+    let storage_session = access
+        .map(|spec| sail_object_store::access::storage_session(session, spec))
+        .transpose()?;
+    let session: &dyn Session = storage_session
+        .as_ref()
+        .map(|state| state as &dyn Session)
+        .unwrap_or(session);
+    let plan = if node.command() == RowLevelCommand::Truncate {
         let table_url =
             IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
         let metadata_location = resolve_iceberg_metadata_location(
@@ -47,21 +57,26 @@ pub(crate) async fn plan_iceberg_row_level_write(
             metadata_location,
         )
         .await?;
-        return plan_metadata_delete(session, node, &table, &table_url)
+        plan_metadata_delete(session, node, &table, &table_url)
             .await?
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
                     "TRUNCATE requires a full-table metadata delete"
                 )
-            });
-    }
-    match node.mode() {
-        RowLevelWriteMode::MergeOnRead => {
-            plan_iceberg_merge_on_read(session, node, physical_inputs).await
+            })
+    } else {
+        match node.mode() {
+            RowLevelWriteMode::MergeOnRead => {
+                plan_iceberg_merge_on_read(session, node, physical_inputs).await
+            }
+            RowLevelWriteMode::CopyOnWrite => {
+                plan_iceberg_copy_on_write(session, node, physical_inputs).await
+            }
         }
-        RowLevelWriteMode::CopyOnWrite => {
-            plan_iceberg_copy_on_write(session, node, physical_inputs).await
-        }
+    }?;
+    match access {
+        Some(spec) => crate::storage_access::bind_write_storage(plan, spec, session.runtime_env()),
+        None => Ok(plan),
     }
 }
 

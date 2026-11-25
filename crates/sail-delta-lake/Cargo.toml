@@ -16,6 +16,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-cache = { path = "../sail-cache" }
 sail-catalog = { path = "../sail-catalog" }
+sail-object-store = { path = "../sail-object-store" }
 sail-data-source = { path = "../sail-data-source" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }

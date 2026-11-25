@@ -145,6 +145,14 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() else {
             return Ok(None);
         };
+        let spec = source.scan().storage_access.as_deref();
+        let scoped = spec
+            .map(|s| sail_object_store::access::storage_session(session, s))
+            .transpose()?;
+        let session = scoped
+            .as_ref()
+            .map(|s| s as &dyn Session)
+            .unwrap_or(session);
         let filters = unnormalize_cols(scan.filters.clone());
         let plan = source
             .scan()
@@ -156,6 +164,10 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
                 source.prepared(&filters, scan.fetch),
             )
             .await?;
+        let plan = match spec {
+            Some(s) => crate::storage_access::bind_scan_storage(plan, s, session.runtime_env())?,
+            None => plan,
+        };
         Ok(Some(plan))
     }
 }

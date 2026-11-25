@@ -222,6 +222,7 @@ mod tests {
             url.clone(),
             Some("memory://bucket/table/metadata/v1.metadata.json".to_string()),
             IcebergMetadataRelationType::Files,
+            None,
         )
         .await?;
         // Manifests do not exist until after planning.

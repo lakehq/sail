@@ -78,6 +78,23 @@ pub trait CatalogProvider: Send + Sync {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus>;
 
+    /// Create a catalog-owned table and preserve the initial execution access.
+    async fn create_table_for_write(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let status = self.create_table(database, table, request.options).await?;
+        Ok(resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            sail_common_datafusion::catalog::LakehouseOperation::Write,
+            &self.lakehouse_capabilities(),
+        ))
+    }
+
     /// Stage an Iceberg replacement without changing visible catalog or storage state.
     async fn stage_table_replacement(
         &self,

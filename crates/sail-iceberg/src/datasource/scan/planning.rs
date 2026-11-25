@@ -79,6 +79,15 @@ impl IcebergScan {
         }
         let table_url = Url::parse(&self.table_uri)
             .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let scoped = self
+            .storage_access
+            .as_deref()
+            .map(|s| sail_object_store::access::storage_session(session, s))
+            .transpose()?;
+        let session = scoped
+            .as_ref()
+            .map(|s| s as &dyn Session)
+            .unwrap_or(session);
         let store = get_object_store_from_session(session, &table_url)?;
         let store_ctx = StoreContext::new(store, &table_url)?;
         let manifests = self.load_manifest_list(&store_ctx).await?;

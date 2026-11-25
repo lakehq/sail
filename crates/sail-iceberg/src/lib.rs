@@ -42,3 +42,5 @@ pub use physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use physical_plan::{IcebergBaseWriteContext, IcebergWriteContext, IcebergWriterExecOptions};
 pub use schema_evolution::*;
 pub use spec::*;
+
+mod storage_access;

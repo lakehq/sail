@@ -71,6 +71,7 @@ fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
 /// A fixed Iceberg read snapshot and its scan refinements.
 #[derive(Debug, Clone)]
 pub struct IcebergScan {
+    pub(crate) storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
     pub(crate) row_level_options: crate::logical::row_level::IcebergRowLevelOptions,
     /// The table location (URI)
     table_uri: String,
@@ -184,6 +185,7 @@ impl IcebergScan {
         );
 
         Ok(Self {
+            storage_access: None,
             row_level_options: Default::default(),
             table_uri: table_uri_str,
             schema_history: vec![schema.clone()],
@@ -221,6 +223,7 @@ impl IcebergScan {
         let arrow_schema = Arc::new(arrow_schema);
 
         Ok(Self {
+            storage_access: None,
             row_level_options: Default::default(),
             table_uri: table_uri_str,
             schema_history: vec![schema.clone()],

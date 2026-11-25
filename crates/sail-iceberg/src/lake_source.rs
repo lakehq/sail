@@ -13,7 +13,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use log::warn;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
@@ -191,10 +190,20 @@ impl LakeRelationProvider for IcebergLakeSource {
         if !relation_type.is_supported() {
             return not_impl_err!("{}", relation_type.unsupported_reason());
         }
+        let access = info
+            .lakehouse_table
+            .as_ref()
+            .and_then(|t| t.storage_access.clone());
         let read = resolve_iceberg_read(ctx, info, IcebergReadPurpose::MetadataRelation).await?;
         Ok(datafusion::datasource::provider_as_source(
-            metadata_relation_provider(ctx, read.table_url, read.metadata_location, relation_type)
-                .await?,
+            metadata_relation_provider(
+                ctx,
+                read.table_url,
+                read.metadata_location,
+                relation_type,
+                access,
+            )
+            .await?,
         ))
     }
 }
@@ -214,19 +223,8 @@ impl LakeSource for IcebergLakeSource {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Vec<(String, String)>> {
-        validate_iceberg_lakehouse_storage_access(info.lakehouse_table.as_ref())?;
-        let table_url = Self::parse_table_url(info.paths).await?;
-        let metadata_location = resolve_iceberg_metadata_location(
-            info.lakehouse_table.as_ref(),
-            metadata_location_from_options(&info.options),
-            catalog_managed_iceberg_from_options(&info.options),
-        )?;
-        let table = Table::load_with_metadata_location(
-            ctx.runtime_env().as_ref(),
-            table_url,
-            metadata_location,
-        )
-        .await?;
+        let (table, _) =
+            load_iceberg_read_table(ctx, info, IcebergReadPurpose::MetadataRelation).await?;
         let metadata = table.metadata();
         let mut properties = metadata.properties.clone();
         let file_format = properties
@@ -457,6 +455,15 @@ impl LakeSource for IcebergLakeSource {
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        let scoped = lakehouse_table
+            .as_ref()
+            .and_then(|t| t.storage_access.as_deref())
+            .map(|spec| {
+                sail_object_store::access::storage_runtime(&ctx.runtime_env(), spec)
+                    .map(|runtime| sail_object_store::access::storage_task_context(ctx, runtime))
+            })
+            .transpose()?;
+        let ctx = scoped.as_deref().unwrap_or(ctx);
         if let LakeSourceAlterTableOperation::AlterSnapshotReference { operation } = operation {
             let properties = if let Some(context) = lakehouse_table.as_ref() {
                 let manager = ctx.extension::<sail_catalog::manager::CatalogManager>()?;
@@ -821,6 +828,29 @@ pub(crate) async fn plan_iceberg_write(
         rewrite_lineage,
     } = node.options().clone();
 
+    let storage_access = lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.as_deref())
+        .cloned();
+    let physical_input: Arc<dyn ExecutionPlan> = if storage_access.is_some() {
+        Arc::new(
+            sail_physical_plan::storage_access::StorageAccessExec::query_input(
+                physical_input,
+                ctx.runtime_env().clone(),
+            ),
+        )
+    } else {
+        physical_input
+    };
+    let storage_session = storage_access
+        .as_ref()
+        .map(|spec| sail_object_store::access::storage_session(ctx, spec))
+        .transpose()?;
+    let ctx: &dyn Session = storage_session
+        .as_ref()
+        .map(|session| session as &dyn Session)
+        .unwrap_or(ctx);
+
     let replacement = match &mode {
         SinkMode::ReplaceTable(replacement) => Some((**replacement).clone()),
         _ => None,
@@ -838,7 +868,11 @@ pub(crate) async fn plan_iceberg_write(
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
-    let metadata_location = metadata_location_from_options(&options);
+    let metadata_location = lakehouse_table
+        .as_ref()
+        .and_then(|context| context.rest_session.as_ref())
+        .and_then(|session| session.metadata_location.clone())
+        .or_else(|| metadata_location_from_options(&options));
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let (clean_options, table_properties) =
         split_iceberg_write_options_and_table_properties(options)?;
@@ -888,7 +922,7 @@ pub(crate) async fn plan_iceberg_write(
         .transpose()?;
     // Authorize storage access through actual reads/writes, not a missing-object HEAD:
     // S3 can return 403 without ListBucket even with valid GetObject/PutObject access.
-    // Failed writer/manifest writes stop publication; REST session credentials remain unused.
+    // Failed writer/manifest writes stop publication.
     let metadata_path = if captured_metadata.is_some() {
         // REST metadata is authoritative; no path discovery or metadata-file read is needed.
         None
@@ -1135,10 +1169,14 @@ pub(crate) async fn plan_iceberg_write(
             .with_expected_snapshot_id(expected_snapshot_id)
             .with_dynamic_partition_overwrite(true);
     }
-    if defer_commit {
+    let plan = if defer_commit {
         builder.build_writer().await
     } else {
         builder.build().await
+    }?;
+    match storage_access {
+        Some(spec) => crate::storage_access::bind_write_storage(plan, &spec, ctx.runtime_env()),
+        None => Ok(plan),
     }
 }
 
@@ -1244,9 +1282,15 @@ impl IcebergLakeSource {
 }
 
 async fn build_iceberg_scan(ctx: &dyn Session, info: SourceInfo) -> Result<Arc<IcebergScan>> {
+    let storage_access = info
+        .lakehouse_table
+        .as_ref()
+        .and_then(|t| t.storage_access.clone());
     let (table, iceberg_options) =
         load_iceberg_read_table(ctx, info, IcebergReadPurpose::DataScan).await?;
-    Ok(Arc::new(table.new_scan(&iceberg_options)?))
+    let mut scan = table.new_scan(&iceberg_options)?;
+    scan.storage_access = storage_access;
+    Ok(Arc::new(scan))
 }
 
 #[derive(Clone, Copy)]
@@ -1260,9 +1304,18 @@ pub(crate) async fn load_iceberg_read_table(
     info: SourceInfo,
     read_purpose: IcebergReadPurpose,
 ) -> Result<(Table, IcebergReadOptions)> {
+    let runtime = ctx.runtime_env();
+    let runtime = match info
+        .lakehouse_table
+        .as_ref()
+        .and_then(|t| t.storage_access.as_deref())
+    {
+        Some(spec) => sail_object_store::access::storage_runtime(runtime, spec)?,
+        None => runtime.clone(),
+    };
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
     let table = Table::load_with_metadata_location(
-        ctx.runtime_env().as_ref(),
+        runtime.as_ref(),
         read.table_url,
         read.metadata_location,
     )
@@ -1338,30 +1391,13 @@ fn validate_iceberg_read_lakehouse_context(
 pub(crate) fn validate_iceberg_lakehouse_storage_access(
     lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Result<()> {
-    let Some(context) = lakehouse_table else {
-        return Ok(());
-    };
-    if context
-        .rest_session
-        .as_ref()
-        .is_some_and(|session| session.remote_signing_enabled)
+    if let Some(context) = lakehouse_table
+        && context.storage_access.is_none()
+        && context.rest_session.as_ref().is_some_and(|session| {
+            session.remote_signing_enabled || session.storage_credential_count > 0
+        })
     {
-        // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
-        warn!(
-            "Iceberg REST catalog table {} advertises remote signing, which is not implemented yet",
-            context.catalog_table().join(".")
-        );
-    }
-    if context
-        .rest_session
-        .as_ref()
-        .is_some_and(|session| session.storage_credential_count > 0)
-    {
-        // TODO: Apply REST vended credentials to operation-scoped storage access.
-        warn!(
-            "Iceberg REST catalog table {} advertises vended storage credentials, which is not implemented yet",
-            context.catalog_table().join(".")
-        );
+        return not_impl_err!("Iceberg REST delegation has no supported storage access");
     }
     Ok(())
 }
@@ -1569,6 +1605,11 @@ pub(crate) fn resolve_iceberg_metadata_location(
         .filter(|context| context.pointer == MetadataPointerAuthority::ReadOnlyVirtual)
         .and_then(|context| context.cross_format.as_ref())
         .and_then(|metadata| metadata.generated_metadata_location.clone())
+        .or_else(|| {
+            context
+                .and_then(|context| context.rest_session.as_ref())
+                .and_then(|session| session.metadata_location.clone())
+        })
         .or(catalog_metadata_location);
     metadata_location.map(Some).ok_or_else(|| {
         DataFusionError::Plan(
@@ -1923,7 +1964,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_access_allows_required_rest_remote_signing() {
+    fn storage_access_rejects_unmaterialized_rest_remote_signing() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1941,6 +1982,7 @@ mod tests {
             ScanAuthority::ClientLakeSource,
         );
         context.rest_session = Some(IcebergRestTableSessionRef {
+            metadata_location: None,
             fingerprint: "rest-session".to_string(),
             scan_planning_mode: Some("client".to_string()),
             storage_credential_count: 0,
@@ -1948,11 +1990,11 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(DataFusionError::NotImplemented(_))));
     }
 
     #[test]
-    fn storage_access_allows_required_rest_vended_credentials() {
+    fn storage_access_rejects_unmaterialized_rest_vended_credentials() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1970,6 +2012,7 @@ mod tests {
             ScanAuthority::ClientLakeSource,
         );
         context.rest_session = Some(IcebergRestTableSessionRef {
+            metadata_location: None,
             fingerprint: "rest-session".to_string(),
             scan_planning_mode: Some("client".to_string()),
             storage_credential_count: 1,
@@ -1977,6 +2020,6 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(DataFusionError::NotImplemented(_))));
     }
 }

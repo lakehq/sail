@@ -48,6 +48,9 @@ impl PlanResolver<'_> {
         execution: LakehouseExecutionContext,
         access_purpose: TableAccessPurpose,
     ) -> PlanResult<LakehouseExecutionContext> {
+        if execution.access_session.is_some() {
+            return Ok(execution);
+        }
         let manager = self.ctx.extension::<CatalogManager>()?;
         match manager
             .begin_table_access(

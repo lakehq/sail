@@ -24,19 +24,19 @@ pub(crate) async fn metadata_relation_provider(
     table_url: Url,
     metadata_location: Option<String>,
     relation_type: IcebergMetadataRelationType,
+    storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
 ) -> Result<Arc<dyn TableProvider>> {
     if !relation_type.is_supported() {
         return Err(DataFusionError::NotImplemented(
             relation_type.unsupported_reason(),
         ));
     }
+    let runtime = match storage_access.as_deref() {
+        Some(spec) => sail_object_store::access::storage_runtime(session.runtime_env(), spec)?,
+        None => session.runtime_env().clone(),
+    };
     let table = Arc::new(
-        Table::load_with_metadata_location(
-            session.runtime_env().as_ref(),
-            table_url,
-            metadata_location,
-        )
-        .await?,
+        Table::load_with_metadata_location(runtime.as_ref(), table_url, metadata_location).await?,
     );
     let schema = if relation_type == IcebergMetadataRelationType::Files {
         files::schema(table.metadata())?
@@ -45,12 +45,16 @@ pub(crate) async fn metadata_relation_provider(
     };
     Ok(Arc::new(IcebergMetadataRelationProvider {
         table,
+        storage_access,
+        runtime,
         relation_type,
         schema,
     }))
 }
 
 struct IcebergMetadataRelationProvider {
+    storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
+    runtime: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
     table: Arc<Table>,
     relation_type: IcebergMetadataRelationType,
     schema: Arc<ArrowSchema>,
@@ -105,7 +109,7 @@ impl TableProvider for IcebergMetadataRelationProvider {
         };
         // Filters remain residual expressions above this scan.
         let limit = if filters.is_empty() { limit } else { None };
-        Ok(Arc::new(IcebergMetadataRelationExec::try_new(
+        let plan = Arc::new(IcebergMetadataRelationExec::try_new(
             self.schema.clone(),
             MetadataRelationScan {
                 table_url: self.table.table_url().to_string(),
@@ -117,6 +121,10 @@ impl TableProvider for IcebergMetadataRelationProvider {
                     .unwrap_or_else(|| (0..self.schema.fields().len()).collect()),
                 limit,
             },
-        )?))
+        )?);
+        match self.storage_access.as_deref() {
+            Some(spec) => crate::storage_access::bind_scan_storage(plan, spec, &self.runtime),
+            None => Ok(plan),
+        }
     }
 }

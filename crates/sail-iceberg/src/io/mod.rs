@@ -21,6 +21,7 @@ pub struct StoreContext {
     pub base: Arc<dyn object_store::ObjectStore>,
     pub prefixed: Arc<dyn object_store::ObjectStore>,
     pub prefix_path: ObjectPath,
+    table_url: Url,
 }
 
 impl StoreContext {
@@ -36,13 +37,32 @@ impl StoreContext {
             base,
             prefixed,
             prefix_path: base_path,
+            table_url: table_url.clone(),
         })
+    }
+
+    pub(crate) fn validate_location(&self, raw: &str) -> Result<(), DataFusionError> {
+        if let Some(url) = crate::utils::parse_absolute_url(raw) {
+            let scheme = |url: &Url| match url.scheme() {
+                "s3a" | "s3n" => "s3".to_string(),
+                scheme => scheme.to_string(),
+            };
+            if scheme(&url) != scheme(&self.table_url)
+                || url.authority() != self.table_url.authority()
+            {
+                return Err(DataFusionError::NotImplemented(
+                    "Iceberg files across object-store origins are unsupported".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn resolve<'a>(
         &'a self,
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
+        self.validate_location(raw)?;
         if crate::utils::parse_absolute_url(raw).is_some() {
             return Ok((&self.base, self.resolve_to_absolute_path(raw)?));
         }
@@ -57,6 +77,7 @@ impl StoreContext {
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
+        self.validate_location(raw_path)?;
         if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
             // Hadoop Path strings in manifests contain literal object keys, including
             // spaces and Hive percent escapes. URL parsing would re-encode them.
@@ -190,4 +211,28 @@ pub(crate) async fn load_delete_file_index(
         }
     }
     Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_access_preserves_object_store_origin() -> Result<(), Box<dyn std::error::Error>> {
+        let context = StoreContext::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            &Url::parse("s3://bucket/table")?,
+        )?;
+        assert_eq!(
+            context.resolve_to_absolute_path("s3a://bucket/table/data")?,
+            ObjectPath::from("table/data")
+        );
+        assert!(context.resolve("s3://another-bucket/table/data").is_err());
+        assert!(
+            context
+                .resolve_to_absolute_path("s3://another-bucket/table/data")
+                .is_err()
+        );
+        Ok(())
+    }
 }

@@ -7,7 +7,7 @@ use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
 use sail_catalog::credentials::{
     BasicCatalogCredentials, CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials,
-    StaticCatalogCredentials,
+    OAuthCatalogCredentials, StaticCatalogCredentials,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
@@ -21,8 +21,11 @@ use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
 use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
 use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
-use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
+use sail_common::config::{
+    AppConfig, CacheType, CatalogCacheConfig, CatalogType, OAuth2CatalogConfig, OneLakeApi,
+};
 use sail_common::runtime::RuntimeHandle;
+use sail_common::storage::{OAuth2ClientCredentials, StorageSecret};
 use secrecy::{ExposeSecret, SecretString};
 
 pub fn create_catalog_manager(
@@ -58,6 +61,7 @@ pub fn create_catalog_manager(
                     oauth_access_token,
                     bearer_access_token,
                     bearer_access_token_file,
+                    oauth_client_credentials,
                     username,
                     password,
                     sigv4_enabled,
@@ -89,6 +93,7 @@ pub fn create_catalog_manager(
                         bearer_access_token_file.as_ref(),
                         bearer_access_token.as_ref(),
                         oauth_access_token.as_ref(),
+                        oauth_client_credentials.as_deref(),
                         username.as_ref(),
                         password.as_ref(),
                     )?;
@@ -347,9 +352,30 @@ fn iceberg_rest_credentials(
     bearer_access_token_file: Option<&String>,
     bearer_access_token: Option<&SecretString>,
     oauth_access_token: Option<&SecretString>,
+    oauth_client_credentials: Option<&OAuth2CatalogConfig>,
     username: Option<&String>,
     password: Option<&SecretString>,
 ) -> CatalogResult<Arc<dyn CatalogCredentials>> {
+    if let Some(oauth) = oauth_client_credentials {
+        if username.is_some()
+            || password.is_some()
+            || bearer_access_token_file.is_some()
+            || bearer_access_token.is_some()
+            || oauth_access_token.is_some()
+        {
+            return Err(sail_catalog::error::CatalogError::InvalidArgument(
+                "oauth_client_credentials cannot be combined with a token, token file, or basic authentication".to_string(),
+            ));
+        }
+        return Ok(Arc::new(OAuthCatalogCredentials::try_new(
+            OAuth2ClientCredentials {
+                endpoint: oauth.token_endpoint.clone(),
+                client_id: oauth.client_id.clone(),
+                client_secret: StorageSecret::new(oauth.client_secret.expose_secret().to_string()),
+                scope: oauth.scope.clone(),
+            },
+        )?));
+    }
     match (username, password) {
         (Some(username), Some(password)) => {
             if bearer_access_token_file.is_some()
@@ -494,7 +520,8 @@ mod tests {
         let static_token = SecretString::from("static-token".to_string());
 
         let credentials =
-            iceberg_rest_credentials(Some(&path), Some(&static_token), None, None, None).unwrap();
+            iceberg_rest_credentials(Some(&path), Some(&static_token), None, None, None, None)
+                .unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("file-token".to_string())
@@ -504,7 +531,8 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_use_the_static_bearer_token() {
         let token = SecretString::from("static-token".to_string());
-        let credentials = iceberg_rest_credentials(None, Some(&token), None, None, None).unwrap();
+        let credentials =
+            iceberg_rest_credentials(None, Some(&token), None, None, None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("static-token".to_string())
@@ -514,7 +542,8 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_fall_back_to_the_oauth_token() {
         let token = SecretString::from("oauth-token".to_string());
-        let credentials = iceberg_rest_credentials(None, None, Some(&token), None, None).unwrap();
+        let credentials =
+            iceberg_rest_credentials(None, None, Some(&token), None, None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("oauth-token".to_string())
@@ -523,8 +552,48 @@ mod tests {
 
     #[tokio::test]
     async fn iceberg_credentials_are_empty_without_any_token() {
-        let credentials = iceberg_rest_credentials(None, None, None, None, None).unwrap();
+        let credentials = iceberg_rest_credentials(None, None, None, None, None, None).unwrap();
         assert_eq!(credentials.retrieve().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn iceberg_oauth_configuration_is_renewable_and_redacted() -> Result<()> {
+        let config: CatalogType = serde_json::from_value(serde_json::json!({
+            "type": "iceberg-rest", "name": "catalog", "uri": "https://catalog.example",
+            "oauth_client_credentials": {
+                "token_endpoint": "https://identity.example/token",
+                "client_id": "sail-client", "client_secret": "private-client-secret", "scope": "catalog"
+            }
+        })).unwrap();
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("private-client-secret")
+        );
+        assert!(!format!("{config:?}").contains("private-client-secret"));
+        let CatalogType::IcebergRest {
+            oauth_client_credentials: Some(oauth),
+            ..
+        } = config
+        else {
+            return Err(plan_datafusion_err!("Expected OAuth catalog configuration"));
+        };
+        let credential =
+            iceberg_rest_credentials(None, None, None, Some(&oauth), None, None).unwrap();
+        let sail_common::storage::CatalogCredentialSource::OAuth2(source) =
+            credential.export_for_execution().await.unwrap()
+        else {
+            return Err(plan_datafusion_err!(
+                "Expected renewable OAuth credential source"
+            ));
+        };
+        assert_eq!(source.client_secret.expose(), "private-client-secret");
+        assert_eq!(source.scope.as_deref(), Some("catalog"));
+        let token = SecretString::from("static-token".to_string());
+        assert!(
+            iceberg_rest_credentials(None, Some(&token), None, Some(&oauth), None, None).is_err()
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -532,7 +601,8 @@ mod tests {
         let username = "user".to_string();
         let password = SecretString::from("pass".to_string());
         let credentials =
-            iceberg_rest_credentials(None, None, None, Some(&username), Some(&password)).unwrap();
+            iceberg_rest_credentials(None, None, None, None, Some(&username), Some(&password))
+                .unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("dXNlcjpwYXNz".to_string())
@@ -543,7 +613,8 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_reject_an_incomplete_basic_configuration() {
         let username = "user".to_string();
-        let error = iceberg_rest_credentials(None, None, None, Some(&username), None).unwrap_err();
+        let error =
+            iceberg_rest_credentials(None, None, None, None, Some(&username), None).unwrap_err();
         assert!(
             matches!(&error, CatalogError::InvalidArgument(message) if message.contains("must be set together")),
             "unexpected error: {error:?}"
@@ -555,9 +626,15 @@ mod tests {
         let username = "user".to_string();
         let password = SecretString::from("pass".to_string());
         let token = SecretString::from("static-token".to_string());
-        let error =
-            iceberg_rest_credentials(None, Some(&token), None, Some(&username), Some(&password))
-                .unwrap_err();
+        let error = iceberg_rest_credentials(
+            None,
+            Some(&token),
+            None,
+            None,
+            Some(&username),
+            Some(&password),
+        )
+        .unwrap_err();
         assert!(
             matches!(&error, CatalogError::InvalidArgument(message) if message.contains("cannot be combined")),
             "unexpected error: {error:?}"

@@ -48,6 +48,7 @@ impl Table {
         let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
         let (metadata_file, metadata_location) = match metadata_location {
             Some(location) => {
+                store_ctx.validate_location(&location)?;
                 let metadata_file =
                     metadata_loader::metadata_location_to_object_path_string(&location)?;
                 let metadata_location = if crate::utils::parse_absolute_url(&location).is_some() {
