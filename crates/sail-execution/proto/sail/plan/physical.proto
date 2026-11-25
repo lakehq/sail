@@ -1150,8 +1150,7 @@ message RangeResampleDecisionExecNode {
 
 message RangeResampleExecNode {
   bytes input = 1;
-  reserved 2, 3;
-  bytes decisions = 4;
+  bytes decisions = 2;
 }
 
 message RangeChannelExecNode {
