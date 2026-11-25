@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
-    TableAccessPurpose, TableAccessSession,
+    TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::manager::table::SessionCatalogTable;
@@ -37,6 +37,7 @@ impl PlanResolver<'_> {
             .await?;
         self.begin_lakehouse_table_access(
             table,
+            None,
             resolved.execution,
             table_access_purpose(operation),
         )
@@ -52,31 +53,19 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LakehouseExecutionContext> {
         self.begin_lakehouse_table_access(
             table,
+            None,
             resolved.execution.for_operation(operation),
             table_access_purpose(operation),
         )
         .await
     }
 
-    /// Begins access to a table that the catalog has already resolved.
+    /// Begins access to a table that the catalog has already resolved. A table in the
+    /// catalog of another session is accessed in that catalog.
     pub(super) async fn begin_lakehouse_table_access(
         &self,
         table: &[String],
-        execution: LakehouseExecutionContext,
-        access_purpose: TableAccessPurpose,
-    ) -> PlanResult<LakehouseExecutionContext> {
-        let manager = self.ctx.extension::<CatalogManager>()?;
-        let request = BeginTableAccessRequest {
-            context: execution.clone(),
-            purpose: access_purpose,
-        };
-        table_access_context(manager.begin_table_access(table, request).await, execution)
-    }
-
-    /// Begins an access to a table in the catalog of another session, like
-    /// [`Self::begin_lakehouse_table_access`].
-    pub(super) async fn begin_session_catalog_table_access(
-        table: &SessionCatalogTable,
+        session_table: Option<&SessionCatalogTable>,
         execution: LakehouseExecutionContext,
         access_purpose: TableAccessPurpose,
     ) -> PlanResult<LakehouseExecutionContext> {
@@ -84,22 +73,20 @@ impl PlanResolver<'_> {
             context: execution.clone(),
             purpose: access_purpose,
         };
-        table_access_context(table.begin_table_access(request).await, execution)
-    }
-}
-
-/// Returns the execution context of a table access, which is the context of the table
-/// when the catalog has no table access sessions.
-fn table_access_context(
-    session: CatalogResult<TableAccessSession>,
-    execution: LakehouseExecutionContext,
-) -> PlanResult<LakehouseExecutionContext> {
-    match session {
-        Ok(session) => Ok(session.context),
-        Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
-            Ok(execution)
+        let session = match session_table {
+            Some(table) => table.begin_table_access(request).await,
+            None => {
+                let manager = self.ctx.extension::<CatalogManager>()?;
+                manager.begin_table_access(table, request).await
+            }
+        };
+        match session {
+            Ok(session) => Ok(session.context),
+            Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
+                Ok(execution)
+            }
+            Err(error) => Err(error.into()),
         }
-        Err(error) => Err(error.into()),
     }
 }
 

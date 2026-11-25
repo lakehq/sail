@@ -99,9 +99,7 @@ impl CatalogManager {
         let state = self.state()?;
         Ok(state
             .get_catalog(table.provider.get_name())
-            .is_ok_and(|provider| {
-                Arc::as_ptr(&provider) as *const () as usize == table.catalog_id()
-            }))
+            .is_ok_and(|provider| Arc::ptr_eq(&provider, &table.provider)))
     }
 
     /// In the delta namespace, an unqualified file name can also be a table name.

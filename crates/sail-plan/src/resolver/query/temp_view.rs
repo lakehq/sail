@@ -1001,12 +1001,9 @@ impl PlanResolver<'_> {
             CatalogTableRead {
                 status,
                 resolved,
-                reference: &origin.name,
+                origin,
                 session_table,
                 lake_relation,
-                options: origin.options.clone(),
-                temporal_options: origin.temporal_options.clone(),
-                read_case_sensitive: origin.read_case_sensitive,
             },
             state,
         )

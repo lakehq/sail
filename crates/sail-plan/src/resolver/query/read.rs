@@ -331,29 +331,26 @@ impl PlanResolver<'_> {
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
                 let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
-                let origin = TableOrigin::CatalogTable(CatalogTableOrigin {
+                let origin = CatalogTableOrigin {
                     session_table: manager.session_catalog_table(&name)?,
                     name,
                     lake_relation: lake_relation
                         .as_ref()
                         .map(|(_, relation)| relation.name().to_string()),
                     format: format.clone(),
-                    options: options.clone(),
-                    temporal_options: temporal_options.clone(),
+                    options,
+                    temporal_options,
                     read_case_sensitive: self.config.case_sensitive,
-                });
+                };
                 // The source has a large future, which the future of every read would
                 // otherwise hold, also in the recursion of the query resolver.
                 let table_source = Box::pin(self.resolve_catalog_table_source(
                     CatalogTableRead {
                         status,
                         resolved,
-                        reference: &catalog_reference,
+                        origin: &origin,
                         session_table: None,
                         lake_relation,
-                        options,
-                        temporal_options,
-                        read_case_sensitive: self.config.case_sensitive,
                     },
                     state,
                 ))
@@ -364,7 +361,7 @@ impl PlanResolver<'_> {
                     None,
                     vec![],
                     None,
-                    Some(origin),
+                    Some(TableOrigin::CatalogTable(origin)),
                     state,
                 )?
             }
@@ -416,12 +413,9 @@ impl PlanResolver<'_> {
         let CatalogTableRead {
             status,
             resolved,
-            reference,
+            origin,
             session_table,
             lake_relation,
-            options,
-            temporal_options,
-            read_case_sensitive,
         } = read;
         let TableKind::Table {
             columns,
@@ -463,9 +457,9 @@ impl PlanResolver<'_> {
                 properties.sort_by(|a, b| a.0.cmp(&b.0));
                 properties
             },
-            options: options.clone(),
-            temporal_options: temporal_options.clone(),
-            read_case_sensitive: (!is_lake_source).then_some(read_case_sensitive),
+            options: origin.options.clone(),
+            temporal_options: origin.temporal_options.clone(),
+            read_case_sensitive: (!is_lake_source).then_some(origin.read_case_sensitive),
             session_catalog: session_table.map(|table| table.catalog_id()),
         });
         if let Some(table_source) = source_key
@@ -480,16 +474,14 @@ impl PlanResolver<'_> {
         };
         let resolved = resolved
             .ok_or_else(|| PlanError::internal("catalog table without lakehouse resolution"))?;
-        let lakehouse_table = match session_table {
-            Some(table) => {
-                Self::begin_session_catalog_table_access(table, resolved.execution, access_purpose)
-                    .await?
-            }
-            None => {
-                self.begin_lakehouse_table_access(reference, resolved.execution, access_purpose)
-                    .await?
-            }
-        };
+        let lakehouse_table = self
+            .begin_lakehouse_table_access(
+                &origin.name,
+                session_table,
+                resolved.execution,
+                access_purpose,
+            )
+            .await?;
         let info = SourceInfo {
             paths: location.map(|x| vec![x]).unwrap_or_default(),
             lakehouse_table: Some(lakehouse_table),
@@ -501,12 +493,14 @@ impl PlanResolver<'_> {
             // TODO: detect duplicated keys in each set of options
             options: vec![
                 OptionLayer::TablePropertyList { items: properties },
-                OptionLayer::OptionList { items: options },
                 OptionLayer::OptionList {
-                    items: temporal_options,
+                    items: origin.options.clone(),
+                },
+                OptionLayer::OptionList {
+                    items: origin.temporal_options.clone(),
                 },
             ],
-            read_case_sensitive,
+            read_case_sensitive: origin.read_case_sensitive,
         };
         let table_source = match lake_relation {
             Some((relation_provider, relation)) => {
@@ -1043,19 +1037,15 @@ impl PlanResolver<'_> {
     }
 }
 
-/// A read of a catalog table.
+/// A read of a catalog table: the lookup of the table, and what the read reads.
 pub(super) struct CatalogTableRead<'a> {
     pub status: TableStatus,
     pub resolved: Option<LakehouseResolvedTable>,
-    /// The name that the catalog is asked for the table by.
-    pub reference: &'a [String],
+    pub origin: &'a CatalogTableOrigin,
     /// The table in the catalog of another session, for a table that a global temporary
     /// view reads in the session that created the view.
     pub session_table: Option<&'a SessionCatalogTable>,
     pub lake_relation: Option<(Arc<dyn LakeRelationProvider>, LakeRelation)>,
-    pub options: Vec<(String, String)>,
-    pub temporal_options: Vec<(String, String)>,
-    pub read_case_sensitive: bool,
 }
 
 fn lake_relation_access_purpose(access: LakeRelationAccess) -> TableAccessPurpose {
