@@ -57,7 +57,7 @@ Every read returns Spark's fixed Kafka schema (all columns nullable):
 | Column          | Type                       | Description                                         |
 | --------------- | -------------------------- | --------------------------------------------------- |
 | `key`           | `binary`                   | Message key, or `null` if absent.                   |
-| `value`         | `binary`                   | Message value.                                      |
+| `value`         | `binary`                   | Message value, or `null` for a tombstone.           |
 | `topic`         | `string`                   | Source topic.                                       |
 | `partition`     | `int`                      | Source partition.                                   |
 | `offset`        | `bigint`                   | Message offset within the partition.                |
@@ -66,6 +66,7 @@ Every read returns Spark's fixed Kafka schema (all columns nullable):
 | `headers`       | `array<struct<key,value>>` | Present only when `includeHeaders=true`.            |
 
 Cast `key` and `value` to `string` (or decode with `from_json`, `from_avro`, etc.) at the query level.
+Headers preserve order, duplicate keys, and null values. Absent or empty headers produce `null`.
 When a broker reports no timestamp type, `timestampType` is `-1` and `timestamp` is `-1` ms
 (`1969-12-31 23:59:59.999`), matching Spark.
 
@@ -73,29 +74,31 @@ When a broker reports no timestamp type, `timestampType` is `-1` and `timestamp`
 
 Options are case-insensitive and follow the
 [PySpark Kafka documentation](https://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html).
+Unknown options outside `kafka.*` are ignored, including streaming-only options such as
+`maxOffsetsPerTrigger`. They do not enable streaming or limit batch reads.
 
-| Name                                 | Required   | Default    | Description                                                                                    |
-| ------------------------------------ | ---------- | ---------- | ---------------------------------------------------------------------------------------------- |
-| `kafka.bootstrap.servers`            | Yes        |            | Comma-separated broker list.                                                                   |
-| `assign`                             | One of the |            | JSON of `{"topic": [partition, ...]}`.                                                         |
-| `subscribe`                          | three      |            | Comma-separated topic names.                                                                   |
-| `subscribePattern`                   |            |            | Regular expression searched within topic names (unanchored, matching Spark).                   |
-| `startingOffsets`                    | No         | `earliest` | `earliest`, or per-partition JSON.                                                             |
-| `endingOffsets`                      | No         | `latest`   | `latest`, or per-partition JSON.                                                               |
-| `startingTimestamp`                  | No         |            | Global start time in milliseconds since epoch.                                                 |
-| `endingTimestamp`                    | No         |            | Global end time in milliseconds since epoch.                                                   |
-| `startingOffsetsByTimestamp`         | No         |            | Per-partition JSON of start timestamps in milliseconds since epoch.                            |
-| `endingOffsetsByTimestamp`           | No         |            | Per-partition JSON of end timestamps in milliseconds since epoch.                              |
-| `startingOffsetsByTimestampStrategy` | No         | `error`    | `error` or `latest`: behavior when no offset matches a starting timestamp.                     |
-| `failOnDataLoss`                     | No         | `true`     | Whether to fail when planned records are no longer in the log.                                 |
-| `includeHeaders`                     | No         | `false`    | Whether to include the `headers` column.                                                       |
-| `minPartitions`                      | No         |            | Approximate target number of input partitions (positive 32-bit integer).                       |
-| `maxRecordsPerPartition`             | No         |            | Offset-span splitting hint per partition (positive 64-bit integer).                            |
-| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`   | Per-poll timeout in ms (also accepted as `pollTimeoutMs`; `kafkaConsumer.pollTimeoutMs` wins). |
-| `maxBatchRows`                       | No         | `10000`    | Maximum rows per Arrow `RecordBatch`. Sail-specific.                                           |
-| `maxBatchBytes`                      | No         | `8388608`  | Estimated Arrow payload bytes per batch (positive 32-bit integer). Sail-specific.              |
-| `adminTimeoutMs`                     | No         | `10000`    | Per-call timeout in ms (1–3,600,000) for planning and task watermark lookups. Sail-specific.   |
-| `kafka.*`                            | No         |            | Additional `librdkafka` property, forwarded with the `kafka.` prefix stripped.                 |
+| Name                                 | Required   | Default    | Description                                                                                  |
+| ------------------------------------ | ---------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `kafka.bootstrap.servers`            | Yes        |            | Comma-separated broker list.                                                                 |
+| `assign`                             | One of the |            | JSON of `{"topic": [partition, ...]}`.                                                       |
+| `subscribe`                          | three      |            | Comma-separated topic names.                                                                 |
+| `subscribePattern`                   |            |            | Regular expression searched within topic names (unanchored, matching Spark).                 |
+| `startingOffsets`                    | No         | `earliest` | `earliest`, or per-partition JSON.                                                           |
+| `endingOffsets`                      | No         | `latest`   | `latest`, or per-partition JSON.                                                             |
+| `startingTimestamp`                  | No         |            | Global start time in milliseconds since epoch.                                               |
+| `endingTimestamp`                    | No         |            | Global end time in milliseconds since epoch.                                                 |
+| `startingOffsetsByTimestamp`         | No         |            | Per-partition JSON of start timestamps in milliseconds since epoch.                          |
+| `endingOffsetsByTimestamp`           | No         |            | Per-partition JSON of end timestamps in milliseconds since epoch.                            |
+| `startingOffsetsByTimestampStrategy` | No         | `error`    | `error` or `latest`: behavior when no offset matches a starting timestamp.                   |
+| `failOnDataLoss`                     | No         | `true`     | Whether to fail when planned records are no longer in the log.                               |
+| `includeHeaders`                     | No         | `false`    | Whether to include the `headers` column.                                                     |
+| `minPartitions`                      | No         |            | Approximate target number of input partitions (positive 32-bit integer).                     |
+| `maxRecordsPerPartition`             | No         |            | Offset-span splitting hint per partition (positive 64-bit integer).                          |
+| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`   | Per-poll timeout in ms (1–2,147,483,647). Alias: `pollTimeoutMs`; canonical name wins.       |
+| `maxBatchRows`                       | No         | `10000`    | Maximum rows per Arrow `RecordBatch`. Sail-specific.                                         |
+| `maxBatchBytes`                      | No         | `8388608`  | Estimated Arrow payload bytes per batch (positive 32-bit integer). Sail-specific.            |
+| `adminTimeoutMs`                     | No         | `10000`    | Per-call timeout in ms (1–3,600,000) for planning and task watermark lookups. Sail-specific. |
+| `kafka.*`                            | No         |            | Additional `librdkafka` property, forwarded with the `kafka.` prefix stripped.               |
 
 ::: info
 Exactly one of `assign`, `subscribe`, and `subscribePattern` is required.
@@ -142,20 +145,6 @@ df = (
 Sentinels `-2` (`earliest`) and `-1` (`latest`) are accepted in JSON at their valid endpoints only:
 `-2`/`earliest` in `startingOffsets` and `-1`/`latest` in `endingOffsets`. The reverse is rejected,
 matching Spark.
-
-### Including Headers
-
-Opt in with `includeHeaders=true` to project an `array<struct<key: string, value: binary>>` column:
-
-```python
-df = (
-    spark.read.format("kafka")
-    .option("kafka.bootstrap.servers", "localhost:9092")
-    .option("subscribe", "orders")
-    .option("includeHeaders", "true")
-    .load()
-)
-```
 
 ### Timestamp-Based Reads
 
@@ -204,8 +193,8 @@ df = (
 - `subscribe` accepts a comma-separated topic list.
 - `subscribePattern` searches a Python regex anywhere inside each topic name (matching Spark). Anchor
   explicitly (e.g. `^orders$`) for whole-name matching.
-- `assign` takes a JSON map of explicit partitions and intersects it with broker metadata — empty maps,
-  empty lists, and nonexistent partition IDs contribute no input partitions.
+- `assign` takes a JSON map of explicit partitions. Empty maps, empty lists, and nonexistent partition
+  IDs contribute no input partitions; a nonexistent topic raises an error.
 - Broker-flagged internal topics (such as `__consumer_offsets` and `__transaction_state`) are excluded from
   all three strategies; user topics with leading underscores (e.g. `__audit`) are read normally.
 
@@ -243,14 +232,9 @@ df = (
 
 ### Offset Resolution
 
-`earliest` and `latest` (including JSON `-2`/`-1`) bind when each task starts reading rather than during
-planning, matching Spark:
-
-- `latest` reads up to the current tail when the task runs.
-- `earliest` stays valid if retention advances between planning and execution.
-
-Explicit offsets and timestamps resolve during planning. When splitting triggers, sentinels are resolved
-only to place interior split points; outer endpoints remain late-bound.
+`earliest` and `latest` (including JSON `-2`/`-1`) bind when each task starts reading, matching Spark.
+They reflect retention and log growth since planning. Explicit offsets and timestamp lookups fix the
+bounds during planning; split ranges retain the sentinel behavior at their outer endpoints.
 
 ::: warning
 Because `latest` binds per task, a retried task can observe a longer log than its first attempt. Use
@@ -269,9 +253,7 @@ explicit `endingOffsets` for a stable upper bound across retries.
 - **Truncated end:** reaching end-of-log below the planned end fails under `failOnDataLoss=true`; with
   `false`, returns the remaining records.
 
-Strict reads query broker watermarks on each offset gap to detect retention, adding round trips on
-compacted or transactional topics. With `failOnDataLoss=false`, ordinary gaps are skipped without a
-watermark lookup or warning; out-of-range recovery or truncated EOF logs one partial-read warning per task.
+With `failOnDataLoss=false`, out-of-range recovery or truncated EOF logs one partial-read warning per task.
 
 ### Resource Limits and Cancellation
 
@@ -289,7 +271,6 @@ watermark lookup or warning; out-of-range recovery or truncated EOF logs one par
 
 - Semantics follow Spark 4.1's batch Kafka source on PySpark 4.0+ (filtering remains above the scan).
 - `kafkaConsumer.pollTimeoutMs` defaults to a fixed `120000` ms and does not inherit `spark.network.timeout`.
-- `subscribePattern` uses Python's regex engine rather than Java's.
 - `isolation.level` defaults to `read_uncommitted` (matching Spark rather than `librdkafka`'s
   `read_committed` default). Pass `kafka.isolation.level=read_committed` to read committed records only;
   planning-time timestamp and split lookups honor the same setting.

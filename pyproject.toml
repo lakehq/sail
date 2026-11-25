@@ -67,7 +67,7 @@ jdbc = [
 ]
 kafka = [
     "confluent-kafka>=2.5,<3",
-    "pyarrow>=10.0",
+    "pyarrow>=10.0,<25",
 ]
 vortex = [
     "vortex-data>=0.64; platform_system != 'Windows'",
