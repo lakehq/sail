@@ -2719,9 +2719,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         struct_field_matching: Self::try_encode_struct_field_matching(
                             struct_field_matching,
                         ),
-                        cast_mode: Self::try_encode_schema_evolution_cast_mode(
-                            cast_mode,
-                        ),
+                        cast_mode: Self::try_encode_schema_evolution_cast_mode(cast_mode),
                         virtual_columns: parquet_source
                             .table_schema()
                             .virtual_columns()
