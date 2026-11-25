@@ -198,9 +198,9 @@ pub(super) struct PlanResolverState {
     /// longer refers to, such as the argument of `typeof`.
     folded_columns: HashSet<String>,
     /// How the temporary views that the definition of a temporary view reads read the
-    /// columns of their tables: the address of the source, the position of the column in
-    /// the source, and the use.
-    view_reads: Vec<(usize, usize, ColumnUse)>,
+    /// columns of their tables, by the address of the source and the position of the column
+    /// in the source. A source whose columns the view does not read has no uses.
+    view_reads: HashMap<usize, HashMap<usize, ColumnUse>>,
     /// The schemas of the plans of the temporary views that the definition of a temporary
     /// view reads. The field IDs in such a plan belong to another resolver state.
     view_plans: Vec<DFSchemaRef>,
@@ -251,7 +251,7 @@ impl PlanResolverState {
             table_origins: HashMap::new(),
             creating_temporary_view: false,
             folded_columns: HashSet::new(),
-            view_reads: vec![],
+            view_reads: HashMap::new(),
             view_plans: vec![],
         }
     }
@@ -627,13 +627,13 @@ impl PlanResolverState {
         &self.folded_columns
     }
 
-    /// Records how a view that the definition of a temporary view reads reads a column
+    /// Records how a view that the definition of a temporary view reads reads the columns
     /// of a source.
-    pub fn record_view_read(&mut self, address: usize, position: usize, used: ColumnUse) {
-        self.view_reads.push((address, position, used));
+    pub fn record_view_reads(&mut self, address: usize, reads: HashMap<usize, ColumnUse>) {
+        self.view_reads.insert(address, reads);
     }
 
-    pub fn view_reads(&self) -> &[(usize, usize, ColumnUse)] {
+    pub fn view_reads(&self) -> &HashMap<usize, HashMap<usize, ColumnUse>> {
         &self.view_reads
     }
 

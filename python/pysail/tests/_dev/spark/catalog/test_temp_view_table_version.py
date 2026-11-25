@@ -738,6 +738,22 @@ VIEW_OVER_VIEW_CHANGES = {
         "(5, 'x')",
         [(5,)],
     ),
+    "no column read by the inner view": (
+        "a INT, b INT",
+        "(1, 10), (2, 20)",
+        ["SELECT count(*) AS n FROM {t}", "SELECT n FROM {v}"],
+        "a STRING, b STRING",
+        "('x', 'y')",
+        [(1,)],
+    ),
+    "constant read by the inner view": (
+        "a INT, b INT",
+        "(1, 10)",
+        ["SELECT 1 AS one FROM {t}", "SELECT one FROM {v}"],
+        "a STRING",
+        "('x'), ('y')",
+        [(1,), (1,)],
+    ),
     "column unread by all views retyped": (
         "a INT, b INT, c INT",
         "(1, 10, 100)",

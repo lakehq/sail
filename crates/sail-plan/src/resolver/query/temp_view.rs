@@ -886,12 +886,13 @@ impl PlanResolver<'_> {
         .then_some(projection);
         let source = if state.creating_temporary_view() {
             let source = view_definition_source(source);
-            let address = table_source_address(&source);
-            for (&i, position) in reference.columns.iter().zip(&positions) {
-                if let (Some(used), Some(position)) = (&reference.required[i], position) {
-                    state.record_view_read(address, *position, used.clone());
-                }
-            }
+            let reads = reference
+                .columns
+                .iter()
+                .zip(&positions)
+                .filter_map(|(&i, position)| Some(((*position)?, reference.required[i].clone()?)))
+                .collect();
+            state.record_view_reads(table_source_address(&source), reads);
             source
         } else {
             source
@@ -1397,8 +1398,11 @@ fn required_columns(
             lineage.add_reads(used, columns);
         }
     }
-    for (address, position, used) in state.view_reads() {
-        add_use(required.entry(*address).or_default(), *position, used);
+    for (address, reads) in state.view_reads() {
+        let columns = required.entry(*address).or_default();
+        for (position, used) in reads {
+            add_use(columns, *position, used);
+        }
     }
     for address in whole {
         required.remove(&address);
