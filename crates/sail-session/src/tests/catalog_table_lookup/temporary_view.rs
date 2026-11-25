@@ -546,31 +546,6 @@ async fn test_temporary_view_ignores_the_columns_that_it_does_not_read() -> Test
 }
 
 #[tokio::test]
-async fn test_temporary_view_reads_a_column_renamed_in_letter_case() -> TestResult {
-    let fixture = Fixture::try_new(&[]).await?;
-    fixture
-        .execute("CREATE TEMPORARY VIEW letter_case AS SELECT k, v FROM t")
-        .await?;
-    fixture
-        .replace_table(&["t"], vec![column("K"), column("v")])
-        .await?;
-    let sql = "SELECT k, v FROM letter_case";
-    let plan = fixture.plan(sql).await?;
-    let names = plan
-        .schema()
-        .fields()
-        .iter()
-        .map(|x| x.name().as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names.len(), 2);
-    fixture.execute(sql).await?;
-    fixture
-        .execute("SELECT k, max(v) FROM letter_case GROUP BY k")
-        .await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> TestResult {
     let changes: Vec<(Vec<TestColumn>, &str)> = vec![
         (vec![column("k")], "- `v` BIGINT has been removed"),

@@ -518,15 +518,6 @@ mod tests {
         let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
         assert_eq!(lookups, 2);
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
-
-        // Names that differ in how they are qualified are looked up once.
-        let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t)";
-        let plan = from_ast_statement(parse_one_statement(sql)?)?;
-        let lookups = catalog.lookups.load(Ordering::SeqCst);
-        resolver.resolve_named_plan(plan).await?;
-        let lookups = catalog.lookups.load(Ordering::SeqCst) - lookups;
-        assert_eq!(lookups, 1);
-        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
         Ok(())
     }
 

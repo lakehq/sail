@@ -744,7 +744,18 @@ async fn test_table_spellings_share_one_catalog_load() -> TestResult {
 
 #[tokio::test]
 async fn test_table_spellings_share_one_catalog_load_across_query_shapes() -> TestResult {
-    let fixture = Fixture::try_new(&["CREATE VIEW tv AS SELECT * FROM default.t"]).await?;
+    // The same holds when the session shares CTEs.
+    for share_ctes in [false, true] {
+        let setup = ["CREATE VIEW tv AS SELECT * FROM default.t"];
+        let fixture = Fixture::try_new_with(TableNames::Exact, share_ctes, &setup).await?;
+        table_spellings_share_one_catalog_load_across_query_shapes(&fixture).await?;
+    }
+    Ok(())
+}
+
+async fn table_spellings_share_one_catalog_load_across_query_shapes(
+    fixture: &Fixture,
+) -> TestResult {
     for sql in [
         // A join. The columns are still qualified by the names as written.
         "SELECT a.k, default.t.v, c.v FROM t a \
@@ -769,19 +780,6 @@ async fn test_table_spellings_share_one_catalog_load_across_query_shapes() -> Te
         "SELECT * FROM t UNION ALL SELECT * FROM default.t UNION ALL SELECT * FROM sail.default.t",
     ] {
         fixture.resolve(sql).await?.expect(1, 1, sql);
-        // The same holds when the session shares CTEs.
-        let plan = from_ast_statement(parse_one_statement(sql)?)?;
-        let loads = fixture.catalog.loads.load(Ordering::SeqCst);
-        fixture
-            .resolver()
-            .with_shared_ctes()
-            .resolve_named_plan(plan)
-            .await?;
-        assert_eq!(
-            fixture.catalog.loads.load(Ordering::SeqCst) - loads,
-            1,
-            "{sql}"
-        );
     }
     Ok(())
 }
