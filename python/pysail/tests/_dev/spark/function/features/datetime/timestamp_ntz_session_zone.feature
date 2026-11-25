@@ -149,8 +149,6 @@ Feature: TIMESTAMP_NTZ and TIMESTAMP values in the session time zone
       | s                   | n         |
       | 2024-01-01 10:00:00 | timestamp |
 
-  # Sail labels values in a session time zone that is an offset with seconds with UTC. These values
-  # do not depend on the offset.
   Scenario: TIMESTAMP values in the session time zone +05:30:45
     Given config spark.sql.session.timeZone = +05:30:45
     When query

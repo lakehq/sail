@@ -311,8 +311,8 @@ impl ScalarUDFImpl for ConvertTz {
     // check. DataFusion main fixes the default in afe4a63d0.
     fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
         let data_type = match input {
-            // The value has the default bounds of a function without bounds of its own, such as
-            // `date_trunc`. Arrow's cast, which this conversion replaces, has bounds of its type,
+            // The value has the default bounds of a function without bounds of its own.
+            // Arrow's cast, which this conversion replaces, has bounds of its type,
             // and the result of a cast is in microseconds.
             [_, _, value] if value.data_type().is_null() => {
                 DataType::Timestamp(TimeUnit::Microsecond, self.output_timezone.clone())

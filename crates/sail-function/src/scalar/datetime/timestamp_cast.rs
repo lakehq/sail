@@ -11,6 +11,8 @@ use crate::scalar::datetime::convert_tz::ConvertTz;
 /// Spark's cast of TIMESTAMP_NTZ to TIMESTAMP, which reads the value as a wall-clock time in
 /// `timezone` and resolves DST gaps and overlaps like Spark.
 pub fn cast_timestamp_ntz_to_ltz(expression: Expr, timezone: &Arc<str>, is_try: bool) -> Expr {
+    let label =
+        Arc::from(sail_common_datafusion::utils::datetime::arrow_timezone_label(timezone).as_ref());
     if is_fixed_zero_offset_timezone(timezone) {
         // The wall-clock time is the instant. Arrow's cast would compute it with Chrono, which
         // does not represent Spark's full range.
@@ -20,16 +22,14 @@ pub fn cast_timestamp_ntz_to_ltz(expression: Expr, timezone: &Arc<str>, is_try: 
         );
         return cast(
             micros,
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(label)),
         );
     }
-    ScalarUDF::from(ConvertTz::cast(is_try).with_output_timezone(Some(Arc::clone(timezone)))).call(
-        vec![
-            lit(timezone.to_string()),
-            lit("UTC"),
-            cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
-        ],
-    )
+    ScalarUDF::from(ConvertTz::cast(is_try).with_output_timezone(Some(label))).call(vec![
+        lit(timezone.to_string()),
+        lit("UTC"),
+        cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
+    ])
 }
 
 /// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in

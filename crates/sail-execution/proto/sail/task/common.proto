@@ -88,6 +88,7 @@ message TaskOutputDistribution {
     TaskOutputRoundRobinDistribution round_robin = 2;
     TaskOutputRoundRobinRowDistribution round_robin_row = 3;
     TaskOutputRangeDistribution range = 4;
+    TaskOutputChannelDistribution channel = 5;
   }
 }
 
@@ -107,6 +108,11 @@ message TaskOutputRoundRobinRowDistribution {
 message TaskOutputRangeDistribution {
   bytes partitioning = 1;
   uint64 channels = 2;
+}
+
+// Each row names its channel in its last column, which is not written.
+message TaskOutputChannelDistribution {
+  uint64 channels = 1;
 }
 
 message TaskOutputLocator {

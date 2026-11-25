@@ -681,18 +681,21 @@ fn rewrite_map_zip_with_temporal_key(
     let body = match (source_key_type, target_key_type) {
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
         ) => cast_timestamp_ntz_to_ltz(
             cast(key, DataType::Timestamp(TimeUnit::Microsecond, None)),
-            timezone,
+            session_timezone,
             false,
         ),
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => {
-            ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?).call(vec![key])
-        }
+        ) => ScalarUDF::from(Timestamp::try_new(
+            timezone.as_ref().map(|_| Arc::clone(session_timezone)),
+            ansi_mode,
+            false,
+        )?)
+        .call(vec![key]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
@@ -740,20 +743,19 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             &plan_config.session_timezone_label(),
         )
     {
-        let session_timezone = plan_config.session_timezone_label();
         left = rewrite_map_zip_with_temporal_key(
             left,
             &target_key_type,
             schema,
             plan_config.ansi_mode,
-            &session_timezone,
+            &plan_config.session_timezone,
         )?;
         right = rewrite_map_zip_with_temporal_key(
             right,
             &target_key_type,
             schema,
             plan_config.ansi_mode,
-            &session_timezone,
+            &plan_config.session_timezone,
         )?;
     }
     let right = lambda_with_fresh_parameter(right, "__map_zip_right")?;

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import pandas as pd
 import pytest
-from pyspark.sql.functions import PandasUDFType, pandas_udf, udf
+from pyspark.sql.functions import pandas_udf, udf
 from pyspark.sql.types import DoubleType
 
 
@@ -11,9 +12,9 @@ def df(spark):
 
 
 def test_nondeterministic_aggregate_udf_calls_are_evaluated_separately(spark, df):
-    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
-    def noise(v):
-        return v.sum() + __import__("random").random()
+    @pandas_udf("double")
+    def noise(v: pd.Series) -> float:
+        return float(v.sum()) + __import__("random").random()
 
     noise = noise.asNondeterministic()
     rows = df.groupBy("g").agg(noise("v").alias("a"), noise("v").alias("b")).collect()
@@ -30,9 +31,9 @@ def test_nondeterministic_aggregate_udf_calls_are_evaluated_separately(spark, df
 
 
 def test_deterministic_aggregate_udf_calls_are_equal(df):
-    @pandas_udf("double", PandasUDFType.GROUPED_AGG)
-    def total(v):
-        return v.sum()
+    @pandas_udf("double")
+    def total(v: pd.Series) -> float:
+        return float(v.sum())
 
     rows = df.groupBy("g").agg(total("v").alias("a"), total("v").alias("b")).collect()
     assert sorted((row.g, row.a, row.b) for row in rows) == [(g, 6.0, 6.0) for g in range(5)]

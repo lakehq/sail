@@ -5,7 +5,6 @@ Feature: quarter output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to quarter yields the schema Spark declares
       When query
         """
@@ -17,7 +16,6 @@ Feature: quarter output schema
          |-- result: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a non-null column input to quarter yields the schema Spark declares
       When query
         """

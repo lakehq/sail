@@ -305,7 +305,10 @@ impl DeleteFileIndex {
             DataContentType::PositionDeletes => {
                 let path = referenced_path(&file_ref.data_file);
                 if let Some(path) = path {
-                    self.pos_by_path.entry(path).or_default().push(file_ref);
+                    self.pos_by_path
+                        .entry(path.to_owned())
+                        .or_default()
+                        .push(file_ref);
                 } else {
                     let key = PartitionKey::new(
                         file_ref.partition_spec_id,
@@ -395,18 +398,18 @@ impl std::fmt::Display for DeleteIndexError {
 
 impl std::error::Error for DeleteIndexError {}
 
-fn referenced_path(file: &DataFile) -> Option<String> {
-    const PATH_FIELD_ID: i32 = 2_147_483_546;
+pub(crate) fn referenced_path(file: &DataFile) -> Option<&str> {
+    use crate::spec::manifest::DELETE_FILE_PATH_ID;
     if let Some(path) = &file.referenced_data_file {
-        return Some(path.clone());
+        return Some(path);
     }
-    let lower = file.lower_bounds.get(&PATH_FIELD_ID)?;
-    let upper = file.upper_bounds.get(&PATH_FIELD_ID)?;
+    let lower = file.lower_bounds.get(&DELETE_FILE_PATH_ID)?;
+    let upper = file.upper_bounds.get(&DELETE_FILE_PATH_ID)?;
     if lower != upper {
         return None;
     }
     if let PrimitiveLiteral::String(path) = &lower.literal {
-        Some(path.clone())
+        Some(path)
     } else {
         None
     }

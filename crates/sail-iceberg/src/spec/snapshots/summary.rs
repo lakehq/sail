@@ -28,10 +28,11 @@ pub(crate) const REMOVED_EQUALITY_DELETES: &str = "removed-equality-deletes";
 pub(crate) const TOTAL_EQUALITY_DELETES: &str = "total-equality-deletes";
 pub(crate) const ADDED_DVS: &str = "added-dvs";
 pub(crate) const REMOVED_DVS: &str = "removed-dvs";
+pub(crate) const REMOVED_FILES_SIZE: &str = "removed-files-size";
 pub(crate) const TOTAL_FILES_SIZE: &str = "total-files-size";
 
 /// Summary fields maintained by Sail rather than by individual writes.
-pub(crate) const RESERVED_SNAPSHOT_PROPERTIES: [&str; 24] = [
+pub(crate) const RESERVED_SNAPSHOT_PROPERTIES: [&str; 25] = [
     OPERATION,
     REPLACE_PARTITIONS,
     ADDED_DATA_FILES,
@@ -55,6 +56,7 @@ pub(crate) const RESERVED_SNAPSHOT_PROPERTIES: [&str; 24] = [
     TOTAL_EQUALITY_DELETES,
     ADDED_DVS,
     REMOVED_DVS,
+    REMOVED_FILES_SIZE,
     TOTAL_FILES_SIZE,
 ];
 
