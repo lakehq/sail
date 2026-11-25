@@ -6,7 +6,7 @@ from datetime import date
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pyiceberg.avro.file import AvroFile
+from pyiceberg.avro.file import AvroFile, AvroOutputFile
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyspark.errors import PySparkException
 from pyspark.sql.types import LongType, StructField, StructType
@@ -16,15 +16,19 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
-@pytest.mark.parametrize("partitioned", [True, False])
-def test_table_import(spark, tmp_path, procedure, partitioned):
+@pytest.mark.parametrize("partition", [None, "p", "_part"])
+def test_table_import(spark, tmp_path, procedure, partition):
     source = tmp_path / "source"
-    data = source / "p=a" if partitioned else source
+    data = source / f"{partition}=a" if partition else source
     data.mkdir(parents=True)
     file = data / "part.parquet"
     pq.write_table(pa.table({"id": [42]}), file)
     original = file.read_bytes()
-    ddl = "(id BIGINT, p STRING) USING parquet PARTITIONED BY (p)" if partitioned else "(id BIGINT) USING parquet"
+    ddl = (
+        f"(id BIGINT, {partition} STRING) USING parquet PARTITIONED BY ({partition})"
+        if partition
+        else "(id BIGINT) USING parquet"
+    )
     spark.sql(f"CREATE TABLE src {ddl} LOCATION '{escape_sql_string_literal(str(source))}' TBLPROPERTIES ('x'='old')")
     try:
         path = tmp_path / "target" if procedure == "snapshot" else source
@@ -43,7 +47,7 @@ def test_table_import(spark, tmp_path, procedure, partitioned):
         assert result.schema == StructType([StructField(field, LongType(), False)])
         assert tuple(result.first()) == (1,)
         target, other = ("dest", "src") if procedure == "snapshot" else ("src", "src_BACKUP_")
-        expected = (42, "a") if partitioned else (42,)
+        expected = (42, "a") if partition else (42,)
         assert tuple(spark.table(target).first()) == expected
         assert tuple(spark.table(other).first()) == expected
         metadata = _find_latest_metadata(path)
@@ -55,7 +59,7 @@ def test_table_import(spark, tmp_path, procedure, partitioned):
         else:
             assert metadata["properties"]["migrated"] == "true"
         assert tuple(spark.read.format("iceberg").load(str(path)).first()) == expected
-        new_row = "(99, 'b')" if partitioned else "(99)"
+        new_row = "(99, 'b')" if partition else "(99)"
         spark.sql(f"INSERT INTO {target} VALUES {new_row}")  # noqa: S608
         assert spark.table(target).count() == 2
         assert spark.table(other).count() == 1
@@ -259,6 +263,13 @@ def test_migrate_empty_partitioned(spark, tmp_path):
         ("swapped_ids", "Parquet field ID"),
         ("nested_ids", "Parquet field ID"),
         ("matching_ids", None),
+        ("field_case", "Parquet field name a differs in case from A"),
+        ("nested_case", "Parquet field name x differs in case from X"),
+        ("only_nested", "unsupported subdirectory"),
+        ("root_and_nested", "unsupported subdirectory"),
+        ("default", "Cannot import column b"),
+        ("generated", "Cannot import column b"),
+        ("identity", "Cannot import column b"),
     ],
 )
 def test_source_import_safety(spark, tmp_path, procedure, case, error):
@@ -267,6 +278,13 @@ def test_source_import_safety(spark, tmp_path, procedure, case, error):
     columns = "" if case == "inferred" else "(a BIGINT, b BIGINT)"
     if case == "nested_ids":
         columns = "(a STRUCT<x: BIGINT>, b BIGINT)"
+    columns = {
+        "field_case": "(A BIGINT, b BIGINT)",
+        "nested_case": "(a STRUCT<X: BIGINT>, b BIGINT)",
+        "default": "(a BIGINT, b BIGINT DEFAULT 7)",
+        "generated": "(a BIGINT, b BIGINT GENERATED ALWAYS AS (a * 2))",
+        "identity": "(a BIGINT, b BIGINT GENERATED ALWAYS AS IDENTITY)",
+    }.get(case, columns)
     options = {"glob": "OPTIONS (pathGlobFilter 'keep*')", "recursive": "OPTIONS (recursiveFileLookup 'true')"}
     properties = (
         "TBLPROPERTIES ('transactional'='true', 'transactional_properties'='insert_only')"
@@ -287,10 +305,20 @@ def test_source_import_safety(spark, tmp_path, procedure, case, error):
                 pa.field("b", pa.int64(), metadata={"PARQUET:field_id": str(b)}),
             ]
         )
+    if case == "nested_case":
+        schema = pa.schema([("a", pa.struct([("x", pa.int64())])), ("b", pa.int64())])
+        values = [{"x": 10}]
     data = pa.Table.from_arrays([pa.array(values, type=schema.field(0).type), pa.array([20])], schema=schema)
-    directory = source / {"transactional": "delta_0000001_0000001_0000", "recursive": "nested"}.get(case, "")
+    directory = source / {
+        "transactional": "delta_0000001_0000001_0000",
+        "recursive": "nested",
+        "only_nested": "nested",
+        "root_and_nested": "nested",
+    }.get(case, "")
     directory.mkdir(exist_ok=True)
     pq.write_table(data, directory / "keep.parquet")
+    if case == "root_and_nested":
+        pq.write_table(data, source / "root.parquet")
     if case == "glob":
         pq.write_table(data, directory / "excluded.parquet")
     spark.sql(
@@ -304,7 +332,7 @@ def test_source_import_safety(spark, tmp_path, procedure, case, error):
     )
     try:
         before = spark.table("src").collect()
-        assert len(before) == 1
+        assert len(before) == (2 if case == "root_and_nested" else 1)
         if error:
             with pytest.raises(PySparkException, match=error):
                 spark.sql(call).collect()
@@ -316,6 +344,45 @@ def test_source_import_safety(spark, tmp_path, procedure, case, error):
         else:
             assert spark.sql(call).first()[0] == 1
             assert tuple(spark.table("src" if procedure == "migrate" else "dest").first()) == (10, 20)
+    finally:
+        for name in ["src", "src_BACKUP_", "dest"]:
+            spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("procedure", ["migrate", "snapshot"])
+@pytest.mark.parametrize("swapped", [False, True])
+def test_avro_import_field_ids(spark, tmp_path, procedure, swapped):
+    from pyiceberg.schema import Schema
+    from pyiceberg.typedef import Record
+    from pyiceberg.types import LongType as IcebergLongType
+    from pyiceberg.types import NestedField
+
+    source = tmp_path / "source"
+    source.mkdir()
+    dest = tmp_path / "dest"
+    first, second = (2, 1) if swapped else (1, 2)
+    schema = Schema(NestedField(first, "a", IcebergLongType()), NestedField(second, "b", IcebergLongType()))
+    with AvroOutputFile(PyArrowFileIO().new_output(str(source / "part.avro")), schema, "row") as writer:
+        writer.write_block([Record(13, 29)])
+    spark.sql(f"CREATE TABLE src (a BIGINT, b BIGINT) USING avro LOCATION '{escape_sql_string_literal(str(source))}'")
+    call = (
+        "CALL system.migrate('src')"
+        if procedure == "migrate"
+        else f"CALL system.snapshot('src','dest','{escape_sql_string_literal(str(dest))}')"
+    )
+    try:
+        assert tuple(spark.table("src").first()) == (13, 29)
+        if swapped:
+            with pytest.raises(PySparkException, match="Incompatible Avro field ID for a"):
+                spark.sql(call).collect()
+            assert tuple(spark.table("src").first()) == (13, 29)
+            assert not spark.catalog.tableExists("src_BACKUP_")
+            assert not spark.catalog.tableExists("dest")
+            assert not (source / "metadata").exists()
+            assert not (dest / "metadata").exists()
+        else:
+            assert spark.sql(call).first()[0] == 1
+            assert tuple(spark.table("src" if procedure == "migrate" else "dest").first()) == (13, 29)
     finally:
         for name in ["src", "src_BACKUP_", "dest"]:
             spark.sql(f"DROP TABLE IF EXISTS {name}")

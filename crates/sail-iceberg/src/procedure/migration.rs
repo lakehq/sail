@@ -99,6 +99,17 @@ pub(crate) async fn execute(
     if columns.is_empty() {
         return plan_err!("Migration requires an explicit source schema");
     }
+    for column in columns {
+        if column.default.is_some()
+            || column.generated_always_as.is_some()
+            || column.identity.is_some()
+        {
+            return plan_err!(
+                "Cannot import column {} with a default, generation expression, or identity",
+                column.name
+            );
+        }
+    }
     for (key, value) in properties {
         let key = key.to_ascii_lowercase();
         if key == "transactional" && value.eq_ignore_ascii_case("true") {

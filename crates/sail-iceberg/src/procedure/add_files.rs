@@ -9,10 +9,13 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::ObjectStoreExt;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::iceberg::MIGRATION_BACKUP_PROPERTY;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
+use sail_data_source::listing::utils::{is_hidden_path_name, is_metadata_file};
 
 use super::arguments::{optional_bool, optional_i32, optional_string_map, required_string};
+use super::import_schema::ImportSchema;
 use super::snapshot::operation::PreparedSnapshotOperation;
 use crate::io::StoreContext;
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
@@ -95,46 +98,52 @@ impl AddFiles {
         metadata: &TableMetadata,
         output_schema: ImportOutput,
     ) -> Result<PreparedSnapshotOperation> {
+        let migration = matches!(output_schema, ImportOutput::FileCount(_));
         let parts = &self.source;
         let filter = self
             .filter
             .iter()
             .map(|(key, value)| (key.to_lowercase(), value))
             .collect::<HashMap<_, _>>();
-        let (format, location, declared_parts, managed_source) = match parts.as_slice() {
-            [format, location]
-                if ["parquet", "avro", "orc"].contains(&format.to_lowercase().as_str()) =>
-            {
-                (format.to_lowercase(), location.clone(), None, false)
-            }
-            _ => {
-                let manager = ctx.extension::<CatalogManager>()?;
-                let source = manager
-                    .get_table(parts)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                match source.kind {
-                    TableKind::Table {
-                        format,
-                        location: Some(location),
-                        partition_by,
-                        is_external,
-                        ..
-                    } => (
-                        format.to_lowercase(),
-                        location,
-                        Some(
-                            partition_by
-                                .into_iter()
-                                .map(|field| field.column)
-                                .collect::<Vec<_>>(),
-                        ),
-                        !is_external,
-                    ),
-                    _ => return plan_err!("add_files source must be a stored file table"),
+        let (format, location, declared_parts, managed_source, backup_source) =
+            match parts.as_slice() {
+                [format, location]
+                    if ["parquet", "avro", "orc"].contains(&format.to_lowercase().as_str()) =>
+                {
+                    (format.to_lowercase(), location.clone(), None, false, false)
                 }
-            }
-        };
+                _ => {
+                    let manager = ctx.extension::<CatalogManager>()?;
+                    let source = manager
+                        .get_table(parts)
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    match source.kind {
+                        TableKind::Table {
+                            format,
+                            location: Some(location),
+                            partition_by,
+                            is_external,
+                            properties,
+                            ..
+                        } => (
+                            format.to_lowercase(),
+                            location,
+                            Some(
+                                partition_by
+                                    .into_iter()
+                                    .map(|field| field.column)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            !is_external,
+                            properties.iter().any(|(key, value)| {
+                                key == MIGRATION_BACKUP_PROPERTY && value == "true"
+                            }),
+                        ),
+                        _ => return plan_err!("add_files source must be a stored file table"),
+                    }
+                }
+            };
         if !supports_import_format(&format) {
             return plan_err!("Unsupported add_files source format: {format}");
         }
@@ -248,16 +257,14 @@ impl AddFiles {
                             .into_iter()
                             .filter(|object| object.location != directory),
                     );
-                    if registered_partition.is_none() {
-                        for child in listing.common_prefixes {
-                            let Some(segment) =
-                                child.filename().filter(|s| !s.starts_with(['_', '.']))
-                            else {
-                                continue;
-                            };
-                            let Some((name, value)) = segment.split_once('=') else {
-                                continue;
-                            };
+                    for child in listing.common_prefixes {
+                        let Some(segment) = child.filename().filter(|s| !is_hidden_path_name(s))
+                        else {
+                            continue;
+                        };
+                        if registered_partition.is_none()
+                            && let Some((name, value)) = segment.split_once('=')
+                        {
                             if prune_directories
                                 && let Some(expected) =
                                     filter.get(&decode_partition(name)?.to_lowercase())
@@ -266,8 +273,10 @@ impl AddFiles {
                                 pruned_directory = true;
                                 continue;
                             }
-                            directories.push(child);
+                        } else if !migration || backup_source {
+                            continue;
                         }
+                        directories.push(child);
                     }
                 }
                 files
@@ -295,13 +304,24 @@ impl AddFiles {
                     continue;
                 };
                 let segments = relative.split('/').collect::<Vec<_>>();
-                if segments
-                    .iter()
-                    .any(|p| p.starts_with('.') || p.starts_with('_'))
+                if segments.iter().any(|p| is_hidden_path_name(p))
+                    || object.location.filename().is_some_and(is_metadata_file)
                 {
                     continue;
                 }
                 let directories = &segments[..segments.len() - 1];
+                // A retained migration backup only scans root files and Hive partition
+                // directories. Reject other visible files before publishing either table.
+                if migration
+                    && directories
+                        .iter()
+                        .any(|s| !s.contains('=') || registered_partition.is_some())
+                {
+                    return plan_err!(
+                        "Cannot import file in an unsupported subdirectory: {}",
+                        object.location
+                    );
+                }
                 let partition = match &registered_partition {
                     Some(partition) => partition.clone(),
                     None => {
@@ -352,17 +372,15 @@ impl AddFiles {
         if !catalog_source && !spec.is_unpartitioned() && candidates.is_empty() {
             return plan_err!("Cannot find any matching partitions in table");
         }
-        let expected = if matches!(output_schema, ImportOutput::FileCount(_)) {
-            let arrow = crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?;
-            Some(parquet::arrow::ArrowSchemaConverter::new().convert(&arrow)?)
-        } else {
-            None
-        };
-        let expected = expected.as_ref().map(|schema| schema.root_schema());
+        let expected = migration
+            .then(|| ImportSchema::new(schema))
+            .transpose()?
+            .map(Arc::new);
         let files = futures::stream::iter(
             candidates
                 .into_iter()
                 .map(|(object, partition, source_store, source_url, format)| {
+                    let expected = expected.clone();
                     async move {
                         let partition = partition
                             .iter()
@@ -509,44 +527,11 @@ fn validate_source_store(source_url: &url::Url, table_url: &url::Url) -> Result<
     Ok(())
 }
 
-// Files without IDs use the table's name mapping. Once IDs are present, check every
-// physical field against the same named field in the target, including nested groups.
-fn has_field_ids(field: &parquet::schema::types::Type) -> bool {
-    field.get_basic_info().has_id()
-        || (field.is_group() && field.get_fields().iter().any(|child| has_field_ids(child)))
-}
-
-fn validate_field_ids(
-    field: &parquet::schema::types::Type,
-    expected: Option<&parquet::schema::types::Type>,
-    path: &object_store::path::Path,
-) -> Result<()> {
-    let id = |field: &parquet::schema::types::Type| {
-        let info = field.get_basic_info();
-        info.has_id().then(|| info.id())
-    };
-    if id(field) != expected.and_then(id) {
-        return plan_err!(
-            "Incompatible Parquet field ID for {} in {path}",
-            field.name()
-        );
-    }
-    if field.is_group() {
-        for child in field.get_fields() {
-            let target = expected
-                .filter(|f| f.is_group())
-                .and_then(|f| f.get_fields().iter().find(|e| e.name() == child.name()));
-            validate_field_ids(child, target.map(AsRef::as_ref), path)?;
-        }
-    }
-    Ok(())
-}
-
 async fn import_record_count(
     store: Arc<dyn object_store::ObjectStore>,
     object: &object_store::ObjectMeta,
     format: &str,
-    expected: Option<&parquet::schema::types::Type>,
+    expected: Option<Arc<ImportSchema>>,
 ) -> Result<(DataFileFormat, u64)> {
     let mut reader = object_store::buffered::BufReader::new(store, object);
     match format {
@@ -554,28 +539,35 @@ async fn import_record_count(
             use parquet::arrow::async_reader::AsyncFileReader;
             let metadata = reader.get_metadata(None).await?;
             if let Some(expected) = expected {
-                let actual = metadata.file_metadata().schema_descr().root_schema();
-                if has_field_ids(actual) {
-                    validate_field_ids(actual, Some(expected), &object.location)?;
-                }
+                expected
+                    .validate_parquet(metadata.file_metadata().schema_descr(), &object.location)?;
             }
             let rows = u64::try_from(metadata.file_metadata().num_rows())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok((DataFileFormat::Parquet, rows))
         }
-        "avro" => tokio::task::spawn_blocking(move || {
-            let reader = tokio_util::io::SyncIoBridge::new(reader);
-            let rows = datafusion::arrow_avro::reader::ReaderBuilder::new()
-                .build(reader)?
-                .try_fold(0u64, |rows, batch| {
+        "avro" => {
+            let path = object.location.clone();
+            tokio::task::spawn_blocking(move || {
+                let reader = tokio_util::io::SyncIoBridge::new(reader);
+                let mut reader =
+                    datafusion::arrow_avro::reader::ReaderBuilder::new().build(reader)?;
+                if let Some(expected) = expected {
+                    let header = reader.avro_header().get("avro.schema").ok_or_else(|| {
+                        DataFusionError::Plan(format!("Missing Avro schema in {path}"))
+                    })?;
+                    expected.validate_avro(header, &path)?;
+                }
+                let rows = reader.try_fold(0u64, |rows, batch| {
                     rows.checked_add(batch?.num_rows() as u64).ok_or_else(|| {
                         DataFusionError::Execution("Avro record count overflow".into())
                     })
                 })?;
-            Ok((DataFileFormat::Avro, rows))
-        })
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                Ok((DataFileFormat::Avro, rows))
+            })
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+        }
         _ => plan_err!("Unsupported add_files source format: {format}"),
     }
 }

@@ -19,6 +19,7 @@ mod add_files;
 mod arguments;
 mod descriptor;
 mod expire_snapshots;
+mod import_schema;
 mod logical;
 pub(crate) mod migration;
 mod rewrite_data_files;

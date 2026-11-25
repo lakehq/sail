@@ -473,21 +473,22 @@ fn has_metadata_prefix(name: &str) -> bool {
     name.starts_with("_common_metadata") || name.starts_with("_metadata")
 }
 
-pub(super) fn is_metadata_file(name: &str) -> bool {
+pub fn is_metadata_file(name: &str) -> bool {
     !name.contains('=') && has_metadata_prefix(name)
+}
+
+pub fn is_hidden_path_name(name: &str) -> bool {
+    let exclude = (name.starts_with('_') && !name.contains('='))
+        || name.starts_with('.')
+        || name.ends_with("._COPYING_");
+    exclude && !has_metadata_prefix(name)
 }
 
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
-    let is_hidden = |name: &str| {
-        let exclude = (name.starts_with('_') && !name.contains('='))
-            || name.starts_with('.')
-            || name.ends_with("._COPYING_");
-        exclude && !has_metadata_prefix(name)
-    };
     url.strip_prefix(location)
-        .is_some_and(|mut segments| segments.any(is_hidden))
-        || location.filename().is_some_and(is_hidden)
+        .is_some_and(|mut segments| segments.any(is_hidden_path_name))
+        || location.filename().is_some_and(is_hidden_path_name)
 }
 
 pub fn can_be_evaluated_for_partition_pruning(
