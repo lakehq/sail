@@ -327,7 +327,8 @@ use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::range_sample::{RangePartitionResampleExec, RangePartitionSampleExec};
 use sail_physical_plan::range_split::{
-    RangeChannelExec, RangeResampleExec, RangeSampleOptions, RangeSplitPointsExec,
+    RangeChannelExec, RangeResampleDecisionExec, RangeResampleExec, RangeSampleOptions,
+    RangeSplitPointsExec,
 };
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -1614,12 +1615,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan_with_converter(ctx, self, proto_converter, &resample)?,
                 decode_range_sample_options(options)?,
             )?)),
-            NodeKind::RangeResample(r#gen::RangeResampleExecNode {
-                input,
+            NodeKind::RangeResample(r#gen::RangeResampleExecNode { input, decisions }) => {
+                Ok(Arc::new(RangeResampleExec::try_new(
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                    try_decode_physical_plan_with_converter(
+                        ctx,
+                        self,
+                        proto_converter,
+                        &decisions,
+                    )?,
+                )?))
+            }
+            NodeKind::RangeResampleDecision(r#gen::RangeResampleDecisionExecNode {
                 sample,
                 options,
-            }) => Ok(Arc::new(RangeResampleExec::try_new(
-                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+            }) => Ok(Arc::new(RangeResampleDecisionExec::try_new(
                 try_decode_physical_plan_with_converter(ctx, self, proto_converter, &sample)?,
                 decode_range_sample_options(options)?,
             )?)),
@@ -3331,6 +3341,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?,
                 options: Some(encode_range_sample_options(split_points.options())),
             })
+        } else if let Some(decision) = node.downcast_ref::<RangeResampleDecisionExec>() {
+            NodeKind::RangeResampleDecision(r#gen::RangeResampleDecisionExecNode {
+                sample: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    decision.sample().clone(),
+                )?,
+                options: Some(encode_range_sample_options(decision.options())),
+            })
         } else if let Some(resample) = node.downcast_ref::<RangeResampleExec>() {
             NodeKind::RangeResample(r#gen::RangeResampleExecNode {
                 input: try_encode_physical_plan_with_converter(
@@ -3338,12 +3357,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     proto_converter,
                     resample.input().clone(),
                 )?,
-                sample: try_encode_physical_plan_with_converter(
+                decisions: try_encode_physical_plan_with_converter(
                     self,
                     proto_converter,
-                    resample.sample().clone(),
+                    resample.decisions().clone(),
                 )?,
-                options: Some(encode_range_sample_options(resample.options())),
             })
         } else if let Some(channel) = node.downcast_ref::<RangeChannelExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -10217,8 +10235,10 @@ mod tests {
         };
         let resample = Arc::new(RangeResampleExec::try_new(
             Arc::clone(&input),
-            Arc::clone(&sample),
-            sample_options.clone(),
+            Arc::new(RangeResampleDecisionExec::try_new(
+                Arc::clone(&sample),
+                sample_options.clone(),
+            )?),
         )?);
         let split_points = Arc::new(RangeSplitPointsExec::try_new(
             sample,
@@ -10248,7 +10268,11 @@ mod tests {
             .resample()
             .downcast_ref::<RangeResampleExec>()
             .ok_or_else(|| plan_datafusion_err!("expected range resample"))?;
-        assert_eq!(resample.options(), &sample_options);
+        let decision = resample
+            .decisions()
+            .downcast_ref::<RangeResampleDecisionExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range resample decision"))?;
+        assert_eq!(decision.options(), &sample_options);
         Ok(())
     }
 

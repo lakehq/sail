@@ -184,3 +184,29 @@ def test_range_repartition_samples_the_shared_cte_that_the_shuffle_reads(local_c
     assert len(rows) == 24
     assert sorted(id_ for id_, _ in pairs) == list(range(12))
     assert set(pairs.values()) == {2}, pairs
+
+
+def test_range_stage_history_matches_executed_tasks(local_cluster_spark):
+    spark = local_cluster_spark
+    spark.range(24, numPartitions=1).selectExpr("1 AS k").repartitionByRange(8, "k").collect()
+    rows = spark.sql(
+        """
+        WITH stages AS (
+            SELECT s.* FROM system.execution.stages s
+            JOIN system.session.sessions ss ON ss.session_id = s.session_id
+            WHERE ss.client_session_id = :session
+        ),
+        last_range AS (
+            SELECT max(job_id) AS job_id FROM stages WHERE distribution LIKE 'Channel(%'
+        )
+        SELECT CAST(s.stage AS BIGINT) AS stage, CAST(s.partitions AS BIGINT) AS planned, s.distribution,
+               count(DISTINCT t.partition) AS executed
+        FROM stages s JOIN last_range r ON s.job_id = r.job_id
+        JOIN system.execution.tasks t
+          ON (s.session_id, s.job_id, s.stage) = (t.session_id, t.job_id, t.stage)
+        GROUP BY s.stage, s.partitions, s.distribution
+        """,
+        args={"session": spark.session_id},
+    ).collect()
+    assert [r.distribution for r in rows if r.distribution.startswith("Channel(")] == ["Channel(channels=2)"]
+    assert [(r.stage, r.planned, r.executed) for r in rows if r.planned != r.executed] == []

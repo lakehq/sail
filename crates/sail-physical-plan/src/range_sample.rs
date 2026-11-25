@@ -307,29 +307,29 @@ impl ExecutionPlan for RangePartitionResampleExec {
         Ok(resample_partition(
             self.input.execute(partition, context)?,
             partition,
-            self.fraction,
-            self.partitions.contains(&partition),
+            self.partitions
+                .contains(&partition)
+                .then_some(self.fraction),
         ))
     }
 }
 
-/// Samples each row of one input partition with probability `fraction` if `resample`
-/// is set. Otherwise the partition reads its input to the end and emits nothing
+/// Samples each row of one input partition with the given probability if a fraction
+/// is supplied. Otherwise the partition reads its input to the end and emits nothing
 /// (see [`RangePartitionResampleExec`]).
 pub(crate) fn resample_partition(
     input: SendableRecordBatchStream,
     partition: usize,
-    fraction: f64,
-    resample: bool,
+    fraction: Option<f64>,
 ) -> SendableRecordBatchStream {
     let schema = input.schema();
-    if !resample {
+    let Some(fraction) = fraction else {
         let output = futures::stream::once(async move {
             input.try_for_each(|_| futures::future::ready(Ok(()))).await
         })
         .try_filter_map(|()| futures::future::ready(Ok(None)));
         return Box::pin(RecordBatchStreamAdapter::new(schema, output));
-    }
+    };
     // The seed only needs to keep the sample the same across runs on the same input.
     // It differs from the seed of the first sample, so the two samples are independent.
     let mut rng = StdRng::seed_from_u64(!(partition as u64));

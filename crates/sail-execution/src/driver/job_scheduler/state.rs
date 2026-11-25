@@ -104,25 +104,27 @@ impl JobDescriptor {
         &mut self,
         shuffle: usize,
         partitions: usize,
-    ) -> ExecutionResult<()> {
-        for s in self.graph.resize_range_shuffle(shuffle, partitions)? {
+    ) -> ExecutionResult<Vec<usize>> {
+        let changed = self.graph.resize_range_shuffle(shuffle, partitions)?;
+        for &s in &changed {
             let stage = &mut self.stages[s];
             if stage.tasks.iter().any(|task| !task.attempts.is_empty()) {
                 return Err(ExecutionError::InternalError(format!(
                     "stage {s} has run before the partitions of range shuffle {shuffle} are known"
                 )));
             }
-            stage.tasks = TaskDescriptor::new_tasks(
-                self.graph.stages()[s]
-                    .plan
-                    .output_partitioning()
-                    .partition_count(),
-            );
+            let partitions = self.graph.stages()[s]
+                .plan
+                .output_partitioning()
+                .partition_count();
+            if stage.tasks.len() != partitions {
+                stage.tasks = TaskDescriptor::new_tasks(partitions);
+            }
         }
         self.topology = JobTopology::try_new(&self.graph)?;
         self.regions = TaskRegionDescriptor::new_regions(&self.topology);
         self.range_shuffles[shuffle] = RangeShuffleState::Resolved;
-        Ok(())
+        Ok(changed)
     }
 
     /// Whether the stage waits for the partitions of a range shuffle.

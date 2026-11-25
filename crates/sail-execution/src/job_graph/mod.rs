@@ -133,8 +133,8 @@ impl JobGraph {
     }
 
     /// Gives the range shuffle its number of partitions, and changes the partitions of the
-    /// stages that read the shuffle, directly or not, accordingly. Returns the stages whose
-    /// number of partitions has changed. None of them has run, since they all wait for
+    /// stages that read the shuffle, directly or not, accordingly. Returns the writer and downstream stages whose
+    /// partitioning or inputs changed. None of them has run, since they all wait for
     /// the split points of the shuffle.
     ///
     /// A stage reads as many partitions of the input as the input has channels for a
@@ -158,10 +158,13 @@ impl JobGraph {
             )));
         }
         // The old and new number of channels or partitions of each stage that has changed.
+        if *channels == partitions {
+            return Ok(vec![]);
+        }
         let changed_channels = HashMap::from([(writer, (*channels, partitions))]);
         *channels = partitions;
         let mut changed_partitions: HashMap<usize, (usize, usize)> = HashMap::new();
-        let mut changed = vec![];
+        let mut changed = vec![writer];
         for s in writer + 1..self.stages.len() {
             let stage = &mut self.stages[s];
             // The old and new number of partitions of each input of the stage that changes.
@@ -226,8 +229,8 @@ impl JobGraph {
             let new = stage.plan.output_partitioning().partition_count();
             if new != old {
                 changed_partitions.insert(s, (old, new));
-                changed.push(s);
             }
+            changed.push(s);
         }
         Ok(changed)
     }
@@ -379,6 +382,15 @@ impl fmt::Display for TaskPlacement {
 pub struct StageInput {
     pub stage: usize,
     pub mode: InputMode,
+}
+
+impl From<&StageInput> for sail_system_store::types::StageInput {
+    fn from(input: &StageInput) -> Self {
+        Self {
+            stage: input.stage as u64,
+            mode: input.mode.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for StageInput {

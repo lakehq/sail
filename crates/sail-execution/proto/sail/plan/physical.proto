@@ -91,6 +91,7 @@ message ExtendedPhysicalPlanNode {
     RangeSplitPointsExecNode range_split_points = 74;
     RangeChannelExecNode range_channel = 75;
     RangeResampleExecNode range_resample = 76;
+    RangeResampleDecisionExecNode range_resample_decision = 77;
   }
 }
 
@@ -1142,10 +1143,15 @@ message RangeSplitPointsExecNode {
   RangeSampleOptions options = 3;
 }
 
+message RangeResampleDecisionExecNode {
+  bytes sample = 1;
+  RangeSampleOptions options = 2;
+}
+
 message RangeResampleExecNode {
   bytes input = 1;
-  bytes sample = 2;
-  RangeSampleOptions options = 3;
+  reserved 2, 3;
+  bytes decisions = 4;
 }
 
 message RangeChannelExecNode {

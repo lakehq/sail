@@ -38,6 +38,8 @@ impl PlanFormatter for SparkPlanFormatter {
     fn field_to_simple_string(&self, field: &Field) -> Result<String> {
         if sail_common_datafusion::uuid::is_uuid_field(field) {
             Ok("uuid".to_string())
+        } else if sail_common_datafusion::variant::is_variant_storage_field(field) {
+            Ok("variant".to_string())
         } else {
             self.data_type_to_simple_string(field.data_type())
         }
