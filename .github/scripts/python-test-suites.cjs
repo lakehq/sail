@@ -127,9 +127,13 @@ function renderSuiteChecklist(suites, run, selectedSuites) {
     "",
     `The test suites were discovered by [Build #${run.run_number}](https://github.com/${run.repository.full_name}/actions/runs/${run.id}).`,
     "",
-    activeSuites
-      ? `The active test suites for this build were ${activeSuites}.`
-      : "No test suites were active for this build.",
+    ...(activeSuites
+      ? [
+          "The following test suites were active for this build.",
+          "",
+          activeSuites,
+        ]
+      : ["No test suites were active for this build."]),
   ].join("\n");
   return renderReport(REPORT_NAME, run, body);
 }
