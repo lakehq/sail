@@ -1295,6 +1295,9 @@ NOT_NULL_QUERIES = {
     "union all": "SELECT a FROM {t} UNION ALL SELECT u FROM {t}",
     "struct": "SELECT struct(a, u) AS s FROM {t}",
     "array": "SELECT array(a, u) AS r FROM {t}",
+    "map": "SELECT map(a, u) AS m FROM {t}",
+    "map from arrays": "SELECT map_from_arrays(array(a), array(u)) AS m FROM {t}",
+    "map from entries": "SELECT map_from_entries(array(struct(a, u))) AS m FROM {t}",
     "case": "SELECT CASE WHEN a > 0 THEN a ELSE u END AS c FROM {t}",
     "coalesce": "SELECT coalesce(a, u) AS c FROM {t}",
 }
@@ -1304,21 +1307,22 @@ NOT_NULL_QUERIES = {
 @pytest.mark.parametrize("query", NOT_NULL_QUERIES)
 def test_view_reports_the_nullability_of_the_columns_that_it_computes(spark, tables, kind, query):
     table = tables("delta", "a INT NOT NULL, u INT NOT NULL")
+    table.insert("(1, 2)")
     sql = NOT_NULL_QUERIES[query].format(t=table.name)
     view = table.create_view(kind, sql)
     assert spark.table(view).schema == spark.sql(sql).schema
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
-@pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tables, kind):
-    table = tables("delta", "a INT NOT NULL, u INT NOT NULL")
-    table.insert("(1, 2)")
-    sql = f"SELECT map(a, u) AS m FROM {table.name}"
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize(("before", "after"), [("a INT NOT NULL", "a INT"), ("a INT", "a INT NOT NULL")])
+def test_view_reads_a_column_whose_nullability_changed(spark, tables, kind, before, after):
+    table = tables("delta", before)
+    table.insert("(1)")
+    sql = f"SELECT a, array(a) AS r, struct(a) AS s FROM {table.name}"
     view = table.create_view(kind, sql)
-    # The definition of a view is resolved as if its columns had nulls, which they can have
-    # when the view is read, and the type of a map records whether its values have nulls.
-    assert spark.sql(sql).schema["m"].dataType.valueContainsNull is False
-    assert spark.table(view).schema["m"].dataType.valueContainsNull is True
+    table.recreate(after, "(2)")
+    assert spark.table(view).schema == spark.sql(sql).schema
     assert spark.table(view).collect() == spark.sql(sql).collect()
 
 

@@ -587,7 +587,7 @@ fn count_arguments(plan: &LogicalPlan) -> datafusion_common::Result<Vec<Expr>> {
 }
 
 #[tokio::test]
-async fn test_temporary_view_counts_a_column_without_nulls_as_a_column() -> TestResult {
+async fn test_temporary_view_counts_a_column_without_nulls_as_the_query_does() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
     let not_null = CreateTableColumnOptions {
         nullable: false,
@@ -603,14 +603,15 @@ async fn test_temporary_view_counts_a_column_without_nulls_as_a_column() -> Test
         matches!(arguments.as_slice(), [Expr::Literal(..)]),
         "{arguments:?}"
     );
-    // A view counts the values of the column, which can have nulls when it is read.
+    // A view counts the rows as well. It reads the column, so that it resolves its query
+    // again when the column can have nulls.
     fixture
         .execute(&format!("CREATE TEMPORARY VIEW counted AS {sql}"))
         .await?;
     let stored = fixture.stored_view_plan(&["counted"]).await?;
     let arguments = count_arguments(&stored)?;
     assert!(
-        matches!(arguments.as_slice(), [Expr::Column(_)]),
+        matches!(arguments.as_slice(), [Expr::Literal(..)]),
         "{arguments:?}"
     );
     Ok(())
