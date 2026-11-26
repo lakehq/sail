@@ -130,7 +130,7 @@ CHANGED_CHAINS = {
 
 @pytest.mark.parametrize("change", CHANGED_CHAINS)
 @pytest.mark.parametrize("shape", ["chain", "replaced", "replaced by a DataFrame"])
-@pytest.mark.parametrize("depth", [30, 100, 101])
+@pytest.mark.parametrize("depth", [30, 100, 150])
 def test_views_nested_deeply_resolve_their_queries_again_after_their_table_changed(
     spark, tables, names, change, shape, depth
 ):
@@ -148,13 +148,5 @@ def test_views_nested_deeply_resolve_their_queries_again_after_their_table_chang
         else:
             spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {view} AS SELECT id + 1 AS id, b FROM {inner}")
     table.recreate(*columns)
-    if depth <= 100:
-        assert rows(spark, f"SELECT * FROM {view}") == [(i + depth - 1, value)]
-        assert spark.table(view).columns == ["id", "b"]
-    elif change == "gained":
-        # The plans of the views fit their table, so that the views nested more deeply read them.
-        assert len(rows(spark, f"SELECT * FROM {view}")) == 1
-    else:
-        # Spark fails to analyze views nested more deeply as well.
-        with pytest.raises(Exception, match="VIEW_EXCEED_MAX_NESTED_DEPTH"):
-            spark.sql(f"SELECT * FROM {view}").collect()
+    assert rows(spark, f"SELECT * FROM {view}") == [(i + depth - 1, value)]
+    assert spark.table(view).columns == ["id", "b"]
