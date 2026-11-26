@@ -4,17 +4,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{RecordBatch, StringArray};
+use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatchOptions;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchReceiverStream;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, exec_datafusion_err, plan_err};
+use futures::stream::BoxStream;
+use sail_common::runtime::spawn_stream_on;
 use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
@@ -205,56 +207,51 @@ impl ExecutionPlan for SocketSourceExec {
             return plan_err!("timeout must be greater than 0 for reading from socket");
         }
         let options = self.options.clone();
-        let projected_schema = self.projected_schema.clone();
-        let output = futures::StreamExt::flatten(futures::stream::once(async move {
+        let chunks = futures::stream::once(async move {
             let io = IoRuntime::from_options(context.session_config().options());
-            let mut builder = RecordBatchReceiverStream::builder(projected_schema.clone(), 1);
-            let tx = builder.tx();
-            builder.spawn_on(
-                async move {
-                    // We do not perform retries or reconnections here
-                    // since the socket source is for testing purposes only.
-                    let stream =
-                        tokio::net::TcpStream::connect((options.host.as_str(), options.port))
-                            .await
-                            .map_err(|e| {
-                                exec_datafusion_err!(
-                                    "failed to connect to socket {}:{}: {e}",
-                                    options.host,
-                                    options.port
-                                )
-                            })?;
-                    let reader = BufReader::new(stream);
-                    let lines = LinesStream::new(reader.lines()).chunks_timeout(
-                        options.max_batch_size,
-                        Duration::from_secs(options.timeout_sec),
-                    );
-                    tokio::pin!(lines);
-                    while let Some(lines) = lines.next().await {
-                        let values = lines
-                            .into_iter()
-                            .map(|x| Ok(Some(x?)))
-                            .collect::<Result<Vec<Option<String>>>>()?;
-                        let array = Arc::new(StringArray::from(values));
-                        let batch = RecordBatch::try_new(
-                            projected_schema.clone(),
-                            vec![array; projected_schema.fields.len()],
-                        )?;
-                        if tx.send(Ok(batch)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Ok(())
-                },
-                &io.0,
-            );
-            builder.build()
-        }));
-        let output = output.map(|x| Ok(FlowEvent::append_only_data(x?)));
+            spawn_stream_on(io.0, options, read_socket_lines)
+        });
+        let projected_schema = self.projected_schema.clone();
+        let output = futures::StreamExt::flatten(chunks).map(move |lines| {
+            let lines = lines?;
+            let rows = lines.len();
+            let arrays = if projected_schema.fields.is_empty() {
+                vec![]
+            } else {
+                let values = Arc::new(StringArray::from_iter_values(lines));
+                vec![values as ArrayRef; projected_schema.fields.len()]
+            };
+            let batch = RecordBatch::try_new_with_options(
+                projected_schema.clone(),
+                arrays,
+                &RecordBatchOptions::new().with_row_count(Some(rows)),
+            )?;
+            Ok(FlowEvent::append_only_data(batch))
+        });
         let stream = Box::pin(FlowEventStreamAdapter::new(
             self.projected_schema.clone(),
             output,
         ));
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
+}
+
+fn read_socket_lines(options: &SocketReadOptions) -> BoxStream<'_, Result<Vec<String>>> {
+    Box::pin(async_stream::try_stream! {
+        // The socket source is for testing and opens one connection per scan.
+        let socket = tokio::net::TcpStream::connect((options.host.as_str(), options.port))
+            .await
+            .map_err(|e| exec_datafusion_err!(
+                "failed to connect to socket {}:{}: {e}", options.host, options.port
+            ))?;
+        let reader = BufReader::new(socket);
+        let chunks = LinesStream::new(reader.lines()).chunks_timeout(
+            options.max_batch_size,
+            Duration::from_secs(options.timeout_sec),
+        );
+        tokio::pin!(chunks);
+        while let Some(lines) = chunks.next().await {
+            yield lines.into_iter().collect::<std::io::Result<_>>()?;
+        }
+    })
 }

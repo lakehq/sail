@@ -147,6 +147,7 @@ impl SparkConnectServer {
         sessions: SessionManager,
         request: ExecutePlanRequest,
     ) -> Result<ExecutePlanResponseStream, Status> {
+        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let metadata = ExecutorMetadata {
@@ -211,6 +212,7 @@ impl SparkConnectServer {
     ) -> Result<AnalyzePlanResponse, Status> {
         use crate::spark::connect::analyze_plan_response;
 
+        debug!("{request:?}");
         let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = sessions
@@ -280,11 +282,13 @@ impl SparkConnectServer {
                 Some(analyze_plan_response::Result::JsonToDdl(json))
             }
         };
-        Ok(AnalyzePlanResponse {
+        let response = AnalyzePlanResponse {
             session_id: request.session_id.clone(),
             server_side_session_id,
             result,
-        })
+        };
+        debug!("{response:?}");
+        Ok(response)
     }
 }
 
@@ -297,7 +301,6 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let request = request.into_inner();
-        debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
         use crate::spark::connect::command::CommandType;
 
@@ -324,7 +327,6 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
         let request = request.into_inner();
-        debug!("{request:?}");
         let response = self
             .session_manager
             .run_query(Self::handle_analyze_plan(
@@ -332,7 +334,6 @@ impl SparkConnectService for SparkConnectServer {
                 request,
             ))
             .await?;
-        debug!("{response:?}");
         Ok(Response::new(response))
     }
 

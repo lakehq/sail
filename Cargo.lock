@@ -7302,6 +7302,7 @@ dependencies = [
  "arrow",
  "arrow-pyarrow",
  "arrow-schema",
+ "async-stream",
  "async-trait",
  "bigdecimal",
  "bytes",
