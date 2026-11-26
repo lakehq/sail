@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -251,38 +251,39 @@ pub struct SourceInfo {
 /// or by path and whatever their read options are.
 #[derive(Debug, Default)]
 pub struct LakeSnapshotPins {
-    /// The snapshot, by the location of the table and whether the snapshot was read with
-    /// the commits that the catalog ratified.
-    snapshots: Mutex<HashMap<(String, bool), Arc<dyn Any + Send + Sync>>>,
+    /// The snapshot, by its type, which is the format of the table, the location of the
+    /// table, and whether the snapshot was read with the commits that the catalog ratified.
+    snapshots: Mutex<HashMap<(TypeId, String, bool), Arc<dyn Any + Send + Sync>>>,
 }
 
 impl LakeSnapshotPins {
-    /// Returns the snapshot that the reads of the table read.
-    pub fn get(
+    /// Returns the snapshot of the type that the reads of the table read.
+    pub fn get<T: Any + Send + Sync>(
         &self,
         location: &str,
         catalog_managed: bool,
-    ) -> Result<Option<Arc<dyn Any + Send + Sync>>> {
+    ) -> Result<Option<Arc<T>>> {
         let snapshots = self
             .snapshots
             .lock()
             .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
+        let key = (TypeId::of::<T>(), location.to_string(), catalog_managed);
         Ok(snapshots
-            .get(&(location.to_string(), catalog_managed))
-            .cloned())
+            .get(&key)
+            .and_then(|snapshot| Arc::clone(snapshot).downcast::<T>().ok()))
     }
 
     /// Records the snapshot that the reads of the table read.
-    pub fn insert(
+    pub fn insert<T: Any + Send + Sync>(
         &self,
         location: String,
         catalog_managed: bool,
-        snapshot: Arc<dyn Any + Send + Sync>,
+        snapshot: Arc<T>,
     ) -> Result<()> {
         self.snapshots
             .lock()
             .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?
-            .insert((location, catalog_managed), snapshot);
+            .insert((TypeId::of::<T>(), location, catalog_managed), snapshot);
         Ok(())
     }
 }
@@ -805,16 +806,23 @@ mod tests {
     fn lake_snapshot_pins_keep_a_snapshot_for_each_table_and_commit_kind() -> Result<()> {
         let pins = LakeSnapshotPins::default();
         let location = "memory:///d/";
-        let version = |pinned: Option<Arc<dyn Any + Send + Sync>>| {
-            pinned.and_then(|x| x.downcast_ref::<i64>().copied())
-        };
+        let version = |pinned: Option<Arc<i64>>| pinned.map(|x| *x);
         pins.insert(location.to_string(), false, Arc::new(1_i64))?;
         // A snapshot of the same location with the commits that the catalog ratified is
         // another snapshot.
         pins.insert(location.to_string(), true, Arc::new(2_i64))?;
+        // A snapshot of another format of the same location is another snapshot as well.
+        pins.insert(location.to_string(), false, Arc::new("other".to_string()))?;
         assert_eq!(version(pins.get(location, false)?), Some(1));
         assert_eq!(version(pins.get(location, true)?), Some(2));
-        assert!(pins.get("memory:///e/", false)?.is_none());
+        assert_eq!(
+            pins.get::<String>(location, false)?
+                .as_deref()
+                .map(String::as_str),
+            Some("other")
+        );
+        assert!(pins.get::<String>(location, true)?.is_none());
+        assert!(pins.get::<i64>("memory:///e/", false)?.is_none());
         Ok(())
     }
 

@@ -8,6 +8,7 @@ use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use sail_delta_lake::{DeltaLakeSource, DeltaTableSource};
+use sail_iceberg::IcebergLakeSource;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use super::*;
@@ -187,6 +188,38 @@ async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
     assert_eq!(fixture.delta_versions(plan).await?, vec![2, 2, 2]);
     let plan = read(read_table(&["d"], &[]));
     assert_eq!(fixture.delta_versions(plan).await?, vec![3]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delta_reads_read_one_version_when_the_statement_reads_the_location_as_iceberg()
+-> TestResult {
+    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
+    fixture
+        .session
+        .extension::<DataSourceRegistry>()?
+        .register_data_source(Arc::new(IcebergLakeSource))?;
+    // The location also has the metadata of an Iceberg table, as a Delta Lake table with
+    // the metadata of Iceberg (UniForm) has.
+    let fields = r#"{"id":1,"name":"k","required":false,"type":"long"},{"id":2,"name":"v","required":false,"type":"long"}"#;
+    let metadata = format!(
+        r#"{{"format-version":2,"table-uuid":"9c12d441-03fe-4693-9a96-a0705ddf69c1","location":"{LOCATION}","last-sequence-number":0,"last-updated-ms":0,"last-column-id":2,"schemas":[{{"type":"struct","schema-id":0,"fields":[{fields}]}}],"current-schema-id":0,"partition-specs":[{{"spec-id":0,"fields":[]}}],"default-spec-id":0,"last-partition-id":999,"sort-orders":[{{"order-id":0,"fields":[]}}],"default-sort-order-id":0,"properties":{{}},"snapshots":[],"snapshot-log":[],"metadata-log":[]}}"#
+    );
+    put(
+        &store,
+        (Path::from("d/metadata/v1.metadata.json"), metadata),
+    )
+    .await?;
+    // The read as Iceberg comes between the Delta Lake reads, and the commit of version 1
+    // comes before the second Delta Lake read, which reads version 0 as well.
+    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
+    let plan = union_all(vec![
+        read_path("delta", LOCATION, &[]),
+        select_k_v(read_path("iceberg", LOCATION, &[])),
+        read_table(&["t"], &[]),
+        read_path("delta", LOCATION, &[]),
+    ])?;
+    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
     Ok(())
 }
 

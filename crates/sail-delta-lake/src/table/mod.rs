@@ -841,10 +841,9 @@ pub(crate) async fn load_delta_read_state(
             && !options.read_change_feed
     });
     let pinned = pins
-        .map(|pins| pins.get(table_url.as_str(), catalog_managed))
+        .map(|pins| pins.get::<DeltaSnapshot>(table_url.as_str(), catalog_managed))
         .transpose()?
-        .flatten()
-        .and_then(|snapshot| snapshot.downcast::<DeltaSnapshot>().ok());
+        .flatten();
     let snapshot = match pinned {
         Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
         pinned => {
@@ -887,7 +886,7 @@ pub(crate) async fn load_delta_read_state(
                 pins.insert(
                     table_url.to_string(),
                     catalog_managed,
-                    Arc::clone(&snapshot) as _,
+                    Arc::clone(&snapshot),
                 )?;
             }
             snapshot

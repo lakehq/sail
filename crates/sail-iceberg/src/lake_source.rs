@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -1272,8 +1271,7 @@ pub(crate) async fn load_iceberg_read_table(
     };
     let catalog_managed = read.metadata_location.is_some();
     if let Some(pins) = &pins
-        && let Some(table) = pins.get(&location, catalog_managed)?
-        && let Ok(table) = table.downcast::<Table>()
+        && let Some(table) = pins.get::<Table>(&location, catalog_managed)?
     {
         return Ok((table, read.options));
     }
@@ -1286,11 +1284,7 @@ pub(crate) async fn load_iceberg_read_table(
         .await?,
     );
     if let Some(pins) = &pins {
-        pins.insert(
-            location,
-            catalog_managed,
-            Arc::clone(&table) as Arc<dyn Any + Send + Sync>,
-        )?;
+        pins.insert(location, catalog_managed, Arc::clone(&table))?;
     }
     Ok((table, read.options))
 }
