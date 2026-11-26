@@ -939,10 +939,22 @@ impl PlanResolver<'_> {
             if scans.contains_key(&address) {
                 continue;
             }
-            let (bound, gained) = match self
+            let bound = match self
                 .bind_view_table_scan(scan, view, definition.as_deref(), state)
-                .await?
+                .await
             {
+                Ok(bound) => bound,
+                // An error of the read itself, such as of a table created again in another
+                // format, does not make the view resolve its query again, which would read
+                // the table in another way. A request for the schema gets the stored columns.
+                Err(error) if !self.schema_only => return Err(error),
+                Err(_) => {
+                    scans.clear();
+                    (gained_columns, recompute_schemas) = (false, false);
+                    break;
+                }
+            };
+            let (bound, gained) = match bound {
                 Ok(bound) => bound,
                 Err(error) => {
                     // A view that the query creates does not read the scans bound so far.

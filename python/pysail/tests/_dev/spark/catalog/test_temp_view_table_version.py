@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
 
 import pytest
@@ -1686,6 +1687,7 @@ def test_view_with_time_travel_reads_its_version(spark, tables, kind):
     # The version of a Delta Lake table is not a version of an Iceberg table.
     table.create("id BIGINT", fmt="iceberg")
     assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
+    assert spark.table(view).columns == ["id"]
 
 
 def test_data_frame_view_that_travels_in_time_by_a_read_option_reads_its_version(spark, tables):
@@ -1697,6 +1699,18 @@ def test_data_frame_view_that_travels_in_time_by_a_read_option_reads_its_version
     # The version of a Delta Lake table is not a version of a Parquet table.
     table.recreate("id BIGINT", "(7), (8)", fmt="parquet")
     assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
+    assert spark.table(view).columns == ["id"]
+
+
+def test_data_frame_view_of_a_version_of_a_removed_path_reports_its_columns(spark, tables):
+    table = tables("delta")
+    table.insert("(1)")
+    location = table.tmp_path / f"{table.name}_{table.locations}"
+    view = table.create_view("dv", frame=spark.read.format("delta").option("versionAsOf", 1).load(str(location)))
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    shutil.rmtree(location)
+    error(spark, f"SELECT * FROM {view}")
+    assert spark.table(view).columns == ["id"]
 
 
 @pytest.mark.parametrize("kind", KINDS)
