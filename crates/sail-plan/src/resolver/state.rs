@@ -190,9 +190,8 @@ pub(super) struct PlanResolverState {
     /// the ways to write the name of the table. Names that the catalog returned the same
     /// table for have the same lookup, see [`PlanResolverState::share_catalog_table`].
     catalog_table_lookups: HashMap<(Option<usize>, Vec<String>), CatalogTableLookup>,
-    /// The first lookup of each table that the catalogs returned, by the catalog instance of
-    /// another session, the catalog name, and the database, the name and the identity that
-    /// the catalog returned for the table (see [`PlanResolverState::share_catalog_table`]).
+    /// The first lookup of each table that the catalogs returned (see
+    /// [`PlanResolverState::share_catalog_table`]).
     shared_catalog_tables: HashMap<SharedCatalogTableKey, (TableStatus, LakehouseResolvedTable)>,
     /// What the definition of a temporary view reads, while the definition is resolved.
     view_definition: Option<ViewDefinitionReads>,

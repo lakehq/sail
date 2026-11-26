@@ -770,7 +770,7 @@ impl PlanResolver<'_> {
             }
             Ok(())
         })?;
-        let definition = Self::rebound_view_definition(view);
+        let definition = Self::stored_view_definition(view);
         // A view whose query read persistent views, or tables that its plan does not scan,
         // resolves its query again at each read, as a view over it does, since its stored
         // plan would read what the query read when the view was created. A request for the
@@ -875,7 +875,7 @@ impl PlanResolver<'_> {
     /// Returns the definition of a temporary view that a read resolves again when the plan of
     /// the view no longer fits the tables that it reads. A global temporary view resolves it
     /// in the catalogs of the session that created it, in any session.
-    fn rebound_view_definition(view: &TableStatus) -> Option<Arc<TemporaryViewDefinition>> {
+    fn stored_view_definition(view: &TableStatus) -> Option<Arc<TemporaryViewDefinition>> {
         let (TableKind::TemporaryView {
             definition: Some(definition),
             ..
@@ -1249,8 +1249,8 @@ fn view_name(view: &TableStatus) -> String {
 /// of an extension node on the input columns that the node needs for it, and a column of a
 /// reference to a CTE definition on the output of the definition. A subquery in an
 /// expression is read as the expression is. The other operators, such as `DISTINCT`, which
-/// tells rows apart by all their columns, read all the columns of their inputs, so the list
-/// of operators is checked again when DataFusion adds or changes operators. A column of a
+/// tells rows apart by all their columns, read all the columns of their inputs. The list of
+/// operators below must be checked again when DataFusion adds or changes operators. A column of a
 /// scan is read if its name is read, or the name of an output of the projection right
 /// above the scan that depends on it, since the columns of a scan have the names of the
 /// table, which the scans of other tables can have as well. The resolver gives each other
@@ -1407,7 +1407,7 @@ impl ReadColumns<'_> {
         Ok(())
     }
 
-    /// Records that each output depends on the input names at its position in `inputs`.
+    /// Records that the output depends on the input names.
     fn depend(&mut self, output: &str, inputs: impl IntoIterator<Item = String>) {
         self.depends
             .entry(output.to_string())

@@ -76,8 +76,8 @@ impl UserDefinedLogicalNodeCore for MonotonicIdNode {
     }
 
     fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // The added column depends only on the partition and the position of each row, which the columns of the
-        // input do not change.
+        // The added column depends only on the partition and the position of each row, which
+        // the columns of the input do not change.
         let input_len = self.input.schema().fields().len();
         Some(vec![
             output_columns
