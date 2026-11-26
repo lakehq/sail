@@ -790,7 +790,8 @@ impl PlanResolver<'_> {
         let mut scans = HashMap::new();
         // Whether a scan has another schema than the scan that the view was created with,
         // which is the case when only the metadata of its columns or the constraints of
-        // the table changed. The nodes above the scan then compute their schemas again.
+        // the table changed, or a column that the view does not read is now a null. The
+        // nodes above the scan then compute their schemas again.
         let mut recompute_schemas = false;
         // Whether a table gained columns, which a star inside the arguments of a function
         // expands to when the query of the view is resolved again.
@@ -801,24 +802,21 @@ impl PlanResolver<'_> {
             if scans.contains_key(&address) {
                 continue;
             }
-            let bound = match self
+            let error = match self
                 .bind_view_table_scan(scan, view, definition.as_deref(), state)
                 .await
             {
-                Ok(bound) => bound,
+                Ok(Ok((bound, gained))) => {
+                    gained_columns |= gained;
+                    recompute_schemas |= bound.schema() != &scan.projected_schema;
+                    scans.insert(address, bound);
+                    continue;
+                }
                 // An error of the read itself, such as of a table created again in another
                 // format, does not make the view resolve its query again, which would read
-                // the table in another way. A request for the schema gets the stored columns.
-                Err(error) if !self.schema_only => return Err(error),
-                Err(_) => {
-                    scans.clear();
-                    (gained_columns, recompute_schemas) = (false, false);
-                    break;
-                }
-            };
-            let (bound, gained) = match bound {
-                Ok(bound) => bound,
-                Err(error) => {
+                // the table in another way.
+                Err(error) => error,
+                Ok(Err(error)) => {
                     // A view that the query creates does not read the scans bound so far.
                     if let (Some(reads), Some(recorded)) = (state.view_definition_mut(), recorded) {
                         *reads = recorded;
@@ -826,28 +824,27 @@ impl PlanResolver<'_> {
                     if let Some(definition) = &definition
                         && let Some(plan) = self
                             .resolve_view_definition_if_possible(&plan, view, definition, state)
-                            .await?
+                            .await
                     {
                         return Ok(plan);
                     }
-                    // A request for the schema gets the columns of the stored plan.
-                    if !self.schema_only {
-                        return Err(error);
-                    }
-                    scans.clear();
-                    (gained_columns, recompute_schemas) = (false, false);
-                    break;
+                    error
                 }
             };
-            gained_columns |= gained;
-            recompute_schemas |= bound.schema() != &scan.projected_schema;
-            scans.insert(address, bound);
+            // A request for the schema gets the columns of the stored plan.
+            if !self.schema_only {
+                return Err(error);
+            }
+            scans.clear();
+            (gained_columns, recompute_schemas) = (false, false);
+            break;
         }
         // The stored plan remains if the query no longer resolves.
         if gained_columns
             && let Some(definition) = &definition
-            && let Ok(Some(plan)) =
-                Box::pin(self.resolve_view_definition(&plan, view, definition, state)).await
+            && let Some(plan) = self
+                .resolve_view_definition_if_possible(&plan, view, definition, state)
+                .await
         {
             return Ok(plan);
         }
@@ -893,9 +890,11 @@ impl PlanResolver<'_> {
         view: &TableStatus,
         definition: &Arc<TemporaryViewDefinition>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Option<LogicalPlan>> {
-        let plan = Box::pin(self.resolve_view_definition(plan, view, definition, state)).await;
-        Ok(plan.unwrap_or(None))
+    ) -> Option<LogicalPlan> {
+        Box::pin(self.resolve_view_definition(plan, view, definition, state))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Returns the plan of a read of a temporary view whose plan no longer fits the tables
@@ -1242,7 +1241,10 @@ fn view_name(view: &TableStatus) -> String {
 /// resolver gives each column a name of its own, so the names can only count more columns
 /// as read than the plan reads, also for the plan of another view that the plan reads, whose
 /// names belong to another resolver state. The columns that such a view reads of its
-/// tables are read as well (see [`ViewDefinitionReads::view_reads`]).
+/// tables are read as well (see [`ViewDefinitionReads::view_reads`]). The operators that
+/// read only the columns that their expressions refer to are an allow-list, and every
+/// other operator reads all the columns of its inputs, so the list is checked again when
+/// DataFusion adds or changes operators.
 fn read_columns(
     plan: &LogicalPlan,
     reads: &ViewDefinitionReads,
