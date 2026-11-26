@@ -12,7 +12,6 @@ use arrow_flight::{
 };
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::prelude::SessionContext;
 use futures::{Stream, StreamExt, stream};
 use log::{debug, info};
 use prost::Message;
@@ -22,6 +21,7 @@ use sail_common_datafusion::session::job::JobService;
 use sail_plan::config::PlanConfig;
 use sail_plan::resolve_and_execute_plan;
 use sail_session::session_manager::SessionManager;
+use sail_session::shutdown;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
 use sail_telemetry::metrics::MetricRegistry;
@@ -58,14 +58,119 @@ impl SailFlightSqlService {
     const DEFAULT_SESSION_ID: &'static str = "flight-default";
     const DEFAULT_USER_ID: &'static str = "flight-user";
 
-    async fn get_session_context(&self) -> Result<SessionContext, Status> {
-        self.session_manager
+    async fn handle_statement_query(
+        sessions: SessionManager,
+        config: Arc<PlanConfig>,
+        metrics: Option<Arc<MetricRegistry>>,
+        state: Arc<Mutex<SailFlightSqlState>>,
+        query: CommandStatementQuery,
+        descriptor: FlightDescriptor,
+    ) -> Result<FlightInfo, Status> {
+        debug!("get_flight_info_statement: {}", query.query);
+
+        let statement = parse_one_statement(&query.query)
+            .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;
+        let plan = from_ast_statement(statement)
+            .map_err(|e| Status::invalid_argument(format!("plan conversion error: {e}")))?;
+        let statement_type = match &plan {
+            spec::Plan::Query(_) => StatementType::Query,
+            spec::Plan::Command(_) => StatementType::Command,
+        };
+
+        let ctx = sessions
             .get_or_create_session_context(
                 Self::DEFAULT_SESSION_ID.to_string(),
                 Self::DEFAULT_USER_ID.to_string(),
             )
             .await
-            .map_err(|e| Status::internal(format!("session error: {e}")))
+            .map_err(|e| Status::internal(format!("session error: {e}")))?;
+        // Flight has no Spark session time zone: it is the DataFusion time zone, which
+        // `SET timezone` sets, so that the resolver and the optimizer cannot disagree on it.
+        let time_zone = ctx
+            .state_ref()
+            .read()
+            .config()
+            .options()
+            .execution
+            .time_zone
+            .clone();
+        let config = match time_zone {
+            Some(time_zone) => Arc::new(PlanConfig {
+                session_timezone: time_zone.as_str().into(),
+                ..(*config).clone()
+            }),
+            None => config,
+        };
+        let (plan, _) = resolve_and_execute_plan(&ctx, config, plan)
+            .await
+            .map_err(|e| Status::internal(format!("plan error: {e}")))?;
+        let schema = plan.schema();
+        let service = ctx
+            .extension::<JobService>()
+            .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
+        let session = ctx
+            .extension::<FlightSession>()
+            .map_err(|e| Status::internal(format!("session not found: {e}")))?;
+        let stream = service
+            .runner()
+            .execute(&ctx, plan)
+            .await
+            .map_err(|e| Status::internal(format!("execution error: {e}")))?;
+
+        let stream: SendableRecordBatchStream = if let Some(metrics) = metrics {
+            Box::pin(MetricsRecordingStream::new(
+                stream,
+                metrics,
+                MetricsRecordingContext {
+                    session_id: session.session_id.clone(),
+                    statement_type,
+                },
+            ))
+        } else {
+            stream
+        };
+
+        let stream: SendableRecordBatchStream = match statement_type {
+            StatementType::Query => stream,
+            StatementType::Command => {
+                // execute command eagerly and store the result stream in memory
+                let mut stream = stream;
+                let mut batches = Vec::new();
+                while let Some(result) = stream.next().await {
+                    batches.push(
+                        result.map_err(|e| Status::internal(format!("execution error: {e}")))?,
+                    );
+                }
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema.clone(),
+                    stream::iter(batches.into_iter().map(Ok)),
+                ))
+            }
+        };
+
+        let handle = QueryHandle::new();
+        state.lock().await.add_stream(handle.clone(), stream);
+        debug!("query execution started with handle {handle}");
+
+        let ticket = TicketStatementQuery {
+            statement_handle: handle.as_bytes().to_vec().into(),
+        };
+        let ticket = ticket.as_any().encode_to_vec();
+
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(descriptor)
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("schema error: {e}")))
     }
 }
 
@@ -95,107 +200,19 @@ impl FlightSqlService for SailFlightSqlService {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        debug!("get_flight_info_statement: {}", query.query);
-
-        let statement = parse_one_statement(&query.query)
-            .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;
-        let plan = from_ast_statement(statement)
-            .map_err(|e| Status::invalid_argument(format!("plan conversion error: {e}")))?;
-        let statement_type = match &plan {
-            spec::Plan::Query(_) => StatementType::Query,
-            spec::Plan::Command(_) => StatementType::Command,
-        };
-
-        let ctx = self.get_session_context().await?;
-        // Flight has no Spark session time zone: it is the DataFusion time zone, which
-        // `SET timezone` sets, so that the resolver and the optimizer cannot disagree on it.
-        let time_zone = ctx
-            .state_ref()
-            .read()
-            .config()
-            .options()
-            .execution
-            .time_zone
-            .clone();
-        let config = match time_zone {
-            Some(time_zone) => Arc::new(PlanConfig {
-                session_timezone: time_zone.into(),
-                ..(*self.config).clone()
-            }),
-            None => self.config.clone(),
-        };
-        let (plan, _) = resolve_and_execute_plan(&ctx, config, plan)
-            .await
-            .map_err(|e| Status::internal(format!("plan error: {e}")))?;
-        let schema = plan.schema();
-        let service = ctx
-            .extension::<JobService>()
-            .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
-        let session = ctx
-            .extension::<FlightSession>()
-            .map_err(|e| Status::internal(format!("session not found: {e}")))?;
-        let stream = service
-            .runner()
-            .execute(&ctx, plan)
-            .await
-            .map_err(|e| Status::internal(format!("execution error: {e}")))?;
-
-        let stream: SendableRecordBatchStream = if let Some(ref m) = self.metrics {
-            Box::pin(MetricsRecordingStream::new(
-                stream,
-                m.clone(),
-                MetricsRecordingContext {
-                    session_id: session.session_id.clone(),
-                    statement_type,
-                },
-            ))
-        } else {
-            stream
-        };
-
-        let stream: SendableRecordBatchStream = match statement_type {
-            StatementType::Query => stream,
-            StatementType::Command => {
-                // execute command eagerly and store the result stream in memory
-                let mut stream = stream;
-                let mut batches = Vec::new();
-                while let Some(result) = stream.next().await {
-                    batches.push(
-                        result.map_err(|e| Status::internal(format!("execution error: {e}")))?,
-                    );
-                }
-                Box::pin(RecordBatchStreamAdapter::new(
-                    schema.clone(),
-                    stream::iter(batches.into_iter().map(Ok)),
-                ))
-            }
-        };
-
-        let handle = QueryHandle::new();
-        self.state.lock().await.add_stream(handle.clone(), stream);
-        debug!("query execution started with handle {handle}");
-
-        let ticket = TicketStatementQuery {
-            statement_handle: handle.as_bytes().to_vec().into(),
-        };
-        let ticket = ticket.as_any().encode_to_vec();
-
-        let endpoint = FlightEndpoint {
-            ticket: Some(Ticket {
-                ticket: ticket.into(),
-            }),
-            location: vec![],
-            expiration_time: None,
-            app_metadata: Default::default(),
-        };
-
-        let info = FlightInfo::new()
-            .with_endpoint(endpoint)
-            .with_descriptor(request.into_inner())
-            .try_with_schema(&schema)
-            .map_err(|e| Status::internal(format!("schema error: {e}")))?;
-
-        Ok(Response::new(info))
+        shutdown::run(
+            self.session_manager.query_cancellation(),
+            Self::handle_statement_query(
+                self.session_manager.clone(),
+                self.config.clone(),
+                self.metrics.clone(),
+                self.state.clone(),
+                query,
+                request.into_inner(),
+            ),
+        )
+        .await
+        .map(Response::new)
     }
 
     async fn do_get_statement(
@@ -227,7 +244,10 @@ impl FlightSqlService for SailFlightSqlService {
             .build(output)
             .map(|result| result.map_err(|e| Status::internal(format!("encoding error: {e}"))));
 
-        Ok(Response::new(Box::pin(output)))
+        Ok(Response::new(Box::pin(shutdown::cancel_stream(
+            self.session_manager.query_cancellation(),
+            output,
+        ))))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}

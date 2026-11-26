@@ -144,7 +144,7 @@ impl ServerSessionFactory {
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,
             &self.config.parquet,
-        );
+        )?;
         self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
@@ -198,6 +198,13 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        // Coordinated fallback shares state across partitions in one process.
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            execution.enable_nlj_coordinated_fallback = false;
+        }
         Ok(())
     }
 

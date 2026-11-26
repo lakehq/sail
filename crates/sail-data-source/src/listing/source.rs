@@ -347,6 +347,12 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
         }
 
+        // A Hive partition directory can supply NULL even when the files or the
+        // requested schema declare the partition column as non-nullable.
+        let partition_fields: Vec<_> = partition_fields
+            .into_iter()
+            .map(|field| Arc::new(field.as_ref().clone().with_nullable(true)))
+            .collect();
         let base_path = base_path
             .map(|options| {
                 discovery

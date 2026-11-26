@@ -201,9 +201,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
     unsafe {
         let array = StringViewArray::new_unchecked(
             views_buf,
-            // TODO: Uncomment after DataFusion 56
-            // Arc::clone(string_view_array.data_buffers()),
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls_buf,
         );
         Ok(Arc::new(array) as ArrayRef)
@@ -664,9 +662,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     Ok(unsafe {
         StringViewArray::new_unchecked(
             ScalarBuffer::from(new_views),
-            // TODO: Uncomment after DataFusion 56
-            // completed.into(),
-            completed,
+            completed.into(),
             array.nulls().cloned(),
         )
     })

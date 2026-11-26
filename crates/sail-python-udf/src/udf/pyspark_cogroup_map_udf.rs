@@ -19,6 +19,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
@@ -178,13 +179,13 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = with_blocking_python(|py| self.udf(py))?;
         let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let data = Python::attach(|py| -> PyUdfResult<_> {
+                let data = with_blocking_python(|py| -> PyUdfResult<_> {
                     let output = udf.call1(
                         py,
                         (

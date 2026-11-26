@@ -6,15 +6,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::common::spawn_buffered;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use sail_common::actor::ActorSystem;
-use sail_common_datafusion::session::job::JobRunner;
+use sail_common_datafusion::session::job::{JobRunner, QueryCancellation};
 use sail_physical_plan::range_repartition::{RangeRepartitionExec, resolve_range_partitions};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
@@ -84,20 +86,31 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let context = ctx.task_ctx();
-        if !plan.exists(|node| Ok(node.is::<RangeRepartitionExec>()))? {
-            return execute_stream(trace_execution_plan(plan, options)?, context);
-        }
-        // The partitions of a range repartitioning come from its sample, which runs
-        // before the plan, since the partitions of the plan cannot change once it runs.
-        // The sample runs when the stream is first polled, so that whoever reads the
-        // stream can stop the sample as it can stop the plan.
-        let schema = plan.schema();
-        let stream = futures::stream::once(async move {
-            let plan = resolve_range_partitions(plan, Arc::clone(&context)).await?;
-            execute_stream(trace_execution_plan(plan, options)?, context)
+        let has_range_repartition = plan.exists(|node| Ok(node.is::<RangeRepartitionExec>()))?;
+        let input: SendableRecordBatchStream = if has_range_repartition {
+            // Resolve partitions on first poll so dropping the stream also stops the sample.
+            let schema = plan.schema();
+            let stream = stream::once(async move {
+                let plan = resolve_range_partitions(plan, Arc::clone(&context)).await?;
+                execute_stream(trace_execution_plan(plan, options)?, context)
+            })
+            .try_flatten();
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream))
+        } else {
+            execute_stream(trace_execution_plan(plan, options)?, context)?
+        };
+
+        let schema = input.schema();
+        // Start the producer lazily on the runtime that created the stream. The
+        // consumer can observe shutdown while the producer finishes a batch.
+        let runtime = Handle::try_current().ok();
+        let output = stream::once(async move {
+            let _guard = runtime.as_ref().map(Handle::enter);
+            spawn_buffered(input, 1)
         })
-        .try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        .flatten();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, output));
+        Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {
@@ -141,7 +154,8 @@ impl JobRunner for ClusterJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        execute_job(&self.driver, plan, ctx.task_ctx()).await
+        let stream = execute_job(&self.driver, plan, ctx.task_ctx()).await?;
+        Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
     async fn stop(&self) {

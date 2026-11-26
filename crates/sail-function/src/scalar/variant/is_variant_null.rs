@@ -106,8 +106,8 @@ impl ScalarUDFImpl for IsVariantNullUdf {
 #[cfg(test)]
 mod tests {
     use arrow::array::{BooleanArray, StructArray};
-    use arrow_schema::{Field, Fields};
-    use parquet_variant_compute::{VariantArrayBuilder, VariantType};
+    use arrow_schema::Field;
+    use parquet_variant_compute::VariantArrayBuilder;
 
     use super::*;
     fn build_variant_array_from_json(value: &serde_json::Value) -> Result<VariantArray> {
@@ -151,14 +151,11 @@ mod tests {
         let json_value = serde_json::json!(null);
         let input = build_variant_array_from_json(&json_value)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = IsVariantNullUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -183,14 +180,11 @@ mod tests {
         let json_value = serde_json::json!({"name": "test"});
         let input = build_variant_array_from_json(&json_value)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = IsVariantNullUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -221,16 +215,13 @@ mod tests {
             })),
         ])?;
 
+        let arg_field = Arc::new(input.field("input"));
         let input: StructArray = input.into();
 
         let variant_input = Arc::new(input) as ArrayRef;
 
         let udf = IsVariantNullUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(variant_input)],

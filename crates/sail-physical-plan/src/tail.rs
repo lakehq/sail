@@ -927,9 +927,9 @@ mod tests {
                 vec![
                     Field::new("ordinal", DataType::Int64, false),
                     Field::new("value", data_type.clone(), true)
-                        .with_metadata([("field-key".to_owned(), "field-value".to_owned())].into()),
+                        .with_metadata([("field-key".to_owned(), "field-value".to_owned())]),
                 ],
-                [("schema-key".to_owned(), "schema-value".to_owned())].into(),
+                [("schema-key", "schema-value")],
             ));
             let mut ordinal = 0;
             let batches = [0, 1, 4, 0, 6, 2, 4, 0]

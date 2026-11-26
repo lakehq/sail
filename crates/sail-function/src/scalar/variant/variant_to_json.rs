@@ -146,8 +146,8 @@ impl ScalarUDFImpl for VariantToJsonUdf {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::{Field, Fields};
-    use parquet_variant_compute::{VariantArrayBuilder, VariantType};
+    use arrow_schema::Field;
+    use parquet_variant_compute::VariantArrayBuilder;
     use serde_json::Value;
 
     use super::*;
@@ -166,14 +166,11 @@ mod tests {
         let expected_json = serde_json::json!("norm");
         let input = build_variant_array_from_json(&expected_json)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -203,15 +200,12 @@ mod tests {
 
         let input = build_variant_array_from_json(&expected_json)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = VariantToJsonUdf::default();
 
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -238,8 +232,10 @@ mod tests {
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
         let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
+            VariantArrayBuilder::new(0)
+                .build()
+                .field("input")
+                .with_nullable(true),
         );
 
         let args = ScalarFunctionArgs {
@@ -266,14 +262,12 @@ mod tests {
         builder.append_json(r#"{"a":1}"#)?;
         builder.append_null();
         builder.append_json(r#""hello""#)?;
-        let arr: StructArray = builder.build().into();
+        let input = builder.build();
+        let arg_field = Arc::new(input.field("input"));
+        let arr: StructArray = input.into();
 
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::new(arr) as ArrayRef)],

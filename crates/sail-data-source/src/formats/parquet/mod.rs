@@ -16,7 +16,8 @@ mod read;
 mod reader;
 mod write;
 
-pub use read::{ParquetReadFormat, parse_coerce_int96_string};
+pub use options::parse_parquet_compression;
+pub use read::ParquetReadFormat;
 pub use reader::ListingParquetReaderFactory;
 pub use write::ParquetWriteFormat;
 

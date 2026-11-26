@@ -331,6 +331,14 @@ SKIPPED_SPARK_TESTS = [
         reason="Flaky test",
     ),
     TestMarker(
+        keywords=[
+            "test_parity_arrow_cogrouped_map_misc.py",
+            "CogroupedMapInArrowMiscParityTests",
+            "test_with_local_data",
+        ],
+        reason="The assertion compares co-group output in a fixed row order without ordering the DataFrame",
+    ),
+    TestMarker(
         keywords=["test_python_udf_segfault"],
         reason="Segmentation fault",
     ),

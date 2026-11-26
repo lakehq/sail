@@ -2620,12 +2620,7 @@ fn columns_to_nested_fields(
         } = col;
 
         let arrow_field = arrow::datatypes::Field::new(name, data_type.clone(), *nullable)
-            .with_metadata(
-                metadata
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            );
+            .with_metadata(metadata.iter().collect::<arrow::datatypes::Metadata>());
         let field_type = arrow_field_to_iceberg(&arrow_field)
             .map_err(CatalogError::DataFusionError)?
             .field_type
