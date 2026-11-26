@@ -560,21 +560,10 @@ impl Fixture {
 
     async fn resolve_plan(&self, plan: spec::Plan) -> TestResult<Resolution> {
         let loads = self.catalog.loads.load(Ordering::SeqCst);
-        self.catalog
-            .requests
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clear();
-        self.source
-            .created
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clear();
-        self.source
-            .written
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clear();
+        // Discards what the earlier statements recorded.
+        take(&self.catalog.requests)?;
+        take(&self.source.created)?;
+        take(&self.source.written)?;
         let error = self
             .resolver()
             .resolve_named_plan(plan)
@@ -583,24 +572,9 @@ impl Fixture {
             .map(|e| e.to_string());
         Ok(Resolution {
             loads: self.catalog.loads.load(Ordering::SeqCst) - loads,
-            requests: self
-                .catalog
-                .requests
-                .lock()
-                .map_err(|e| e.to_string())?
-                .clone(),
-            sources: self
-                .source
-                .created
-                .lock()
-                .map_err(|e| e.to_string())?
-                .clone(),
-            writes: self
-                .source
-                .written
-                .lock()
-                .map_err(|e| e.to_string())?
-                .clone(),
+            requests: take(&self.catalog.requests)?,
+            sources: take(&self.source.created)?,
+            writes: take(&self.source.written)?,
             error,
         })
     }
@@ -609,6 +583,12 @@ impl Fixture {
         self.resolve_plan(from_ast_statement(parse_one_statement(sql)?)?)
             .await
     }
+}
+
+/// Takes the recorded items out of the list.
+fn take<T>(items: &Mutex<Vec<T>>) -> TestResult<Vec<T>> {
+    let mut items = items.lock().map_err(|e| e.to_string())?;
+    Ok(std::mem::take(&mut *items))
 }
 
 /// The options to create a table with `BIGINT` columns directly in a catalog. The test

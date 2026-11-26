@@ -239,36 +239,22 @@ async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestR
 }
 
 #[tokio::test]
-async fn test_delta_merge_target_and_source_read_one_version() -> TestResult {
-    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
-    // The target is read first. The source reads the table by path after a commit, and
-    // reads the version of the target, which the write is validated against.
-    fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
-    let sql = "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
-        SELECT k, v FROM delta.`memory:///d/`) AS s ON d.k = s.k WHEN MATCHED THEN DELETE";
-    let versions = fixture
-        .delta_versions(from_ast_statement(parse_one_statement(sql)?)?)
-        .await?;
-    assert!(versions.len() >= 2, "{versions:?}");
-    assert!(versions.iter().all(|v| *v == 0), "{versions:?}");
-    let plan = read(read_path("delta", LOCATION, &[]));
-    assert_eq!(fixture.delta_versions(plan).await?, vec![1]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_delta_update_and_delete_target_and_condition_read_one_version() -> TestResult {
-    for statement in ["UPDATE d SET v = 1 WHERE", "DELETE FROM d WHERE"] {
+async fn test_delta_row_level_target_and_source_read_one_version() -> TestResult {
+    for sql in [
+        "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
+            SELECT k, v FROM delta.`memory:///d/`) AS s ON d.k = s.k WHEN MATCHED THEN DELETE",
+        "UPDATE d SET v = 1 WHERE k IN (SELECT k FROM t UNION ALL \
+            SELECT k FROM delta.`memory:///d/`)",
+        "DELETE FROM d WHERE k IN (SELECT k FROM t UNION ALL \
+            SELECT k FROM delta.`memory:///d/`)",
+    ] {
         let (fixture, store) = Fixture::try_new_with_delta_table().await?;
-        // The target is read first. The condition reads the table by path after a
-        // commit, and reads the version of the target, which the write is validated
-        // against.
+        // The target is read first. The source or the condition reads the table by path
+        // after a commit, and reads the version of the target, which the write is
+        // validated against.
         fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
-        let sql = format!(
-            "{statement} k IN (SELECT k FROM t UNION ALL SELECT k FROM delta.`memory:///d/`)"
-        );
         let versions = fixture
-            .delta_versions(from_ast_statement(parse_one_statement(&sql)?)?)
+            .delta_versions(from_ast_statement(parse_one_statement(sql)?)?)
             .await?;
         assert!(versions.len() >= 2, "{sql}: {versions:?}");
         assert!(versions.iter().all(|v| *v == 0), "{sql}: {versions:?}");
