@@ -8,6 +8,7 @@ use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::lakehouse::CatalogTableIdentity;
 use sail_common_datafusion::datasource::LakeSnapshotPins;
 
 use crate::error::{PlanError, PlanResult};
@@ -189,9 +190,23 @@ pub(super) struct PlanResolverState {
     /// the ways to write the name of the table. Names that the catalog returned the same
     /// table for have the same lookup, see [`PlanResolverState::share_catalog_table`].
     catalog_table_lookups: HashMap<(Option<usize>, Vec<String>), CatalogTableLookup>,
+    /// The first lookup of each table that the catalogs returned, by the catalog instance of
+    /// another session, the catalog name, and the database, the name and the identity that
+    /// the catalog returned for the table (see [`PlanResolverState::share_catalog_table`]).
+    shared_catalog_tables: HashMap<SharedCatalogTableKey, (TableStatus, LakehouseResolvedTable)>,
     /// What the definition of a temporary view reads, while the definition is resolved.
     view_definition: Option<ViewDefinitionReads>,
 }
+
+/// The key of a table that the catalogs returned: the catalog instance of another session,
+/// the catalog name, and the database, the name and the identity that the catalog returned.
+type SharedCatalogTableKey = (
+    Option<usize>,
+    Option<String>,
+    Vec<String>,
+    String,
+    CatalogTableIdentity,
+);
 
 /// What the definition of a temporary view reads, which is recorded while the definition is
 /// resolved.
@@ -274,6 +289,7 @@ impl PlanResolverState {
             lake_path_sources: HashMap::new(),
             lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
+            shared_catalog_tables: HashMap::new(),
             view_definition: None,
         }
     }
@@ -664,6 +680,7 @@ impl PlanResolverState {
             lake_path_sources,
             lake_snapshot_pins,
             catalog_table_lookups,
+            shared_catalog_tables,
             view_definition
         );
     }
@@ -682,23 +699,18 @@ impl PlanResolverState {
         status: TableStatus,
         resolved: LakehouseResolvedTable,
     ) -> (TableStatus, LakehouseResolvedTable) {
-        let first =
-            self.catalog_table_lookups
-                .iter()
-                .find_map(|((first_catalog, first_name), lookup)| match lookup {
-                    (first, Some(first_resolved))
-                        if *first_catalog == session_catalog
-                            && first_name.first() == name.first()
-                            && first.database == status.database
-                            && first.name == status.name
-                            && first_resolved.execution.table_identity
-                                == resolved.execution.table_identity =>
-                    {
-                        Some((first.clone(), first_resolved.clone()))
-                    }
-                    _ => None,
-                });
-        let (status, resolved) = first.unwrap_or((status, resolved));
+        let key = (
+            session_catalog,
+            name.first().cloned(),
+            status.database.clone(),
+            status.name.clone(),
+            resolved.execution.table_identity.clone(),
+        );
+        let (status, resolved) = self
+            .shared_catalog_tables
+            .entry(key)
+            .or_insert_with(|| (status, resolved))
+            .clone();
         self.catalog_table_lookups.insert(
             (session_catalog, name),
             (status.clone(), Some(resolved.clone())),
