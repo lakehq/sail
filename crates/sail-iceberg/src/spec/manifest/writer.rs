@@ -344,7 +344,7 @@ impl ManifestWriter {
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
-            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
+            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version)?;
         let mut writer =
             create_avro_writer(&encoding_schema, LimitedWriter::new(Vec::new(), limit))
                 .map_err(|error| format!("Avro writer creation error: {error}"))?;
