@@ -3,7 +3,7 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::actor::ActorHandle;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
@@ -81,6 +81,7 @@ impl WorkerActor {
             .await?;
 
         ServerBuilder::new("sail_worker", server_options())
+            .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
             .add_service(service, Some(crate::worker::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)

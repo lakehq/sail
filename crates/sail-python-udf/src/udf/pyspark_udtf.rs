@@ -10,13 +10,13 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::Expr;
 use educe::Educe;
-use pyo3::Python;
 use sail_common_datafusion::udf::StreamUDF;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 use crate::stream::PyMapStream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
@@ -188,7 +188,7 @@ impl StreamUDF for PySparkUDTF {
         input: SendableRecordBatchStream,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let function = Python::attach(|py| -> PyUdfResult<_> {
+        let function = with_blocking_python(|py| -> PyUdfResult<_> {
             let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
             let udtf = match self.kind {
                 PySparkUdtfKind::Table => PySpark::table_udf(

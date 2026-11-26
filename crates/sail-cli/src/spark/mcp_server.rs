@@ -48,8 +48,10 @@ pub fn run_spark_mcp_server(
             // Please refer to the comments in that function for details.
             let (tx, rx) = oneshot::channel::<()>();
             let address = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
-            let shutdown = async {
-                let _ = rx.await;
+            let shutdown = || {
+                Ok(async {
+                    let _ = rx.await;
+                })
             };
             with_spark_connect_server(address, shutdown, |addr| async move {
                 let _tx = tx;

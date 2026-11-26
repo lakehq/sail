@@ -10,6 +10,7 @@ mod scalar_subquery;
 pub mod session_factory;
 pub mod session_manager;
 mod shared_cte;
+pub mod shutdown;
 
 #[cfg(test)]
 mod tests {

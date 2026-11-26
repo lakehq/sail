@@ -6,7 +6,7 @@ use std::sync::Arc;
 use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
 use sail_common::runtime::RuntimeHandle;
-use sail_common::server::ServerBuilder;
+use sail_common::server::{CONNECTION_GRACE_PERIOD, ServerBuilder};
 pub use sail_session::session_manager::{ServerSessionFactoryFn, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
@@ -52,7 +52,7 @@ where
     let session_manager =
         create_spark_session_manager_with_factory(config, runtime, &mut system, session_factory_fn)
             .await?;
-    let result = {
+    let builder = {
         let server = SparkConnectServer::new(session_manager.clone());
         let service = SparkConnectServiceServer::new(server)
             // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.
@@ -63,13 +63,11 @@ where
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
         ServerBuilder::new("sail_spark_connect", Default::default())
+            .with_shutdown_grace_period(CONNECTION_GRACE_PERIOD)
             .add_service(service, Some(crate::spark::connect::FILE_DESCRIPTOR_SET))
             .await
-            .serve(listener, signal)
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))
     };
-    session_manager.shutdown().await?;
+    let result = session_manager.serve(builder, listener, signal).await;
     system.join().await;
     result.map_err(Into::into)
 }
