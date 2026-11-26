@@ -246,14 +246,17 @@ pub struct SourceInfo {
     pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
 }
 
+/// The key of the snapshot of a lake table: the type of the snapshot, which is the format of
+/// the table, the location of the table, and whether the snapshot was read with the commits
+/// that the catalog ratified.
+type LakeSnapshotKey = (TypeId, String, bool);
+
 /// The snapshots of the lake tables that the reads of one statement read, so that all the
 /// reads of a table in the statement read one snapshot of it, whether they read it by name
 /// or by path and whatever their read options are.
 #[derive(Debug, Default)]
 pub struct LakeSnapshotPins {
-    /// The snapshot, by its type, which is the format of the table, the location of the
-    /// table, and whether the snapshot was read with the commits that the catalog ratified.
-    snapshots: Mutex<HashMap<(TypeId, String, bool), Arc<dyn Any + Send + Sync>>>,
+    snapshots: Mutex<HashMap<LakeSnapshotKey, Arc<dyn Any + Send + Sync>>>,
 }
 
 impl LakeSnapshotPins {
