@@ -44,16 +44,17 @@ data:
                 AggregateExec: mode=FinalPartitioned, gby=[#28@0 as #28], aggr=[min(#31) as min(partsupp.#31)]
                   RepartitionExec: partitioning=Hash([#28@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#28@0 as #28], aggr=[min(#31) as min(partsupp.#31)]
-                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[_0@0 as #28, _3@1 as #31]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(_0@0, _1@1)], projection=[_0@1, _3@3]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(_0@0, _3@1)], projection=[_0@1]
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(_0@0, _2@1)], projection=[_0@1]
-                                FilterExec: _1@1 = ASIA, projection=[_0@0]
-                                  DataSourceExec: partitions=1, partition_sizes=[1]
+                      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#44@0, #42@2)], projection=[#28@0, #31@1]
+                        ProjectionExec: expr=[_0@0 as #44]
+                          FilterExec: _1@1 = ASIA, projection=[_0@0]
+                            DataSourceExec: partitions=1, partition_sizes=[1]
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          ProjectionExec: expr=[_0@1 as #28, _3@2 as #31, _2@0 as #42]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(_0@0, _1@1)], projection=[_2@1, _0@2, _3@4]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(_3@1, _0@0)], projection=[_0@0, _2@3]
+                                DataSourceExec: partitions=1, partition_sizes=[1]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-                            DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[03]"
 data:
