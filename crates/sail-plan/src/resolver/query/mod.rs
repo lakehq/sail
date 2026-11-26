@@ -46,7 +46,7 @@ mod with_relations;
 
 pub(super) use cte::{CteInfo, CteKind};
 pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
-pub(super) use temp_view::{ColumnUse, TableOrigin};
+pub(super) use temp_view::TableOrigin;
 
 impl PlanResolver<'_> {
     /// Resolve query plan.

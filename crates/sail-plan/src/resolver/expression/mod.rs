@@ -26,9 +26,7 @@ mod udf;
 mod wildcard;
 mod window;
 
-pub(super) use predicate::{
-    ansi_float_comparison_types, is_comparison, spark_interval_metadata_for_expression,
-};
+pub(super) use predicate::{ansi_float_comparison_types, spark_interval_metadata_for_expression};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {

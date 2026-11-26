@@ -1093,7 +1093,7 @@ fn is_ordering_comparison(operator: Operator) -> bool {
     )
 }
 
-pub(in crate::resolver) fn is_comparison(operator: Operator) -> bool {
+fn is_comparison(operator: Operator) -> bool {
     matches!(
         operator,
         Operator::Eq

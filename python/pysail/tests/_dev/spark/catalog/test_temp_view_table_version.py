@@ -925,6 +925,22 @@ def test_view_of_a_union_reads_a_table_whose_columns_changed(spark, tables, fmt,
     assert_view_reads(spark, view, expected)
 
 
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+def test_data_frame_view_of_a_union_reads_a_column_of_its_second_input_by_its_position(spark, tables, fmt):
+    # The union reads the column `a` of `w` only by its position, under the name of `t`.
+    t = tables(fmt, "a INT, b INT")
+    t.insert("(1, 10)")
+    w = tables(fmt, "a INT, b INT")
+    w.insert("(2, 20)")
+
+    def frame():
+        return spark.table(t.name).union(spark.table(w.name)).select("a")
+
+    view = t.create_view("dv", frame=frame())
+    w.recreate("a BIGINT, b INT", "(3000000000, 30)")
+    assert sorted(spark.table(view).collect()) == sorted(frame().collect()) == [(1,), (3000000000,)]
+
+
 # Queries over `t (a INT, u INT)` whose column `a` had no nulls when a view of the query
 # was created, and has nulls when the view is read.
 NULLABLE_QUERIES = {

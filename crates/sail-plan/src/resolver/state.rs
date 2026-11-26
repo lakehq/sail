@@ -14,7 +14,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{
-    ColumnUse, CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
+    CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution, TableOrigin,
 };
 use crate::shared_cte::CteDefinition;
 
@@ -204,14 +204,9 @@ pub(super) struct ViewDefinitionReads {
     /// columns of the arguments of a function that its expression no longer refers to,
     /// such as the argument of `typeof`.
     pub folded_columns: HashSet<String>,
-    /// How the temporary views that the definition reads read the columns of their tables,
-    /// by the address of the source and the position of the column in the source. A source
-    /// whose columns the view does not read has no uses.
-    pub view_reads: HashMap<usize, HashMap<usize, ColumnUse>>,
-    /// The plans of the temporary views that the definition reads, by their schemas and the
-    /// names that the read gives their outputs. The field IDs in such a plan belong to
-    /// another resolver state.
-    pub view_plans: Vec<(DFSchemaRef, Vec<String>)>,
+    /// The columns that the temporary views that the definition reads read of their tables,
+    /// by the address of the source and the positions of the columns in the source.
+    pub view_reads: HashMap<usize, HashSet<usize>>,
     /// Whether the definition expands a star inside the arguments of a function, which
     /// expands to the columns that the tables have when the definition is resolved.
     pub star_in_function: bool,

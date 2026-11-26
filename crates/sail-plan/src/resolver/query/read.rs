@@ -414,11 +414,6 @@ impl PlanResolver<'_> {
                 // The future is boxed to keep it out of the recursive resolver futures.
                 let plan = Box::pin(self.resolve_stored_view_plan(plan, &status, state)).await?;
                 let names = state.register_fields(plan.schema().inner().fields());
-                if let Some(reads) = state.view_definition_mut() {
-                    reads
-                        .view_plans
-                        .push((Arc::clone(plan.schema()), names.clone()));
-                }
                 let plan = rename_logical_plan(plan, &names)?;
                 // The stored plan's internal field IDs belong to another resolver
                 // state. Missing-reference recovery must see only the fresh output.
