@@ -166,46 +166,6 @@ def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, 
     assert "- `id` BIGINT has been removed" in message
 
 
-# Queries over `t (a INT, b INT)` that pass `b` on through a subquery or a CTE, and read only `a`.
-PASSED_ON_QUERIES = {
-    "subquery": "SELECT a FROM (SELECT a, b FROM {t})",
-    "cte": "WITH s AS (SELECT a, b FROM {t}) SELECT a FROM s",
-}
-
-
-@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
-@pytest.mark.parametrize("query", PASSED_ON_QUERIES)
-@pytest.mark.parametrize(
-    ("fmt", "change"),
-    [
-        ("delta", "drop"),
-        ("delta", "rename"),
-        ("parquet", "drop"),
-        ("parquet", "rename"),
-        ("delta_cm", "alter drop"),
-        ("delta_cm", "alter rename"),
-    ],
-)
-def test_view_reads_a_table_whose_column_that_it_passes_on_but_does_not_read_changed(
-    spark, tables, kind, query, fmt, change
-):
-    using, properties = METADATA_FORMATS[fmt]
-    table = tables(using, "a INT, b INT", properties)
-    table.insert("(1, 10), (2, 20)")
-    view = table.create_view(kind, PASSED_ON_QUERIES[query].format(t=table.name))
-    if change == "drop":
-        table.recreate("a INT", "(3), (4)")
-    elif change == "rename":
-        table.recreate("a INT, c INT", "(3, 30), (4, 40)")
-    elif change == "alter drop":
-        spark.sql(f"ALTER TABLE {table.name} DROP COLUMN b")
-        table.insert("(3)")
-    else:
-        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN b TO c")
-        table.insert("(3, 30)")
-    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, f"SELECT a FROM {table.name}")
-
-
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 def test_views_over_views_read_a_table_whose_unread_column_changed_its_type(spark, tables, kind):
     table = tables("delta", "a INT, b INT, u INT")
@@ -246,6 +206,8 @@ UNUSED_VALUE_QUERIES = {
         "SELECT id, k FROM {t}",
     ),
     "cte": ("WITH c AS (SELECT id, k, b + 1 AS e FROM {t}) SELECT id, k FROM c", "SELECT id, k FROM {t}"),
+    "passed on": ("SELECT id, k FROM (SELECT id, k, b FROM {t})", "SELECT id, k FROM {t}"),
+    "passed on cte": ("WITH s AS (SELECT id, k, b FROM {t}) SELECT id, k FROM s", "SELECT id, k FROM {t}"),
 }
 
 # The changes of `b`: the format of the table, and whether the table is created again with or without
