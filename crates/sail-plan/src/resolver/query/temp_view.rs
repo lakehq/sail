@@ -24,6 +24,9 @@ use datafusion::datasource::source_as_provider;
 use datafusion::functions_aggregate::average::Avg;
 use datafusion::functions_aggregate::count::Count;
 use datafusion::functions_aggregate::sum::Sum;
+use datafusion_common::nested_struct::{
+    requires_nested_struct_cast, validate_data_type_compatibility,
+};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::expr::{
@@ -189,7 +192,6 @@ impl ViewTableReference {
         let matches = match_fields(self.table.fields(), table.fields(), case_sensitive);
         let mut reads = Vec::with_capacity(matches.len());
         for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
-            let path = [field.name().clone()];
             let read = match (used, found) {
                 (Some(ColumnUse::Identity), FieldMatch::Found(position)) => {
                     Some((position, Read::Same))
@@ -199,13 +201,11 @@ impl ViewTableReference {
                 {
                     Some((position, Read::Same))
                 }
-                (Some(used), found) => {
-                    fit.field(field, found, table.fields(), &path, used.fields())
-                }
+                (Some(used), found) => fit.column(field, found, table.fields(), used.fields()),
                 // A column that the view does not read is read only if it did not change.
                 (None, found) => {
                     let mut unread = Fit::new(case_sensitive, type_name);
-                    let read = unread.field(field, found, table.fields(), &path, None);
+                    let read = unread.column(field, found, table.fields(), None);
                     read.filter(|_| unread.changes.is_empty())
                 }
             };
@@ -495,6 +495,9 @@ struct Fit<'a> {
     case_sensitive: bool,
     type_name: &'a dyn Fn(&DataType) -> String,
     changes: Vec<String>,
+    /// The fields that structs read whole gained in the column, which the cast to the
+    /// stored type leaves out if it matches the fields of structs by name.
+    added: Vec<String>,
 }
 
 impl<'a> Fit<'a> {
@@ -503,7 +506,43 @@ impl<'a> Fit<'a> {
             case_sensitive,
             type_name,
             changes: vec![],
+            added: vec![],
         }
+    }
+
+    /// Returns the position of the match of a stored column in the current columns and how
+    /// the column is read (see [`Fit::field`]). A struct that is read whole and gained
+    /// fields is read without them, as a table that gained a column, unless the cast to the
+    /// stored type cannot leave them out, such as a cast of a map.
+    fn column(
+        &mut self,
+        stored: &Field,
+        found: FieldMatch,
+        current: &Fields,
+        used: Option<&HashMap<String, ColumnUse>>,
+    ) -> Option<(usize, Read)> {
+        let read = self.field(stored, found, current, &[stored.name().clone()], used);
+        let added = std::mem::take(&mut self.added);
+        if added.is_empty() {
+            return read;
+        }
+        let left_out = match &read {
+            Some((position, Read::Cast)) => casts_by_name(
+                current[*position].data_type(),
+                nullable_field(stored).data_type(),
+            ),
+            Some((position, Read::Rename)) => {
+                let current = current[*position].data_type();
+                let (order, _) = rename_types(stored.data_type(), current, self.case_sensitive);
+                casts_by_name(current, &order)
+            }
+            _ => false,
+        };
+        if !left_out {
+            self.changes
+                .extend(added.into_iter().map(|x| format!("{x} has been added")));
+        }
+        read
     }
 
     /// Returns the position of the match of a stored field in the current fields and how
@@ -702,8 +741,7 @@ impl<'a> Fit<'a> {
             for field in current {
                 if !names.contains(&fold(field.name())) {
                     let path = child_path(path, field.name());
-                    let change = self.describe_field(&path, field);
-                    self.changes.push(format!("{change} has been added"));
+                    self.added.push(self.describe_field(&path, field));
                 }
             }
         }
@@ -796,14 +834,26 @@ fn child_path(path: &[String], name: &str) -> Vec<String> {
 /// Returns the field of a cast of a value of `current` to the stored field: the stored
 /// type, whose fields can have nulls now that had none, unless the type cannot be cast to.
 fn cast_target(stored: &Field, current: &Field) -> Field {
+    let target = nullable_field(stored).data_type().clone();
     let data_type = if stored.data_type() == current.data_type() {
         stored.data_type().clone()
-    } else if can_cast_types(current.data_type(), stored.data_type()) {
-        nullable_field(stored).data_type().clone()
+    } else if casts_by_name(current.data_type(), &target) {
+        target
     } else {
         current.data_type().clone()
     };
     stored.clone().with_data_type(data_type)
+}
+
+/// Whether a value of one type can be cast to another, matching the fields of structs by
+/// name and leaving out the fields that the target does not have, as DataFusion plans a
+/// cast.
+fn casts_by_name(from: &DataType, to: &DataType) -> bool {
+    if requires_nested_struct_cast(from, to) {
+        validate_data_type_compatibility("", from, to).is_ok()
+    } else {
+        can_cast_types(from, to)
+    }
 }
 
 /// Returns `value`, a value of the current field, in the stored type before the cast to the
@@ -1956,8 +2006,8 @@ mod tests {
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
     use super::{
-        ColumnUse, Fit, Read, TableOrigin, ViewTableReference, converts_exactly, required_columns,
-        view_definition_source,
+        ColumnUse, FieldMatch, Fit, Read, TableOrigin, ViewTableReference, converts_exactly,
+        required_columns, view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
     use crate::resolver::state::{ViewDefinitionReads, table_source_address};
@@ -2729,14 +2779,6 @@ mod tests {
             ),
             (
                 fields(vec![
-                    field("a", DataType::Int32),
-                    field("b", DataType::Utf8),
-                    Field::new("d", DataType::Int64, false),
-                ]),
-                vec!["`c`.`d` Int64 NOT NULL has been added"],
-            ),
-            (
-                fields(vec![
                     field("a", DataType::Int64),
                     field("b", DataType::Utf8),
                 ]),
@@ -2789,6 +2831,55 @@ mod tests {
         assert_eq!(
             match_columns(&value(false), &value(true), true),
             Ok(vec![0])
+        );
+    }
+
+    #[test]
+    fn test_structs_read_whole_are_read_without_the_fields_that_they_gained() {
+        let fields = |names: &[&str]| {
+            DataType::Struct(names.iter().map(|x| field(x, DataType::Int32)).collect())
+        };
+        let wraps = [
+            (|x: DataType| x) as fn(DataType) -> DataType,
+            |x| DataType::List(Arc::new(field("item", x))),
+            |x| DataType::LargeList(Arc::new(field("item", x))),
+            |x| DataType::FixedSizeList(Arc::new(field("item", x)), 2),
+            |x| DataType::Struct(vec![field("s", x)].into()),
+        ];
+        for wrap in wraps {
+            let column = |names: &[&str]| field("c", wrap(fields(names)));
+            let stored = column(&["a", "b"]);
+            // A field added, the fields reordered, and a field renamed in letter case.
+            for (names, expected) in [
+                (&["a", "b", "d"][..], Read::Cast),
+                (&["d", "b", "a"][..], Read::Cast),
+                (&["A", "b", "d"][..], Read::Rename),
+            ] {
+                let mut fit = Fit::new(false, &type_name);
+                let current = Fields::from(vec![column(names)]);
+                let read = fit.column(&stored, FieldMatch::Found(0), &current, None);
+                assert_eq!(fit.changes, Vec::<String>::new(), "{names:?}");
+                assert_eq!(read, Some((0, expected)), "{names:?}");
+            }
+        }
+        // A cast of a map cannot leave out the fields that the structs of its values gained.
+        let value = |names: &[&str]| {
+            field(
+                "c",
+                map(
+                    Field::new("key", DataType::Utf8, false),
+                    field("value", fields(names)),
+                ),
+            )
+        };
+        let changes = match_columns(
+            &Schema::new(vec![value(&["a"])]),
+            &Schema::new(vec![value(&["a", "d"])]),
+            true,
+        );
+        assert_eq!(
+            changes,
+            Err(vec!["`c`.`value`.`d` Int32 has been added".to_string()])
         );
     }
 

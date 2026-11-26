@@ -394,14 +394,6 @@ COLUMN_CHANGES = {
         "(2, named_struct('a', 11, 'b', 21, 'c', 31))",
         [(11,)],
     ),
-    "whole struct gains a field": (
-        "id INT, s STRUCT<a: INT, b: INT>",
-        "(1, named_struct('a', 10, 'b', 20))",
-        "SELECT * FROM {t}",
-        "id INT, s STRUCT<a: INT, b: INT, c: INT>",
-        "(2, named_struct('a', 11, 'b', 21, 'c', 31))",
-        None,
-    ),
     "unread struct field retyped": (
         "id INT, s STRUCT<a: INT, b: INT>",
         "(1, named_struct('a', 10, 'b', 20))",
@@ -1113,6 +1105,57 @@ def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tables, kind):
     assert spark.sql(sql).schema["m"].dataType.valueContainsNull is False
     assert spark.table(view).schema["m"].dataType.valueContainsNull is True
     assert spark.table(view).collect() == spark.sql(sql).collect()
+
+
+# Structs that a view reads whole and that gain a field: the columns and a row before, and
+# after the change. The view reads them without the new field, as it reads a table that
+# gained a column without the column.
+STRUCT_GAINS = {
+    "struct": (
+        "s STRUCT<a: INT, b: INT>",
+        "named_struct('a', 10, 'b', 20)",
+        "s STRUCT<b: INT, c: INT, a: INT>",
+        "named_struct('b', 21, 'c', 31, 'a', 11)",
+        (11, 21),
+    ),
+    "struct in a list": (
+        "s ARRAY<STRUCT<a: INT, b: INT>>",
+        "array(named_struct('a', 10, 'b', 20))",
+        "s ARRAY<STRUCT<a: INT, b: INT, c: INT>>",
+        "array(named_struct('a', 11, 'b', 21, 'c', 31))",
+        [(11, 21)],
+    ),
+    "struct renamed in letter case": (
+        "s STRUCT<a: INT, b: INT>",
+        "named_struct('a', 10, 'b', 20)",
+        "s STRUCT<A: INT, b: INT, c: INT>",
+        "named_struct('A', 11, 'b', 21, 'c', 31)",
+        (11, 21),
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("case", STRUCT_GAINS)
+def test_view_reads_a_struct_without_the_fields_that_it_gained(spark, tables, fmt, kind, case):
+    columns, value, new_columns, new_value, expected = STRUCT_GAINS[case]
+    table = tables(fmt, f"id INT, {columns}")
+    table.insert(f"(1, {value})")
+    view = table.create_view(kind)
+    schema = spark.table(view).schema
+    table.recreate(f"id INT, {new_columns}", f"(2, {new_value})")
+    assert spark.table(view).schema == schema
+    assert rows(spark, f"SELECT * FROM {view}") == [(2, expected)]
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_of_a_map_of_structs_that_gained_a_field_must_be_created_again(spark, tables, kind):
+    table = tables("delta", "id INT, m MAP<STRING, STRUCT<a: INT>>")
+    table.insert("(1, map('k', named_struct('a', 10)))")
+    view = table.create_view(kind)
+    table.recreate("id INT, m MAP<STRING, STRUCT<a: INT, c: INT>>", "(2, map('k', named_struct('a', 11, 'c', 31)))")
+    assert_view_reads(spark, view, None)
 
 
 # Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The
