@@ -7,7 +7,8 @@ use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use datafusion_common::config::{
     MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
 };
-use datafusion_common::parquet_config::DFParquetWriterVersion;
+use datafusion_common::parquet_config::{DFParquetCompression, DFParquetWriterVersion};
+use datafusion_common::{DataFusionError, Result};
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
@@ -17,17 +18,38 @@ use crate::options::r#gen::{
     ParquetReadOptions, ParquetReadPartialOptions, ParquetWriteOptions, ParquetWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
-use crate::utils::split_parquet_compression_string;
 
-fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceResult<()> {
-    if level.is_some() {
-        return Err(DataSourceError::InvalidOption {
-            key: "compression".to_string(),
-            value: codec.to_string(),
-            cause: Some("does not support specifying a level".to_string()),
-        });
+pub fn parse_parquet_compression(value: &str) -> Result<DFParquetCompression> {
+    match value.to_ascii_lowercase().as_str() {
+        "none" | "" => Ok(DFParquetCompression::Uncompressed),
+        "gzip" => Ok(DFParquetCompression::Gzip(
+            GzipLevel::default().compression_level(),
+        )),
+        "brotli" => Ok(DFParquetCompression::Brotli(
+            BrotliLevel::default().compression_level(),
+        )),
+        "zstd" => Ok(DFParquetCompression::Zstd(
+            ZstdLevel::default().compression_level() as u32,
+        )),
+        _ => value.parse(),
     }
-    Ok(())
+}
+
+fn invalid_write_option(key: &str, value: String, error: DataFusionError) -> DataSourceError {
+    DataSourceError::InvalidOption {
+        key: key.to_owned(),
+        value,
+        cause: Some(error.to_string()),
+    }
+}
+
+fn parse_parquet_write_option<T: FromStr<Err = DataFusionError>>(
+    key: &str,
+    value: String,
+) -> DataSourceResult<T> {
+    value
+        .parse()
+        .map_err(|error| invalid_write_option(key, value, error))
 }
 
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
@@ -44,7 +66,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
             force_filter_selections: Some(self.global.force_filter_selections),
             schema_force_view_types: Some(self.global.schema_force_view_types),
             binary_as_string: Some(self.global.binary_as_string),
-            coerce_int96: self.global.coerce_int96.map(Some),
+            coerce_int96: self.global.coerce_int96.map(|unit| Some(unit.to_string())),
             bloom_filter_on_read: Some(self.global.bloom_filter_on_read),
             max_predicate_cache_size: Some(self.global.max_predicate_cache_size),
             max_in_list_size: Some(self.global.max_in_list_size),
@@ -54,7 +76,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 }
 
 impl ParquetReadOptions {
-    pub fn into_table_options(self) -> TableParquetOptions {
+    pub fn into_table_options(self) -> datafusion_common::Result<TableParquetOptions> {
         let ParquetReadOptions {
             merge_schema: _,
             enable_page_index,
@@ -83,17 +105,17 @@ impl ParquetReadOptions {
             schema_force_view_types,
             binary_as_string,
             // Spark reads INT96 as `TimestampType`, which stores UTC instants.
-            coerce_int96_tz: coerce_int96.as_ref().map(|_| "UTC".to_string()),
-            coerce_int96,
+            coerce_int96_tz: coerce_int96.as_ref().map(|_| "UTC".parse()).transpose()?,
+            coerce_int96: coerce_int96.map(|unit| unit.parse()).transpose()?,
             bloom_filter_on_read,
             max_predicate_cache_size,
             max_in_list_size,
             ..ParquetOptions::default()
         };
-        TableParquetOptions {
+        Ok(TableParquetOptions {
             global,
             ..TableParquetOptions::default()
-        }
+        })
     }
 }
 
@@ -104,16 +126,20 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             write_batch_size: Some(self.global.write_batch_size),
             writer_version: Some(self.global.writer_version.to_string()),
             skip_arrow_metadata: Some(self.global.skip_arrow_metadata),
-            compression: Some(self.global.compression.clone()),
+            compression: Some(self.global.compression.as_ref().map(ToString::to_string)),
             dictionary_enabled: Some(self.global.dictionary_enabled),
             dictionary_page_size_limit: Some(self.global.dictionary_page_size_limit),
-            statistics_enabled: Some(self.global.statistics_enabled.clone()),
+            statistics_enabled: Some(
+                self.global
+                    .statistics_enabled
+                    .map(|value| value.to_string()),
+            ),
             max_row_group_size: Some(self.global.max_row_group_size),
             max_row_group_bytes: Some(self.global.max_row_group_bytes.map(|v| v.get())),
             column_index_truncate_length: Some(self.global.column_index_truncate_length),
             statistics_truncate_length: Some(self.global.statistics_truncate_length),
             data_page_row_count_limit: Some(self.global.data_page_row_count_limit),
-            encoding: Some(self.global.encoding.clone()),
+            encoding: Some(self.global.encoding.map(|value| value.to_string())),
             bloom_filter_on_write: Some(self.global.bloom_filter_on_write),
             bloom_filter_fpp: Some(self.global.bloom_filter_fpp),
             bloom_filter_ndv: Some(self.global.bloom_filter_ndv),
@@ -167,88 +193,13 @@ impl ParquetWriteOptions {
             content_defined_chunking_norm_level,
         } = self;
         let writer_version =
-            DFParquetWriterVersion::from_str(writer_version.as_str()).map_err(|e| {
-                DataSourceError::InvalidOption {
-                    key: "writer_version".to_string(),
-                    value: writer_version.to_string(),
-                    cause: Some(e.to_string()),
-                }
-            })?;
-        let compression = if let Some(v) = compression {
-            let (codec, level) =
-                split_parquet_compression_string(&v.to_lowercase()).map_err(|e| {
-                    DataSourceError::InvalidOption {
-                        key: "compression".to_string(),
-                        value: v.to_string(),
-                        cause: Some(e.to_string()),
-                    }
-                })?;
-            let resolved = match codec.as_str() {
-                "uncompressed" | "none" | "" => {
-                    check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok::<String, DataSourceError>("uncompressed".to_string())
-                }
-                "snappy" => {
-                    check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok(v)
-                }
-                "gzip" => {
-                    if level.is_some() {
-                        Ok(v)
-                    } else {
-                        Ok(format!(
-                            "gzip({})",
-                            GzipLevel::default().compression_level()
-                        ))
-                    }
-                }
-                "lzo" => {
-                    check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok(v)
-                }
-                "brotli" => {
-                    if level.is_some() {
-                        Ok(v)
-                    } else {
-                        Ok(format!(
-                            "brotli({})",
-                            BrotliLevel::default().compression_level()
-                        ))
-                    }
-                }
-                "lz4" => {
-                    check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok(v)
-                }
-                "zstd" => {
-                    if level.is_some() {
-                        Ok(v)
-                    } else {
-                        Ok(format!(
-                            "zstd({})",
-                            ZstdLevel::default().compression_level()
-                        ))
-                    }
-                }
-                "lz4_raw" => {
-                    check_parquet_level_is_none(codec.as_str(), &level)?;
-                    Ok(v)
-                }
-                _ => Err(DataSourceError::InvalidOption {
-                    key: "compression".to_string(),
-                    value: v.to_string(),
-                    cause: Some(
-                        "unknown or unsupported parquet compression. Valid values are: \
-                        uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), \
-                        and lz4_raw."
-                            .to_string(),
-                    ),
-                }),
-            }?;
-            Some(resolved)
-        } else {
-            None
-        };
+            parse_parquet_write_option::<DFParquetWriterVersion>("writer_version", writer_version)?;
+        let compression = compression
+            .map(|value| {
+                parse_parquet_compression(&value)
+                    .map_err(|error| invalid_write_option("compression", value, error))
+            })
+            .transpose()?;
         // `parse_optional_non_zero_usize` maps `0` to `None`, so the value is never zero here.
         let max_row_group_bytes = max_row_group_bytes
             .map(MaxRowGroupBytes::try_new)
@@ -276,13 +227,17 @@ impl ParquetWriteOptions {
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
-            statistics_enabled,
+            statistics_enabled: statistics_enabled
+                .map(|value| parse_parquet_write_option("statistics_enabled", value))
+                .transpose()?,
             max_row_group_size,
             max_row_group_bytes,
             column_index_truncate_length,
             statistics_truncate_length,
             data_page_row_count_limit,
-            encoding,
+            encoding: encoding
+                .map(|value| parse_parquet_write_option("encoding", value))
+                .transpose()?,
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
@@ -347,7 +302,10 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::config::MaxRowGroupBytes;
-    use datafusion_common::parquet_config::DFParquetWriterVersion;
+    use datafusion_common::parquet_config::{
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
+        DFTimeUnit,
+    };
     use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
@@ -375,7 +333,7 @@ mod tests {
         ]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .into_table_options()?;
         assert!(options.global.enable_page_index);
         assert!(options.global.pruning);
         assert!(!options.global.skip_metadata);
@@ -384,7 +342,7 @@ mod tests {
         assert!(!options.global.reorder_filters);
         assert!(options.global.schema_force_view_types);
         assert!(options.global.binary_as_string);
-        assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
+        assert_eq!(options.global.coerce_int96, Some(DFTimeUnit::Millisecond));
         assert!(options.global.bloom_filter_on_read);
         // max_predicate_cache_size uses parse_optional_usize: "0" = Some(0)
         assert_eq!(options.global.max_predicate_cache_size, Some(0));
@@ -396,14 +354,14 @@ mod tests {
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .into_table_options()?;
         assert_eq!(options.global.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
         let kv = option_list(&[("metadata_size_hint", "")]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .into_table_options()?;
         assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
@@ -426,14 +384,14 @@ mod tests {
         let kv = option_list(&[]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .into_table_options()?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
         // When metadata_size_hint = "0" is provided, the value is explicitly cleared
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options();
+            .into_table_options()?;
         assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
@@ -481,17 +439,23 @@ mod tests {
             DFParquetWriterVersion::from_str("2.0")?
         );
         assert!(options.global.skip_arrow_metadata);
-        assert_eq!(options.global.compression, Some("snappy".to_string()));
+        assert_eq!(
+            options.global.compression,
+            Some(DFParquetCompression::Snappy)
+        );
         assert_eq!(options.global.dictionary_enabled, Some(true));
         assert_eq!(options.global.dictionary_page_size_limit, 2048);
-        assert_eq!(options.global.statistics_enabled, Some("chunk".to_string()));
+        assert_eq!(
+            options.global.statistics_enabled,
+            Some(DFParquetStatistics::Chunk)
+        );
         assert_eq!(options.global.max_row_group_size, 5000);
         assert_eq!(options.global.column_index_truncate_length, Some(100));
         assert_eq!(options.global.statistics_truncate_length, Some(200));
         assert_eq!(options.global.data_page_row_count_limit, 10000);
         assert_eq!(
             options.global.encoding,
-            Some("delta_binary_packed".to_string())
+            Some(DFParquetEncoding::DeltaBinaryPacked)
         );
         assert!(options.global.bloom_filter_on_write);
         assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
@@ -613,7 +577,7 @@ mod tests {
             .options_mut()
             .execution
             .parquet
-            .encoding = Some("bit_packed".to_string());
+            .encoding = Some(DFParquetEncoding::BitPacked);
         state
             .write()
             .config_mut()
@@ -663,7 +627,7 @@ mod tests {
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
-        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+        assert_eq!(options.global.encoding, Some(DFParquetEncoding::BitPacked));
         assert!(options.global.content_defined_chunking.enabled);
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);

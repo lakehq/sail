@@ -3,6 +3,7 @@
 //! Checks that a shuffle write with many output channels and few rows for each of them
 //! holds memory in proportion to its input rather than to its channels and batch size.
 
+use std::mem::size_of;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -11,12 +12,14 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
+use datafusion::physical_expr::SplitPoint;
 use futures::FutureExt;
 
 use super::probe::{arrays, key_partitioning, output_limit, probed_shuffle};
 use super::{
-    assert_compact, matrix_column, matrix_input, matrix_list, matrix_rows, shuffle_with, stream,
+    ShufflePartitioning, assert_compact, matrix_column, matrix_input, matrix_list, matrix_rows,
+    shuffle_with, stream,
 };
 use crate::stream::writer::TaskStreamWriteState;
 
@@ -132,6 +135,15 @@ async fn few_rows_per_channel_violations(
     for &(name, channels, batch_size) in inputs {
         let input = few_rows_per_channel(name, scheme, channels)?;
         let partitioning = key_partitioning(scheme, &input, channels)?;
+        // The DataFusion range router keeps copies of the split points and the
+        // primitive key values. These fixtures all use one Int64 per split point.
+        let router_bytes = match &partitioning {
+            ShufflePartitioning::Range(range, _) => {
+                range.split_points().len()
+                    * (size_of::<SplitPoint>() + size_of::<ScalarValue>() + size_of::<i64>())
+            }
+            _ => 0,
+        };
         let probe = probed_shuffle(
             &input,
             partitioning,
@@ -153,7 +165,7 @@ async fn few_rows_per_channel_violations(
                 "a {scheme} shuffle of unbounded input holds rows back"
             );
         }
-        let found = probe.heap_violations(channels, arrays(&input[0]), batch_size);
+        let found = probe.heap_violations(channels, arrays(&input[0]), batch_size, router_bytes);
         violations.extend(found.into_iter().map(|violation| {
             format!(
                 "{scheme} shuffle (unbounded: {unbounded}), {name} input, {channels} channels, \

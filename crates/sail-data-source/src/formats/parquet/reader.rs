@@ -11,8 +11,8 @@ use datafusion::parquet::arrow::arrow_reader::ArrowReaderOptions;
 use datafusion::parquet::arrow::async_reader::AsyncFileReader;
 use datafusion::parquet::basic::{ConvertedType, Type as PhysicalType};
 use datafusion::parquet::errors::{ParquetError, Result};
+use datafusion::parquet::file::metadata::page_index::PageIndexBuilder;
 use datafusion::parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
-use datafusion::parquet::file::page_index::column_index::ColumnIndexMetaData;
 use datafusion::parquet::schema::types::{SchemaDescriptor, Type, TypePtr};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_datasource::PartitionedFile;
@@ -128,20 +128,24 @@ fn raw_decimal_metadata(
                 .build()?,
         );
     }
-    let mut column_index = metadata.column_index().cloned();
-    if let Some(groups) = &mut column_index {
-        for group in groups {
-            for &index in raw_columns {
-                if let Some(column) = group.get_mut(index) {
-                    *column = ColumnIndexMetaData::NONE;
+    if let Some(indexes) = metadata.page_index() {
+        let num_columns = schema.num_columns();
+        let mut page_index = PageIndexBuilder::try_new(metadata.num_row_groups(), num_columns)?;
+        for row_group in 0..metadata.num_row_groups() {
+            for column in 0..num_columns {
+                if !raw_columns.contains(&column)
+                    && let Some(index) = indexes.column_index(row_group, column)
+                {
+                    page_index.try_put_column_index(index.clone(), row_group, column)?;
+                }
+                if let Some(index) = indexes.offset_index(row_group, column) {
+                    page_index.try_put_offset_index(index.clone(), row_group, column)?;
                 }
             }
         }
+        builder = builder.set_page_index(Some(Arc::new(page_index.build())));
     }
-    Ok(builder
-        .set_column_index(column_index)
-        .set_offset_index(metadata.offset_index().cloned())
-        .build())
+    Ok(builder.build())
 }
 
 fn raw_decimal_schema(node: &TypePtr, raw_columns: &[usize], leaf: &mut usize) -> Result<TypePtr> {

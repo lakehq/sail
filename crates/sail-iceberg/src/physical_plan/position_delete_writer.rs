@@ -386,24 +386,16 @@ async fn write_position_delete_file(
 fn position_delete_arrow_schema() -> Schema {
     Schema::new(vec![
         Arc::new(
-            Field::new(POSITION_DELETE_FILE_PATH_COL, DataType::Utf8, false).with_metadata(
-                [(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    POSITION_DELETE_FILE_PATH_ID.to_string(),
-                )]
-                .into_iter()
-                .collect(),
-            ),
+            Field::new(POSITION_DELETE_FILE_PATH_COL, DataType::Utf8, false).with_metadata([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                POSITION_DELETE_FILE_PATH_ID.to_string(),
+            )]),
         ),
         Arc::new(
-            Field::new(POSITION_DELETE_POS_COL, DataType::Int64, false).with_metadata(
-                [(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    POSITION_DELETE_POS_ID.to_string(),
-                )]
-                .into_iter()
-                .collect(),
-            ),
+            Field::new(POSITION_DELETE_POS_COL, DataType::Int64, false).with_metadata([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                POSITION_DELETE_POS_ID.to_string(),
+            )]),
         ),
     ])
 }

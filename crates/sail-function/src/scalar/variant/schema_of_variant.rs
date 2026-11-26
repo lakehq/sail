@@ -177,7 +177,11 @@ pub(crate) fn variant_type_to_spark_type(inferred: &InferredType) -> String {
 }
 
 /// Compute the decimal precision from the integer value and scale.
-fn decimal_type(integer: i128, scale: u8) -> InferredType {
+fn decimal_type(mut integer: i128, mut scale: u8) -> InferredType {
+    while scale > 0 && integer % 10 == 0 {
+        integer /= 10;
+        scale -= 1;
+    }
     let abs = integer.unsigned_abs();
     let int_digits = if abs == 0 {
         1u8

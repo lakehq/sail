@@ -96,7 +96,7 @@ impl SailFlightSqlService {
             .clone();
         let config = match time_zone {
             Some(time_zone) => Arc::new(PlanConfig {
-                session_timezone: time_zone.into(),
+                session_timezone: time_zone.as_str().into(),
                 ..(*config).clone()
             }),
             None => config,

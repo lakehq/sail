@@ -9,7 +9,7 @@ use arrow::array::{
     Array, ArrayRef, Float64Array, ListArray, RecordBatch, RecordBatchOptions, UInt64Array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Metadata, Schema};
 use datafusion_common::{
     Result, ScalarValue, downcast_value, not_impl_err, plan_datafusion_err, plan_err,
 };
@@ -144,7 +144,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             DataType::List(element) => element.data_type(),
             data_type => data_type,
         };
-        let metadata = matches!(
+        let metadata: Metadata = matches!(
             value_type,
             DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
         )

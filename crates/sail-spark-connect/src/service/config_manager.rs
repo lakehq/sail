@@ -6,10 +6,10 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
 use sail_plan::resolver::PlanResolver;
 use sail_sql_analyzer::parser::parse_native_config_value;
 
@@ -51,17 +51,6 @@ pub(crate) async fn handle_sql_config(
             } else {
                 (variable.as_str(), value.clone())
             };
-            if key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(&value) {
-                warn!(
-                    "invalid time zone {:?} for {variable}: the statement is rejected and the \
-                    session keeps its time zone, as Spark does",
-                    value.chars().take(64).collect::<String>()
-                );
-                return Err(SparkError::invalid(format!(
-                    "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{variable}\" \
-                    is invalid. Cannot resolve the given timezone. SQLSTATE: 22022"
-                )));
-            }
             handle_config_set(
                 ctx,
                 vec![KeyValue {
@@ -214,10 +203,6 @@ pub(crate) fn handle_config_set(
     let spark = ctx.extension::<SparkSession>()?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = spark.get_config_warnings(&kv)?;
-    let sets_session_timezone = {
-        let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
-        kv.iter().any(|pair| pair.key == key)
-    };
     // A request that fails on one pair keeps the pairs applied before it, as Spark does, so the
     // mirror follows what the session holds on the error path as well. Returning the error without
     // mirroring would leave `conf.get` reporting a value that Parquet reads ignore. The pairs are
@@ -227,10 +212,22 @@ pub(crate) fn handle_config_set(
     // caller needs, so it takes precedence over a mirroring error.
     let parquet_binary_as_string_key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
     let mut sets_parquet_binary_as_string = false;
+    let mut sets_session_timezone = false;
     let result = kv.into_iter().try_for_each(|pair| {
         let is_parquet_binary_as_string = pair.key == parquet_binary_as_string_key;
+        let is_session_timezone = pair.key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE;
+        if is_session_timezone
+            && let Some(value) = &pair.value
+            && !is_valid_time_zone(value)
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TIME_ZONE] The value '{value}' in the config \"{}\" is invalid. Cannot resolve the given timezone. SQLSTATE: 22022",
+                pair.key
+            )));
+        }
         spark.set_config(vec![pair])?;
         sets_parquet_binary_as_string |= is_parquet_binary_as_string;
+        sets_session_timezone |= is_session_timezone;
         Ok(())
     });
     let mirrored = if sets_parquet_binary_as_string {
@@ -238,21 +235,12 @@ pub(crate) fn handle_config_set(
     } else {
         Ok(())
     };
-    result.and(mirrored)?;
-    if sets_session_timezone {
-        // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
-        // listing-table schema inference reads `execution.time_zone` to reconcile mixed-timezone
-        // timestamps and to render adjusted timestamps in the session zone; Sail otherwise keeps
-        // the session timezone only in `PlanConfig`, leaving `execution.time_zone` unset. The
-        // optimizer rules read it as the session time zone.
-        let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
-    }
+    let timezone_mirrored = if sets_session_timezone {
+        sync_session_timezone(ctx, &spark)
+    } else {
+        Ok(())
+    };
+    result.and(mirrored).and(timezone_mirrored)?;
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
         server_side_session_id: spark.server_session_id().to_string(),
@@ -328,27 +316,29 @@ pub(crate) fn handle_config_unset(
     // Mirror before anything else can return an error, for the same reason as in
     // `handle_config_set`. Unsetting either removes every key or none of them, so there is no
     // partially applied request to mirror here.
-    if unsets_parquet_binary_as_string {
-        sync_parquet_binary_as_string(ctx, &spark)?;
-    }
+    let mirrored = if unsets_parquet_binary_as_string {
+        sync_parquet_binary_as_string(ctx, &spark)
+    } else {
+        Ok(())
+    };
     if unsets_session_timezone {
-        // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
-        // `execution.time_zone` to the now-effective session zone instead of leaving the last
-        // explicitly-set value behind. Mirrors the sync in `handle_config_set`.
-        let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
+        sync_session_timezone(ctx, &spark)?;
     }
+    mirrored?;
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
         server_side_session_id: spark.server_session_id().to_string(),
         pairs: Vec::new(),
         warnings,
     })
+}
+
+fn sync_session_timezone(ctx: &SessionContext, spark: &SparkSession) -> SparkResult<()> {
+    let state = ctx.state_ref();
+    let mut state = state.write();
+    let config = spark.plan_config()?;
+    set_spark_session_time_zone(state.config_mut().options_mut(), &config.session_timezone)?;
+    Ok(())
 }
 
 pub(crate) fn handle_config_is_modifiable(

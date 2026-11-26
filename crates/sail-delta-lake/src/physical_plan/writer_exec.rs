@@ -898,7 +898,7 @@ impl DeltaWriterExec {
                             &change_data_schema(&writer_schema),
                             logical_cdc_schema.as_ref(),
                             kernel_mode,
-                            timezone.as_deref(),
+                            timezone.as_ref().map(|tz| tz.as_str()),
                         )?;
                         change_writer
                             .write(&change)
@@ -942,7 +942,7 @@ impl DeltaWriterExec {
                     &writer_schema,
                     logical_schema_for_mapping.as_ref(),
                     kernel_mode,
-                    timezone.as_deref(),
+                    timezone.as_ref().map(|tz| tz.as_str()),
                 )?;
 
                 writer

@@ -1470,8 +1470,7 @@ fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Resul
                 if let Some(comment) = comment {
                     metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), comment);
                 }
-                let mut field = ArrowField::new(name, data_type, nullable)
-                    .with_metadata(metadata.into_iter().collect());
+                let mut field = ArrowField::new(name, data_type, nullable).with_metadata(metadata);
                 field = with_variant_extension_if_marked_storage(field);
                 Ok(field)
             },

@@ -372,13 +372,10 @@ mod tests {
 
         for name in [UUID_EXTENSION_NAME, "other.extension", "parquet.variant"] {
             let typed = Arc::new(
-                Field::new("typed", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [
-                        (EXTENSION_TYPE_NAME_KEY.into(), name.into()),
-                        (EXTENSION_TYPE_METADATA_KEY.into(), String::new()),
-                    ]
-                    .into(),
-                ),
+                Field::new("typed", DataType::FixedSizeBinary(16), true).with_metadata([
+                    (EXTENSION_TYPE_NAME_KEY.to_owned(), name.to_owned()),
+                    (EXTENSION_TYPE_METADATA_KEY.to_owned(), String::new()),
+                ]),
             );
             let fixed = Arc::new(Field::new("fixed", DataType::FixedSizeBinary(16), true));
             for fields in [

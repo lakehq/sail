@@ -13,6 +13,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::session::time_zone::set_spark_session_time_zone;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_session::session_factory::{
@@ -66,19 +67,11 @@ impl ServerSessionMutator for SparkSessionMutator {
             .map_err(|e| internal_datafusion_err!("{e}"))?,
         );
         let config_service = SessionConfigService::new(spark.clone());
-        // Seed the DataFusion `execution.time_zone` from the resolved Spark session timezone at
-        // session creation. `SparkSession::try_new` sets `spark.sql.session.timeZone` to the
-        // system timezone, but nothing otherwise copies it into `SessionConfig`; without this
-        // seed a session that never calls `conf.set` leaves `execution.time_zone = None`, so
-        // Parquet schema inference treats a non-UTC server as UTC. `handle_config_set` and
-        // `handle_config_unset` keep the two in sync thereafter.
-        let session_timezone = spark
+        let plan_config = spark
             .plan_config()
-            .map_err(|e| internal_datafusion_err!("{e}"))?
-            .session_timezone
-            .to_string();
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
         let mut config = config;
-        config.options_mut().execution.time_zone = Some(session_timezone);
+        set_spark_session_time_zone(config.options_mut(), &plan_config.session_timezone)?;
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(spark)
