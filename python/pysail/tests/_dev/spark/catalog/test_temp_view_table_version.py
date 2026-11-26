@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 from pyspark.sql.connect.session import SparkSession
-from pyspark.sql.functions import col, udf
+from pyspark.sql.functions import array, col, explode, udf
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.session import patch_spark_connect_session, spark_connect_server
@@ -981,6 +981,76 @@ def test_view_over_views_reads_a_table_whose_unread_columns_changed(spark, table
         view = table.create_view(kind if i == len(queries) - 1 else "sv", query.format(t=table.name, v=view))
     table.recreate(new_columns, new_values)
     assert rows(spark, f"SELECT * FROM {view}") == expected
+
+
+# Queries over `t (id INT, k INT, extra INT)` that read `id` and `k` through an operator that
+# passes the columns of its input on, as SQL or as a function of the DataFrame of the table.
+PASSING_QUERIES = {
+    "repartition": lambda frame: frame.repartition(3).select("id", "k"),
+    "repartition by a column": lambda frame: frame.repartition(3, "k").select("id", "k"),
+    "coalesce": lambda frame: frame.coalesce(1).select("id", "k"),
+    "sort within partitions": lambda frame: frame.sortWithinPartitions("k").select("id", "k"),
+    "repartition by range": lambda frame: frame.repartitionByRange(3, "k").select("id", "k"),
+    "sample": lambda frame: frame.sample(fraction=1.0, seed=3).select("id", "k"),
+    "explode": lambda frame: frame.select("id", explode(array("id", "k")).alias("e")),
+    "unpivot": lambda frame: frame.unpivot("id", ["k"], "n", "v"),
+    "table sample": "SELECT id, k FROM {t} TABLESAMPLE (100 PERCENT)",
+    "lateral view": "SELECT id, e FROM {t} LATERAL VIEW explode(array(id, k)) x AS e",
+    "explode in the select list": "SELECT id, explode(array(id, k)) AS e FROM {t}",
+    "posexplode": "SELECT id, posexplode(array(k)) FROM {t}",
+    "inline": "SELECT inline(array(named_struct('a', k))) FROM {t}",
+    "unpivot in SQL": "SELECT id, n, v FROM {t} UNPIVOT (v FOR n IN (k))",
+}
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.parametrize("change", ["retyped", "dropped"])
+@pytest.mark.parametrize("query", PASSING_QUERIES)
+def test_view_over_an_operator_that_passes_columns_on_reads_a_table_whose_unread_column_changed(
+    spark, tables, fmt, change, query
+):
+    table = tables(fmt, "id INT, k INT, extra INT")
+    table.insert("(1, 10, 100), (2, 20, 200)")
+    definition = PASSING_QUERIES[query]
+
+    def direct():
+        if isinstance(definition, str):
+            return spark.sql(definition.format(t=table.name))
+        return definition(spark.table(table.name))
+
+    if isinstance(definition, str):
+        view = table.create_view("sv", definition.format(t=table.name))
+    else:
+        view = table.create_view("dv", frame=direct())
+    if change == "retyped":
+        table.recreate("id INT, k INT, extra STRING", "(1, 10, 'a'), (4, 40, 'b')")
+    else:
+        table.recreate("id INT, k INT", "(1, 10), (4, 40)")
+    assert sorted(spark.table(view).collect()) == sorted(direct().collect())
+
+
+# Queries over `t (id INT, s ARRAY<STRUCT<a: INT, b: INT>>, extra INT)` that read the field `a`
+# of the structs in `s`.
+UNNESTED_STRUCT_QUERIES = {
+    "explode": "SELECT id, x.a AS a FROM {t} LATERAL VIEW explode(s) e AS x",
+    "inline": "SELECT a FROM (SELECT inline(s) FROM {t})",
+}
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.parametrize("query", UNNESTED_STRUCT_QUERIES)
+def test_view_that_unnests_structs_reads_a_table_whose_columns_changed(spark, tables, fmt, query):
+    table = tables(fmt, "id INT, s ARRAY<STRUCT<a: INT, b: INT>>, extra INT")
+    table.insert("(1, array(named_struct('a', 1, 'b', 2)), 100)")
+    sql = UNNESTED_STRUCT_QUERIES[query].format(t=table.name)
+    view = table.create_view("sv", sql)
+    table.recreate(
+        "id INT, s ARRAY<STRUCT<a: INT, b: INT>>, extra STRING", "(2, array(named_struct('a', 3, 'b', 4)), 'x')"
+    )
+    assert sorted(spark.table(view).collect()) == sorted(spark.sql(sql).collect())
+    # The field that the view reads changes its type.
+    table.recreate("id INT, s ARRAY<STRUCT<a: BIGINT, b: INT>>", "(3, array(named_struct('a', 5, 'b', 6)))")
+    assert_view_reads(spark, view, None)
 
 
 # DataFrames whose definitions run a query to find their columns, over a table `(id, s)` with the

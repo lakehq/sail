@@ -25,7 +25,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::Cast;
 use datafusion_expr::{
-    Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource, lit, when,
+    Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource,
+    UserDefinedLogicalNode, lit, when,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_functions::core::{get_field, named_struct};
@@ -1200,6 +1201,64 @@ impl<K: Eq + Hash + Clone> Derivation<K> {
     }
 }
 
+/// Adds how the outputs of an extension node read its inputs, and returns whether the node
+/// reports it. The node reports the input columns that its outputs need, apart from the
+/// columns of its expressions, and DataFusion's `OptimizeProjections` prunes the inputs of
+/// the node by the same report. An output that needs only the input column of its name
+/// passes the column on. Any other output reads whole the inputs that it needs, and the
+/// inputs that the node needs for every output are read whole.
+fn add_extension_reads(
+    node: &dyn UserDefinedLogicalNode,
+    uses: &mut HashMap<String, ColumnUse>,
+    derivations: &mut HashMap<String, Vec<Derivation<String>>>,
+) -> bool {
+    let inputs = node.inputs();
+    let needs = |outputs: &[usize]| -> Option<HashSet<&String>> {
+        let required = node.necessary_children_exprs(outputs)?;
+        if required.len() != inputs.len() {
+            return None;
+        }
+        inputs
+            .iter()
+            .zip(required)
+            .flat_map(|(input, columns)| {
+                columns
+                    .into_iter()
+                    .map(|i| input.schema().fields().get(i).map(|x| x.name()))
+            })
+            .collect()
+    };
+    let Some(always) = needs(&[]) else {
+        return false;
+    };
+    let mut computed = vec![];
+    for (i, output) in node.schema().fields().iter().enumerate() {
+        let Some(mut reads) = needs(&[i]) else {
+            return false;
+        };
+        reads.retain(|name| !always.contains(name));
+        if reads.len() == 1 && reads.contains(output.name()) {
+            continue;
+        }
+        if !reads.is_empty() {
+            let reads = reads
+                .into_iter()
+                .map(|name| (name.clone(), ColumnUse::Whole));
+            computed.push((output.name().clone(), reads.collect()));
+        }
+    }
+    for name in always {
+        add_use(uses, name.clone(), &ColumnUse::Whole);
+    }
+    for (output, reads) in computed {
+        derivations
+            .entry(output)
+            .or_default()
+            .push(Derivation::Computed(reads));
+    }
+    true
+}
+
 /// Returns whether the projection gives names of the query to the outputs of the plan of a
 /// temporary view that the plan reads. A rewrite of the plan, such as type coercion, can
 /// compute the schema of the plan of the view again, with the same names. The names of
@@ -1298,9 +1357,11 @@ fn scan_lineage(
 ///
 /// The plan reads its outputs and the columns of the expressions of its operators. A
 /// projection or a union reads its inputs only for the outputs that are read. `DISTINCT`
-/// and grouping columns tell rows apart. Operators that do not pass their inputs on read
-/// all of them. The uses are propagated once the plan, its subqueries and its CTE
-/// definitions are visited, so the order of the visit does not matter.
+/// and grouping columns tell rows apart. Operators that pass their inputs on read the
+/// columns of their outputs that are read, and so do extension nodes for the outputs that
+/// they report to pass on. Any other operator reads all its inputs. The uses are
+/// propagated once the plan, its subqueries and its CTE definitions are visited, so the
+/// order of the visit does not matter.
 fn required_columns(
     plan: &LogicalPlan,
     reads: &ViewDefinitionReads,
@@ -1378,18 +1439,23 @@ fn required_columns(
                     add_expression_uses(e, &mut uses)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
-                // These operators pass their input columns on, and any other operator
+                // These operators pass their input columns on, `UNNEST` the columns that
+                // it does not unnest, which its expressions read, and any other operator
                 // may read all of them.
-                let passes_on = matches!(
-                    node,
+                let passes_on = match node {
                     LogicalPlan::Filter(_)
-                        | LogicalPlan::Sort(_)
-                        | LogicalPlan::Window(_)
-                        | LogicalPlan::Join(_)
-                        | LogicalPlan::Limit(_)
-                        | LogicalPlan::SubqueryAlias(_)
-                        | LogicalPlan::Repartition(_)
-                );
+                    | LogicalPlan::Sort(_)
+                    | LogicalPlan::Window(_)
+                    | LogicalPlan::Join(_)
+                    | LogicalPlan::Limit(_)
+                    | LogicalPlan::SubqueryAlias(_)
+                    | LogicalPlan::Repartition(_)
+                    | LogicalPlan::Unnest(_) => true,
+                    LogicalPlan::Extension(extension) => {
+                        add_extension_reads(extension.node.as_ref(), &mut uses, &mut derivations)
+                    }
+                    _ => false,
+                };
                 if !passes_on {
                     for input in node.inputs() {
                         for field in input.schema().fields() {
@@ -1613,12 +1679,19 @@ mod tests {
         DataType, Field, Fields, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
     };
     use datafusion::datasource::{MemTable, provider_as_source};
-    use datafusion::functions_aggregate::expr_fn::sum;
+    use datafusion::functions_aggregate::expr_fn::{count, sum};
+    use datafusion::functions_nested::expr_fn::make_array;
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::{Column, JoinType, ScalarValue};
     use datafusion_expr::expr::Exists;
-    use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan, col, lit};
+    use datafusion_expr::{
+        Expr, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan,
+        UserDefinedLogicalNode, col, lit,
+    };
     use datafusion_functions::core::get_field;
+    use sail_logical_plan::barrier::BarrierNode;
+    use sail_logical_plan::monotonic_id::MonotonicIdNode;
+    use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
     use super::{
         ColumnUse, TableOrigin, ViewTableReference, needs_cast, required_columns,
@@ -2512,6 +2585,83 @@ mod tests {
             .project(vec![col("a").alias("t_a")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_nodes_read_the_columns_that_they_report() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        let input = Arc::new(t.clone());
+        let extension = |node: Arc<dyn UserDefinedLogicalNode>| {
+            LogicalPlanBuilder::from(LogicalPlan::Extension(Extension { node }))
+        };
+        let repartition = |kind| {
+            extension(Arc::new(ExplicitRepartitionNode::new(
+                Arc::clone(&input),
+                Some(3),
+                kind,
+            )))
+        };
+        // A repartition passes its input columns on, and reads its keys.
+        let plan = repartition(ExplicitRepartitionKind::Hash(vec![col("t_b")]))
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
+        // The keys are read when no output of the node is read.
+        let plan = repartition(ExplicitRepartitionKind::Hash(vec![col("t_b")]))
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[1]));
+        let plan = repartition(ExplicitRepartitionKind::RoundRobin)
+            .project(vec![get(col("t_s"), "x").alias("x")])?
+            .build()?;
+        let x = ColumnUse::path(&["x".to_string()]);
+        assert_eq!(uses(&plan, &reads, address)?, Some(vec![(3, x)]));
+        // A node that needs all its inputs for an output it adds reads all of them, and a
+        // node that does not report what it needs reads all its inputs as well.
+        let plan = extension(Arc::new(MonotonicIdNode::try_new(
+            Arc::clone(&input),
+            "id".to_string(),
+        )?))
+        .project(vec![col("t_a")])?
+        .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2, 3]));
+        let plan = extension(Arc::new(BarrierNode::new(vec![], Arc::clone(&input))))
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2, 3]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_unnest_reads_the_columns_that_it_unnests_whole() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        // The columns that are not unnested are passed on.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![
+                col("t_a"),
+                make_array(vec![col("t_b"), col("t_c")]).alias("e"),
+            ])?
+            .unnest_column("e")?
+            .project(vec![col("t_a"), col("e")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2]));
+        // A field of a struct in an unnested list reads the list whole.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![col("t_a"), make_array(vec![col("t_s")]).alias("e")])?
+            .unnest_column("e")?
+            .project(vec![get(col("e"), "x").alias("x")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[3]));
+        // An unnested struct is read whole, whichever of its fields are read.
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![col("t_a"), col("t_s")])?
+            .unnest_column("t_s")?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 3]));
         Ok(())
     }
 
