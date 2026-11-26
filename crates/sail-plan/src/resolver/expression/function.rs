@@ -224,7 +224,6 @@ impl PlanResolver<'_> {
                                             options: _
                                         }]
                                     ) {
-                                    state.record_star_in_function();
                                     schema
                                         .columns()
                                         .into_iter()
@@ -436,7 +435,6 @@ impl PlanResolver<'_> {
                 // - struct(alias.*) expands to all visible columns from that qualifier
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
-                    state.record_star_in_function();
                     let schema = &Self::local_schema(schema, state);
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
@@ -466,7 +464,6 @@ impl PlanResolver<'_> {
                 Expr::ScalarFunction(ScalarFunction { func, args })
                     if func.inner().is::<MultiExpr>() =>
                 {
-                    state.record_star_in_function();
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {
                             let field_name = n;

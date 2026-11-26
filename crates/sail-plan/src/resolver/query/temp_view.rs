@@ -758,10 +758,6 @@ impl PlanResolver<'_> {
             Ok(())
         })?;
         let definition = Self::rebound_view_definition(view);
-        // A view created over this view expands the star again as well.
-        if definition.as_ref().is_some_and(|x| x.star_in_function) {
-            state.record_star_in_function();
-        }
         // A view whose query read persistent views, or tables that its plan does not scan,
         // resolves its query again at each read, as a view over it does, since its stored
         // plan would read what the query read when the view was created. A request for the
@@ -793,8 +789,8 @@ impl PlanResolver<'_> {
         // the table changed, or a column that the view does not read is now a null. The
         // nodes above the scan then compute their schemas again.
         let mut recompute_schemas = false;
-        // Whether a table gained columns, which a star inside the arguments of a function
-        // expands to when the query of the view is resolved again.
+        // Whether a table gained columns, which a star or a natural join of the query of the
+        // view would read when the query is resolved again, as a direct query reads them.
         let mut gained_columns = false;
         let recorded = state.view_definition_mut().map(|reads| reads.clone());
         for scan in &references {
@@ -802,10 +798,7 @@ impl PlanResolver<'_> {
             if scans.contains_key(&address) {
                 continue;
             }
-            let error = match self
-                .bind_view_table_scan(scan, view, definition.as_deref(), state)
-                .await
-            {
+            let error = match self.bind_view_table_scan(scan, view, state).await {
                 Ok(Ok((bound, gained))) => {
                     gained_columns |= gained;
                     recompute_schemas |= bound.schema() != &scan.projected_schema;
@@ -967,13 +960,11 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
-    /// whether the table gained columns that a star of the definition of the view expands
-    /// to, or the error of the columns that changed.
+    /// whether the table gained columns, or the error of the columns that changed.
     async fn bind_view_table_scan(
         &self,
         scan: &TableScan,
         view: &TableStatus,
-        definition: Option<&TemporaryViewDefinition>,
         state: &mut PlanResolverState,
     ) -> PlanResult<PlanResult<(LogicalPlan, bool)>> {
         let Some(reference) = ViewTableReference::try_from_scan(scan) else {
@@ -1023,12 +1014,11 @@ impl PlanResolver<'_> {
                 ))));
             }
         };
-        let gained = definition.is_some_and(|x| x.star_in_function)
-            && has_new_fields(
-                reference.table.fields(),
-                table_schema.fields(),
-                case_sensitive,
-            );
+        let gained = has_new_fields(
+            reference.table.fields(),
+            table_schema.fields(),
+            case_sensitive,
+        );
         let positions = reads
             .iter()
             .map(|read| read.as_ref().map(|(position, _)| *position))

@@ -219,6 +219,50 @@ def test_views_over_views_read_a_table_whose_unread_column_changed_its_type(spar
     assert rows(spark, f"SELECT * FROM {view}") == [(5, 30)]
 
 
+# Queries over `t (a INT, b INT)` and `w (a INT, c INT)` whose star or natural join reads the column
+# that `t` or `w` gains: the query, the table, its columns and rows then, and the columns of the view.
+GAINED_COLUMN_QUERIES = {
+    "distinct star": (
+        "SELECT a FROM (SELECT DISTINCT * FROM {t})",
+        "t",
+        "a INT, b INT, c INT",
+        "(1, 1, 1), (1, 1, 2), (2, 2, 2)",
+        "a",
+    ),
+    "union of stars": (
+        "SELECT * FROM {t} UNION SELECT * FROM {t}",
+        "t",
+        "a INT, b INT, c INT",
+        "(1, 1, 1), (1, 1, 2), (2, 2, 2)",
+        "a, b",
+    ),
+    "natural join": (
+        "SELECT a, b, c FROM {t} NATURAL JOIN {w}",
+        "w",
+        "a INT, c INT, b INT",
+        "(1, 10, 1), (2, 20, 9)",
+        "a, b, c",
+    ),
+    "star": ("SELECT * FROM {t}", "t", "a INT, b INT, c INT", "(1, 1, 1), (1, 1, 2), (2, 2, 2)", "a, b"),
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("case", GAINED_COLUMN_QUERIES)
+def test_view_reads_the_column_that_its_star_or_natural_join_gains(spark, tables, kind, fmt, case):
+    query, changed, columns, values, outputs = GAINED_COLUMN_QUERIES[case]
+    inputs = {"t": tables(fmt, "a INT, b INT"), "w": tables(fmt, "a INT, c INT")}
+    inputs["t"].insert("(1, 1), (1, 1), (2, 2)")
+    inputs["w"].insert("(1, 10), (2, 20)")
+    sql = query.format(t=inputs["t"].name, w=inputs["w"].name)
+    view = inputs["t"].create_view(kind, sql)
+    inputs[changed].recreate(columns, values)
+    # The view keeps its columns, and reads what its query reads now.
+    assert spark.table(view).columns == outputs.split(", ")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, f"SELECT {outputs} FROM ({sql})")
+
+
 @pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
 def test_view_reads_the_current_database_of_its_creation(spark, tmp_path, kind):
     suffix = uuid.uuid4().hex

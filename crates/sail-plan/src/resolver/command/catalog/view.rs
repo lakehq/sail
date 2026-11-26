@@ -171,7 +171,6 @@ impl PlanResolver<'_> {
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
-                star_in_function: reads.star_in_function,
                 resolves_at_each_read,
             }))
         } else {

@@ -190,9 +190,6 @@ pub struct TemporaryViewDefinition {
     /// The catalogs of the session that each session has its own instance of, in which the
     /// query resolves again in any session.
     pub catalogs: Arc<dyn Any + Send + Sync>,
-    /// Whether the query expands a star inside the arguments of a function, which Spark
-    /// expands again to the columns that the tables have at each read.
-    pub star_in_function: bool,
     /// Whether the query resolves again at each read of the view, as Spark analyzes it: the
     /// query read tables that the plan of the view does not scan, or persistent views, which
     /// can be defined again.
@@ -207,7 +204,6 @@ impl PartialEq for TemporaryViewDefinition {
             && self.database == other.database
             && Arc::ptr_eq(&self.config, &other.config)
             && Arc::ptr_eq(&self.catalogs, &other.catalogs)
-            && self.star_in_function == other.star_in_function
             && self.resolves_at_each_read == other.resolves_at_each_read
     }
 }

@@ -207,9 +207,6 @@ pub(super) struct ViewDefinitionReads {
     /// The columns that the temporary views that the definition reads read of their tables,
     /// by the address of the source and the positions of the columns in the source.
     pub view_reads: HashMap<usize, HashSet<usize>>,
-    /// Whether the definition expands a star inside the arguments of a function, which
-    /// expands to the columns that the tables have when the definition is resolved.
-    pub star_in_function: bool,
     /// Whether the definition reads a persistent view, which can be defined again.
     pub reads_persistent_view: bool,
 }
@@ -642,14 +639,6 @@ impl PlanResolverState {
     /// Returns what the definition of a temporary view reads, while it is resolved.
     pub fn view_definition_mut(&mut self) -> Option<&mut ViewDefinitionReads> {
         self.view_definition.as_mut()
-    }
-
-    /// Records that the definition of a temporary view, if one is resolved, expands a star
-    /// inside the arguments of a function.
-    pub fn record_star_in_function(&mut self) {
-        if let Some(reads) = self.view_definition.as_mut() {
-            reads.star_in_function = true;
-        }
     }
 
     /// Swaps the parts of the state that belong to the whole statement with those of another
