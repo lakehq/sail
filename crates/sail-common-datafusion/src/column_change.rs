@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Metadata, Schema};
 use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use sail_common::spec::{ColumnChange, ColumnPosition};
 
@@ -49,12 +49,10 @@ pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> 
             metadata
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+                .collect::<Metadata>(),
         );
         if let Some(comment) = comment {
-            field
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            field.metadata_mut().insert("comment", comment.clone());
         }
         fields.push(Arc::new(field));
     }
@@ -170,12 +168,10 @@ fn alter_fields(
             metadata
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+                .collect::<Metadata>(),
         );
         if let Some(comment) = comment {
-            field
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            field.metadata_mut().insert("comment", comment.clone());
         }
         fields.push(Arc::new(field));
         if let Some(position) = position {
@@ -205,9 +201,7 @@ fn alter_fields(
             // Iceberg also stores column documentation under "doc".
             field.metadata_mut().remove("doc");
             if let Some(comment) = comment {
-                field
-                    .metadata_mut()
-                    .insert("comment".into(), comment.clone());
+                field.metadata_mut().insert("comment", comment.clone());
             } else {
                 field.metadata_mut().remove("comment");
             }
@@ -318,14 +312,11 @@ mod tests {
     }
 
     fn expected_uuid() -> Field {
-        Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
-            [
-                (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
-                ("custom".into(), "retained".into()),
-                ("comment".into(), "UUID column".into()),
-            ]
-            .into(),
-        )
+        Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata([
+            (UUID_METADATA_KEY.to_owned(), UUID_EXTENSION_NAME.to_owned()),
+            ("custom".to_owned(), "retained".to_owned()),
+            ("comment".to_owned(), "UUID column".to_owned()),
+        ])
     }
 
     #[test]
@@ -363,9 +354,7 @@ mod tests {
             false,
         )?;
         let mut expected = expected_uuid().with_name("renamed");
-        expected
-            .metadata_mut()
-            .insert("comment".into(), "updated".into());
+        expected.metadata_mut().insert("comment", "updated");
         assert_eq!(
             schema.field(0).data_type(),
             &DataType::Struct(vec![Field::new("id", DataType::Int32, true), expected,].into())

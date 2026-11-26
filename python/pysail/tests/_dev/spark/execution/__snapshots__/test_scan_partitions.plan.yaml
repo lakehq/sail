@@ -240,6 +240,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -351,6 +354,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -396,7 +402,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -426,6 +432,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -581,9 +590,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -784,6 +790,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -895,6 +904,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -940,7 +952,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -970,6 +982,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -1119,9 +1134,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -1329,6 +1341,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1440,6 +1455,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1485,7 +1503,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -1515,6 +1533,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -1664,9 +1685,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -1874,6 +1892,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1985,6 +2006,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2030,7 +2054,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -2060,6 +2084,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -2215,9 +2242,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2418,6 +2442,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2529,6 +2556,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2574,7 +2604,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -2604,6 +2634,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -2753,9 +2786,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2963,6 +2993,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3074,6 +3107,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3119,7 +3155,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -3149,6 +3185,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -3298,9 +3337,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -3508,6 +3544,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3619,6 +3658,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3664,7 +3706,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -3694,6 +3736,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -3849,9 +3894,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -4052,6 +4094,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4163,6 +4208,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4208,7 +4256,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -4238,6 +4286,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -4387,9 +4438,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -4597,6 +4645,9 @@ data:
             Filter: ?table?.id % Int64(2) = Int64(0)
               TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4708,6 +4759,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4753,7 +4807,7 @@ data:
 
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
-      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Exact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
         ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
@@ -4783,6 +4837,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -4932,9 +4989,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:

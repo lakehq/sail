@@ -485,7 +485,7 @@
   description: |
     (Writing) The default Parquet compression codec.
     Valid values are `uncompressed`, `snappy`, `gzip(level)`,
-    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
     where `level` is an integer defining the compression level.
     These values are not case-sensitive.
     Defaults to the Sail configuration option `parquet.compression`.

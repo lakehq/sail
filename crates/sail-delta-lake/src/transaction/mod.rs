@@ -2516,6 +2516,7 @@ mod tests {
                         meta: result.meta.clone(),
                         range: result.range.clone(),
                         attributes: result.attributes.clone(),
+                        extensions: result.extensions.clone(),
                         // Even a complete matching first chunk must not hide a stream error.
                         payload: GetResultPayload::Stream(
                             result

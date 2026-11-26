@@ -655,7 +655,7 @@ impl ExecutionPlan for RangeChannelExec {
                         .iter()
                         .map(|sort_expr| Arc::clone(&sort_expr.expr))
                         .collect();
-                    RangeExpr::try_new(keys, &range)
+                    RangeExpr::try_new_with_schema(keys, &range, &input.schema())
                 })
                 .transpose()?;
             let input = input.execute(partition, context)?;

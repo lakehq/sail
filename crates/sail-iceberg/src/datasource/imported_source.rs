@@ -172,13 +172,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let values: ArrayRef = Arc::new(StringArray::from(vec!["x".repeat(16 * 1024); 16]));
         let batch = RecordBatch::try_from_iter([("value", values)])?;
-        let target_field = batch.schema().field(0).clone().with_metadata(
-            [(
-                FIELD_ALIASES_METADATA_KEY.to_string(),
-                r#"["value"]"#.to_string(),
-            )]
-            .into(),
-        );
+        let target_field = batch.schema().field(0).clone().with_metadata([(
+            FIELD_ALIASES_METADATA_KEY.to_string(),
+            r#"["value"]"#.to_string(),
+        )]);
         let target = Arc::new(Schema::new(vec![target_field]));
         let mut avro = WriterBuilder::new(batch.schema().as_ref().clone())
             .build::<_, AvroOcfFormat>(Vec::new())?;

@@ -161,7 +161,7 @@ impl PlanResolver<'_> {
                 PlanError::invalid("UPDATE target field is missing during assignment validation")
             })?;
             if target_format.eq_ignore_ascii_case("delta")
-                && ColumnFeatures::from_map(target_field.metadata())
+                && ColumnFeatures::from_field(target_field)
                     .identity()
                     .is_some()
             {

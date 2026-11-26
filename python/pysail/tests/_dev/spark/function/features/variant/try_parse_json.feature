@@ -188,7 +188,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | true   |
 
-    @sail-bug
     Scenario: try_parse_json scientific notation preserves decimal
       When query
         """
@@ -207,7 +206,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 0.15   |
 
-    @sail-bug
     Scenario: try_parse_json preserves large number beyond i64
       When query
         """
@@ -265,6 +263,44 @@ Feature: try_parse_json comprehensive tests
         | NaN string is invalid JSON            | 'NaN'      |
         | hex number is invalid JSON            | '0xff'     |
 
+    Scenario: try_parse_json applies the numeric length limit inside arrays
+      When query
+        """
+        SELECT try_parse_json(repeat('9', 1000)) IS NOT NULL AS at_limit,
+               try_parse_json(concat('[', repeat('9', 1001), ']')) IS NULL AS over_limit,
+               to_json(try_parse_json('1e400')) AS overflow
+        """
+      Then query result
+        | at_limit | over_limit | overflow   |
+        | true     | true       | "Infinity" |
+
+    @sail-only
+    # On Spark 4.3 this decimal crosses a Jackson reader buffer after 3,500 leading
+    # spaces and is accepted. After 2,000 spaces Spark rejects the same decimal.
+    Scenario: The VARIANT number length limit is independent of reader buffer boundaries
+      When query
+        """
+        SELECT padding, try_parse_json(concat(repeat(' ', padding), '1.', repeat('1', 1000),
+                                              repeat(' ', 50000))) IS NULL AS rejected
+        FROM VALUES (2000), (3500) AS t(padding)
+        ORDER BY padding
+        """
+      Then query result ordered
+        | padding | rejected |
+        | 2000    | true     |
+        | 3500    | true     |
+
+    Scenario: Root number and keyword tokens have different boundaries
+      When query
+        """
+        SELECT try_parse_json('1,') IS NULL AS comma, try_parse_json('1]') IS NULL AS bracket,
+               to_json(try_parse_json('true!')) AS bang, to_json(try_parse_json('null/')) AS slash,
+               try_parse_json('true_') IS NULL AS identifier
+        """
+      Then query result
+        | comma | bracket | bang | slash | identifier |
+        | true  | true    | true | null  | true       |
+
     Scenario Outline: Number edge case (to_json): <case>
       When query
         """
@@ -280,8 +316,6 @@ Feature: try_parse_json comprehensive tests
         | negative zero float becomes zero     | '-0.0'                 | 0                    |
         | very small float preserves precision | '0.000000000000000001' | 0.000000000000000001 |
 
-    @sail-bug
-    # Sail doesn't convert very large integers to scientific notation in Variant
     Scenario: very large integer uses scientific notation
       When query
         """
@@ -291,8 +325,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 1.0E39 |
 
-    @sail-bug
-    # Sail doesn't produce scientific notation for 1e10 in Variant
     Scenario: scientific notation 1e10
       When query
         """
@@ -390,8 +422,6 @@ Feature: try_parse_json comprehensive tests
         | NULL    |
         | NULL    |
 
-    @sail-bug
-    # Sail renders 1e10 as 10000000000 instead of Spark's 1.0E10 (scientific notation).
     Scenario: multi-row with number edge cases
       When query
         """

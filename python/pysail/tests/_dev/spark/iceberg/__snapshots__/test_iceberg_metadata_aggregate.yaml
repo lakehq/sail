@@ -195,11 +195,11 @@ data:
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(2 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(3 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(10 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[null-file].1"
@@ -216,11 +216,11 @@ data:
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(2 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(3 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(10 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_constant_file_casts_preserve_lexical_order[null-file].2"
@@ -237,11 +237,11 @@ data:
                   UnionExec
                     ProjectionExec: expr=[NULL as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(2 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(2 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(3 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(3 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(10 AS Int64) as v]
+                    ProjectionExec: expr=[CAST(10 AS Int64;N) as v]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_decimal_metadata_preserves_integer_precision[aggregate_table0]"

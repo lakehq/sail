@@ -7,6 +7,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::predicate::rlike::RLike;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -76,16 +77,6 @@ fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanRe
     }
 }
 
-fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    expr::Expr::SimilarTo(expr::Like {
-        negated: false,
-        expr: Box::new(expr),
-        pattern: Box::new(pattern),
-        case_insensitive: false,
-        escape_char: None,
-    })
-}
-
 fn is_in_list(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (value, list) = arguments.at_least_one()?;
@@ -125,8 +116,8 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
-        ("regexp", F::binary(rlike)),
-        ("regexp_like", F::binary(rlike)),
-        ("rlike", F::binary(rlike)),
+        ("regexp", F::udf(RLike::default())),
+        ("regexp_like", F::udf(RLike::default())),
+        ("rlike", F::udf(RLike::default())),
     ]
 }
