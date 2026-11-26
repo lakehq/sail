@@ -247,8 +247,9 @@ pub struct SourceInfo {
 }
 
 /// The key of the snapshot of a lake table: the type of the snapshot, which is the format of
-/// the table, the location of the table, and whether the snapshot was read with the commits
-/// that the catalog ratified.
+/// the table, the location of the table, and a flag that each format uses for its own second
+/// kind of snapshot: for Delta Lake, whether the snapshot was read with the commits that the
+/// catalog ratified, and for Iceberg, whether the read names a metadata file.
 type LakeSnapshotKey = (TypeId, String, bool);
 
 /// The snapshots of the lake tables that the reads of one statement read, so that all the

@@ -1269,9 +1269,9 @@ pub(crate) async fn load_iceberg_read_table(
         Some(location) => location.clone(),
         None => read.table_url.to_string(),
     };
-    let catalog_managed = read.metadata_location.is_some();
+    let names_metadata_file = read.metadata_location.is_some();
     if let Some(pins) = &pins
-        && let Some(table) = pins.get::<Table>(&location, catalog_managed)?
+        && let Some(table) = pins.get::<Table>(&location, names_metadata_file)?
     {
         return Ok((table, read.options));
     }
@@ -1284,7 +1284,7 @@ pub(crate) async fn load_iceberg_read_table(
         .await?,
     );
     if let Some(pins) = &pins {
-        pins.insert(location, catalog_managed, Arc::clone(&table))?;
+        pins.insert(location, names_metadata_file, Arc::clone(&table))?;
     }
     Ok((table, read.options))
 }
