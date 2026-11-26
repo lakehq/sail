@@ -58,7 +58,9 @@ use super::read::{CatalogTableRead, rename_source};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::is_comparison;
-use crate::resolver::state::{PlanResolverState, ViewDefinitionReads, table_source_address};
+use crate::resolver::state::{
+    CatalogTableLookup, PlanResolverState, ViewDefinitionReads, table_source_address,
+};
 use crate::shared_cte::{CteReference, replace_scans, visit_nodes, visit_scans};
 
 /// What the source of a table scan reads, for the sources that a temporary view obtains
@@ -143,7 +145,7 @@ impl ViewTableReference {
         scan: TableScan,
         origin: &Arc<TableOrigin>,
         required: Option<&HashMap<usize, ColumnUse>>,
-    ) -> PlanResult<TableScan> {
+    ) -> datafusion_common::Result<TableScan> {
         let source = match scan.source.downcast_ref::<ViewDefinitionSource>() {
             Some(source) => &source.inner,
             None => &scan.source,
@@ -177,10 +179,10 @@ impl ViewTableReference {
             origin: Arc::clone(origin),
         });
         // The stored scan has the nullability of the table when the view was created.
-        Ok(TableScanBuilder::new(scan.table_name, reference)
+        TableScanBuilder::new(scan.table_name, reference)
             .with_filters(scan.filters)
             .with_fetch(scan.fetch)
-            .build()?)
+            .build()
     }
 
     /// Returns, for each column that the scan read when the view was created, its position
@@ -1015,7 +1017,7 @@ impl PlanResolver<'_> {
         let required = required_columns(&plan, reads)?;
         // The stored plan has its own CTE definitions, and the stored scans have the
         // nullability of the tables, which the plan above them was resolved without.
-        let plan = replace_scans(
+        Ok(replace_scans(
             plan,
             &|scan| reads.table_origin(&scan.source).is_some(),
             &|scan| ViewDefinitionSource::changes_nullability(&scan.source),
@@ -1024,12 +1026,10 @@ impl PlanResolver<'_> {
                     return Ok(LogicalPlan::TableScan(scan));
                 };
                 let required = required.get(&table_source_address(&scan.source));
-                let scan = ViewTableReference::store(scan, origin, required)
-                    .map_err(|e| datafusion_common::DataFusionError::External(e.into()))?;
+                let scan = ViewTableReference::store(scan, origin, required)?;
                 Ok(LogicalPlan::TableScan(scan))
             },
-        )?;
-        Ok(plan)
+        )?)
     }
 
     /// Returns the plan of a read of a temporary view, for the stored plan of the view.
@@ -1213,20 +1213,7 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let lookup = match session_table {
-            Some(table) => match state.get_session_catalog_table_lookup(table, &origin.name) {
-                Some(lookup) => Ok(lookup),
-                None => {
-                    let request = Self::catalog_table_lookup_request(&origin.name);
-                    table.get_lakehouse_table(request).await.inspect(|lookup| {
-                        state.insert_session_catalog_table_lookup(
-                            table,
-                            origin.name.clone(),
-                            lookup.clone(),
-                        );
-                    })
-                }
-            }
-            .map(|(status, resolved)| (status, Some(resolved))),
+            Some(table) => Self::lookup_session_catalog_table(table, &origin.name, state).await,
             None => Self::lookup_catalog_object(&manager, origin.name.clone(), state).await,
         };
         let (status, resolved) = match lookup {
@@ -1295,6 +1282,23 @@ impl PlanResolver<'_> {
             state,
         )
         .await
+    }
+
+    /// Looks up the table `name` in the catalog of another session, reusing an earlier
+    /// lookup of the table in the query.
+    async fn lookup_session_catalog_table(
+        table: &SessionCatalogTable,
+        name: &[String],
+        state: &mut PlanResolverState,
+    ) -> Result<CatalogTableLookup, CatalogError> {
+        if let Some((status, resolved)) = state.get_session_catalog_table_lookup(table, name) {
+            return Ok((status, Some(resolved)));
+        }
+        let request = Self::catalog_table_lookup_request(name);
+        let lookup = table.get_lakehouse_table(request).await?;
+        state.insert_session_catalog_table_lookup(table, name.to_vec(), lookup.clone());
+        let (status, resolved) = lookup;
+        Ok((status, Some(resolved)))
     }
 }
 
@@ -1911,7 +1915,7 @@ impl TableSource for ViewDefinitionSource {
 pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
     // The scans have the nullability of the tables, which the plan above them was resolved
     // without.
-    let plan = replace_scans(
+    Ok(replace_scans(
         plan,
         &|scan| scan.source.downcast_ref::<ViewDefinitionSource>().is_some(),
         &|scan| ViewDefinitionSource::changes_nullability(&scan.source),
@@ -1926,8 +1930,7 @@ pub(in crate::resolver) fn executable_plan(plan: LogicalPlan) -> PlanResult<Logi
                 .build()?;
             Ok(LogicalPlan::TableScan(scan))
         },
-    )?;
-    Ok(plan)
+    )?)
 }
 
 impl ViewDefinitionSource {
