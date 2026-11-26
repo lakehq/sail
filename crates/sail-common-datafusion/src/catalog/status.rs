@@ -8,6 +8,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::{LogicalPlan, ScalarUDF};
+use sail_common::spec::QueryPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
@@ -155,7 +156,7 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
         /// The data source backing the view, if it was created with `USING`.
         source: Option<TemporaryViewSource>,
-        /// The SQL definition of the view, if it was defined by a SQL query.
+        /// The definition of the view, if it reads tables.
         definition: Option<Arc<TemporaryViewDefinition>>,
     },
     GlobalTemporaryView {
@@ -165,17 +166,18 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
         /// The data source backing the view, if it was created with `USING`.
         source: Option<TemporaryViewSource>,
-        /// The SQL definition of the view, if it was defined by a SQL query.
+        /// The definition of the view, if it reads tables.
         definition: Option<Arc<TemporaryViewDefinition>>,
     },
 }
 
-/// The SQL query that defines a temporary view, and what it was resolved with when the view
-/// was created. The view resolves the query again when its plan no longer fits the tables
-/// that it reads, as Spark analyzes the SQL text of a temporary view at each read.
+/// The query that defines a temporary view, as a SQL query or a DataFrame defined it, and what
+/// it was resolved with when the view was created. The view resolves the query again when its
+/// plan no longer fits the tables that it reads, as Spark analyzes the SQL text of a temporary
+/// view at each read and as the DataFrame resolves its plan at each action.
 #[derive(Debug, Clone)]
 pub struct TemporaryViewDefinition {
-    pub query: String,
+    pub query: QueryPlan,
     /// The names of the outputs of the query.
     pub output_names: Vec<String>,
     /// The current catalog and database of the session that created the view.
@@ -208,7 +210,7 @@ impl PartialEq for TemporaryViewDefinition {
 impl Eq for TemporaryViewDefinition {}
 
 /// The temporary views by the references that name them, and the functions of the session
-/// by their names, that the SQL query of a temporary view resolved.
+/// by their names, that the query of a temporary view resolved.
 #[derive(Debug, Clone, Default)]
 pub struct TemporaryViewObjects {
     pub temporary_views: HashMap<Vec<String>, TableStatus>,

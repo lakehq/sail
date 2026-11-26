@@ -671,7 +671,7 @@ impl PlanResolverState {
     /// Swaps the parts of the state that belong to the whole statement with those of another
     /// state: the generators of IDs, the fields, the sources and lookups of the tables that the
     /// statement reads, its shared CTE definitions, and what the definition of a view that the
-    /// statement creates reads. The SQL query of a temporary view is resolved again in a new
+    /// statement creates reads. The query of a temporary view is resolved again in a new
     /// state that has these parts of the state of the query, and none of its scopes, such as
     /// its CTEs or its outer query.
     pub fn swap_statement(&mut self, other: &mut Self) {

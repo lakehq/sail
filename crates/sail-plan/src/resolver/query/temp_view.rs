@@ -217,10 +217,12 @@ impl ViewTableReference {
     /// column that only tells rows apart or orders them, or
     /// only stays a signed integer for a column that is only an operand (see
     /// [`ColumnUse::Operand`]). A column that the plan does not read has a position only if
-    /// it did not change. A view that `rebinds` its SQL query when its plan no longer fits
+    /// it did not change. A view that `rebinds` its query when its plan no longer fits
     /// reads neither values that convert exactly nor structs read whole whose fields were
     /// added, reordered or renamed, since its plan would compute on other values than the
-    /// query resolved again.
+    /// query resolved again. A view reads them only when it cannot resolve its query: a
+    /// global view read in another session than the one whose private catalog has its
+    /// tables, or a view whose query no longer resolves.
     fn fit_columns(
         &self,
         table: &Schema,
@@ -544,7 +546,7 @@ struct Fit<'a> {
     /// The fields that structs read whole gained in the column, which the cast to the
     /// stored type leaves out if it matches the fields of structs by name.
     added: Vec<String>,
-    /// Whether the view resolves its SQL query again instead of a cast of the values that
+    /// Whether the view resolves its query again instead of a cast of the values that
     /// convert exactly or of the structs read whole whose fields changed.
     rebinds: bool,
 }
@@ -1127,45 +1129,61 @@ impl PlanResolver<'_> {
         // the table changed. The nodes above the scan then compute their schemas again.
         let mut recompute_schemas = false;
         // Whether a table gained columns, which a star inside the arguments of a function
-        // expands to when the query of a SQL view is resolved again.
+        // expands to when the query of the view is resolved again.
         let mut gained_columns = false;
         let recorded = state.view_definition_mut().map(|reads| reads.clone());
-        for scan in references {
-            let address = table_source_address(&scan.source);
-            if scans.contains_key(&address) {
-                continue;
-            }
-            let (bound, gained) = match self
-                .bind_view_table_scan(&scan, view, definition.as_deref(), state)
-                .await?
-            {
-                Ok(bound) => bound,
-                Err(error) => {
-                    // A view that the query creates does not read the scans bound so far.
-                    if let (Some(reads), Some(recorded)) = (state.view_definition_mut(), recorded) {
-                        *reads = recorded;
-                    }
-                    // The query fails with the error of the columns that changed if it no
-                    // longer resolves, which names the column that the query no longer has.
-                    if let Some(definition) = &definition
-                        && let Some(plan) = self
-                            .resolve_view_definition_if_possible(&plan, view, definition, state)
-                            .await?
-                    {
-                        return Ok(plan);
-                    }
-                    // A request for the schema gets the columns of the stored plan.
-                    if !self.schema_only {
-                        return Err(error);
-                    }
-                    scans.clear();
-                    (gained_columns, recompute_schemas) = (false, false);
-                    break;
+        // The definition that the scans are bound for, which the view resolves again
+        // instead of reading values through a cast (see [`ViewTableReference::fit_columns`]).
+        let mut rebound = definition.clone();
+        'bind: loop {
+            for scan in &references {
+                let address = table_source_address(&scan.source);
+                if scans.contains_key(&address) {
+                    continue;
                 }
-            };
-            gained_columns |= gained;
-            recompute_schemas |= bound.schema() != &scan.projected_schema;
-            scans.insert(address, bound);
+                let (bound, gained) = match self
+                    .bind_view_table_scan(scan, view, rebound.as_deref(), state)
+                    .await?
+                {
+                    Ok(bound) => bound,
+                    Err(error) => {
+                        // A view that the query creates does not read the scans bound so far.
+                        if let (Some(reads), Some(recorded)) =
+                            (state.view_definition_mut(), recorded.clone())
+                        {
+                            *reads = recorded;
+                        }
+                        scans.clear();
+                        (gained_columns, recompute_schemas) = (false, false);
+                        if let Some(definition) = rebound.take() {
+                            if let Some(plan) = self
+                                .resolve_view_definition_if_possible(
+                                    &plan,
+                                    view,
+                                    &definition,
+                                    state,
+                                )
+                                .await?
+                            {
+                                return Ok(plan);
+                            }
+                            // The query no longer resolves, such as when it reads a
+                            // checkpoint that was released, so the plan reads the values
+                            // that convert exactly to their stored types through a cast.
+                            continue 'bind;
+                        }
+                        // A request for the schema gets the columns of the stored plan.
+                        if !self.schema_only {
+                            return Err(error);
+                        }
+                        break 'bind;
+                    }
+                };
+                gained_columns |= gained;
+                recompute_schemas |= bound.schema() != &scan.projected_schema;
+                scans.insert(address, bound);
+            }
+            break;
         }
         // The stored plan remains if the query no longer resolves.
         if gained_columns
@@ -1191,10 +1209,9 @@ impl PlanResolver<'_> {
         self.renew_shared_cte_definitions(plan, &mut bind, recompute_schemas, state)
     }
 
-    /// Returns the SQL definition of a temporary view that a read resolves again when the
-    /// plan of the view no longer fits the tables that it reads, if the view is defined by a
-    /// SQL query and reads no table in a catalog of another session, which no name refers to
-    /// here.
+    /// Returns the definition of a temporary view that a read resolves again when the plan of
+    /// the view no longer fits the tables that it reads, if the view reads no table in a
+    /// catalog of another session, which no name refers to here.
     fn rebound_view_definition(
         &self,
         view: &TableStatus,
@@ -1242,7 +1259,7 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the plan of a read of a temporary view whose plan no longer fits the tables
-    /// that it reads, for the SQL definition of the view. The query is resolved again as
+    /// that it reads, for the definition of the view. The query is resolved again as
     /// when the view was created (see [`ViewDefinitionScope`]), in a state that has only the
     /// parts of the state of this query that belong to the whole statement, and the view
     /// returns the outputs of the query that have the names of its outputs then, as Spark
@@ -1280,7 +1297,7 @@ impl PlanResolver<'_> {
         state.swap_statement(&mut query_state);
         // The views that the definition reads can resolve their definitions again as well.
         let query = GrowStack(Box::pin(
-            scope.run(resolver.resolve_view_query(&definition.query, &mut query_state)),
+            scope.run(resolver.resolve_query_plan(definition.query.clone(), &mut query_state)),
         ))
         .await;
         state.swap_statement(&mut query_state);
@@ -1322,7 +1339,7 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
-    /// whether the table gained columns that a star of the SQL definition of the view expands
+    /// whether the table gained columns that a star of the definition of the view expands
     /// to, or the error of the columns that changed. A view with a `definition` that a read
     /// resolves again rebinds its query (see [`ViewTableReference::fit_columns`]).
     async fn bind_view_table_scan(
@@ -1495,7 +1512,7 @@ impl PlanResolver<'_> {
             Err(error) => return Err(error.into()),
         };
         let TableKind::Table { format, .. } = &status.kind else {
-            // A view defined by a SQL query reads the view of the name instead.
+            // A view with a definition reads the view of the name instead.
             return Ok(Err(PlanError::AnalysisError(format!(
                 "[TABLE_OR_VIEW_NOT_FOUND] {} is now a view, and the temporary view {} reads it \
                 as a table. Create the temporary view again.",

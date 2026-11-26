@@ -16,11 +16,9 @@ FORMATS = [*LAKE_FORMATS, "parquet"]
 KINDS = ["sv", "svc", "gv", "dv", "dgv"]
 # The kinds whose stored plan refers to the table by its columns, as a Spark DataFrame view does.
 PLAN_KINDS = ["gv", "dv", "dgv"]
-# The kinds of views defined by a SQL query, which resolve the query again when their plans no longer
-# fit their tables, as Spark analyzes the query of such a view at each read.
-SQL_KINDS = ["sv", "svc", "gv"]
-# The query of each view of a SQL kind and its columns, by the name that reads the view.
-SQL_VIEWS = {}
+# The query or the DataFrame that defines each view and its columns, by the name that reads the view. A view
+# resolves its definition again when its plan no longer fits its tables.
+DEFINITIONS = {}
 
 COLUMNS_CHANGED = "INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION"
 NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
@@ -30,22 +28,22 @@ def create_view(spark, kind, query, frame=None):
     """Creates a temporary view of the kind over the query, or over `frame` for a DataFrame view if given,
     and returns the name to read the view by."""
     view = f"{kind}_{uuid.uuid4().hex}"
+    definition = spark.sql(query) if frame is None else frame
     if kind == "sv":
         spark.sql(f"CREATE TEMPORARY VIEW {view} AS {query}")
     elif kind == "svc":
-        columns = ", ".join(spark.sql(query).columns)
+        columns = ", ".join(definition.columns)
         spark.sql(f"CREATE TEMPORARY VIEW {view} ({columns}) AS {query}")
     elif kind == "gv":
         spark.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS {query}")
     elif kind == "dv":
-        (spark.sql(query) if frame is None else frame).createOrReplaceTempView(view)
+        definition.createOrReplaceTempView(view)
     elif kind == "dgv":
-        (spark.sql(query) if frame is None else frame).createOrReplaceGlobalTempView(view)
+        definition.createOrReplaceGlobalTempView(view)
     else:
         raise ValueError(kind)
     name = f"global_temp.{view}" if kind in ("gv", "dgv") else view
-    if kind in SQL_KINDS:
-        SQL_VIEWS[name] = (query, spark.sql(query).columns)
+    DEFINITIONS[name] = (definition, definition.columns)
     return name
 
 
@@ -101,7 +99,9 @@ class Table:
 
 
 def rows(spark, sql):
-    return sorted((tuple(row) for row in spark.sql(sql).collect()), key=lambda row: [(x is None, x or 0) for x in row])
+    """Returns the sorted rows of the query, or of the DataFrame."""
+    frame = spark.sql(sql) if isinstance(sql, str) else sql
+    return sorted((tuple(row) for row in frame.collect()), key=lambda row: [(x is None, x or 0) for x in row])
 
 
 def error(spark, sql):

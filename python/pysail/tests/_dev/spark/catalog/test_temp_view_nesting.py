@@ -129,7 +129,7 @@ CHANGED_CHAINS = {
 
 
 @pytest.mark.parametrize("change", CHANGED_CHAINS)
-@pytest.mark.parametrize("shape", ["chain", "replaced"])
+@pytest.mark.parametrize("shape", ["chain", "replaced", "replaced by a DataFrame"])
 @pytest.mark.parametrize("depth", [30, 100, 101])
 def test_views_nested_deeply_resolve_their_queries_again_after_their_table_changed(
     spark, tables, names, change, shape, depth
@@ -143,7 +143,10 @@ def test_views_nested_deeply_resolve_their_queries_again_after_their_table_chang
         inner = view
         if shape == "chain":
             view = names()
-        spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {view} AS SELECT id + 1 AS id, b FROM {inner}")
+        if shape == "replaced by a DataFrame":
+            spark.table(inner).selectExpr("id + 1 AS id", "b").createOrReplaceTempView(view)
+        else:
+            spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {view} AS SELECT id + 1 AS id, b FROM {inner}")
     table.recreate(*columns)
     if depth <= 100:
         assert rows(spark, f"SELECT * FROM {view}") == [(i + depth - 1, value)]

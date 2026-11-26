@@ -1062,9 +1062,6 @@ pub struct ViewColumnDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct TemporaryViewDefinition {
     pub input: Box<QueryPlan>,
-    /// The SQL text of the query, for a view defined by a SQL query. The view resolves it again
-    /// when its plan no longer fits the tables that it reads.
-    pub definition: Option<String>,
     pub columns: Option<Vec<ViewColumnDefinition>>,
     pub if_not_exists: bool,
     pub replace: bool,

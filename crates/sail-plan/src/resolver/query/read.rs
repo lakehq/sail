@@ -564,7 +564,14 @@ impl PlanResolver<'_> {
         table_reference: TableReference,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let plan = self.resolve_view_query(&definition, state).await?;
+        let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
+        let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        let plan = match spec_plan {
+            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            _ => {
+                return Err(PlanError::invalid("view definition must be a query"));
+            }
+        };
         let plan =
             LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
         if columns.is_empty() {
@@ -576,19 +583,6 @@ impl PlanResolver<'_> {
             // recovery must not see the definition's column names under this output.
             state.register_missing_input_boundary(&plan);
             Ok(plan)
-        }
-    }
-
-    /// Resolves the SQL query that defines a view.
-    pub(super) async fn resolve_view_query(
-        &self,
-        definition: &str,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let ast = sail_sql_analyzer::parser::parse_one_statement(definition)?;
-        match sail_sql_analyzer::statement::from_ast_statement(ast)? {
-            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await,
-            _ => Err(PlanError::invalid("view definition must be a query")),
         }
     }
 

@@ -23,7 +23,7 @@ struct CatalogObjectTrackerState {
     logical_plans: HashMap<u64, TrackedLogicalPlan>,
 }
 
-/// The plan of a temporary view, with the SQL definition of a view defined by SQL.
+/// The plan of a temporary view, with the definition of a view that reads tables.
 pub type TrackedLogicalPlan = (Arc<LogicalPlan>, Option<Arc<TemporaryViewDefinition>>);
 
 /// Tracks in-memory objects (UDFs and logical plans) that cannot be serialized directly,

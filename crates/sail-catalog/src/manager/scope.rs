@@ -13,7 +13,7 @@ tokio::task_local! {
     static VIEW_DEFINITION_SCOPE: Arc<ViewDefinitionScope>;
 }
 
-/// How the catalog manager resolves the names of the SQL query that defines a temporary view,
+/// How the catalog manager resolves the names of the query that defines a temporary view,
 /// for the futures that [`ViewDefinitionScope::run`] runs. Spark analyzes such a query in the
 /// catalog and the database that it was created in, and a name refers to a temporary view or
 /// a temporary function only if it referred to one when the view was created.

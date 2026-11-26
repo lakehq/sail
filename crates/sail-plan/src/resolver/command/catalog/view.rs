@@ -98,7 +98,6 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::TemporaryViewDefinition {
             input,
-            definition,
             columns,
             if_not_exists,
             replace,
@@ -123,20 +122,14 @@ impl PlanResolver<'_> {
         };
         // The tables that the view reads again at each read can have nulls later in columns
         // that have none now, so the definition is resolved as if all their columns had nulls.
-        // A view defined by a SQL query resolves the query again when its plan no longer fits
-        // the tables that it reads, in the scope that records what the query resolves now.
-        let scope = definition
-            .as_ref()
-            .map(|_| Arc::new(ViewDefinitionScope::create()));
+        // The view resolves the query again when its plan no longer fits the tables that it
+        // reads, in the scope that records what the query resolves now.
+        let query = input.as_ref().clone();
+        let scope = Arc::new(ViewDefinitionScope::create());
         state.begin_view_definition();
-        let input = match &scope {
-            Some(scope) => {
-                Arc::clone(scope)
-                    .run(self.resolve_query_plan(*input, state))
-                    .await
-            }
-            None => self.resolve_query_plan(*input, state).await,
-        };
+        let input = Arc::clone(&scope)
+            .run(self.resolve_query_plan(*input, state))
+            .await;
         let reads = state.end_view_definition();
         let input = input?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
@@ -169,8 +162,10 @@ impl PlanResolver<'_> {
         // table sources that the definition was resolved with.
         let (input, reads_folded_tables) = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let definition = match (definition, scope) {
-            (Some(query), Some(scope)) => Some(Arc::new(TemporaryViewDefinition {
+        // A view that reads no table has a plan that always fits, and keeps no query, which
+        // can hold the rows of a local relation.
+        let definition = if reads.sources().next().is_some() {
+            Some(Arc::new(TemporaryViewDefinition {
                 query,
                 output_names,
                 catalog: manager.default_catalog()?.to_string(),
@@ -179,8 +174,9 @@ impl PlanResolver<'_> {
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 star_in_function: reads.star_in_function,
                 reads_folded_tables,
-            })),
-            _ => None,
+            }))
+        } else {
+            None
         };
         let input: CatalogLogicalPlanId =
             manager.track_logical_plan((Arc::new(input), definition))?;
