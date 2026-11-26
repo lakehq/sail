@@ -39,13 +39,13 @@ impl TableProvider for RangeTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = self.node.schema().inner().clone();
         let projection = projection
-            .cloned()
+            .map(<[usize]>::to_vec)
             .unwrap_or_else(|| (0..schema.fields().len()).collect());
         Ok(Arc::new(RangeExec::try_new(
             self.node.range().clone(),

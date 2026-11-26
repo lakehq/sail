@@ -148,7 +148,7 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 expr,
                 ExprKind::Float16Literal(Float16LiteralExprNode {
                     bits: value.map(|value| u32::from(value.to_bits())),
-                    metadata: literal.return_field(&Schema::empty())?.metadata().clone(),
+                    metadata: literal.return_field(&Schema::empty())?.metadata().into(),
                 }),
                 vec![],
             );
@@ -407,6 +407,7 @@ fn extension_expr_to_proto(
             PhysicalExtensionExprNode {
                 expr: node.encode_to_vec(),
                 inputs,
+                expr_name: None,
             },
         )),
     })

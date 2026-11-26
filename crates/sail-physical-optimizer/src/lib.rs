@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion::physical_optimizer::eliminate_constant_join::EliminateConstantJoin;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
@@ -14,7 +15,6 @@ use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWin
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
-use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
@@ -65,6 +65,7 @@ pub fn get_physical_optimizers(
     // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
     // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
+    rules.push(Arc::new(EliminateConstantJoin::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
@@ -100,7 +101,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules
 }

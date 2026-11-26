@@ -167,6 +167,11 @@ impl SessionManagerActor {
                 return ActorAction::Continue;
             }
         };
+        context
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(self.shutdown.clone());
         self.insert_session(
             session_id.clone(),
             ServerSession {

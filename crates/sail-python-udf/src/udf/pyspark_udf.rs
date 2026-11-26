@@ -16,6 +16,7 @@ use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PySparkUdfKind {
@@ -148,8 +149,8 @@ impl ScalarUDFImpl for PySparkUDF {
             args, number_rows, ..
         } = args;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
-        let udf = Python::attach(|py| self.udf(py))?;
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let udf = with_blocking_python(|py| self.udf(py))?;
+        let data = with_blocking_python(|py| -> PyUdfResult<_> {
             let output = udf.call1(
                 py,
                 (

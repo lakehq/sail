@@ -96,6 +96,14 @@ pub enum SystemEvent {
         status: String,
         updated_at: DateTime<Utc>,
     },
+    StageResized {
+        session_id: String,
+        job_id: u64,
+        stage: u64,
+        partitions: u64,
+        inputs: Vec<StageInput>,
+        distribution: String,
+    },
 }
 
 pub(crate) fn is_session_deleted(status: &str) -> bool {

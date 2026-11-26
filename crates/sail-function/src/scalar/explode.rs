@@ -76,7 +76,7 @@ mod map_entry_tests {
     fn entry_refinement_preserves_fields_and_rejects_nulls() -> Result<()> {
         let child = Arc::new(
             Field::new("key", DataType::Int32, false)
-                .with_metadata([("owner".to_string(), "retained".to_string())].into()),
+                .with_metadata([("owner".to_string(), "retained".to_string())]),
         );
         let fields = vec![child].into();
         let array = Arc::new(StructArray::new(
@@ -86,7 +86,7 @@ mod map_entry_tests {
         ));
         let field = Arc::new(
             Field::new("entry", array.data_type().clone(), true)
-                .with_metadata([("entry".to_string(), "retained".to_string())].into()),
+                .with_metadata([("entry".to_string(), "retained".to_string())]),
         );
         let udf = MapExplodeEntry::default();
         let output_field = udf.return_field_from_args(ReturnFieldArgs {

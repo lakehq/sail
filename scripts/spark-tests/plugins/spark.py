@@ -19,6 +19,7 @@ from pysail.testing._dev.spark.utils.parity import (
     assert_math_function_frames_equal,
     normalize_datetime_dtypes,
     normalize_pandas_data_frame,
+    normalize_pandas_nulls,
 )
 
 
@@ -183,6 +184,8 @@ def patch_pandas_test_utils():
         right = normalize_pandas_data_frame(right)
         left = normalize_datetime_dtypes(left)
         right = normalize_datetime_dtypes(right)
+        left = normalize_pandas_nulls(left)
+        right = normalize_pandas_nulls(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -326,6 +329,14 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_arrow_cogrouped_map.py", "test_with_local_data"],
         reason="Flaky test",
+    ),
+    TestMarker(
+        keywords=[
+            "test_parity_arrow_cogrouped_map_misc.py",
+            "CogroupedMapInArrowMiscParityTests",
+            "test_with_local_data",
+        ],
+        reason="The assertion compares co-group output in a fixed row order without ordering the DataFrame",
     ),
     TestMarker(
         keywords=["test_python_udf_segfault"],

@@ -153,6 +153,7 @@ pub(super) async fn prepare_registered_scan(
         session,
         std::slice::from_ref(&urls),
         config.path_glob_filter.as_ref(),
+        config.partition_directories_only,
         None,
         false,
         true,

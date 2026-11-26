@@ -30,8 +30,8 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
     })?;
 
     let mut files: Vec<String> = vec![];
-    // List each (path, filter) once so a repeated scan (e.g. `df.union(df)`) isn't re-listed.
-    let mut listed: HashSet<(String, Option<String>, bool)> = HashSet::new();
+    // List each path with the same options once, even when a scan is repeated.
+    let mut listed = HashSet::new();
 
     for (source, filters) in scans {
         let source = if let Some(registered) = source.downcast_ref::<RegisteredTableSource>() {
@@ -53,6 +53,8 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
                 table_path.as_str().to_string(),
                 path_glob_filter.map(|filter| filter.as_str().to_string()),
                 direct_only,
+                config.partition_directories_only,
+                values.is_some(),
             )) {
                 continue;
             }
@@ -62,7 +64,14 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
             let metas = if values.is_some() {
                 list_partition_files(table_path, store.as_ref(), path_glob_filter).await?
             } else {
-                list_all_files(table_path, &state, store.as_ref(), path_glob_filter).await?
+                list_all_files(
+                    table_path,
+                    &state,
+                    store.as_ref(),
+                    path_glob_filter,
+                    config.partition_directories_only,
+                )
+                .await?
             }
             .try_collect::<Vec<_>>()
             .await?;

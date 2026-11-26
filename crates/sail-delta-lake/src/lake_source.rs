@@ -1174,6 +1174,32 @@ impl DeltaLakeSource {
             new_metadata = new_metadata.remove_config_key(key);
         }
 
+        let mode_key = "delta.columnMapping.mode";
+        if validated_sets.contains_key(mode_key) || canonical_unsets.iter().any(|k| k == mode_key) {
+            let old_mode = snapshot.effective_column_mapping_mode();
+            let new_mode = new_metadata
+                .configuration()
+                .get(mode_key)
+                .map(|value| ColumnMappingMode::try_from(value.as_str()))
+                .transpose()?
+                .unwrap_or_default();
+            if old_mode != new_mode {
+                if (old_mode, new_mode) != (ColumnMappingMode::None, ColumnMappingMode::Name) {
+                    return plan_err!(
+                        "Changing column mapping mode from {} to {} is not supported",
+                        old_mode.as_ref(),
+                        new_mode.as_ref()
+                    );
+                }
+                let schema =
+                    crate::schema::mapping::annotate_existing_schema(&new_metadata.parse_schema()?);
+                new_metadata = new_metadata.with_schema(&schema)?.add_config_key(
+                    "delta.columnMapping.maxColumnId".into(),
+                    compute_max_column_id(&schema).to_string(),
+                );
+            }
+        }
+
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. Features already supported by the table are preserved;
         // equivalent legacy protocol representations may use lower version numbers.
@@ -2003,7 +2029,7 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .generation_expression()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -2018,7 +2044,7 @@ fn extract_default_expressions(logical_schema: Option<&DFSchema>) -> HashMap<Str
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .current_default()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -2049,7 +2075,7 @@ fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRe
         .fields()
         .iter()
         .map(|field| {
-            let features = ColumnFeatures::from_map(field.metadata());
+            let features = ColumnFeatures::from_field(field);
             let mut metadata = field.metadata().clone();
             if features.is_not_null_constraint() {
                 changed = true;
@@ -2077,7 +2103,7 @@ fn extract_identity_columns(
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .identity()
                 .map(|identity| (field.name().clone(), identity))
         })

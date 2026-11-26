@@ -13,6 +13,8 @@ from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import IntegerType, StructField, StructType
 
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -847,3 +849,76 @@ def test_nested_resolution_uses_only_the_configured_identity(
     row = spark.read.format("delta").load(str(table_path)).collect()[0]
 
     assert row.details.amount == expected
+
+
+@pytest.mark.parametrize("by_path", [True, False], ids=["path", "catalog"])
+def test_upgrade_existing_table_to_name_mapping(spark, tmp_path, by_path):
+    base = tmp_path / "existing"
+    spark.sql("SELECT 1 AS id, array(named_struct('v', 'old')) AS items").write.format("delta").save(str(base))
+    name = "mapping_upgrade"
+    spark.sql(f"CREATE TABLE {name} USING delta LOCATION '{escape_sql_string_literal(str(base))}'").collect()
+    path = f"delta.`{escape_sql_identifier(str(base))}`"
+    uri = f"delta.`{escape_sql_identifier(base.as_uri())}`"
+    try:
+        target = path if by_path else name
+        spark.sql(f"ALTER TABLE {uri} SET TBLPROPERTIES ('department' = 'accounting')").collect()
+        assert _latest_metadata(base)["configuration"]["department"] == "accounting"
+        spark.sql(f"ALTER TABLE {path} UNSET TBLPROPERTIES ('department')").collect()
+        assert "department" not in _latest_metadata(base)["configuration"]
+        old_files = set(base.rglob("*.parquet"))
+        spark.sql(
+            f"ALTER TABLE {target} SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name', "
+            "'delta.minReaderVersion' = '2', 'delta.minWriterVersion' = '5')"
+        ).collect()
+        assert set(base.rglob("*.parquet")) == old_files
+        metadata = _latest_metadata(base)
+        schema = json.loads(metadata["schemaString"])
+        id_field, items = schema["fields"]
+        nested = items["type"]["elementType"]["fields"][0]
+        fields = [id_field, items, nested]
+        assert [f["metadata"]["delta.columnMapping.physicalName"] for f in fields] == ["id", "items", "v"]
+        assert sorted(f["metadata"]["delta.columnMapping.id"] for f in fields) == [1, 2, 3]
+        assert metadata["configuration"]["delta.columnMapping.maxColumnId"] == "3"
+        spark.sql(f"INSERT INTO {name} SELECT 2, array(named_struct('v', 'new'))").collect()
+        for identifier in (name, path):
+            assert spark.sql(f"SELECT id, items[0].v FROM {identifier} ORDER BY id").collect() == [  # noqa: S608
+                (1, "old"),
+                (2, "new"),
+            ]
+        for data_file in _latest_added_parquet_files(base):
+            _assert_parquet_struct_matches_delta(pq.read_schema(data_file), schema)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
+def test_reject_id_mapping_upgrade(spark, tmp_path):
+    base = tmp_path / "legacy"
+    spark.range(1).write.format("delta").save(str(base))
+    path = f"delta.`{escape_sql_identifier(str(base))}`"
+    commits = list((base / "_delta_log").glob("*.json"))
+    with pytest.raises(Exception, match="Changing column mapping mode from none to id"):
+        spark.sql(f"ALTER TABLE {path} SET TBLPROPERTIES ('delta.columnMapping.mode' = 'id')").collect()
+    assert list((base / "_delta_log").glob("*.json")) == commits
+
+
+@pytest.mark.parametrize("missing", ["id", "physicalName"])
+def test_reads_reject_incomplete_column_mapping(spark, tmp_path, missing):
+    base = tmp_path / "incomplete"
+    name = "incomplete_mapping"
+    spark.sql("SELECT named_struct('value', 1) AS nested").write.format("delta").option(
+        "delta.columnMapping.mode", "name"
+    ).save(str(base))
+    spark.sql(f"CREATE TABLE {name} USING delta LOCATION '{escape_sql_string_literal(str(base))}'").collect()
+    try:
+        metadata = _latest_metadata(base)
+        schema = json.loads(metadata["schemaString"])
+        del schema["fields"][0]["type"]["fields"][0]["metadata"][f"delta.columnMapping.{missing}"]
+        metadata["schemaString"] = json.dumps(schema)
+        log = base / "_delta_log"
+        version = max(int(file.stem) for file in log.glob("*.json")) + 1
+        (log / f"{version:020}.json").write_text(json.dumps({"metaData": metadata}) + "\n", encoding="utf-8")
+        for identifier in (name, f"delta.`{escape_sql_identifier(str(base))}`"):
+            with pytest.raises(Exception, match=r"Missing .* for mapped Delta field 'value'"):
+                spark.table(identifier).collect()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()

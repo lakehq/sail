@@ -11,14 +11,18 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::VariantArray;
-use parquet_variant_json::VariantToJson;
+use sail_common_datafusion::utils::datetime::SparkZone;
 
+use super::variant_get::write_variant_json;
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
 
 /// Converts a variant ColumnarValue to a Utf8View JSON string representation.
 /// This is the shared logic used by both `variant_to_json` and `to_json` (for variant inputs).
-pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
+pub fn variant_to_json_columnar(
+    arg: &ColumnarValue,
+    timezone: &SparkZone,
+) -> Result<ColumnarValue> {
     match arg {
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None))),
@@ -33,8 +37,10 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
                 } else {
                     let v = variant_array.value(0);
+                    let mut json = Vec::new();
+                    write_variant_json(v, timezone, &mut json)?;
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                        v.to_json_string()?,
+                        String::from_utf8(json).map_err(|e| exec_datafusion_err!("{e}"))?,
                     ))))
                 }
             }
@@ -45,9 +51,17 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
                 let variant_array = VariantArray::try_new(arr.as_ref())?;
                 let mut builder =
                     arrow::array::StringViewBuilder::with_capacity(variant_array.len());
+                let mut json = Vec::new();
                 for variant in variant_array.iter() {
                     match variant {
-                        Some(v) => builder.append_value(v.to_json_string()?),
+                        Some(v) => {
+                            json.clear();
+                            write_variant_json(v, timezone, &mut json)?;
+                            builder.append_value(
+                                std::str::from_utf8(&json)
+                                    .map_err(|e| exec_datafusion_err!("{e}"))?,
+                            );
+                        }
                         None => builder.append_null(),
                     }
                 }
@@ -65,12 +79,18 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
 /// - options: an optional MAP (not yet implemented — currently rejected at runtime)
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VariantToJsonUdf {
+    timezone: Arc<str>,
     signature: Signature,
 }
 
 impl VariantToJsonUdf {
-    pub fn new() -> Self {
+    pub fn timezone(&self) -> &str {
+        &self.timezone
+    }
+
+    pub fn new(timezone: Arc<str>) -> Self {
         Self {
+            timezone,
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
@@ -78,7 +98,7 @@ impl VariantToJsonUdf {
 
 impl Default for VariantToJsonUdf {
     fn default() -> Self {
-        Self::new()
+        Self::new("UTC".into())
     }
 }
 
@@ -106,7 +126,7 @@ impl ScalarUDFImpl for VariantToJsonUdf {
 
         try_field_as_variant_array(field.as_ref())?;
 
-        variant_to_json_columnar(&args.args[0])
+        variant_to_json_columnar(&args.args[0], &SparkZone::parse(&self.timezone)?)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -126,8 +146,8 @@ impl ScalarUDFImpl for VariantToJsonUdf {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::{Field, Fields};
-    use parquet_variant_compute::{VariantArrayBuilder, VariantType};
+    use arrow_schema::Field;
+    use parquet_variant_compute::VariantArrayBuilder;
     use serde_json::Value;
 
     use super::*;
@@ -146,14 +166,11 @@ mod tests {
         let expected_json = serde_json::json!("norm");
         let input = build_variant_array_from_json(&expected_json)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -183,15 +200,12 @@ mod tests {
 
         let input = build_variant_array_from_json(&expected_json)?;
 
+        let arg_field = Arc::new(input.field("input"));
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = VariantToJsonUdf::default();
 
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(variant_input)],
@@ -218,8 +232,10 @@ mod tests {
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
         let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
+            VariantArrayBuilder::new(0)
+                .build()
+                .field("input")
+                .with_nullable(true),
         );
 
         let args = ScalarFunctionArgs {
@@ -246,14 +262,12 @@ mod tests {
         builder.append_json(r#"{"a":1}"#)?;
         builder.append_null();
         builder.append_json(r#""hello""#)?;
-        let arr: StructArray = builder.build().into();
+        let input = builder.build();
+        let arg_field = Arc::new(input.field("input"));
+        let arr: StructArray = input.into();
 
         let udf = VariantToJsonUdf::default();
         let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
 
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::new(arr) as ArrayRef)],

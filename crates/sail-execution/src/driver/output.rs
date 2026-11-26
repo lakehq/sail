@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
 
@@ -14,6 +15,7 @@ use futures::stream::SelectAll;
 use futures::{Stream, StreamExt};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::QueryCancellation;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -100,12 +102,21 @@ pub fn build_job_output(
     ctx: &mut ActorContext<DriverActor>,
     job_id: JobId,
     schema: SchemaRef,
+    shutdown: Arc<QueryCancellation>,
 ) -> (JobOutputManager, SendableRecordBatchStream) {
     let (sender, receiver) = mpsc::channel(JobOutputItem::CHANNEL_SIZE);
     let (tx, rx) = mpsc::channel(1);
     let handle = ctx.handle().clone();
+    // A paused consumer must see the driver cancellation when it resumes.
+    let result = shutdown.clone().cancel_stream(ReceiverStream::new(rx), || {
+        datafusion::common::exec_err!("query cancelled because the driver is shutting down")
+    });
     ctx.spawn(async move {
-        let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+        let outcome = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            outcome = forward_job_output(JobOutputStream::new(receiver), &tx) => outcome,
+        };
         // Output errors and consumer cancellation can precede terminal task updates.
         // Tell the scheduler why output ended so cleanup records the correct job status.
         // Keep `tx` alive until cleanup has been sent, before signaling EOF to the client.
@@ -115,10 +126,7 @@ pub fn build_job_output(
     });
     (
         JobOutputManager { sender },
-        Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            ReceiverStream::new(rx),
-        )),
+        Box::pin(RecordBatchStreamAdapter::new(schema, result)),
     )
 }
 

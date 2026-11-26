@@ -67,7 +67,6 @@ def test_spark_creates_sail_reads_parquet(
     assert _describe_column_comments(spark, table_fqn)["id"] == "identifier"
 
 
-@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_spark_creates_sail_reads_schema_matrix_parquet(
     jvm_spark: SparkSession,
     spark: SparkSession,
@@ -587,7 +586,6 @@ def test_spark_dataframe_writer_creates_table_sail_reads_external_table(
     assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
-@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_spark_creates_sail_reads_mixed_complex_partitioned_parquet(
     jvm_spark: SparkSession,
     spark: SparkSession,

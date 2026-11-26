@@ -14,6 +14,7 @@ from pyspark.errors import PySparkException
 from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing._dev.spark.steps.iceberg import _current_snapshot, _find_latest_metadata
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests._dev.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
@@ -128,7 +129,8 @@ def _replace(spark, target, source, api, *, overwrite_schema=None, partition=Fal
         if overwrite_schema is False:
             writer = writer.option("overwriteSchema", "false")
         if partition:
-            writer = writer.partitionedBy(F.bucket(4, "c"))
+            bucket = F.partitioning.bucket if pyspark_version() >= (4,) else F.bucket
+            writer = writer.partitionedBy(bucket(4, "c"))
         for key, value in (properties or {}).items():
             writer = writer.tableProperty(key, value)
         getattr(writer, api)()

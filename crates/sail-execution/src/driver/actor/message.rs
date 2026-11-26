@@ -78,6 +78,13 @@ pub enum DriverMessage {
     ProbePendingTask {
         key: TaskKey,
     },
+    /// The number of partitions that the driver has read from the split points of a
+    /// range shuffle.
+    RangeSplitPointsRead {
+        job_id: JobId,
+        shuffle: usize,
+        partitions: ExecutionResult<usize>,
+    },
     FetchDriverStream {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
@@ -154,6 +161,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
+            DriverMessage::RangeSplitPointsRead { .. } => "RangeSplitPointsRead",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStreams { .. } => "FetchWorkerStreams",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
@@ -248,6 +256,13 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
                 p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
+            DriverMessage::RangeSplitPointsRead {
+                job_id,
+                shuffle: _,
+                partitions: _,
+            } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::FetchDriverStream {
                 key:

@@ -28,23 +28,7 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 _DSV2_FORMATS = ["parquet", "csv", "json", "avro", "delta"]
-# Sail reads every DSV2 format above, but cannot *write* Avro: its writer raises
-# "Writer not implemented for this format". The reverse (Sail-write) parametrization
-# keeps Avro in the matrix as xfail with that real error, so a future Avro writer
-# landing turns the xfail green without touching the read-side coverage.
-_SAIL_WRITE_FORMATS = [
-    "parquet",
-    "csv",
-    "json",
-    pytest.param(
-        "avro",
-        marks=pytest.mark.xfail(
-            reason="Sail has no Avro writer ('Writer not implemented for this format')",
-            strict=True,
-        ),
-    ),
-    "delta",
-]
+_SAIL_WRITE_FORMATS = ["parquet", "csv", "json", "avro", "delta"]
 # Formats whose authoritative table metadata (schema, column comments, user
 # TBLPROPERTIES) lives in HMS table parameters, so assertions reading that metadata
 # back through Sail are meaningful. Delta is deliberately excluded: the DeltaCatalog
@@ -666,9 +650,7 @@ def test_spark_dsv2_column_comments_preserved(
 # Sail's HMS catalog carries partition column *names* in TableStatus; actual
 # partition discovery is delegated to the object-store-aware reader, which walks
 # Hive-style partition directories (e.g. ``.../event_date=2024-01-02/...``).
-# These tests validate that path for plain (identity) partitions with simple
-# types, in isolation from the complex-type concerns that the existing xfailed
-# ``schema_matrix`` / ``mixed_complex_partitioned`` parquet tests confound.
+# These tests cover identity partitions with simple types across formats.
 # ---------------------------------------------------------------------------
 
 

@@ -15,5 +15,5 @@ def test_empty_map_preserves_schema_and_value(spark):
 
 def test_map_rejects_null_keys(spark):
     result = spark.range(1).select(F.create_map(F.lit(None).cast("int"), F.lit("a")))
-    with pytest.raises(SparkRuntimeException):
+    with pytest.raises(SparkRuntimeException, match=r"\[NULL_MAP_KEY\]"):
         result.collect()

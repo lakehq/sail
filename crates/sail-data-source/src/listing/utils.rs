@@ -177,6 +177,7 @@ pub(super) async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     inputs: &'a [Vec<ListingTableUrl>],
     path_glob_filter: Option<&PathGlobFilter>,
+    partition_directories_only: bool,
     base_path: Option<&BasePathOptions>,
     recursive: bool,
     registered: bool,
@@ -206,7 +207,7 @@ pub(super) async fn sample_listing_files<'a>(
             let mut files = if registered {
                 list_partition_files(url, store.as_ref(), None).await?
             } else {
-                list_all_files(url, ctx, store.as_ref(), None).await?
+                list_all_files(url, ctx, store.as_ref(), None, partition_directories_only).await?
             };
             while let Some(file) = files.try_next().await? {
                 let selected = matches_path_glob_filter(path_glob_filter, &file.location);
@@ -430,6 +431,7 @@ pub async fn list_all_files<'a>(
     ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
     path_glob_filter: Option<&'a PathGlobFilter>,
+    partition_directories_only: bool,
 ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
@@ -460,12 +462,26 @@ pub async fn list_all_files<'a>(
         .try_filter(move |meta| {
             let path = &meta.location;
             let included = url.contains(path, ignore_subdirectory)
+                && (!partition_directories_only || in_partition_directories(url, path))
                 && !has_hidden_path_component(url, path)
                 && matches_path_glob_filter(path_glob_filter, path);
             futures::future::ready(included)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
+}
+
+/// A migrated file table owns root files and Hive partition directories only.
+pub(super) fn in_partition_directories(root: &ListingTableUrl, location: &Path) -> bool {
+    root.strip_prefix(location).is_some_and(|segments| {
+        let mut segments = segments.peekable();
+        while let Some(part) = segments.next() {
+            if segments.peek().is_some() && !part.contains('=') {
+                return false;
+            }
+        }
+        true
+    })
 }
 
 pub fn matches_path_glob_filter(
@@ -483,21 +499,22 @@ fn has_metadata_prefix(name: &str) -> bool {
     name.starts_with("_common_metadata") || name.starts_with("_metadata")
 }
 
-pub(super) fn is_metadata_file(name: &str) -> bool {
+pub fn is_metadata_file(name: &str) -> bool {
     !name.contains('=') && has_metadata_prefix(name)
+}
+
+pub fn is_hidden_path_name(name: &str) -> bool {
+    let exclude = (name.starts_with('_') && !name.contains('='))
+        || name.starts_with('.')
+        || name.ends_with("._COPYING_");
+    exclude && !has_metadata_prefix(name)
 }
 
 /// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
 pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
-    let is_hidden = |name: &str| {
-        let exclude = (name.starts_with('_') && !name.contains('='))
-            || name.starts_with('.')
-            || name.ends_with("._COPYING_");
-        exclude && !has_metadata_prefix(name)
-    };
     url.strip_prefix(location)
-        .is_some_and(|mut segments| segments.any(is_hidden))
-        || location.filename().is_some_and(is_hidden)
+        .is_some_and(|mut segments| segments.any(is_hidden_path_name))
+        || location.filename().is_some_and(is_hidden_path_name)
 }
 
 pub fn can_be_evaluated_for_partition_pruning(
@@ -796,7 +813,7 @@ mod tests {
                 )
                 .await?;
             let url = ListingTableUrl::parse(format!("s3://{bucket}/data/"))?;
-            let files = list_all_files(&url, &state, &store, None)
+            let files = list_all_files(&url, &state, &store, None, false)
                 .await?
                 .map_ok(|meta| meta.location.to_string())
                 .try_collect::<Vec<_>>()

@@ -4,10 +4,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::array::timezone::Tz;
 use arrow::array::{ArrayRef, StringBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
-use chrono::{Offset, Timelike};
+use chrono::Timelike;
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err};
@@ -19,6 +18,7 @@ use parquet_variant_compute::{GetOptions, VariantArray, VariantType, variant_get
 use parquet_variant_json::VariantToJson;
 use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
 use sail_common_datafusion::formatter::{Time64MicrosecondFormatter, TimestampFormatter};
+use sail_common_datafusion::utils::datetime::SparkZone;
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -93,7 +93,11 @@ fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<Fi
 }
 
 // [CREDIT]: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/common/variant/src/main/java/org/apache/spark/types/variant/Variant.java#L266-L346
-fn write_variant_json(value: Variant, timezone: &Tz, out: &mut Vec<u8>) -> Result<()> {
+pub(super) fn write_variant_json(
+    value: Variant,
+    timezone: &SparkZone,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     match value {
         Variant::Object(object) => {
             out.push(b'{');
@@ -119,13 +123,19 @@ fn write_variant_json(value: Variant, timezone: &Tz, out: &mut Vec<u8>) -> Resul
             out.push(b']');
         }
         Variant::TimestampMicros(ts) | Variant::TimestampNanos(ts) => {
-            let offset = ts.with_timezone(timezone).offset().fix().local_minus_utc();
+            let offset = timezone.at_utc(&ts).offset().local_minus_utc();
             let sign = if offset < 0 { '-' } else { '+' };
             let minutes = offset.unsigned_abs() / 60;
             write!(
                 out,
                 r#""{}{sign}{:02}:{:02}""#,
-                TimestampFormatter(&ts, Some(timezone)),
+                TimestampFormatter(
+                    &timezone
+                        .local_datetime(&ts)
+                        .ok_or_else(|| exec_datafusion_err!("timestamp out of range"))?
+                        .and_utc(),
+                    None
+                ),
                 minutes / 60,
                 minutes % 60
             )?;
@@ -133,12 +143,23 @@ fn write_variant_json(value: Variant, timezone: &Tz, out: &mut Vec<u8>) -> Resul
         Variant::TimestampNtzMicros(ts) | Variant::TimestampNtzNanos(ts) => {
             write!(out, r#""{}""#, TimestampFormatter(&ts.and_utc(), None))?;
         }
+        Variant::Double(v) => write_json_float(out, spark_f64_to_string(v), v.is_finite())?,
+        Variant::Float(v) => write_json_float(out, spark_f32_to_string(v), v.is_finite())?,
         v => v.to_json(out)?,
     }
     Ok(())
 }
 
-fn variant_strings(values: &VariantArray, timezone: &Tz, safe: bool) -> Result<ArrayRef> {
+fn write_json_float(out: &mut Vec<u8>, value: String, finite: bool) -> Result<()> {
+    if finite {
+        out.extend_from_slice(value.as_bytes());
+    } else {
+        Variant::String(&value).to_json(out)?;
+    }
+    Ok(())
+}
+
+fn variant_strings(values: &VariantArray, timezone: &SparkZone, safe: bool) -> Result<ArrayRef> {
     let mut strings = StringBuilder::new();
     let mut json = Vec::new();
     for value in values.iter() {
@@ -170,7 +191,16 @@ fn variant_strings(values: &VariantArray, timezone: &Tz, safe: bool) -> Result<A
                 strings.append_value(Time64MicrosecondFormatter(micros).to_string());
             }
             Variant::TimestampMicros(v) | Variant::TimestampNanos(v) => {
-                strings.append_value(TimestampFormatter(&v, Some(timezone)).to_string());
+                strings.append_value(
+                    TimestampFormatter(
+                        &timezone
+                            .local_datetime(&v)
+                            .ok_or_else(|| exec_datafusion_err!("timestamp out of range"))?
+                            .and_utc(),
+                        None,
+                    )
+                    .to_string(),
+                );
             }
             Variant::TimestampNtzMicros(v) | Variant::TimestampNtzNanos(v) => {
                 strings.append_value(TimestampFormatter(&v.and_utc(), None).to_string());
@@ -283,7 +313,7 @@ fn invoke_variant_get(
             build_get_options(variant_path.clone(), &Some(Arc::new(variant_output))),
         )?;
         let values = VariantArray::try_new(values.as_ref())?;
-        variant_strings(&values, &timezone.parse()?, safe)?
+        variant_strings(&values, &SparkZone::parse(timezone)?, safe)?
     } else {
         variant_get(&variant_arr, options)
             .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?

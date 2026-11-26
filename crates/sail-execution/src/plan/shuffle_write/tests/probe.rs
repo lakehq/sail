@@ -227,16 +227,19 @@ impl Probe {
     /// input alone. While it partitions or writes a batch, each channel can also have one
     /// small output batch in flight, and the rows pulled so far can be in full batches.
     /// `arrays` is the number of arrays in a batch of the schema, counting nested ones.
+    /// `router_bytes` is the range router storage allocated before pulling input.
     pub(super) fn heap_violations(
         &self,
         channels: usize,
         arrays: usize,
         batch_size: usize,
+        router_bytes: usize,
     ) -> Vec<String> {
-        let held_limit = |sample: &Sample| INPUT_FACTOR * sample.input_bytes + TASK_BYTES;
+        let held_limit =
+            |sample: &Sample| INPUT_FACTOR * sample.input_bytes + TASK_BYTES + router_bytes;
         let peak_limit = |sample: &Sample| {
             let batches = channels + sample.input_rows / batch_size;
-            output_limit(sample.input_bytes, batches, arrays)
+            output_limit(sample.input_bytes, batches, arrays) + router_bytes
         };
         let describe = |what: &str, held: usize, limit: usize, sample: &Sample| {
             format!(
@@ -495,10 +498,10 @@ pub(super) fn key_partitioning(
                 .into_iter()
                 .map(|point| SplitPoint::new(vec![ScalarValue::Int64(Some(point))]))
                 .collect();
-            ShufflePartitioning::Range(RangePartitioning::try_new(
-                [PhysicalSortExpr::new_default(key)].into(),
-                points,
-            )?)
+            ShufflePartitioning::Range(
+                RangePartitioning::try_new([PhysicalSortExpr::new_default(key)].into(), points)?,
+                channels,
+            )
         }
         "round_robin_batch" => ShufflePartitioning::RoundRobinBatch(channels),
         _ => ShufflePartitioning::RoundRobinRow(channels),

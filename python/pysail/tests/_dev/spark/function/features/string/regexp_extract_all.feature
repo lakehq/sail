@@ -72,7 +72,7 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
 
       Examples:
         | case                                                 | args           |
-        | regexp_extract_all returns NULL when input is NULL   | NULL, r'(\d+)' |
+        | regexp_extract_all returns NULL when input is NULL   | NULL, r'(\\\\d+)' |
         | regexp_extract_all returns NULL when pattern is NULL | 'abc', NULL    |
 
   Rule: Pattern from a column

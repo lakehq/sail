@@ -25,7 +25,6 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema::{clear_metadata, mark_partially_present_fields_nullable};
-use sail_data_source::formats::parquet::parse_coerce_int96_string;
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
@@ -166,12 +165,7 @@ async fn infer_parquet_checkpoint_schema(
     objects: &[ObjectMeta],
 ) -> Result<SchemaRef> {
     let format = ParquetFormat::default();
-    // TODO: Uncomment after DataFusion 56
-    // let coerce_int96 = format.coerce_int96().map(datafusion::arrow::datatypes::TimeUnit::from);
-    let coerce_int96 = format
-        .coerce_int96()
-        .map(|time_unit| parse_coerce_int96_string(&time_unit))
-        .transpose()?;
+    let coerce_int96 = format.coerce_int96().map(Into::into);
     let coerce_int96_tz = format
         .options()
         .global

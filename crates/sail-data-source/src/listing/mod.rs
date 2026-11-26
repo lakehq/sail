@@ -3,6 +3,7 @@
 pub mod delete;
 pub mod input_files;
 mod partition;
+pub mod partition_write;
 pub mod planner;
 mod registered;
 pub mod source;

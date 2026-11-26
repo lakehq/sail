@@ -30,6 +30,7 @@ pub struct ListingTableSourceConfig {
     pub collect_stat: bool,
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
+    pub partition_directories_only: bool,
     pub path_glob_filter: Option<PathGlobFilter>,
     pub compression: CompressionTypeVariant,
 }

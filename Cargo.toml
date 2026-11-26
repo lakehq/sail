@@ -60,7 +60,7 @@ quick-xml = "0.42.0"
 serde_yaml = "0.9.34"
 monostate = "1.0.2"
 regex = "1.12.3"
-fancy-regex = "0.20.0"
+fancy-regex = "0.20.2"
 csv-core = "0.1.13"
 memchr = "2.8.3"
 regex-syntax = "0.8.11"
@@ -122,7 +122,7 @@ lz4_flex = "0.14.0"
 twox-hash = "2.1.5"
 zstd = "0.14.0"
 roaring = "0.12.0"
-datasketches = { version = "0.6.0", features = ["hll", "theta"] }
+datasketches = { version = "0.7.0", features = ["hll", "theta"] }
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
 chumsky = { version = "0.14.2", default-features = false, features = ["pratt"] }
@@ -138,7 +138,7 @@ bytes = "1.11.1"
 indexmap = "2.14.0"
 pin-project-lite = "0.2.17"
 ordered-float = { version = "5.3.0", features = ["serde"] }
-apache-avro = { version = "0.22.0" }
+apache-avro = { version = "0.23.0" }
 rust_decimal = "1.42.0"
 wiremock = "0.6.5"
 secrecy = { version = "0.10.3", features = ["serde"] }
@@ -176,7 +176,7 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.9"
-datafusion = { version = "55.2.0", default-features = false, features = [
+datafusion = { version = "56.0.0", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -190,40 +190,39 @@ datafusion = { version = "55.2.0", default-features = false, features = [
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { version = "55.2.0", features = ["object_store"] }
-datafusion-datasource = { version = "55.2.0" }
-datafusion-datasource-avro = { version = "55.2.0" }
-datafusion-datasource-json = { version = "55.2.0" }
-datafusion-datasource-parquet = { version = "55.2.0" }
-datafusion-expr = { version = "55.2.0", default-features = false }
-datafusion-expr-common = { version = "55.2.0" }
-datafusion-proto = { version = "55.2.0" }
-datafusion-functions = { version = "55.2.0" }
-datafusion-functions-nested = { version = "55.2.0", default-features = false }
-datafusion-physical-expr = { version = "55.2.0" }
-datafusion-session = { version = "55.2.0" }
-datafusion-spark = { version = "55.2.0", features = ["core"] }
-datafusion-functions-aggregate-common = { version = "55.2.0" }
-datafusion-macros = { version = "55.2.0" }
-datafusion-physical-expr-common = { version = "55.2.0" }
+datafusion-common = { version = "56.0.0", features = ["object_store"] }
+datafusion-datasource = { version = "56.0.0" }
+datafusion-datasource-avro = { version = "56.0.0" }
+datafusion-datasource-json = { version = "56.0.0" }
+datafusion-datasource-parquet = { version = "56.0.0" }
+datafusion-expr = { version = "56.0.0", default-features = false }
+datafusion-expr-common = { version = "56.0.0" }
+datafusion-proto = { version = "56.0.0" }
+datafusion-functions = { version = "56.0.0" }
+datafusion-functions-nested = { version = "56.0.0", default-features = false }
+datafusion-physical-expr = { version = "56.0.0" }
+datafusion-session = { version = "56.0.0" }
+datafusion-spark = { version = "56.0.0", features = ["core"] }
+datafusion-functions-aggregate-common = { version = "56.0.0" }
+datafusion-macros = { version = "56.0.0" }
+datafusion-physical-expr-common = { version = "56.0.0" }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.19.0", default-features = false }
-arrow = { version = "59.2.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "59.2.0" }
-arrow-schema = { version = "59.2.0", features = ["serde", "canonical_extension_types"] }
-arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
-arrow-pyarrow = { version = "59.2.0" }
-arrow-select = { version = "59.2.0" }
-parquet = { version = "59.2.0", features = ["arrow_canonical_extension_types"] }
-orc-rust = { version = "0.9.0", default-features = false }
-parquet-variant = { version = "59.2.0" }
-parquet-variant-compute = { version = "59.2.0" }
-parquet-variant-json = { version = "59.2.0" }
-serde_arrow = { version = "0.15.1", features = ["arrow-59"] }
+arrow = { version = "60.1.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "60.1.0" }
+arrow-schema = { version = "60.1.0", features = ["serde", "canonical_extension_types"] }
+arrow-flight = { version = "60.1.0", features = ["flight-sql"] }
+arrow-pyarrow = { version = "60.1.0" }
+arrow-select = { version = "60.1.0" }
+parquet = { version = "60.1.0", features = ["arrow_canonical_extension_types"] }
+parquet-variant = { version = "60.1.0" }
+parquet-variant-compute = { version = "60.1.0" }
+parquet-variant-json = { version = "60.1.0" }
+serde_arrow = { version = "0.15.1", features = ["arrow-60"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
+object_store = { version = "0.14.2", features = ["aws", "gcp", "azure", "http"] }
 # The `object-store-0-*` feature must match the `object_store` version used in DataFusion.
-hdfs-native-object-store = { version = "0.18.2", default-features = false, features = ["object-store-0-13"] }
+hdfs-native-object-store = { version = "0.18.2", default-features = false, features = ["object-store-0-14"] }
 hashbrown = { version = "0.17.1" }
 
 ######

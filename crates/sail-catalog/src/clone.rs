@@ -14,39 +14,8 @@ use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{CreateTableOptions, StageTableOptions};
 
-impl CatalogManager {
-    /// In the delta namespace, an unqualified file name can also be a table name.
-    pub async fn clone_path<'a, T: AsRef<str>>(
-        &self,
-        name: &'a [T],
-    ) -> CatalogResult<Option<&'a str>> {
-        let [format, path] = name else {
-            return Ok(None);
-        };
-        if !format.as_ref().eq_ignore_ascii_case("delta") {
-            return Ok(None);
-        }
-        let path = path.as_ref();
-        if std::path::Path::new(path).is_absolute()
-            || path.contains(":/")
-            || path.starts_with("./")
-            || path.starts_with("../")
-        {
-            return Ok(Some(path));
-        }
-        match self
-            .get_database_by_qualifier(std::slice::from_ref(format))
-            .await
-        {
-            Ok(_) => Ok(None),
-            Err(CatalogError::NotFound(_, _)) => Ok(Some(path)),
-            Err(error) => Err(error),
-        }
-    }
-}
-
 async fn resolve_source(manager: &CatalogManager, source: &[String]) -> CatalogResult<String> {
-    if let Some(path) = manager.clone_path(source).await? {
+    if let Some(path) = manager.delta_table_path(source).await? {
         return Ok(path.to_string());
     }
     let status = manager.get_table(source).await?;
@@ -83,6 +52,11 @@ impl StageTableOptions {
     pub fn resolve(self, existing: Option<&TableStatus>) -> CatalogResult<CreateTableOptions> {
         let (default_location, location, mode, is_external) = match self {
             Self::Definition(options) => return Ok(options),
+            Self::IcebergMigration { .. } => {
+                return Err(CatalogError::NotSupported(
+                    "Iceberg migration staging".into(),
+                ));
+            }
             Self::ShallowClone {
                 default_location,
                 location,

@@ -204,6 +204,18 @@ impl DeltaSnapshot {
         Self::from_replayed_state(log_store, config, replayed)
     }
 
+    fn replayed_schema(metadata: &Metadata) -> DeltaResult<(ArrowSchemaRef, TableProperties)> {
+        let properties = TableProperties::from(metadata.configuration().iter());
+        let schema = metadata.parse_schema()?;
+        if matches!(
+            properties.column_mapping_mode,
+            Some(ColumnMappingMode::Name | ColumnMappingMode::Id)
+        ) {
+            crate::schema::mapping::validate_mapped_schema(&schema)?;
+        }
+        Ok((Arc::new(ArrowSchema::try_from(&schema)?), properties))
+    }
+
     fn from_replayed_state(
         log_store: &dyn LogStore,
         config: DeltaSnapshotConfig,
@@ -228,8 +240,7 @@ impl DeltaSnapshot {
         config: DeltaSnapshotConfig,
         replayed: ReplayedTableHeader,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(replayed.metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&replayed.metadata)?;
 
         Ok(Self {
             version: replayed.version,
@@ -261,8 +272,7 @@ impl DeltaSnapshot {
         domain_metadata: Vec<DomainMetadata>,
         commit_timestamps: BTreeMap<i64, i64>,
     ) -> DeltaResult<Self> {
-        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
-        let table_properties = TableProperties::from(metadata.configuration().iter());
+        let (arrow_schema, table_properties) = Self::replayed_schema(&metadata)?;
 
         Ok(Self {
             version,

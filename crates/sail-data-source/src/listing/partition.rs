@@ -23,6 +23,7 @@ use sail_common::spec;
 use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::session::config::SessionConfigService;
+use sail_common_datafusion::session::time_zone::session_time_zone;
 use sail_common_datafusion::utils::datetime::{SparkZone, arrow_timezone_label};
 use sail_function::scalar::conversion::cast_string_to_int32::parse_spark_legacy_string_to_i64;
 use sail_function::scalar::datetime::date::Date;
@@ -139,12 +140,7 @@ pub(super) fn resolve_base_path(
     };
     let ntz =
         option("spark.sql.timestampType")?.is_some_and(|v| v.eq_ignore_ascii_case("TIMESTAMP_NTZ"));
-    let session_zone = ctx
-        .config_options()
-        .execution
-        .time_zone
-        .as_deref()
-        .unwrap_or("UTC");
+    let session_zone = session_time_zone(ctx.config_options()).unwrap_or("UTC");
     let timezone = read_option(options, "timeZone").unwrap_or(session_zone);
     SparkZone::parse(timezone)?;
     let timestamp_type = DataType::Timestamp(

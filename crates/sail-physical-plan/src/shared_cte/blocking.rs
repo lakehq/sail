@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::window::WindowExpr;
-use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, GroupClusteringMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, NestedLoopJoinExec};
@@ -18,7 +19,6 @@ use datafusion::physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use datafusion::physical_plan::{ExecutionPlan, InputOrderMode};
 use datafusion_common::JoinType;
 
 use crate::shared_cte::SharedCteScanExec;
@@ -59,7 +59,7 @@ fn holds_groups(aggregate: &AggregateExec) -> bool {
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned
     ) && (aggregate.group_expr().is_empty()
-        || matches!(aggregate.input_order_mode(), InputOrderMode::Linear))
+        || matches!(aggregate.group_clustering_mode(), GroupClusteringMode::None))
 }
 
 /// Whether the window holds its input in a sort below it, and adds columns of a fixed
@@ -334,8 +334,8 @@ mod tests {
         )
         .unwrap();
         assert!(!matches!(
-            aggregate.input_order_mode(),
-            InputOrderMode::Linear
+            aggregate.group_clustering_mode(),
+            GroupClusteringMode::None
         ));
         assert!(!holds_output(
             &(Arc::new(aggregate) as Arc<dyn ExecutionPlan>)

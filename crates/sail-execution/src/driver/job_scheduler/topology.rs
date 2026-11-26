@@ -50,7 +50,11 @@ impl JobTopology {
         for (s, stage) in graph.stages().iter().enumerate() {
             for input in &stage.inputs {
                 stages[input.stage].consumers.push(s);
-                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined) {
+                // A stage that waits for the split points of a range shuffle reads the
+                // stages that run before them once they have run, as a blocking input.
+                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined)
+                    && !graph.reads_after_range_split_points(input.stage, s)
+                {
                     pipelined_adjacency[s].push(input.stage);
                     pipelined_adjacency[input.stage].push(s);
                 }

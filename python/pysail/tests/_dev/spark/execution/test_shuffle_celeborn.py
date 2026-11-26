@@ -197,6 +197,17 @@ def test_repartition_collect_with_celeborn_shuffle(remote):
     ]
 
 
+def test_range_repartition_with_celeborn_shuffle(spark):
+    # The range shuffle routes rows by a channel column that it does not write.
+    df = (
+        spark.range(0, 24, 1, 4)
+        .withColumn("v", F.concat(F.lit("v"), F.col("id").cast("string")))
+        .repartitionByRange(3, "id")
+        .select("id", "v", F.spark_partition_id().alias("pid"))
+    )
+    assert sorted((row.id, row.v, row.pid) for row in df.collect()) == [(i, f"v{i}", i // 8) for i in range(24)]
+
+
 @pytest.mark.spark(cross_version=True)
 def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: MasterService):
     @F.udf("long")
