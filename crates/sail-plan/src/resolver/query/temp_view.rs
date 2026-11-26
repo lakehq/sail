@@ -21,7 +21,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::datasource::source_as_provider;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::expr::{Cast, InSubquery, SetComparison};
 use datafusion_expr::{
@@ -49,9 +49,7 @@ use super::read::{CatalogTableRead, rename_source};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::{PlanResolverState, ViewDefinitionReads, table_source_address};
-use crate::shared_cte::{
-    CteReference, recompute_plan_schemas, replace_scans, visit_nodes, visit_scans,
-};
+use crate::shared_cte::{CteReference, replace_scans, visit_nodes, visit_scans};
 
 /// What the source of a table scan reads, for the sources that a temporary view obtains
 /// again at each read.
@@ -769,22 +767,14 @@ impl PlanResolver<'_> {
                 None => Transformed::no(LogicalPlan::TableScan(scan)),
             })
         };
+        // Without CTE sharing, the plan refers to no CTE definition once its references are
+        // inlined, so that only its scans are bound.
         let plan = if self.share_ctes {
-            self.renew_shared_cte_definitions(plan, &mut bind, recompute_schemas, state)?
+            plan
         } else {
-            let plan = Self::inline_shared_cte_references(plan)?
-                .transform_down_with_subqueries(|plan| match plan {
-                    LogicalPlan::TableScan(scan) => bind(scan),
-                    plan => Ok(Transformed::no(plan)),
-                })
-                .data()?;
-            if recompute_schemas {
-                recompute_plan_schemas(plan)?
-            } else {
-                plan
-            }
+            Self::inline_shared_cte_references(plan)?
         };
-        Ok(plan)
+        self.renew_shared_cte_definitions(plan, &mut bind, recompute_schemas, state)
     }
 
     /// Returns the scan of a read of the view, for a scan of the stored plan of the view.
