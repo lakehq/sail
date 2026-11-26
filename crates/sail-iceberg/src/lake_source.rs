@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -1257,16 +1258,40 @@ pub(crate) enum IcebergReadPurpose {
 
 pub(crate) async fn load_iceberg_read_table(
     ctx: &dyn Session,
-    info: SourceInfo,
+    mut info: SourceInfo,
     read_purpose: IcebergReadPurpose,
-) -> Result<(Table, IcebergReadOptions)> {
+) -> Result<(Arc<Table>, IcebergReadOptions)> {
+    // The reads of a table in one statement read one version of its metadata, whatever
+    // their read options are, and each read selects its snapshot in that version. A read
+    // of a metadata file reads that file.
+    let pins = info.snapshot_pins.take();
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
-    let table = Table::load_with_metadata_location(
-        ctx.runtime_env().as_ref(),
-        read.table_url,
-        read.metadata_location,
-    )
-    .await?;
+    let location = match &read.metadata_location {
+        Some(location) => location.clone(),
+        None => read.table_url.to_string(),
+    };
+    let catalog_managed = read.metadata_location.is_some();
+    if let Some(pins) = &pins
+        && let Some(table) = pins.get(&location, catalog_managed)?
+        && let Ok(table) = table.downcast::<Table>()
+    {
+        return Ok((table, read.options));
+    }
+    let table = Arc::new(
+        Table::load_with_metadata_location(
+            ctx.runtime_env().as_ref(),
+            read.table_url,
+            read.metadata_location,
+        )
+        .await?,
+    );
+    if let Some(pins) = &pins {
+        pins.insert(
+            location,
+            catalog_managed,
+            Arc::clone(&table) as Arc<dyn Any + Send + Sync>,
+        )?;
+    }
     Ok((table, read.options))
 }
 

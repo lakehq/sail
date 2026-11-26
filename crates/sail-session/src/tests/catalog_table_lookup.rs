@@ -40,6 +40,7 @@ use sail_sql_analyzer::statement::from_ast_statement;
 use super::{create_memory_catalog, create_session_with_catalogs, plan_shared_ctes};
 
 mod delta_snapshot;
+mod iceberg_snapshot;
 mod temporary_view;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
