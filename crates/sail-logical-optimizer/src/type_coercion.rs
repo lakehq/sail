@@ -2050,7 +2050,7 @@ mod test {
     use datafusion::functions_aggregate::average::AvgAccumulator;
     use datafusion::optimizer::{Analyzer, AnalyzerRule};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::tree_node::{TransformedResult, TreeNode};
+    use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference};
     use datafusion_expr::expr::{
         self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
@@ -2059,13 +2059,17 @@ mod test {
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
-        ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast, col,
-        create_udaf, grouping_set, is_true, lit, placeholder,
+        ExprSchemable, Filter, Limit, LogicalPlan, LogicalPlanBuilder, MaterializedCte,
+        MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
+        col, create_udaf, exists, grouping_set, in_subquery, is_true, lit, placeholder,
     };
     use insta::assert_snapshot;
 
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
+    use crate::type_coercion::{
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
+        with_materialized_cte_scan_schema,
+    };
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -4328,5 +4332,225 @@ mod test {
           EmptyRelation: rows=0
         "#,
         )
+    }
+
+    fn cte_scan(
+        id: MaterializedCteId,
+        qualifier: &str,
+        data_type: &DataType,
+    ) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
+        Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(
+                id,
+                "c",
+                Arc::new(DFSchema::try_from_qualified_schema(qualifier, &schema)?),
+            ),
+        )))
+    }
+
+    /// A union whose schema is the schema of its first input, so that type
+    /// coercion changes the type of its column.
+    fn uncoerced_union(left: ScalarValue, right: ScalarValue) -> Result<Arc<LogicalPlan>> {
+        let one_row = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let inputs = [left, right]
+            .into_iter()
+            .map(|value| {
+                Projection::try_new(vec![lit(value).alias("a")], Arc::clone(&one_row))
+                    .map(|p| Arc::new(LogicalPlan::Projection(p)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let schema = Arc::clone(inputs[0].schema());
+        Ok(Arc::new(LogicalPlan::Union(Union { inputs, schema })))
+    }
+
+    /// The id, qualifier, and type of each materialized CTE scan in `plan`,
+    /// also in subqueries, ordered by qualifier.
+    fn cte_scan_fields(plan: &LogicalPlan) -> Result<Vec<(MaterializedCteId, String, DataType)>> {
+        let mut fields = vec![];
+        plan.apply_with_subqueries(|node| {
+            if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) = node {
+                let (qualifier, field) = scan.schema.qualified_field(0);
+                fields.push((
+                    scan.id,
+                    qualifier.map(|q| q.to_string()).unwrap_or_default(),
+                    field.data_type().clone(),
+                ));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        fields.sort_by(|a, b| a.1.cmp(&b.1));
+        Ok(fields)
+    }
+
+    #[test]
+    fn materialized_cte_scans_use_coerced_body_type() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let body = uncoerced_union(ScalarValue::Null, ScalarValue::Int64(Some(1)))?;
+        let subquery = LogicalPlanBuilder::from(cte_scan(id, "d", &DataType::Null)?)
+            .project(vec![col("d.a") + lit(1_i32)])?
+            .build()?;
+        let continuation = LogicalPlanBuilder::from(cte_scan(id, "c", &DataType::Null)?)
+            .filter(in_subquery(col("c.a"), Arc::new(subquery)))?
+            .project(vec![col("c.a"), col("c.a") + lit(1_i32)])?
+            .build()?;
+        let plan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+            MaterializedCte::try_new(id, "c", body, Arc::new(continuation))?,
+        ));
+
+        let analyzed = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &ConfigOptions::default(), |_, _| {})?;
+
+        assert_eq!(
+            cte_scan_fields(&analyzed)?,
+            vec![
+                (id, "c".to_string(), DataType::Int64),
+                (id, "d".to_string(), DataType::Int64),
+            ]
+        );
+        let (qualifier, field) = analyzed.schema().qualified_field(0);
+        assert_eq!(qualifier, Some(&TableReference::bare("c")));
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert_snapshot!(
+            analyzed,
+            @r"
+        MaterializedCte: name=c
+          Union
+            Projection: CAST(NULL AS Int64) AS a
+              EmptyRelation: rows=1
+            Projection: Int64(1) AS a
+              EmptyRelation: rows=1
+          Projection: c.a, c.a + CAST(Int32(1) AS Int64)
+            Filter: c.a IN (<subquery>)
+              Subquery:
+                Projection: d.a + CAST(Int32(1) AS Int64)
+                  MaterializedCteScan: name=c
+              MaterializedCteScan: name=c
+        "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_cte_scans_use_coerced_body_type_for_arrow_types() -> Result<()> {
+        let cases = [
+            (
+                ScalarValue::Null,
+                ScalarValue::Int64(Some(1)),
+                DataType::Int64,
+            ),
+            (
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Int64(Some(1)),
+                DataType::Int64,
+            ),
+            (
+                ScalarValue::Float32(Some(1.0)),
+                ScalarValue::Float64(Some(1.0)),
+                DataType::Float64,
+            ),
+            (
+                ScalarValue::Decimal128(Some(1), 5, 2),
+                ScalarValue::Int64(Some(1)),
+                DataType::Decimal128(22, 2),
+            ),
+            (
+                ScalarValue::Utf8(Some("x".to_string())),
+                ScalarValue::LargeUtf8(Some("x".to_string())),
+                DataType::LargeUtf8,
+            ),
+            (
+                ScalarValue::Null,
+                ScalarValue::Utf8View(Some("x".to_string())),
+                DataType::Utf8View,
+            ),
+            (
+                ScalarValue::Binary(Some(vec![1])),
+                ScalarValue::LargeBinary(Some(vec![1])),
+                DataType::LargeBinary,
+            ),
+        ];
+        for (left, right, expected) in cases {
+            let case = format!("{left:?} UNION {right:?}");
+            let id = MaterializedCteId::next();
+            let body = uncoerced_union(left, right)?;
+            let data_type = body.schema().field(0).data_type().clone();
+            assert_ne!(data_type, expected, "{case}");
+            let continuation = LogicalPlanBuilder::from(cte_scan(id, "c", &data_type)?)
+                .filter(exists(Arc::new(cte_scan(id, "d", &data_type)?)))?
+                .project(vec![col("c.a")])?
+                .build()?;
+            let plan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                MaterializedCte::try_new(id, "c", body, Arc::new(continuation))?,
+            ));
+
+            let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+
+            assert_eq!(
+                cte_scan_fields(&analyzed)?,
+                vec![
+                    (id, "c".to_string(), expected.clone()),
+                    (id, "d".to_string(), expected.clone()),
+                ],
+                "{case}"
+            );
+            let (qualifier, field) = analyzed.schema().qualified_field(0);
+            assert_eq!(qualifier, Some(&TableReference::bare("c")), "{case}");
+            assert_eq!(field.data_type(), &expected, "{case}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_cte_scan_schema_stops_at_nested_occurrence() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let other = MaterializedCteId::next();
+        let unrelated = MaterializedCteId::next();
+        let body_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("a", DataType::Int64, true)].into(),
+            std::collections::HashMap::new(),
+        )?);
+        // Another CTE whose body and continuation read the CTE `id`.
+        let nested_other = MaterializedCte::try_new(
+            other,
+            "n",
+            Arc::new(cte_scan(id, "e", &DataType::Null)?),
+            Arc::new(cte_scan(id, "f", &DataType::Null)?),
+        )?;
+        // A nested occurrence of the CTE `id`, which owns the scans below it.
+        let nested_same = MaterializedCte::try_new(
+            id,
+            "c",
+            empty_with_type(DataType::Int32),
+            Arc::new(cte_scan(id, "g", &DataType::Int32)?),
+        )?;
+        let continuation = LogicalPlanBuilder::from(cte_scan(id, "c", &DataType::Null)?)
+            .filter(exists(Arc::new(cte_scan(id, "d", &DataType::Null)?)))?
+            .union(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                nested_other,
+            )))?
+            .union(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                nested_same,
+            )))?
+            .union(cte_scan(unrelated, "h", &DataType::Null)?)?
+            .build()?;
+
+        let continuation = with_materialized_cte_scan_schema(continuation, id, &body_schema)?;
+
+        assert_eq!(
+            cte_scan_fields(&continuation)?,
+            vec![
+                (id, "c".to_string(), DataType::Int64),
+                (id, "d".to_string(), DataType::Int64),
+                (id, "e".to_string(), DataType::Int64),
+                (id, "f".to_string(), DataType::Int64),
+                (id, "g".to_string(), DataType::Int32),
+                (unrelated, "h".to_string(), DataType::Null),
+            ]
+        );
+        Ok(())
     }
 }
