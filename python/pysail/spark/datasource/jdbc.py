@@ -202,19 +202,11 @@ class JdbcDataSourceReader(DataSourceReader):
 
     def partitions(self) -> list[InputPartition]:
         base = self._base_ref()
-
-        if self.num_partitions <= 1 or self.partition_column is None or self.lower_bound == self.upper_bound:
-            # Single partition — may include pushed-down filters
-            where = _build_where(self._sql_filters)
-            q = f"SELECT * FROM {base}{where}"  # noqa: S608
-            return [JdbcInputPartition(0, q, self.conn_str)]
-
-        # Range-stride partitioning
-        col = _quote_identifier(self.partition_column)  # type: ignore[arg-type]
         lb = self.lower_bound
         ub = self.upper_bound
         n = self.num_partitions
-        if ub - lb < n:  # type: ignore[operator]
+
+        if n > 1 and self.partition_column is not None and lb != ub and ub - lb < n:  # type: ignore[operator]
             # Same as Spark: cap the partition count so that every stride is at least 1.
             logger.warning(
                 "The number of partitions is reduced because the specified number of partitions is less than "
@@ -226,6 +218,15 @@ class JdbcDataSourceReader(DataSourceReader):
                 ub,
             )
             n = ub - lb  # type: ignore[operator]
+
+        if n <= 1 or self.partition_column is None or lb == ub:
+            # Single partition — may include pushed-down filters
+            where = _build_where(self._sql_filters)
+            q = f"SELECT * FROM {base}{where}"  # noqa: S608
+            return [JdbcInputPartition(0, q, self.conn_str)]
+
+        # Range-stride partitioning
+        col = _quote_identifier(self.partition_column)
         stride = (ub - lb) / n  # type: ignore[operator]
 
         parts: list[InputPartition] = []

@@ -741,6 +741,11 @@ def test_partitions_capped_by_bound_range_unit(caplog):
     assert "Updated number of partitions: 3" in caplog.text
 
 
+def test_partitions_capped_to_one_unit(caplog):
+    assert _partition_queries(num_partitions=10, lower_bound=0, upper_bound=1) == ["SELECT * FROM t"]
+    assert "Updated number of partitions: 1" in caplog.text
+
+
 def test_partitions_exact_stride_unit(caplog):
     assert _partition_queries(num_partitions=4, lower_bound=0, upper_bound=4) == [
         'SELECT * FROM t WHERE ("id" < 1 OR "id" IS NULL)',
