@@ -1503,6 +1503,36 @@ async fn test_insert_into_temporary_view_does_not_load_a_catalog_table() -> Test
 }
 
 #[tokio::test]
+async fn test_insert_into_temporary_view_with_relations_writes_to_its_data_source() -> TestResult {
+    let fixture = Fixture::try_new(&[]).await?;
+    let source = RecordingDataSource::new("recording");
+    fixture
+        .session
+        .extension::<DataSourceRegistry>()?
+        .register_data_source(Arc::clone(&source) as Arc<dyn DataSource>)?;
+    // A temporary view over a data source, created by a command with DataFrame arguments.
+    let spec::Plan::Command(create) = from_ast_statement(parse_one_statement(
+        "CREATE TEMPORARY VIEW t USING recording OPTIONS (path 'memory:///view')",
+    )?)?
+    else {
+        return Err("CREATE TEMPORARY VIEW is not a command".into());
+    };
+    let mut reference = read_path("recording", "memory:///other", &[]);
+    reference.plan_id = Some(1);
+    let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::WithRelations {
+        root: Box::new(create),
+        references: vec![reference],
+    }));
+    let plan = fixture.resolver().resolve_named_plan(plan).await?.plan;
+    fixture.execute_plan(plan).await?;
+    let resolution = fixture.resolve("INSERT INTO t VALUES (1, 2)").await?;
+    assert_eq!(resolution.error, None);
+    assert_eq!(resolution.requests, Vec::<String>::new());
+    assert_eq!(source.written.lock().map_err(|e| e.to_string())?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_writes_to_missing_tables_and_views_are_rejected() -> TestResult {
     let fixture = Fixture::try_new(&[
         "CREATE VIEW tv AS SELECT * FROM t",
