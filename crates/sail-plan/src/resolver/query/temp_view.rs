@@ -12,6 +12,7 @@
 //! one version of the table. Only the columns that the stored plan reads must be as they
 //! were when the view was created.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -1213,17 +1214,37 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Whether `current` has a field, also in a struct, that `stored` does not have.
+/// Whether `current` has a field, also in a struct, that `stored` does not have. A field
+/// matches the first stored field of its name (see [`same_name`]).
 fn has_new_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> bool {
+    // A name matches the names that it is equal to, or that have its lowercase letters if
+    // the letter case is ignored, as `same_name` matches them.
+    fn key(name: &str, case_sensitive: bool) -> Cow<'_, str> {
+        if case_sensitive {
+            Cow::Borrowed(name)
+        } else {
+            Cow::Owned(name.to_lowercase())
+        }
+    }
+    if stored == current {
+        return false;
+    }
+    let mut first = HashMap::with_capacity(stored.len());
+    for field in stored.iter() {
+        first
+            .entry(key(field.name(), case_sensitive))
+            .or_insert(field);
+    }
     current.iter().any(|field| {
-        let old = stored
-            .iter()
-            .find(|x| same_name(x.name(), field.name(), case_sensitive));
-        match (old.map(|x| x.data_type()), field.data_type()) {
+        match (
+            first.get(key(field.name(), case_sensitive).as_ref()),
+            field.data_type(),
+        ) {
             (None, _) => true,
-            (Some(DataType::Struct(old)), DataType::Struct(new)) => {
-                has_new_fields(old, new, case_sensitive)
-            }
+            (Some(old), DataType::Struct(new)) => match old.data_type() {
+                DataType::Struct(old) => has_new_fields(old, new, case_sensitive),
+                _ => false,
+            },
             _ => false,
         }
     })
@@ -2090,6 +2111,78 @@ mod tests {
             read_of(&in_list(user("{}")), &in_list(user("{\"x\":1}"))),
             Ok(Read::Cast)
         );
+    }
+
+    #[test]
+    fn test_new_fields_are_found_at_each_level_of_structs() {
+        let inner = |names: &[&str]| {
+            DataType::Struct(Fields::from(
+                names
+                    .iter()
+                    .map(|x| field(x, DataType::Int32))
+                    .collect::<Vec<_>>(),
+            ))
+        };
+        let fields = |s: DataType, extra: &[&str]| {
+            let mut fields = vec![field("a", DataType::Int32), field("s", s)];
+            fields.extend(extra.iter().map(|x| field(x, DataType::Int32)));
+            Fields::from(fields)
+        };
+        let stored = fields(inner(&["x", "y"]), &[]);
+        let cases = [
+            (fields(inner(&["x", "y"]), &[]), true, false),
+            (fields(inner(&["x", "y"]), &["b"]), true, true),
+            (fields(inner(&["x", "y", "z"]), &[]), true, true),
+            (fields(inner(&["y", "x"]), &[]), true, false),
+            (
+                Fields::from(vec![
+                    field("s", inner(&["x", "y"])),
+                    field("a", DataType::Int32),
+                ]),
+                true,
+                false,
+            ),
+            (fields(inner(&["X", "Y"]), &[]), true, true),
+            (fields(inner(&["X", "Y"]), &[]), false, false),
+            (
+                Fields::from(vec![
+                    field("A", DataType::Int32),
+                    field("S", inner(&["x", "y"])),
+                ]),
+                false,
+                false,
+            ),
+            // A list or a map of structs is not compared field by field.
+            (
+                fields(
+                    DataType::List(Arc::new(field("item", inner(&["x", "y", "z"])))),
+                    &[],
+                ),
+                true,
+                false,
+            ),
+        ];
+        for (current, case_sensitive, expected) in cases {
+            assert_eq!(
+                has_new_fields(&stored, &current, case_sensitive),
+                expected,
+                "{current:?}"
+            );
+        }
+        // A field matches the first stored field of its name.
+        let stored = Fields::from(vec![
+            field("s", inner(&["x"])),
+            field("s", inner(&["x", "y"])),
+        ]);
+        let current = Fields::from(vec![field("s", inner(&["x", "y"]))]);
+        assert!(has_new_fields(&stored, &current, true));
+        // Names that are not ASCII match by their lowercase letters, also the Kelvin sign.
+        for (stored, current) in [("\u{e4}", "\u{c4}"), ("k", "\u{212a}")] {
+            let stored = Fields::from(vec![field(stored, DataType::Int32)]);
+            let current = Fields::from(vec![field(current, DataType::Int32)]);
+            assert!(!has_new_fields(&stored, &current, false));
+            assert!(has_new_fields(&stored, &current, true));
+        }
     }
 
     #[test]
