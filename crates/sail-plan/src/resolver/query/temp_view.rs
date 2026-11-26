@@ -26,7 +26,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, ScalarValue, TableReference};
+use datafusion_common::{Column, JoinType, ScalarValue, TableReference};
 use datafusion_expr::expr::{Cast, Exists, InSubquery, SetComparison};
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, SubqueryAlias, TableScan, TableScanBuilder,
@@ -1540,6 +1540,15 @@ impl ReadColumns<'_> {
                     }
                 }
             }
+            // A mark join returns each row of its left input, and whether a row of its right
+            // input matches it, as the join of an `EXISTS` subquery in a projection.
+            LogicalPlan::Join(join) if join.join_type == JoinType::LeftMark => {
+                if let Some(mark) = join.schema.fields().last() {
+                    for expr in node.expressions() {
+                        self.expr(&expr, ReadFor::Output(mark.name()))?;
+                    }
+                }
+            }
             // These operators read the columns that their expressions refer to, and pass the
             // columns of their inputs on under their names.
             LogicalPlan::Filter(_)
@@ -2515,12 +2524,30 @@ mod tests {
         assert_eq!(read(&plan, &reads, address)?, [0, 1]);
         let (u, other) = read_table(&mut reads, "u")?;
         let keys = (col("t_c") + lit(1)).eq(col("u_b"));
-        let plan = LogicalPlanBuilder::from(t)
-            .join_on(u, JoinType::Inner, vec![keys])?
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .join_on(u.clone(), JoinType::Inner, vec![keys])?
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(read(&plan, &reads, address)?, [0, 2]);
         assert_eq!(read(&plan, &reads, other)?, [1]);
+        // A mark join, as of an `EXISTS` subquery in a projection, returns all the rows of
+        // its left input, and reads its condition for the mark.
+        let mark = |columns: Vec<Expr>| {
+            LogicalPlanBuilder::from(t.clone())
+                .join_on(
+                    u.clone(),
+                    JoinType::LeftMark,
+                    vec![col("t_b").eq(col("u_a"))],
+                )?
+                .project(columns)?
+                .build()
+        };
+        let plan = mark(vec![col("t_a")])?;
+        assert_eq!(read(&plan, &reads, address)?, [0]);
+        assert_eq!(read(&plan, &reads, other)?, Vec::<usize>::new());
+        let plan = mark(vec![col("t_a"), col("mark")])?;
+        assert_eq!(read(&plan, &reads, address)?, [0, 1]);
+        assert_eq!(read(&plan, &reads, other)?, [0]);
         Ok(())
     }
 
