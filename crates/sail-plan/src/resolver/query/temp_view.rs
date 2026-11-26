@@ -1217,21 +1217,13 @@ impl PlanResolver<'_> {
                 Some(lookup) => Ok(lookup),
                 None => {
                     let request = Self::catalog_table_lookup_request(&origin.name);
-                    match table.get_lakehouse_table(request).await {
-                        Ok(lookup) => {
-                            state.insert_session_catalog_table_lookup(
-                                table,
-                                origin.name.clone(),
-                                lookup.clone(),
-                            );
-                            Ok(lookup)
-                        }
-                        Err(CatalogError::NotFound(object, name)) => Err(CatalogError::NotFound(
-                            object,
-                            format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),
-                        )),
-                        Err(error) => Err(error),
-                    }
+                    table.get_lakehouse_table(request).await.inspect(|lookup| {
+                        state.insert_session_catalog_table_lookup(
+                            table,
+                            origin.name.clone(),
+                            lookup.clone(),
+                        );
+                    })
                 }
             }
             .map(|(status, resolved)| (status, Some(resolved))),
@@ -1239,10 +1231,15 @@ impl PlanResolver<'_> {
         };
         let (status, resolved) = match lookup {
             Ok(lookup) => lookup,
-            Err(CatalogError::NotFound(object, message)) => {
+            Err(CatalogError::NotFound(object, _)) => {
                 return Err(CatalogError::NotFound(
                     object,
-                    format!("{message} (read by the temporary view {})", view_name(view)),
+                    format!(
+                        "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {} (read by the \
+                        temporary view {})",
+                        quote_names(&origin.name),
+                        view_name(view),
+                    ),
                 )
                 .into());
             }

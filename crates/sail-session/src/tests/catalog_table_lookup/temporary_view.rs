@@ -707,7 +707,10 @@ async fn temporary_view_of_a_missing_table_is_not_found() -> TestResult {
         assert!(resolution.sources.is_empty(), "{view}");
         let error = resolution.error.ok_or("missing error")?;
         assert!(
-            error.contains("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: t"),
+            error.contains(
+                "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: `sail`.`default`.`t` \
+                (read by the temporary view"
+            ),
             "{error}"
         );
     }
