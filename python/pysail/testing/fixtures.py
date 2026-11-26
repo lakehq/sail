@@ -3,6 +3,7 @@
 import importlib
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -19,18 +20,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """Configure both installed sanity tests and development tests."""
     config.pluginmanager.import_plugin("pysail.testing.suites")
-    # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
-    # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
-    # Since clearing the cache requires access to the private attribute of `config`, we do not
-    # do it here unless absolutely necessary, to avoid compatibility issues with future versions
-    # of pytest.
-    # In common cases, plugins only access the configuration for the first time after this hook,
-    # so the cache is not a problem.
-    config.inicfg["doctest_optionflags"] = [
-        "ELLIPSIS",
-        "NORMALIZE_WHITESPACE",
-        "IGNORE_EXCEPTION_DETAIL",
-    ]
+    if config.pluginmanager.has_plugin("doctest"):
+        config.getini("doctest_optionflags")[:] = ["ELLIPSIS", "NORMALIZE_WHITESPACE", "IGNORE_EXCEPTION_DETAIL"]
+
+    # Small test inputs intentionally exercise window plans without a partition key.
+    config.addinivalue_line(
+        "filterwarnings",
+        r"ignore:WARN WindowExpression\x3a No Partition Defined for Window operation!:UserWarning:"
+        r"pyspark\.sql\.connect\.expressions$",
+    )
+    # Older supported PySpark clients use these deprecated APIs internally.
+    for warning in (
+        r"ignore:The distutils package is deprecated:DeprecationWarning:pyspark\.sql\.pandas\.utils$",
+        r"ignore:is_categorical_dtype is deprecated:DeprecationWarning:pyspark\.sql\.pandas\.serializers$",
+        r"ignore:is_datetime64tz_dtype is deprecated:DeprecationWarning:pyspark\.sql\.(pandas\.types|connect\.session)$",
+        r"ignore:The 'warn' method is deprecated:DeprecationWarning:pyspark\.logger\.logger$",
+    ):
+        config.addinivalue_line("filterwarnings", warning)
 
     # Default Syrupy snapshot format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
     default_ext = getattr(config.option, "default_extension", None)
@@ -41,6 +47,19 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report():
+    # With --pyargs, pytest can load this plugin after it applies its collection warning filters.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="The distutils package is deprecated",
+            category=DeprecationWarning,
+            module=r"pyspark\.sql\.pandas\.utils$",
+        )
+        return (yield)
 
 
 @pytest.fixture(scope="session", autouse=True)

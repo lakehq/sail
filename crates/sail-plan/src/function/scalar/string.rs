@@ -309,7 +309,11 @@ fn length_argument(input: ScalarFunctionInput, name: &str) -> PlanResult<expr::E
         | DataType::Union(_, _) => Err(PlanError::invalid(format!(
             "`{name}` does not support {data_type} input"
         ))),
-        _ => Ok(ScalarUDF::from(ToUtf8::new()).call(vec![arg])),
+        _ => Ok(ScalarUDF::from(
+            ToUtf8::new()
+                .with_timezone(Some(function_context.plan_config.session_timezone.clone())),
+        )
+        .call(vec![arg])),
     }
 }
 
@@ -393,7 +397,7 @@ fn implicit_string_argument(
             }
             ScalarUDF::new_from_impl(
                 ToUtf8::new()
-                    .with_timezone(Some(function_context.plan_config.session_timezone_label())),
+                    .with_timezone(Some(function_context.plan_config.session_timezone.clone())),
             )
             .call(arguments)
         }
@@ -471,8 +475,7 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .map_err(|_| PlanError::invalid("to_char requires 2 arguments"))?;
     match value.get_type(function_context.schema)? {
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-            let timezone = function_context.plan_config.session_timezone.clone();
-            Ok(date_format(value, format, timezone.to_string()))
+            date_format(value, format, &function_context)
         }
         DataType::Binary
         | DataType::LargeBinary

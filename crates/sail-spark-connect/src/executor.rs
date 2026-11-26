@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,8 +13,7 @@ use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
-use futures::stream::StreamExt;
-use futures::{Stream, stream};
+use futures::stream::{self, BoxStream, StreamExt};
 use sail_common_datafusion::schema::{
     normalize_record_batch, record_batch_has_views, spark_arrow_schema,
 };
@@ -63,8 +61,6 @@ impl ExecutorOutput {
         Self::new(ExecutorBatch::Complete)
     }
 }
-
-pub type ExecutorOutputStream = Pin<Box<dyn Stream<Item = SparkResult<ExecutorOutput>> + Send>>;
 
 struct ExecutorBuffer {
     capacity: usize,
@@ -377,7 +373,10 @@ impl Executor {
     ) -> ExecutorTaskResult {
         let out = tokio::select! {
             x = Executor::run_internal(&mut context, &tx, reattachable) => x,
-            _ = listener => return ExecutorTaskResult::Paused(context),
+            pause = listener => match pause {
+                Ok(()) => return ExecutorTaskResult::Paused(context),
+                Err(_) => Err(SparkError::internal("query cancelled because its executor was dropped")),
+            },
         };
         match out {
             Ok(()) => ExecutorTaskResult::Completed,
@@ -392,7 +391,7 @@ impl Executor {
         }
     }
 
-    pub(crate) fn start(&self) -> SparkResult<ExecutorOutputStream> {
+    pub(crate) fn start(&self) -> SparkResult<BoxStream<'static, SparkResult<ExecutorOutput>>> {
         let mut state = self.state.lock()?;
         let (context, span) = match mem::replace(state.deref_mut(), ExecutorState::Idle) {
             ExecutorState::Pending { context, span } => (context, span),

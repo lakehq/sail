@@ -2612,12 +2612,7 @@ fn columns_to_nested_fields(
         } = col;
 
         let arrow_field = arrow::datatypes::Field::new(name, data_type.clone(), *nullable)
-            .with_metadata(
-                metadata
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            );
+            .with_metadata(metadata.iter().collect::<arrow::datatypes::Metadata>());
         let field_type = arrow_field_to_iceberg(&arrow_field)
             .map_err(CatalogError::DataFusionError)?
             .field_type
@@ -2926,6 +2921,35 @@ mod tests {
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     use super::*;
+
+    #[test]
+    fn partition_statistics_updates_round_trip_through_rest_commit() -> serde_json::Result<()> {
+        use sail_iceberg::spec::{PartitionStatisticsFile, TableUpdate};
+
+        for (update, expected) in [
+            (
+                TableUpdate::SetPartitionStatistics {
+                    partition_statistics: PartitionStatisticsFile {
+                        snapshot_id: 17,
+                        statistics_path: "file:///stats.parquet".to_owned(),
+                        file_size_in_bytes: 401,
+                    },
+                },
+                serde_json::json!({"action": "set-partition-statistics", "partition-statistics": {
+                    "snapshot-id": 17, "statistics-path": "file:///stats.parquet", "file-size-in-bytes": 401
+                }}),
+            ),
+            (
+                TableUpdate::RemovePartitionStatistics { snapshot_id: 17 },
+                serde_json::json!({"action": "remove-partition-statistics", "snapshot-id": 17}),
+            ),
+        ] {
+            let rest: crate::r#gen::TableUpdate =
+                serde_json::from_value(serde_json::to_value(update)?)?;
+            assert_eq!(serde_json::to_value(rest)?, expected);
+        }
+        Ok(())
+    }
 
     struct TestContext {
         name: String,

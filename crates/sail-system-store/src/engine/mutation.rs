@@ -109,6 +109,28 @@ where
             status,
             created_at,
         ),
+        SystemEvent::StageResized {
+            session_id,
+            job_id,
+            stage,
+            partitions,
+            inputs,
+            distribution,
+        } => writer
+            .table_mut::<StageTable>()
+            .update_if_present(
+                &StagePrimaryKey {
+                    session_id,
+                    job_id,
+                    stage,
+                },
+                |row| {
+                    row.partitions = partitions;
+                    row.inputs = inputs;
+                    row.distribution = distribution;
+                },
+            )
+            .map(|_| ()),
         SystemEvent::StageUpdated {
             session_id,
             job_id,

@@ -17,7 +17,7 @@ pub(crate) fn ancestors_output(
 ) -> Result<RecordBatch> {
     let start = optional_i64(invocation, "snapshot_id")?.or_else(|| main_snapshot_id(metadata));
     let Some(start) = start else {
-        return Ok(RecordBatch::new_empty(invocation.procedure.schema()));
+        return plan_err!("Cannot find snapshot: -1");
     };
     let ancestors = ancestor_chain(metadata, start)?;
     let snapshot_ids = ancestors
@@ -86,6 +86,8 @@ impl SnapshotOperation {
                 let target = ancestor_chain(metadata, previous)?
                     .into_iter()
                     .filter(|snapshot| snapshot.timestamp_ms() < *timestamp_ms)
+                    // Ancestors are newest first. On a timestamp tie, keep the nearest one.
+                    .rev()
                     .max_by_key(|snapshot| snapshot.timestamp_ms())
                     .map(Snapshot::snapshot_id)
                     .ok_or_else(|| {

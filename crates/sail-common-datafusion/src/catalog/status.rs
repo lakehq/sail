@@ -597,22 +597,19 @@ mod tests {
 
     #[test]
     fn alter_type_replaces_uuid_marker_and_preserves_column_metadata() -> Result<()> {
-        let field = Field::new("u", DataType::FixedSizeBinary(16), false).with_metadata(
-            [
-                (
-                    crate::uuid::UUID_METADATA_KEY.into(),
-                    UUID_EXTENSION_NAME.into(),
-                ),
-                ("custom".into(), "retained".into()),
-                ("PARQUET:field_id".into(), "7".into()),
-                ("comment".into(), "retained doc".into()),
-                (
-                    ColumnFeatureKey::CurrentDefault.as_str().into(),
-                    "NULL".into(),
-                ),
-            ]
-            .into(),
-        );
+        let field = Field::new("u", DataType::FixedSizeBinary(16), false).with_metadata([
+            (
+                crate::uuid::UUID_METADATA_KEY.to_owned(),
+                UUID_EXTENSION_NAME.to_owned(),
+            ),
+            ("custom".to_owned(), "retained".to_owned()),
+            ("PARQUET:field_id".to_owned(), "7".to_owned()),
+            ("comment".to_owned(), "retained doc".to_owned()),
+            (
+                ColumnFeatureKey::CurrentDefault.as_str().to_owned(),
+                "NULL".to_owned(),
+            ),
+        ]);
         let mut columns = vec![];
         replace_columns(&mut columns, &Schema::new(vec![field.clone()]));
         alter_column_type(
@@ -684,12 +681,10 @@ mod tests {
     #[test]
     fn alter_type_only_removes_uuid_extension_metadata() -> Result<()> {
         for name in [UUID_EXTENSION_NAME, "parquet.variant", "other.extension"] {
-            let metadata = [
-                (EXTENSION_TYPE_NAME_KEY.into(), name.into()),
-                (EXTENSION_TYPE_METADATA_KEY.into(), String::new()),
-                ("custom".into(), "retained".into()),
-            ]
-            .into();
+            let metadata = arrow_schema::Metadata::new()
+                .with(EXTENSION_TYPE_NAME_KEY, name)
+                .with(EXTENSION_TYPE_METADATA_KEY, "")
+                .with("custom", "retained");
             let field =
                 Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(metadata);
             let mut expected = field.clone();
@@ -716,19 +711,19 @@ mod tests {
 
     #[test]
     fn alter_type_to_uuid_clears_former_extension_parameters() -> Result<()> {
-        let source = Field::new("u", DataType::Binary, true).with_metadata(
-            [
-                (EXTENSION_TYPE_NAME_KEY.into(), "geoarrow.wkb".into()),
-                (
-                    EXTENSION_TYPE_METADATA_KEY.into(),
-                    r#"{"crs":"EPSG:4326"}"#.into(),
-                ),
-                ("custom".into(), "retained".into()),
-            ]
-            .into(),
-        );
+        let source = Field::new("u", DataType::Binary, true).with_metadata([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                "geoarrow.wkb".to_owned(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                r#"{"crs":"EPSG:4326"}"#.to_owned(),
+            ),
+            ("custom".to_owned(), "retained".to_owned()),
+        ]);
         let expected = Field::new("u", DataType::FixedSizeBinary(16), true)
-            .with_metadata([("custom".into(), "retained".into())].into())
+            .with_metadata([("custom".to_owned(), "retained".to_owned())])
             .with_extension_type(arrow_schema::extension::Uuid);
         let marker = vec![(EXTENSION_TYPE_NAME_KEY.into(), UUID_EXTENSION_NAME.into())];
         let mut columns = vec![];
@@ -754,17 +749,17 @@ mod tests {
     #[test]
     fn dropped_default_is_not_restored_by_column_changes() -> Result<()> {
         let typed_default = encode_field_default(&ScalarValue::Int32(None))?;
-        let field = Field::new("x", DataType::Int32, true).with_metadata(
-            [
-                (ColumnFeatureKey::CurrentDefault.as_str().into(), "7".into()),
-                (
-                    ColumnFeatureKey::CurrentDefaultValue.as_str().into(),
-                    typed_default.clone(),
-                ),
-                ("custom".into(), "retained".into()),
-            ]
-            .into(),
-        );
+        let field = Field::new("x", DataType::Int32, true).with_metadata([
+            (
+                ColumnFeatureKey::CurrentDefault.as_str().to_owned(),
+                "7".to_owned(),
+            ),
+            (
+                ColumnFeatureKey::CurrentDefaultValue.as_str().to_owned(),
+                typed_default.clone(),
+            ),
+            ("custom".to_owned(), "retained".to_owned()),
+        ]);
         let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
             .with_extension_type(arrow_schema::extension::Uuid);
         let mut columns = vec![];
@@ -787,15 +782,13 @@ mod tests {
         assert_eq!(columns[0].default, None);
         assert_eq!(
             columns[0].field().metadata(),
-            &[
-                (
-                    ColumnFeatureKey::CurrentDefaultValue.as_str().into(),
+            &arrow_schema::Metadata::new()
+                .with(
+                    ColumnFeatureKey::CurrentDefaultValue.as_str(),
                     typed_default
-                ),
-                ("custom".into(), "retained".into()),
-                ("comment".into(), "updated".into()),
-            ]
-            .into()
+                )
+                .with("custom", "retained")
+                .with("comment", "updated")
         );
         assert_eq!(columns[1].field(), uuid);
         Ok(())

@@ -323,12 +323,24 @@ impl RewriteManifests {
                     .map(|(_, origin, entry)| (origin, entry))
                     .unzip();
                 let retained_before_group = budget.used;
+                // Plan the initial ranges from the source manifest sizes, as Iceberg does.
+                // Compression of the rewritten entries can otherwise collapse all ranges.
+                let source_bytes: u64 = group
+                    .sources
+                    .iter()
+                    .map(|source| source.manifest_length as u64)
+                    .sum();
+                let target_count = source_bytes
+                    .div_ceil(target_size)
+                    .clamp(1, entries.len().max(1) as u64)
+                    as usize;
                 let candidates = encode_manifests_with_budget(
                     &group.metadata,
                     &entries,
                     target_size,
                     sequence_number,
                     snapshot_id,
+                    target_count,
                     &mut budget,
                 )?;
                 // Avoid rewriting identical groups, including indivisible oversized entries.
@@ -557,6 +569,7 @@ fn encode_manifests(
         target_size,
         sequence_number,
         snapshot_id,
+        1,
         &mut OutputBudget::new(MAX_OUTPUT_BYTES),
     )
 }
@@ -567,9 +580,17 @@ fn encode_manifests_with_budget(
     target_size: u64,
     sequence_number: i64,
     snapshot_id: i64,
+    target_count: usize,
     budget: &mut OutputBudget,
 ) -> Result<Vec<EncodedManifest>> {
-    let mut pending = std::iter::once(0..entries.len()).collect::<Vec<_>>();
+    let mut pending = (0..target_count)
+        .rev()
+        .map(|index| {
+            let boundary =
+                |i: usize| i * (entries.len() / target_count) + i.min(entries.len() % target_count);
+            boundary(index)..boundary(index + 1)
+        })
+        .collect::<Vec<_>>();
     let mut output = vec![];
     while let Some(range) = pending.pop() {
         let chunk = &entries[range.clone()];
@@ -1090,6 +1111,7 @@ pub(crate) mod tests {
                         1,
                         1,
                         20,
+                        1,
                         &mut OutputBudget::new(limit),
                     );
                     assert_eq!(
@@ -1102,13 +1124,13 @@ pub(crate) mod tests {
                 // Each group fits individually, but none may reset the shared budget.
                 budget.limit = total + size - 1;
                 assert!(
-                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, &mut budget)
+                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, 1, &mut budget)
                         .is_err()
                 );
                 assert_eq!(budget.used, total);
                 budget.limit += 1;
                 let output =
-                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, &mut budget)
+                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, 1, &mut budget)
                         .expect("exact cumulative budget");
                 total += output[0].bytes.len();
                 assert_eq!(budget.used, total);

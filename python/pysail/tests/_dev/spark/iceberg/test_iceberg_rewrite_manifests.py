@@ -223,6 +223,26 @@ def test_manifest_rewrite_rolls_large_manifests(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def test_partitioned_rewrite_plans_from_source_manifest_lengths(spark, tmp_path):
+    name = "manifest_source_lengths"
+    path = tmp_path / name
+    spark.sql(f"""CREATE TABLE {name} (id INT, p INT) USING iceberg PARTITIONED BY (p)
+        LOCATION '{escape_sql_string_literal(str(path))}'""")
+    try:
+        for i in range(4):
+            spark.sql(f"INSERT INTO {name} VALUES ({i}, 0), ({i}, 1)")
+        sources = _manifests(path)
+        assert len(sources) == 4
+        target = sum(manifest["manifest-length"] for manifest in sources) * 53 // 100
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='{target}')")
+        result = spark.sql(f"CALL system.rewrite_manifests(usE_cAcHiNg => false, tAbLe => '{name}')").first()
+        assert tuple(result) == (4, 2)
+        assert sorted(manifest["existing-files-count"] for manifest in _manifests(path)) == [4, 4]
+        assert sorted(tuple(row) for row in spark.table(name).collect()) == [(i, p) for i in range(4) for p in (0, 1)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 def test_equal_count_rewrite_reclusters_partition_groups(spark, tmp_path):
     name = "manifest_reclustering"
     path = tmp_path / name

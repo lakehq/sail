@@ -6,7 +6,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Array;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -122,12 +121,16 @@ impl TimestampParser {
                         .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
                 } else {
                     let timezone_name = parsed.timezone.as_deref().unwrap_or(default_timezone);
-                    let timezone: Tz = match timezone_name.parse() {
+                    let timezone = match SparkZone::parse(timezone_name) {
                         Ok(v) => v,
                         Err(_e) if is_try => return Ok(None),
-                        Err(e) => return Err(e.into()),
+                        Err(e) => return Err(e),
                     };
-                    match localize_with_fallback(&timezone, &parsed.datetime) {
+                    let localized = match timezone {
+                        SparkZone::Fixed(zone) => localize_with_fallback(&zone, &parsed.datetime),
+                        SparkZone::Named(zone) => localize_with_fallback(&zone, &parsed.datetime),
+                    };
+                    match localized {
                         Ok(v) => v,
                         Err(_e) if is_try => return Ok(None),
                         Err(e) => return Err(e),
@@ -233,7 +236,11 @@ impl Timestamp {
             TimestampParser::Ntz
         };
         Ok(Self {
-            timezone,
+            timezone: timezone.map(|zone| {
+                Arc::from(
+                    sail_common_datafusion::utils::datetime::arrow_timezone_label(&zone).as_ref(),
+                )
+            }),
             parser,
             // Time-only inputs depend on the current date, but remain stable within a query.
             signature: Signature::variadic_any(Volatility::Stable),
@@ -243,7 +250,10 @@ impl Timestamp {
     }
 
     pub fn timezone(&self) -> Option<&str> {
-        self.timezone.as_deref()
+        match &self.parser {
+            TimestampParser::Ntz => None,
+            TimestampParser::Ltz { default_timezone } => Some(default_timezone),
+        }
     }
 
     pub fn ansi_mode(&self) -> bool {

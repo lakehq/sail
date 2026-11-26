@@ -49,6 +49,7 @@ impl Actor for SessionManagerActor {
             session_factory,
             job_runner_factory,
             driver_gateway,
+            shutdown,
             event_reporter,
         } = components;
         Self {
@@ -60,6 +61,7 @@ impl Actor for SessionManagerActor {
             drivers: Default::default(),
             driver_gateway,
             driver_id_generator: IdGenerator::new(),
+            shutdown,
             shutdown_notifier: None,
             event_reporter,
         }

@@ -277,7 +277,19 @@ pub(super) async fn plan_rewrite_data_files(
             } else {
                 None
             };
+            // A partition-wide delete file can include records for other data files.
+            let deleted_records = deletes
+                .positional
+                .iter()
+                .filter(|delete| {
+                    crate::spec::delete_index::referenced_path(&delete.data_file).is_some()
+                })
+                .map(|delete| delete.data_file.record_count)
+                .fold(0u64, u64::saturating_add);
             let mut file = RewriteFile::from(entry.data_file);
+            // Iceberg's default delete-ratio-threshold is 0.3, inclusive.
+            file.high_delete_ratio =
+                file.record_count > 0 && (deleted_records as f64 / file.record_count as f64) >= 0.3;
             file.identity_partition_defaults = defaults;
             file.rewrite_scan_context = scan_context;
             Ok(Some(file))
@@ -388,7 +400,7 @@ fn validate_arguments(call: &LakeProcedureCall) -> Result<()> {
         return not_impl_err!("rewrite_data_files where predicates are not implemented yet");
     }
     if optional_string(invocation, "branch")?
-        .is_some_and(|branch| !branch.eq_ignore_ascii_case("main"))
+        .is_some_and(|branch| branch != crate::spec::snapshots::MAIN_BRANCH)
     {
         return not_impl_err!("rewrite_data_files currently supports only the main branch");
     }
@@ -407,6 +419,7 @@ struct RewriteOptions {
 
 /// Only retain fields needed for grouping; manifest column metrics stay out of the driver plan.
 struct RewriteFile {
+    high_delete_ratio: bool,
     content: DataContentType,
     file_path: String,
     file_format: DataFileFormat,
@@ -421,6 +434,7 @@ struct RewriteFile {
 impl From<DataFile> for RewriteFile {
     fn from(file: DataFile) -> Self {
         Self {
+            high_delete_ratio: false,
             content: file.content,
             file_path: file.file_path,
             file_format: file.file_format,
@@ -526,10 +540,16 @@ fn select_file_groups(
         .filter(|file| matches!(file.content, DataContentType::Data))
         .filter(|file| {
             options.rewrite_all
+                || file.high_delete_ratio
                 || file.file_size_in_bytes < options.min_file_size
                 || file.file_size_in_bytes > options.max_file_size
         })
         .collect::<Vec<_>>();
+    let delete_candidates: HashSet<_> = candidates
+        .iter()
+        .filter(|file| file.high_delete_ratio)
+        .map(|file| file.file_path.as_str())
+        .collect();
     let unsupported_files = candidates
         .iter()
         .filter(|file| file.file_format != DataFileFormat::Parquet)
@@ -548,8 +568,15 @@ fn select_file_groups(
         let enough_input_files = group.len() > 1 && group.len() >= options.min_input_files;
         let enough_content = group.len() > 1 && input_size > options.target_file_size;
         let oversized_content = input_size > options.max_file_size;
+        let high_delete_ratio = group
+            .iter()
+            .any(|file| delete_candidates.contains(file.path.as_str()));
         if !group.is_empty()
-            && (options.rewrite_all || enough_input_files || enough_content || oversized_content)
+            && (options.rewrite_all
+                || enough_input_files
+                || enough_content
+                || oversized_content
+                || high_delete_ratio)
         {
             if group
                 .iter()
@@ -647,6 +674,7 @@ mod tests {
 
     fn data_file(path: &str, size: u64, partition: i32) -> RewriteFile {
         RewriteFile {
+            high_delete_ratio: false,
             content: DataContentType::Data,
             file_path: path.to_string(),
             file_format: DataFileFormat::Parquet,
@@ -686,6 +714,40 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec!["p1-a", "p1-b", "p3-large"]);
+        Ok(())
+    }
+
+    // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/test/java/org/apache/iceberg/actions/TestBinPackRewriteFilePlanner.java#L371-L453
+    #[test]
+    fn binpack_selects_groups_by_file_count_or_content_size() -> Result<()> {
+        for (sizes, min, target, max, min_count, expected) in [
+            (vec![100, 450, 1000], 250, 500, 750, 5, vec![100, 1000]),
+            (vec![100; 4], 150, 1000, 5000, 3, vec![100; 4]),
+            (vec![100; 3], 200, 250, 500, 5, vec![100; 3]),
+            (vec![2000], 200, 250, 500, 5, vec![2000]),
+            (vec![10, 20, 30], 30, 500, 750, 1, vec![10, 20]),
+        ] {
+            let files = sizes
+                .iter()
+                .enumerate()
+                .map(|(index, &size)| data_file(&format!("file-{index}"), size, 0))
+                .collect::<Vec<_>>();
+            let options = RewriteOptions {
+                min_file_size: min,
+                target_file_size: target,
+                max_file_size: max,
+                min_input_files: min_count,
+                rewrite_all: false,
+                max_file_group_size: DEFAULT_MAX_FILE_GROUP_SIZE,
+                max_concurrent_file_groups: DEFAULT_MAX_CONCURRENT_FILE_GROUPS,
+            };
+            let groups = select_file_groups(&files, &options)?;
+            assert_eq!(groups.len(), 1);
+            assert_eq!(
+                groups[0].iter().map(|file| file.size).collect::<Vec<_>>(),
+                expected
+            );
+        }
         Ok(())
     }
 

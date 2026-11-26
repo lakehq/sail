@@ -8,13 +8,14 @@ use std::str::FromStr;
 
 use datafusion::common::Result;
 use datafusion::common::config::{MaxRowGroupBytes, ParquetOptions};
-use datafusion::common::parquet_config::DFParquetWriterVersion;
+use datafusion::common::parquet_config::{DFParquetWriterVersion, DFTimeUnit};
 use datafusion::prelude::SessionContext;
 pub use job_runner::{
     ServerSessionJobRunnerFactory, SessionJobRunner, SessionJobRunnerFactory, SessionJobRunnerInfo,
 };
 use sail_common::config::{ParquetConfig, TemporaryFileCompression};
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
+use sail_data_source::formats::parquet::parse_parquet_compression;
 pub use server::{ServerSessionFactory, ServerSessionInfo, ServerSessionMutator};
 pub use worker::WorkerSessionFactory;
 
@@ -38,7 +39,7 @@ fn temporary_file_compression(
 }
 
 // Apply the same Parquet settings when planning on the server or building scans on workers.
-fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
+fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) -> Result<()> {
     parquet.created_by = SAIL_PARQUET_CREATED_BY.to_string();
     parquet.enable_page_index = config.enable_page_index;
     parquet.pruning = config.pruning;
@@ -51,16 +52,16 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.binary_as_string = config.binary_as_string;
     parquet.max_predicate_cache_size = Some(config.max_predicate_cache_size);
     parquet.max_in_list_size = config.max_in_list_size;
-    parquet.coerce_int96 = Some("us".to_string());
+    parquet.coerce_int96 = Some(DFTimeUnit::Microsecond);
     parquet.data_pagesize_limit = config.data_page_size_limit;
     parquet.write_batch_size = config.write_batch_size;
     parquet.writer_version =
         DFParquetWriterVersion::from_str(config.writer_version.as_str()).unwrap_or_default();
     parquet.skip_arrow_metadata = config.skip_arrow_metadata;
-    parquet.compression = Some(config.compression.clone());
+    parquet.compression = Some(parse_parquet_compression(&config.compression)?);
     parquet.dictionary_enabled = Some(config.dictionary_enabled);
     parquet.dictionary_page_size_limit = config.dictionary_page_size_limit;
-    parquet.statistics_enabled = Some(config.statistics_enabled.clone());
+    parquet.statistics_enabled = Some(config.statistics_enabled.parse()?);
     parquet.max_row_group_size = config.max_row_group_size;
     parquet.max_row_group_bytes = config
         .max_row_group_bytes
@@ -68,7 +69,7 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.column_index_truncate_length = config.column_index_truncate_length;
     parquet.statistics_truncate_length = config.statistics_truncate_length;
     parquet.data_page_row_count_limit = config.data_page_row_count_limit;
-    parquet.encoding = config.encoding.clone();
+    parquet.encoding = config.encoding.as_deref().map(str::parse).transpose()?;
     parquet.bloom_filter_on_read = config.bloom_filter_on_read;
     parquet.bloom_filter_on_write = config.bloom_filter_on_write;
     parquet.bloom_filter_fpp = Some(config.bloom_filter_fpp);
@@ -83,4 +84,5 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.content_defined_chunking.max_chunk_size =
         config.content_defined_chunking.max_chunk_size;
     parquet.content_defined_chunking.norm_level = config.content_defined_chunking.norm_level;
+    Ok(())
 }

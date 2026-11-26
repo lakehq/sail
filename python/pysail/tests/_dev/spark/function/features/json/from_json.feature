@@ -334,10 +334,6 @@ Feature: from_json function parses JSON strings into structured types
         | case                                                        | args                                               |
         | Parse timestamp without timezone using TIMESTAMP_NTZ schema | '{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ' |
 
-    # A TIMESTAMP_NTZ field is driven by the `timestampNTZFormat` option, not `timestampFormat`,
-    # so Spark ignores the custom pattern here and fails the parse. Sail applies `timestampFormat`
-    # to TIMESTAMP_NTZ as well and parses the value.
-    @sail-bug
     Scenario: Parse timestamp without timezone with a custom timestampFormat is not applied
       When query
         """

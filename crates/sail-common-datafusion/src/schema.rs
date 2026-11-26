@@ -461,21 +461,19 @@ mod tests {
 
     #[test]
     fn spark_arrow_metadata_is_uuid_only_and_recursive() {
-        let metadata = [("custom".to_string(), "retained".to_string())].into();
+        let metadata = arrow_schema::Metadata::new().with("custom", "retained");
         let storage = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(metadata);
         let mut uuid = storage.clone().with_extension_type(Uuid);
         uuid.metadata_mut()
-            .insert(EXTENSION_TYPE_METADATA_KEY.into(), String::new());
+            .insert(EXTENSION_TYPE_METADATA_KEY, String::new());
         assert_eq!(spark_arrow_field(&uuid), storage);
         assert!(is_uuid_field(&uuid));
         for name in ["other.extension", "uuid"] {
             let mut other = storage.clone();
+            other.metadata_mut().insert(EXTENSION_TYPE_NAME_KEY, name);
             other
                 .metadata_mut()
-                .insert(EXTENSION_TYPE_NAME_KEY.into(), name.into());
-            other
-                .metadata_mut()
-                .insert(EXTENSION_TYPE_METADATA_KEY.into(), "parameters".into());
+                .insert(EXTENSION_TYPE_METADATA_KEY, "parameters");
             assert_eq!(spark_arrow_field(&other), other);
         }
         assert_eq!(spark_arrow_field(&storage), storage);

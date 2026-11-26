@@ -451,8 +451,7 @@ fn bytes_footprint<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
     values: &Buffer,
 ) -> (usize, usize) {
-    let used = offsets.last().map_or(0, |last| last.as_usize())
-        - offsets.first().map_or(0, |first| first.as_usize());
+    let used = offsets.last().as_usize() - offsets.first().as_usize();
     (
         offsets.inner().inner().capacity() + values.capacity(),
         padded(offsets.inner().inner().len()) + padded(used),
@@ -463,8 +462,8 @@ fn list_footprint<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
     values: &ArrayRef,
 ) -> (usize, usize) {
-    let start = offsets.first().map_or(0, |first| first.as_usize());
-    let end = offsets.last().map_or(0, |last| last.as_usize());
+    let start = offsets.first().as_usize();
+    let end = offsets.last().as_usize();
     let (h, n) = footprint(values.slice(start, end - start).as_ref());
     (
         offsets.inner().inner().capacity() + h,

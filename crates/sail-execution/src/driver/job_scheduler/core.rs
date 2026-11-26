@@ -19,7 +19,7 @@ use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
+    JobDescriptor, RangeShuffleState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
@@ -66,7 +66,8 @@ impl JobScheduler {
         )?;
         debug!("job {job_id} job graph \n{graph}");
 
-        let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
+        let (output, stream) =
+            build_job_output(ctx, job_id, graph.schema().clone(), self.shutdown.clone());
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
@@ -85,14 +86,7 @@ impl JobScheduler {
                     job_id: u64::from(job_id),
                     stage: s as u64,
                     partitions: stage.plan.output_partitioning().partition_count() as u64,
-                    inputs: stage
-                        .inputs
-                        .iter()
-                        .map(|input| sail_system_store::types::StageInput {
-                            stage: input.stage as u64,
-                            mode: input.mode.to_string(),
-                        })
-                        .collect(),
+                    inputs: stage.inputs.iter().map(Into::into).collect(),
                     group: stage.group.clone(),
                     mode: stage.mode.to_string(),
                     distribution: stage.distribution.to_string(),
@@ -238,6 +232,7 @@ impl JobScheduler {
             return actions;
         }
 
+        actions.extend(Self::read_range_split_points(job_id, job));
         actions.extend(Self::schedule_task_regions(
             job_id,
             job,
@@ -245,6 +240,97 @@ impl JobScheduler {
             &session_id,
         ));
 
+        actions
+    }
+
+    /// Reads the split points of each range shuffle once they are picked.
+    fn read_range_split_points(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+        let mut actions = vec![];
+        for (shuffle, range) in job.graph.range_shuffles().iter().enumerate() {
+            if job.range_shuffles[shuffle] != RangeShuffleState::Sampling {
+                continue;
+            }
+            let Some(tasks) = job.stages.get(range.split_points).map(|x| &x.tasks) else {
+                continue;
+            };
+            // The split points have one partition.
+            let Some((attempt, head)) = tasks.first().and_then(|x| x.attempts.split_last()) else {
+                continue;
+            };
+            if !matches!(attempt.state, TaskState::Succeeded) {
+                continue;
+            }
+            job.range_shuffles[shuffle] = RangeShuffleState::Reading;
+            actions.push(JobAction::ReadRangeSplitPoints {
+                job_id,
+                shuffle,
+                key: TaskStreamKey {
+                    job_id,
+                    stage: range.split_points,
+                    partition: 0,
+                    attempt: head.len(),
+                    channel: 0,
+                },
+                schema: job.graph.stages()[range.split_points].plan.schema(),
+            });
+        }
+        actions
+    }
+
+    /// Gives a range shuffle the number of partitions that the driver has read from its
+    /// split points, or fails the job if the split points cannot be read.
+    pub fn resolve_range_shuffle(
+        &mut self,
+        job_id: JobId,
+        shuffle: usize,
+        partitions: ExecutionResult<usize>,
+    ) -> Vec<JobAction> {
+        let Some(job) = self.jobs.get_mut(&job_id) else {
+            warn!("job {job_id} not found");
+            return vec![];
+        };
+        if !matches!(job.state, JobState::Running { .. })
+            || job.range_shuffles.get(shuffle) != Some(&RangeShuffleState::Reading)
+        {
+            return vec![];
+        }
+        let error = match partitions
+            .and_then(|partitions| job.resolve_range_shuffle(shuffle, partitions))
+        {
+            Err(error) => error,
+            Ok(changed) => {
+                for s in changed {
+                    let stage = &job.graph.stages()[s];
+                    self.event_reporter.report(SystemEvent::StageResized {
+                        session_id: self.options.session_id.clone(),
+                        job_id: u64::from(job_id),
+                        stage: s as u64,
+                        partitions: stage.plan.output_partitioning().partition_count() as u64,
+                        inputs: stage.inputs.iter().map(Into::into).collect(),
+                        distribution: stage.distribution.to_string(),
+                    });
+                }
+                debug!(
+                    "job {job_id} job graph after range shuffle {shuffle}\n{}",
+                    job.graph
+                );
+                return vec![];
+            }
+        };
+        let mut actions = vec![];
+        if let JobState::Running { output, .. } = &job.state {
+            actions.push(JobAction::FailJobOutput {
+                handle: output.handle(),
+                cause: CommonErrorCause::new::<PyErrExtractor>(&error),
+            });
+        }
+        job.state = JobState::Failed;
+        self.event_reporter.report(SystemEvent::JobUpdated {
+            session_id: self.options.session_id.clone(),
+            job_id: u64::from(job_id),
+            status: job.state.status().to_string(),
+            updated_at: Utc::now(),
+        });
         actions
     }
 
@@ -405,6 +491,15 @@ impl JobScheduler {
                 .all(|d| matches!(job.regions[*d].state, TaskRegionState::Succeeded))
             {
                 // The region has dependencies that are not yet succeeded.
+                continue;
+            }
+
+            if region
+                .tasks
+                .iter()
+                .any(|t| job.waits_for_range_shuffle(t.stage))
+            {
+                // The partitions of the region come from split points that are not known yet.
                 continue;
             }
 
@@ -726,19 +821,13 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
+        // Release remote task streams even when their consumer has stopped reading.
+        self.shutdown.cancel();
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         for (job_id, job) in self.jobs.iter_mut() {
             let job_id = u64::from(*job_id);
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
-                // For running jobs, the job output is dropped here.
-                // Internally, the job output manages the receiving end of the output stream.
-                // So once the stream receiver is no longer available, all the running tasks
-                // will ultimately find that the sink (owned by the shuffle write node) is closed.
-                // The task will stop running even if the task produces an infinite stream.
-                // Once the tasks are stopped, the inputs (gRPC streaming responses owned by
-                // shuffle read nodes) are dropped. So the worker gRPC server will have no active
-                // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
                 event_reporter.report(SystemEvent::JobUpdated {
                     session_id: session_id.to_string(),
@@ -1078,8 +1167,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
-            OutputDistribution::Range { partitioning } => {
-                let channels = partitioning.partition_count();
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let channels = *channels;
                 let partitioning = encode_remote_partitioning(
                     self.codec,
                     &Partitioning::Range(partitioning.clone()),
@@ -1099,6 +1191,9 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
+            OutputDistribution::Channel { channels } => TaskOutputDistribution::Channel {
+                channels: *channels,
+            },
         };
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
@@ -1461,6 +1556,178 @@ pub(super) mod tests {
                     Some(CommonErrorCause::Execution(message)) if message == "forced task failure"
                 )
         }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stages_after_range_split_points_run_with_their_partitions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::PhysicalSortExpr;
+        use datafusion::physical_expr::expressions::col;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+        use super::{JobAction, JobScheduler, JobState, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::DriverId;
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "range-shuffle-partitions".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // A range repartitioning into 8 partitions of an input with 2 partitions.
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let input = || {
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::clone(&schema), None)
+                .map(|x| x as Arc<dyn ExecutionPlan>)
+        };
+        let sample = Arc::new(RangeSample::try_new(
+            Arc::new(RangePartitionSampleExec::try_new(input()?, 10)?),
+            80.0,
+            vec![SortOptions::default()],
+            8,
+        )?);
+        let ordering = [PhysicalSortExpr::new_default(col("k", &schema)?)].into();
+        let plan = Arc::new(RangeRepartitionExec::try_new(input()?, sample, ordering)?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (split_points, writer) = {
+            let graph = &scheduler.jobs[&job_id].graph;
+            (
+                graph.range_shuffles()[0].split_points,
+                graph.range_shuffles()[0].writer,
+            )
+        };
+        let last = scheduler.jobs[&job_id].graph.stages().len() - 1;
+
+        let scheduled = |actions: &[JobAction]| {
+            actions
+                .iter()
+                .flat_map(|action| match action {
+                    JobAction::ScheduleTaskRegion { region } => region
+                        .tasks
+                        .iter()
+                        .flat_map(|(_, set)| set.tasks().cloned())
+                        .collect(),
+                    _ => vec![],
+                })
+                .collect::<Vec<_>>()
+        };
+        // Only the stages before the split points run, until the driver has read them.
+        let mut actions = scheduler.refresh_job(job_id);
+        let mut read = None;
+        for _ in 0..10 {
+            let tasks = scheduled(&actions);
+            assert!(tasks.iter().all(|t| t.stage != writer && t.stage != last));
+            for task in tasks {
+                scheduler.update_task(&task, TaskState::Succeeded, None, None);
+            }
+            actions = scheduler.refresh_job(job_id);
+            read = actions.iter().find_map(|action| match action {
+                JobAction::ReadRangeSplitPoints { shuffle, key, .. } => Some((*shuffle, key.stage)),
+                _ => None,
+            });
+            if read.is_some() {
+                break;
+            }
+        }
+        assert_eq!(read, Some((0, split_points)));
+        assert!(scheduled(&actions).is_empty());
+        assert!(scheduled(&scheduler.refresh_job(job_id)).is_empty());
+
+        // The split points give 2 partitions, so the stages after them have 2 tasks.
+        assert!(scheduler.resolve_range_shuffle(job_id, 0, Ok(2)).is_empty());
+        let tasks = scheduled(&scheduler.refresh_job(job_id));
+        let mut last_partitions = tasks
+            .iter()
+            .filter(|t| t.stage == last)
+            .map(|t| t.partition)
+            .collect::<Vec<_>>();
+        last_partitions.sort();
+        assert_eq!(last_partitions, vec![0, 1]);
+        assert!(tasks.iter().any(|t| t.stage == writer));
+
+        // A range repartitioning of a range repartitioning, whose sample reads a copy of
+        // the inner one, runs to the end: every stage runs once its split points are read.
+        let range = |input: Arc<dyn ExecutionPlan>| -> Result<_, Box<dyn std::error::Error>> {
+            let sample = Arc::new(RangeSample::try_new(
+                Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 10)?),
+                80.0,
+                vec![SortOptions::default()],
+                8,
+            )?);
+            let ordering = [PhysicalSortExpr::new_default(col("k", &schema)?)].into();
+            Ok(
+                Arc::new(RangeRepartitionExec::try_new(input, sample, ordering)?)
+                    as Arc<dyn ExecutionPlan>,
+            )
+        };
+        let plan = range(range(input()?)?)?;
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let shuffles = scheduler.jobs[&job_id].graph.range_shuffles().len();
+        let mut resolved = 0;
+        for _ in 0..100 {
+            let actions = scheduler.refresh_job(job_id);
+            if !matches!(scheduler.jobs[&job_id].state, JobState::Running { .. }) {
+                break;
+            }
+            for task in scheduled(&actions) {
+                scheduler.update_task(&task, TaskState::Succeeded, None, None);
+            }
+            for action in &actions {
+                if let JobAction::ReadRangeSplitPoints { shuffle, .. } = action {
+                    assert!(
+                        scheduler
+                            .resolve_range_shuffle(job_id, *shuffle, Ok(2))
+                            .is_empty()
+                    );
+                    resolved += 1;
+                }
+            }
+        }
+        assert_eq!(resolved, shuffles);
+        assert!(
+            matches!(scheduler.jobs[&job_id].state, JobState::Draining),
+            "job graph\n{}",
+            scheduler.jobs[&job_id].graph
+        );
         Ok(())
     }
 

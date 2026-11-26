@@ -240,18 +240,23 @@ def test_partial_casts_preserve_errors_after_local_filters(spark, source, target
         spark.conf.set("spark.sql.ansi.enabled", previous)
 
 
-@pytest.mark.spark(skip_if_jvm=True, reason="Sail permits raw Time64 values outside the civil-day range")
-def test_nested_time_string_correlation_keeps_colliding_computed_keys(spark):
-    # Arrow's Time64 formatter wraps seconds through u32. These distinct raw times
-    # have the same string key, even though ordinary in-range time formatting is exact.
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's nested correlation key strategy")
+def test_nested_float_string_correlation_keeps_colliding_computed_keys(spark):
+    # Distinct NaN bit patterns produce the same nested string key.
     query = """
         WITH i(k,v) AS (
-          SELECT array(CAST(k AS TIME)),v FROM VALUES (0L,1),(4294967296000000L,2) AS t(k,v)
-        ), o(k) AS (VALUES (array('00:00:00')))
+          SELECT array(k),v FROM VALUES (-CAST('NaN' AS DOUBLE),1),(CAST('NaN' AS DOUBLE),2),(1D,3) AS t(k,v)
+        ), o(k) AS (VALUES (array('NaN')))
         SELECT (SELECT count(*) FROM i WHERE CAST(i.k AS ARRAY<STRING>)=o.k) AS n FROM o
     """
     assert [tuple(row) for row in spark.sql(query).collect()] == [(2,)]
     assert _computed_correlation_cast(_optimized_plan(spark, query))
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's Time64 formatting validation")
+def test_nested_time_string_cast_rejects_invalid_time(spark):
+    with pytest.raises(Exception, match=r"Failed to convert 4294967296000000 to temporal for Time64"):
+        spark.sql("SELECT CAST(array(CAST(4294967296000000L AS TIME)) AS ARRAY<STRING>)").collect()
 
 
 @pytest.mark.spark(version=">=4", reason="Uses Arrow table input")

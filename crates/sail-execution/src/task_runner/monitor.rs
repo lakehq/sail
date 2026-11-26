@@ -70,6 +70,9 @@ impl TaskMonitor {
                 (SpanAttribute::EXECUTION_ATTEMPT, key.attempt.to_string()),
             ]
         });
+        // TODO: Run distributed batch execution on a dedicated query runtime so long operator
+        // polls leave both RPC shutdown and object-store I/O responsive. Add a cluster shutdown
+        // test with a saturated execution runtime.
         let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
             let _ = handle.send(message).await;

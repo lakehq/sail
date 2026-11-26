@@ -16,6 +16,7 @@ use crate::cereal::{
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
+use crate::python::with_blocking_python;
 
 pub struct PySparkUdtfPayload;
 
@@ -87,7 +88,7 @@ impl PySparkUdtfPayload {
         check_python_udf_version(python_version)?;
         let _ = eval_type; // eval_type is not needed for the analyze call itself
 
-        Python::attach(|py| -> PyUdfResult<DataType> {
+        with_blocking_python(|py| -> PyUdfResult<DataType> {
             // Load the UDTF handler by directly unpickling the command bytes.
             // The command is a CloudPickle-serialized UDTF class (compatible with pickle.loads).
             let cloudpickle = PyModule::import(py, intern!(py, "pyspark.cloudpickle"))

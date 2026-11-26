@@ -108,6 +108,8 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
+            // DataFusion derives this ratio from the partition row counts already emitted above.
+            MetricValue::Ratio { name, .. } if name == "output_rows_skew" => {}
             // Peak-memory metrics are handled only by emitters that recognize both the physical
             // operator and the DataFusion metric name.
             MetricValue::PeakMemoryUsage { .. }

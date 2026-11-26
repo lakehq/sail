@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.sql import Row, Window
-from pyspark.sql.functions import PandasUDFType, pandas_udf, udtf
+from pyspark.sql.functions import pandas_udf, udtf
 from pyspark.sql.types import BinaryType, StringType, StructType
 
 from pysail.testing.spark.utils.common import pyspark_version
@@ -95,8 +95,8 @@ def test_pandas_udfs_normalize_view_types(view_type_df):
     def identity(value: pd.Series) -> pd.Series:
         return value
 
-    @pandas_udf("binary", PandasUDFType.GROUPED_AGG)
-    def first(value: pd.Series):
+    @pandas_udf("binary")
+    def first(value: pd.Series) -> bytes | None:
         return value.iloc[0]
 
     scalar = view_type_df.select("id", identity("value").alias("value")).orderBy("id").collect()

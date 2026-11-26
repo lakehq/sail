@@ -192,3 +192,21 @@ def test_references_reject_other_formats(spark, tmp_path, table_format):
             spark.sql(f"ALTER TABLE {table} CREATE BRANCH audit")
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("kind", ["BRANCH", "TAG"])
+def test_numeric_reference_name_requires_quotes(spark, tmp_path, kind):
+    table = "numeric_reference"
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"INSERT INTO {table} VALUES (1)")
+        spark.sql(f"ALTER TABLE {table} CREATE {kind} `123`")
+        before = _find_latest_metadata(tmp_path)
+        assert "123" in before["refs"]
+        with pytest.raises(Exception, match=r"expected|syntax"):
+            spark.sql(f"ALTER TABLE {table} DROP {kind} 123").collect()
+        assert _find_latest_metadata(tmp_path) == before
+        spark.sql(f"ALTER TABLE {table} DROP {kind} `123`")
+        assert "123" not in _find_latest_metadata(tmp_path)["refs"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

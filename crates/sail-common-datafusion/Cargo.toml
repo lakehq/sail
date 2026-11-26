@@ -16,6 +16,7 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 arrow = { workspace = true }
+arrow-select = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-datasource = { workspace = true }
@@ -42,6 +43,7 @@ parquet-variant-compute = { workspace = true }
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 serde_arrow = { workspace = true }
 itertools = { workspace = true }
 half = { workspace = true }

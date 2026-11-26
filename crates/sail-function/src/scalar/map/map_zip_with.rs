@@ -533,7 +533,7 @@ fn repeat_captures(arrays: &[ArrayRef], offsets: &OffsetBuffer<i32>) -> Result<V
 }
 
 fn offsets_to_row_indices(offsets: &OffsetBuffer<i32>) -> datafusion::arrow::array::UInt32Array {
-    let total = offsets.last().copied().unwrap_or_default() as usize;
+    let total = offsets.last() as usize;
     let mut indices = Vec::with_capacity(total);
     for row in 0..offsets.len() - 1 {
         indices.extend(std::iter::repeat_n(

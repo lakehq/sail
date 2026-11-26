@@ -1139,3 +1139,11 @@ def test_parquet_merge_schema_partition_boundaries(spark, tmp_path):
     reader = spark.read.option("mergeSchema", True)
     assert reader.parquet(str(selected)).collect() == [Row(id=2, day=2)]
     assert reader.parquet(str(partition / "data.parquet")).collect() == [Row(id=2)]
+
+
+@pytest.mark.parametrize("partition", ["id", "nullif(id, 7)"])
+def test_write_decimal_partition_directories(spark, tmp_path, partition):
+    data = spark.range(2).selectExpr("id", f"cast({partition} as decimal(8, 2)) as p")
+    target = tmp_path / "data"
+    data.write.partitionBy("p").parquet(str(target))
+    assert {p.name for p in target.iterdir() if p.is_dir() and p.name.startswith("p=")} == {"p=0.00", "p=1.00"}
