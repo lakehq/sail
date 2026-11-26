@@ -130,6 +130,17 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     pub read_case_sensitive: bool,
 }
 
+impl CatalogTableOrigin {
+    /// Whether the read travels in time, by a clause or by a read option that Spark reads
+    /// as time travel for a table of any format.
+    fn travels_in_time(&self) -> bool {
+        !self.temporal_options.is_empty()
+            || self.options.iter().any(|(key, _)| {
+                key.eq_ignore_ascii_case("versionAsOf") || key.eq_ignore_ascii_case("timestampAsOf")
+            })
+    }
+}
+
 /// The source of a table scan in the stored plan of a temporary view. It is not a table
 /// provider, so a stored plan cannot be executed before each reference is bound to the
 /// source of a read (see [`PlanResolver::resolve_stored_view_plan`]).
@@ -1258,7 +1269,7 @@ impl PlanResolver<'_> {
                 view_name(view),
             ))));
         };
-        if !origin.temporal_options.is_empty() && !format.eq_ignore_ascii_case(&origin.format) {
+        if origin.travels_in_time() && !format.eq_ignore_ascii_case(&origin.format) {
             return Err(PlanError::AnalysisError(format!(
                 "the temporary view {} reads a version of {}, which has been created again \
                 with another format",
