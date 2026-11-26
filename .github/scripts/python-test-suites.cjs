@@ -95,6 +95,9 @@ function writeSuiteReport({
 
 function renderSuiteChecklist(suites, run, selectedSuites) {
   const enabled = new Set(selectedSuites);
+  const activeSuites = selectedSuites
+    .map((name) => `<kbd><b>${name}</b></kbd>`)
+    .join(" ");
   const lines = suites.map(
     ({ name, test_count }) =>
       `- [${enabled.has(name) ? "x" : " "}] \`${name}\` (${test_count} ${test_count === 1 ? "test" : "tests"})`,
@@ -123,6 +126,10 @@ function renderSuiteChecklist(suites, run, selectedSuites) {
     "</details>",
     "",
     `The test suites were discovered by [Build #${run.run_number}](https://github.com/${run.repository.full_name}/actions/runs/${run.id}).`,
+    "",
+    activeSuites
+      ? `The active test suites for this build were ${activeSuites}.`
+      : "No test suites were active for this build.",
   ].join("\n");
   return renderReport(REPORT_NAME, run, body);
 }

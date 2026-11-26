@@ -8,6 +8,23 @@ on:
       - reopened
 
 jobs:
+  python-test-selection:
+    name: Initialize Python test selection
+    if: github.event.action == 'opened'
+    runs-on: ubuntu-slim
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Create Python test selection comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: python-test-selection
+          only_create: true
+          message: |
+            ### Python Test Selection
+
+            The test suites will be available after the build finishes.
+
   title:
     name: Validate title
     runs-on: ubuntu-slim
