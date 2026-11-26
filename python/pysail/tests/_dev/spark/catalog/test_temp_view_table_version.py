@@ -313,6 +313,14 @@ COLUMN_CHANGES = {
         "(5, 'q', 500)",
         [(5,)],
     ),
+    "scalar subquery column retyped": (
+        "a INT, b INT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, (SELECT max(b) FROM {t}) AS m FROM {t}",
+        "a INT, b BIGINT, x INT",
+        "(5, 50, 500)",
+        None,
+    ),
     "in subquery column retyped": (
         "a INT, b INT, x INT",
         "(1, 1, 100)",
@@ -1044,16 +1052,18 @@ def test_view_over_an_operator_that_passes_columns_on_reads_a_table_whose_unread
     table = tables(fmt, "id INT, k INT, extra INT")
     table.insert("(1, 10, 100), (2, 20, 200)")
     definition = PASSING_QUERIES[query]
-
-    def direct():
-        if isinstance(definition, str):
-            return spark.sql(definition.format(t=table.name))
-        return definition(spark.table(table.name))
-
     if isinstance(definition, str):
-        view = table.create_view("sv", definition.format(t=table.name))
+        sql = definition.format(t=table.name)
+        view = table.create_view("sv", sql)
+
+        def direct():
+            return spark.sql(sql)
     else:
-        view = table.create_view("dv", frame=direct())
+        view = table.create_view("dv", frame=definition(spark.table(table.name)))
+
+        def direct():
+            return definition(spark.table(table.name))
+
     if change == "retyped":
         table.recreate("id INT, k INT, extra STRING", "(1, 10, 'a'), (4, 40, 'b')")
     else:

@@ -1149,13 +1149,12 @@ fn add_key_uses(
 }
 
 /// Adds how each output of a projection, or each value that an operator computes, reads
-/// the columns of its input.
-fn add_derivations(
-    exprs: &[Expr],
-    fields: &[FieldRef],
+/// the columns of its input, for the expressions and the fields of the outputs.
+fn add_derivations<'a>(
+    outputs: impl Iterator<Item = (&'a Expr, &'a FieldRef)>,
     derivations: &mut HashMap<String, Vec<Derivation<String>>>,
 ) -> datafusion_common::Result<()> {
-    for (expr, field) in exprs.iter().zip(fields) {
+    for (expr, field) in outputs {
         derivations
             .entry(field.name().clone())
             .or_default()
@@ -1241,6 +1240,8 @@ fn add_extension_reads(
             })
             .collect()
     };
+    // Nothing is added until every output is described, so that a node that does not
+    // report what an output needs reads all its inputs.
     let Some(always) = needs(&[]) else {
         return false;
     };
@@ -1406,11 +1407,8 @@ fn required_columns(
                     lineages.push(lineage);
                     return Ok(TreeNodeRecursion::Jump);
                 }
-                add_derivations(
-                    &projection.expr,
-                    projection.schema.fields(),
-                    &mut derivations,
-                )?;
+                let outputs = projection.expr.iter().zip(projection.schema.fields());
+                add_derivations(outputs, &mut derivations)?;
             }
             LogicalPlan::TableScan(scan) => {
                 if let Some(reference) = CteReference::try_from_scan(scan) {
@@ -1443,23 +1441,27 @@ fn required_columns(
             }
             LogicalPlan::Distinct(Distinct::On(on)) if on.sort_expr.is_none() => {
                 add_key_uses(&on.on_expr, &mut uses)?;
-                add_derivations(&on.select_expr, on.schema.fields(), &mut derivations)?;
+                let outputs = on.select_expr.iter().zip(on.schema.fields());
+                add_derivations(outputs, &mut derivations)?;
             }
             LogicalPlan::Aggregate(aggregate) => {
                 // The keys decide the rows, and an aggregate value reads its arguments
                 // when it is read. The values are the last outputs.
                 add_key_uses(&aggregate.group_expr, &mut uses)?;
-                let fields = aggregate.schema.fields();
-                let values = fields.len().saturating_sub(aggregate.aggr_expr.len());
-                let fields = fields.get(values..).unwrap_or_default();
-                add_derivations(&aggregate.aggr_expr, fields, &mut derivations)?;
+                let fields = aggregate.schema.fields().iter().rev();
+                add_derivations(
+                    aggregate.aggr_expr.iter().rev().zip(fields),
+                    &mut derivations,
+                )?;
             }
             LogicalPlan::Window(window) => {
                 // The input columns are passed on, and a window value reads its arguments
-                // and its keys when it is read. The values follow the input columns.
-                let inputs = window.input.schema().fields().len();
-                let fields = window.schema.fields().get(inputs..).unwrap_or_default();
-                add_derivations(&window.window_expr, fields, &mut derivations)?;
+                // and its keys when it is read. The values are the last outputs.
+                let fields = window.schema.fields().iter().rev();
+                add_derivations(
+                    window.window_expr.iter().rev().zip(fields),
+                    &mut derivations,
+                )?;
             }
             node => {
                 node.apply_expressions(|e| {
@@ -1468,8 +1470,7 @@ fn required_columns(
                 })?;
                 // These operators pass their input columns on, `UNNEST` the columns that
                 // it does not unnest, which its expressions read, and any other operator
-                // may read all of them. The expression of a subquery reads the outputs of
-                // the subquery that it needs.
+                // may read all of them.
                 let passes_on = match node {
                     LogicalPlan::Filter(_)
                     | LogicalPlan::Sort(_)
@@ -1477,6 +1478,8 @@ fn required_columns(
                     | LogicalPlan::Limit(_)
                     | LogicalPlan::SubqueryAlias(_)
                     | LogicalPlan::Repartition(_)
+                    // The expression of a subquery reads the outputs of the subquery that
+                    // it needs (see `add_expression_uses`).
                     | LogicalPlan::Subquery(_)
                     | LogicalPlan::Unnest(_) => true,
                     LogicalPlan::Extension(extension) => {
@@ -2500,19 +2503,25 @@ mod tests {
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, other)?, whole(&[1]));
-        // A scalar subquery in an output that is not read.
+        // A scalar subquery in an output that is read or not.
         let value = LogicalPlanBuilder::from(u)
             .aggregate(Vec::<Expr>::new(), vec![sum(col("u_c")).alias("m")])?
             .build()?;
-        let plan = LogicalPlanBuilder::from(t)
+        let outputs = LogicalPlanBuilder::from(t)
             .project(vec![
                 col("t_a"),
                 scalar_subquery(Arc::new(value)).alias("v"),
             ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(outputs.clone())
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
         assert_eq!(uses(&plan, &reads, other)?, Some(vec![]));
+        let plan = LogicalPlanBuilder::from(outputs)
+            .project(vec![col("v")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, other)?, whole(&[2]));
         Ok(())
     }
 
