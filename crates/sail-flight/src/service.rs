@@ -10,6 +10,7 @@ use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, SqlInfo, TicketS
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::{Stream, StreamExt, stream};
@@ -62,10 +63,8 @@ impl SailFlightSqlService {
         sessions: SessionManager,
         config: Arc<PlanConfig>,
         metrics: Option<Arc<MetricRegistry>>,
-        state: Arc<Mutex<SailFlightSqlState>>,
         query: CommandStatementQuery,
-        descriptor: FlightDescriptor,
-    ) -> Result<FlightInfo, Status> {
+    ) -> Result<(SchemaRef, SendableRecordBatchStream), Status> {
         debug!("get_flight_info_statement: {}", query.query);
 
         let statement = parse_one_statement(&query.query)
@@ -148,29 +147,7 @@ impl SailFlightSqlService {
             }
         };
 
-        let handle = QueryHandle::new();
-        state.lock().await.add_stream(handle.clone(), stream);
-        debug!("query execution started with handle {handle}");
-
-        let ticket = TicketStatementQuery {
-            statement_handle: handle.as_bytes().to_vec().into(),
-        };
-        let ticket = ticket.as_any().encode_to_vec();
-
-        let endpoint = FlightEndpoint {
-            ticket: Some(Ticket {
-                ticket: ticket.into(),
-            }),
-            location: vec![],
-            expiration_time: None,
-            app_metadata: Default::default(),
-        };
-
-        FlightInfo::new()
-            .with_endpoint(endpoint)
-            .with_descriptor(descriptor)
-            .try_with_schema(&schema)
-            .map_err(|e| Status::internal(format!("schema error: {e}")))
+        Ok((schema, stream))
     }
 }
 
@@ -200,17 +177,38 @@ impl FlightSqlService for SailFlightSqlService {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        self.session_manager
+        let (schema, stream) = self
+            .session_manager
             .run_query(Self::handle_statement_query(
                 self.session_manager.clone(),
                 self.config.clone(),
                 self.metrics.clone(),
-                self.state.clone(),
                 query,
-                request.into_inner(),
             ))
-            .await
-            .map(Response::new)
+            .await?;
+        let handle = QueryHandle::new();
+        let ticket = TicketStatementQuery {
+            statement_handle: handle.as_bytes().to_vec().into(),
+        };
+        let ticket = ticket.as_any().encode_to_vec();
+
+        let endpoint = FlightEndpoint {
+            ticket: Some(Ticket {
+                ticket: ticket.into(),
+            }),
+            location: vec![],
+            expiration_time: None,
+            app_metadata: Default::default(),
+        };
+
+        let info = FlightInfo::new()
+            .with_endpoint(endpoint)
+            .with_descriptor(request.into_inner())
+            .try_with_schema(&schema)
+            .map_err(|e| Status::internal(format!("schema error: {e}")))?;
+        self.state.lock().await.add_stream(handle.clone(), stream);
+        debug!("query execution started with handle {handle}");
+        Ok(Response::new(info))
     }
 
     async fn do_get_statement(
