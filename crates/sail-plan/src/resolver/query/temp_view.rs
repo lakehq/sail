@@ -3321,7 +3321,9 @@ mod tests {
     -> TestResult {
         let mut reads = ViewDefinitionReads::default();
         let (t, _) = read_table(&mut reads, "t")?;
-        let plan = LogicalPlanBuilder::from(t).project(vec![col("t_a")])?.build()?;
+        let plan = LogicalPlanBuilder::from(t)
+            .project(vec![col("t_a")])?
+            .build()?;
         assert!(!PlanResolver::store_view_plan(plan.clone(), &reads)?.1);
         // The table of a scalar subquery that a function folded into a value.
         read_table(&mut reads, "u")?;
