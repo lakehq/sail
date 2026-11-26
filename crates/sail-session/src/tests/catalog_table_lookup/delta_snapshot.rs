@@ -371,6 +371,29 @@ async fn test_catalog_managed_delta_reads_request_the_ratified_commits_once() ->
 }
 
 #[tokio::test]
+async fn test_catalog_managed_delta_read_of_files_after_a_read_without_them_requests_no_commits()
+-> TestResult {
+    let (fixture, _) = Fixture::try_new_with_delta_table().await?;
+    fixture
+        .catalog
+        .ratifies_delta_commits
+        .store(true, Ordering::SeqCst);
+    // The read of the data loads the files of the snapshot that the first read read
+    // without them, with the commits that the catalog ratified for that snapshot.
+    let plan = union_all(vec![
+        read_table(&["d"], &[("metadataAsDataRead", "true")]),
+        read_table(&["d"], &[]),
+    ])?;
+    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
+    let requests = fixture
+        .catalog
+        .ratified_commit_requests
+        .load(Ordering::SeqCst);
+    assert_eq!(requests, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delta_row_level_target_and_source_read_one_version() -> TestResult {
     for sql in [
         "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
