@@ -163,26 +163,28 @@ impl ViewTableReference {
             .build()?)
     }
 
-    /// Returns the position in the table of each column that the scan read when the view
-    /// was created, or how the columns that the stored plan reads changed. A column that
-    /// the plan reads keeps its type (Spark's `SchemaUtils.validateSchemaCompatibility`),
-    /// or only the fields that it reads for a struct, or only exists for a column that
-    /// only tells rows apart. A column that the plan does not read has a position only if
-    /// it did not change.
-    fn match_columns(
+    /// Returns, for each column that the scan read when the view was created, its position
+    /// in the table and how the scan reads it, or how the columns that the stored plan reads
+    /// changed. A column that the plan reads keeps its type (Spark's
+    /// `SchemaUtils.validateSchemaCompatibility`), or only the fields that it reads for a
+    /// struct, or only exists for a column that only tells rows apart. A column that the
+    /// plan does not read has a position only if it did not change.
+    fn fit_columns(
         &self,
         table: &Schema,
         case_sensitive: bool,
         type_name: &dyn Fn(&DataType) -> String,
-    ) -> Result<Vec<Option<usize>>, Vec<String>> {
+    ) -> Result<Vec<Option<(usize, Read)>>, Vec<String>> {
         let mut changes = vec![];
         let matches = match_fields(self.table.fields(), table.fields(), case_sensitive);
-        let mut positions = Vec::with_capacity(matches.len());
+        let mut reads = Vec::with_capacity(matches.len());
         for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
-            let path = vec![field.name().clone()];
-            let position = match (used, found) {
-                (Some(ColumnUse::Identity), FieldMatch::Found(position)) => Some(position),
-                (Some(used), found) => field_changes(
+            let path = [field.name().clone()];
+            let read = match (used, found) {
+                (Some(ColumnUse::Identity), FieldMatch::Found(position)) => {
+                    Some((position, Read::Same))
+                }
+                (Some(used), found) => fit_field(
                     field,
                     found,
                     table.fields(),
@@ -194,8 +196,8 @@ impl ViewTableReference {
                 ),
                 // A column that the view does not read is read only if it did not change.
                 (None, found) => {
-                    let count = changes.len();
-                    let position = field_changes(
+                    let mut unread = vec![];
+                    let read = fit_field(
                         field,
                         found,
                         table.fields(),
@@ -203,54 +205,44 @@ impl ViewTableReference {
                         None,
                         case_sensitive,
                         type_name,
-                        &mut changes,
+                        &mut unread,
                     );
-                    let changed = changes.len() > count;
-                    changes.truncate(count);
-                    position.filter(|_| !changed)
+                    read.filter(|_| unread.is_empty())
                 }
             };
-            positions.push(position);
+            reads.push(read);
         }
         if !changes.is_empty() {
             return Err(changes);
         }
-        Ok(self.columns.iter().map(|&i| positions[i]).collect())
+        Ok(self.columns.iter().map(|&i| reads[i].take()).collect())
     }
 
     /// Returns the plan of a scan of the current table with the output of the stored scan:
     /// the names and the types that the view reads, and the metadata that clients see in
-    /// its schema. `positions` are those of [`Self::match_columns`], and the scan reads the
+    /// its schema. `reads` are those of [`Self::fit_columns`], and the scan reads the
     /// columns that have a position, in their order.
     fn with_stored_output(
         &self,
         scan: TableScan,
-        positions: &[Option<usize>],
-        case_sensitive: bool,
+        reads: &[Option<(usize, Read)>],
     ) -> PlanResult<LogicalPlan> {
         let source = scan.source.schema();
         let columns = self
             .schema
             .fields()
             .iter()
-            .zip(positions)
-            .zip(&self.columns)
-            .map(|((stored, position), &i)| {
-                let current = position.map(|position| source.field(position));
-                (stored, current, self.required[i].as_ref())
+            .zip(reads)
+            .map(|(stored, read)| {
+                let current = read
+                    .as_ref()
+                    .map(|(position, read)| (source.field(*position), read));
+                (stored, current)
             })
             .collect::<Vec<_>>();
-        let rebuilt = |stored: &Field, current: &Field, used: Option<&ColumnUse>| match used {
-            Some(ColumnUse::Fields(_)) => stored.data_type() != current.data_type(),
-            // The fields of a struct that is read whole keep the names of the view.
-            Some(ColumnUse::Whole) => field_names_changed(stored.data_type(), current.data_type()),
-            _ => false,
-        };
-        let same = columns.iter().all(|(stored, current, used)| {
-            current.is_some_and(|current| {
-                stored.name() == current.name()
-                    && !needs_cast(stored, current)
-                    && !rebuilt(stored, current, *used)
+        let same = columns.iter().all(|(stored, current)| {
+            current.is_some_and(|(current, read)| {
+                stored.name() == current.name() && read == &Read::Same
             })
         });
         if same {
@@ -259,8 +251,8 @@ impl ViewTableReference {
         let qualifier = Some(scan.table_name.clone());
         let expressions = columns
             .into_iter()
-            .map(|(stored, current, used)| {
-                let Some(current) = current else {
+            .map(|(stored, current)| {
+                let Some((current, read)) = current else {
                     // A column that the view does not read and that changed is a null of
                     // its stored type. The plans above the scan compute their schemas again.
                     let null = Expr::Literal(ScalarValue::try_new_null(stored.data_type())?, None);
@@ -271,33 +263,17 @@ impl ViewTableReference {
                     );
                 };
                 let column = Expr::Column(Column::new(qualifier.clone(), current.name().clone()));
-                let expression = match used {
-                    Some(ColumnUse::Identity) => column,
-                    Some(used) if rebuilt(stored, current, Some(used)) => {
-                        let value = rebuild_struct(column, stored, current, used, case_sensitive)?;
-                        let target = nullable_field(stored).with_nullable(current.is_nullable());
-                        Expr::Cast(Cast::new_from_field(Box::new(value), Arc::new(target)))
-                    }
-                    // A column keeps the metadata of the view, and a column whose values are
-                    // stored in another way, such as `LargeUtf8` instead of `Utf8`, is read
-                    // in the type of the view.
-                    _ if needs_cast(stored, current) => {
-                        // The fields of a struct can have nulls now that had none.
-                        let data_type = if stored.data_type() == current.data_type() {
-                            stored.data_type().clone()
-                        } else if can_cast_types(current.data_type(), stored.data_type()) {
-                            nullable_field(stored).data_type().clone()
-                        } else {
-                            current.data_type().clone()
-                        };
-                        let target = stored
-                            .as_ref()
-                            .clone()
-                            .with_data_type(data_type)
-                            .with_nullable(current.is_nullable());
-                        Expr::Cast(Cast::new_from_field(Box::new(column), Arc::new(target)))
-                    }
-                    _ => column,
+                let target = match read {
+                    Read::Same => None,
+                    Read::Cast => Some(cast_target(stored, current)),
+                    Read::Struct(_) => Some(nullable_field(stored)),
+                };
+                let expression = match target {
+                    Some(target) => Expr::Cast(Cast::new_from_field(
+                        Box::new(read_value(column, stored, current, read)?),
+                        Arc::new(target.with_nullable(current.is_nullable())),
+                    )),
+                    None => column,
                 };
                 Ok(expression.alias_qualified(qualifier.clone(), stored.name()))
             })
@@ -426,9 +402,54 @@ fn match_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> Vec<
     matches
 }
 
-/// Adds the changes of a stored field to its match in the current fields, and returns the
-/// position of the match.
-fn field_changes(
+fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
+    a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
+}
+
+fn describe_field(
+    path: &[String],
+    field: &Field,
+    type_name: &dyn Fn(&DataType) -> String,
+) -> String {
+    let null = if field.is_nullable() { "" } else { " NOT NULL" };
+    format!(
+        "{} {}{null}",
+        quote_names(path),
+        type_name(field.data_type())
+    )
+}
+
+/// Returns whether two string types or two binary types store the same values in other ways.
+fn same_values(a: &DataType, b: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (a, b),
+        (Utf8 | LargeUtf8 | Utf8View, Utf8 | LargeUtf8 | Utf8View)
+            | (
+                Binary | LargeBinary | BinaryView,
+                Binary | LargeBinary | BinaryView
+            )
+    )
+}
+
+/// How a scan reads the current value of a column or of a field of a struct as the value
+/// that the stored plan reads.
+#[derive(Debug, PartialEq)]
+enum Read {
+    /// The value as it is.
+    Same,
+    /// The value cast to the stored type: the values are stored in another way, such as
+    /// `LargeUtf8` instead of `Utf8`, the fields of a struct are in another order, or the
+    /// metadata that clients see differs. A cast matches the fields of structs by name.
+    Cast,
+    /// A struct built field by field: each field that the plan reads from the current
+    /// field at that position, and a null for the other fields.
+    Struct(Vec<Option<(usize, Read)>>),
+}
+
+/// Returns the position of the match of a stored field in the current fields and how the
+/// field is read, and adds the changes of the field.
+fn fit_field(
     field: &Field,
     found: FieldMatch,
     current: &Fields,
@@ -437,21 +458,19 @@ fn field_changes(
     case_sensitive: bool,
     type_name: &dyn Fn(&DataType) -> String,
     changes: &mut Vec<String>,
-) -> Option<usize> {
+) -> Option<(usize, Read)> {
     match found {
         FieldMatch::Found(position) => {
-            let other = &current[position];
-            column_changes(
-                field.data_type(),
-                other.data_type(),
-                path,
+            let read = fit(
+                field,
+                &current[position],
                 fields,
+                path,
                 case_sensitive,
                 type_name,
                 changes,
             );
-            logical_type_changes(field, other, path, type_name, changes);
-            Some(position)
+            Some((position, read))
         }
         FieldMatch::Missing => {
             changes.push(format!(
@@ -475,221 +494,267 @@ fn field_changes(
     }
 }
 
-fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
-    a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
-}
-
-fn describe_field(
-    path: &[String],
-    field: &Field,
-    type_name: &dyn Fn(&DataType) -> String,
-) -> String {
-    let null = if field.is_nullable() { "" } else { " NOT NULL" };
-    format!(
-        "{} {}{null}",
-        quote_names(path),
-        type_name(field.data_type())
-    )
-}
-
-/// Adds the changes of a column or of a nested field from the type that a view was created
-/// with, to that of the table now. The nullability of fields, their metadata, and the
-/// names of the fields that Spark does not name (the elements of lists and the entries of
-/// maps) are not compared. The definition of the view was resolved as if every field had
-/// nulls (see [`ViewDefinitionSource`]).
-fn column_changes(
-    stored: &DataType,
-    current: &DataType,
-    path: &[String],
+/// Returns how a value of the current field is read as the stored field, and adds the
+/// changes from the type that the view was created with to that of the table now. The
+/// nullability of fields, their metadata, and the names of the fields that Spark does not
+/// name (the elements of lists and the entries of maps) are not compared. The definition
+/// of the view was resolved as if every field had nulls (see [`ViewDefinitionSource`]).
+fn fit(
+    stored: &Field,
+    current: &Field,
     fields: Option<&HashMap<String, ColumnUse>>,
+    path: &[String],
     case_sensitive: bool,
     type_name: &dyn Fn(&DataType) -> String,
     changes: &mut Vec<String>,
-) {
-    let child = |name: &str| {
-        let mut path = path.to_vec();
-        path.push(name.to_string());
-        path
+) -> Read {
+    logical_type_changes(stored, current, path, type_name, changes);
+    let read = fit_type(
+        stored.data_type(),
+        current.data_type(),
+        fields,
+        path,
+        case_sensitive,
+        type_name,
+        changes,
+    );
+    let metadata = |field: &Field| field.metadata().get(SPARK_METADATA_JSON_KEY).cloned();
+    if read == Read::Same && metadata(stored) != metadata(current) {
+        Read::Cast
+    } else {
+        read
+    }
+}
+
+/// Returns how a value of the current type is read as the stored type, as [`fit`] for fields.
+/// `fields` are the fields that the plan reads, for a struct that it does not read whole.
+fn fit_type(
+    stored: &DataType,
+    current: &DataType,
+    fields: Option<&HashMap<String, ColumnUse>>,
+    path: &[String],
+    case_sensitive: bool,
+    type_name: &dyn Fn(&DataType) -> String,
+    changes: &mut Vec<String>,
+) -> Read {
+    use DataType::*;
+    if stored == current {
+        return Read::Same;
+    }
+    // A value inside a list, a map, or another such type is read whole, and is cast. A cast
+    // matches the fields of structs by name, so it cannot read a field that was renamed in
+    // letter case.
+    let inner = |read: Read, path: &[String], changes: &mut Vec<String>| {
+        if matches!(read, Read::Struct(_)) {
+            changes.push(format!(
+                "{} has fields renamed in letter case",
+                quote_names(path)
+            ));
+        }
+        read
     };
     let nested = |stored: &Field, current: &Field, name: &str, changes: &mut Vec<String>| {
-        let path = child(name);
-        column_changes(
-            stored.data_type(),
-            current.data_type(),
-            &path,
+        let path = child_path(path, name);
+        let read = fit(
+            stored,
+            current,
             None,
+            &path,
             case_sensitive,
             type_name,
             changes,
         );
-        logical_type_changes(stored, current, &path, type_name, changes);
+        inner(read, &path, changes)
+    };
+    let cast = |reads: &[Read]| match reads.iter().all(|x| x == &Read::Same) {
+        true => Read::Same,
+        false => Read::Cast,
     };
     match (stored, current) {
-        (DataType::Struct(stored), DataType::Struct(current)) => {
-            let matches = match_fields(stored, current, case_sensitive);
-            for (field, found) in stored.iter().zip(matches) {
-                // A struct that the view reads only through some of its fields keeps those
-                // fields, and the other fields can change.
-                let used = match fields {
-                    Some(fields) => match fields
-                        .iter()
-                        .find(|(name, _)| same_name(name, field.name(), case_sensitive))
-                    {
-                        Some((_, used)) => used.fields(),
-                        None => continue,
-                    },
-                    None => None,
-                };
-                field_changes(
-                    field,
-                    found,
-                    current,
-                    &child(field.name()),
-                    used,
-                    case_sensitive,
-                    type_name,
-                    changes,
-                );
-            }
-            if fields.is_some() {
-                return;
-            }
-            for field in current {
-                if !stored
-                    .iter()
-                    .any(|x| same_name(x.name(), field.name(), case_sensitive))
-                {
-                    changes.push(format!(
-                        "{} has been added",
-                        describe_field(&child(field.name()), field, type_name)
-                    ));
-                }
-            }
-        }
-        (
-            DataType::List(stored)
-            | DataType::LargeList(stored)
-            | DataType::ListView(stored)
-            | DataType::LargeListView(stored),
-            DataType::List(current)
-            | DataType::LargeList(current)
-            | DataType::ListView(current)
-            | DataType::LargeListView(current),
-        ) => nested(stored, current, "element", changes),
-        (DataType::FixedSizeList(stored, n), DataType::FixedSizeList(current, m)) if n == m => {
-            nested(stored, current, "element", changes)
-        }
-        (DataType::Map(stored, x), DataType::Map(current, y)) if x == y => {
-            match (stored.data_type(), current.data_type()) {
-                (DataType::Struct(stored), DataType::Struct(current))
-                    if stored.len() == 2 && current.len() == 2 =>
-                {
-                    nested(&stored[0], &current[0], "key", changes);
-                    nested(&stored[1], &current[1], "value", changes);
-                }
-                _ => nested(stored, current, "entries", changes),
-            }
-        }
-        (DataType::Dictionary(x, stored), DataType::Dictionary(y, current)) if x == y => {
-            column_changes(
-                stored,
-                current,
-                path,
-                None,
-                case_sensitive,
-                type_name,
-                changes,
-            )
-        }
-        (DataType::RunEndEncoded(x, stored), DataType::RunEndEncoded(y, current))
-            if x.data_type() == y.data_type() =>
-        {
-            nested(stored, current, "values", changes)
-        }
-        (DataType::Union(stored, x), DataType::Union(current, y))
-            if x == y
-                && stored.len() == current.len()
-                && stored
-                    .iter()
-                    .zip(current.iter())
-                    .all(|((i, a), (j, b))| i == j && a.name() == b.name()) =>
-        {
-            for ((_, stored), (_, current)) in stored.iter().zip(current.iter()) {
-                nested(stored, current, stored.name(), changes);
-            }
-        }
-        _ if stored != current && !same_values(stored, current) => changes.push(format!(
-            "{} type has changed from {} to {}",
-            quote_names(path),
-            type_name(stored),
-            type_name(current)
-        )),
-        _ => {}
-    }
-}
-
-/// Returns whether a field of a struct, or of a struct in a struct, has a name of another
-/// letter case than the stored field that it matches.
-fn field_names_changed(stored: &DataType, current: &DataType) -> bool {
-    let (DataType::Struct(stored), DataType::Struct(current)) = (stored, current) else {
-        return false;
-    };
-    stored.iter().any(|field| {
-        current
-            .iter()
-            .find(|x| same_name(x.name(), field.name(), false))
-            .is_some_and(|x| {
-                x.name() != field.name() || field_names_changed(field.data_type(), x.data_type())
-            })
-    })
-}
-
-/// Returns whether two string types or two binary types store the same values in other ways.
-fn same_values(a: &DataType, b: &DataType) -> bool {
-    use DataType::*;
-    matches!(
-        (a, b),
-        (Utf8 | LargeUtf8 | Utf8View, Utf8 | LargeUtf8 | Utf8View)
-            | (
-                Binary | LargeBinary | BinaryView,
-                Binary | LargeBinary | BinaryView
-            )
-    )
-}
-
-/// Returns whether a column that has no column change is read with a cast to the stored
-/// field: when the metadata that clients see differs, or the values are stored in another
-/// encoding, such as a string, binary or list type of another encoding, at any level.
-fn needs_cast(stored: &Field, current: &Field) -> bool {
-    stored.metadata().get(SPARK_METADATA_JSON_KEY)
-        != current.metadata().get(SPARK_METADATA_JSON_KEY)
-        || type_needs_cast(stored.data_type(), current.data_type())
-}
-
-/// Returns whether a type needs a cast to the stored type, as [`needs_cast`] for fields.
-fn type_needs_cast(stored: &DataType, current: &DataType) -> bool {
-    use DataType::*;
-    match (stored, current) {
-        (Struct(stored), Struct(current)) => stored.iter().any(|field| {
-            current
-                .iter()
-                .find(|x| same_name(x.name(), field.name(), false))
-                .is_some_and(|x| needs_cast(field, x))
-        }),
+        (Struct(stored), Struct(current)) => fit_struct(
+            stored,
+            current,
+            fields,
+            path,
+            case_sensitive,
+            type_name,
+            changes,
+        ),
         (
             List(a) | LargeList(a) | ListView(a) | LargeListView(a),
             List(b) | LargeList(b) | ListView(b) | LargeListView(b),
-        ) => std::mem::discriminant(stored) != std::mem::discriminant(current) || needs_cast(a, b),
-        (FixedSizeList(a, _), FixedSizeList(b, _))
-        | (Map(a, _), Map(b, _))
-        | (RunEndEncoded(_, a), RunEndEncoded(_, b)) => needs_cast(a, b),
-        (Dictionary(_, a), Dictionary(_, b)) => type_needs_cast(a, b),
-        (Union(a, _), Union(b, _)) => a
-            .iter()
-            .zip(b.iter())
-            .any(|((_, a), (_, b))| needs_cast(a, b)),
-        _ => stored != current && same_values(stored, current),
+        ) => {
+            let read = nested(a, b, "element", changes);
+            if std::mem::discriminant(stored) == std::mem::discriminant(current) {
+                cast(&[read])
+            } else {
+                Read::Cast
+            }
+        }
+        (FixedSizeList(a, n), FixedSizeList(b, m)) if n == m => {
+            cast(&[nested(a, b, "element", changes)])
+        }
+        (Map(a, x), Map(b, y)) if x == y => match (a.data_type(), b.data_type()) {
+            (Struct(a), Struct(b)) if a.len() == 2 && b.len() == 2 => cast(&[
+                nested(&a[0], &b[0], "key", changes),
+                nested(&a[1], &b[1], "value", changes),
+            ]),
+            _ => cast(&[nested(a, b, "entries", changes)]),
+        },
+        (Dictionary(x, a), Dictionary(y, b)) if x == y => {
+            let read = fit_type(a, b, None, path, case_sensitive, type_name, changes);
+            cast(&[inner(read, path, changes)])
+        }
+        (RunEndEncoded(x, a), RunEndEncoded(y, b)) if x.data_type() == y.data_type() => {
+            cast(&[nested(a, b, "values", changes)])
+        }
+        (Union(a, x), Union(b, y))
+            if x == y
+                && a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|((i, a), (j, b))| i == j && a.name() == b.name()) =>
+        {
+            let reads = a
+                .iter()
+                .zip(b.iter())
+                .map(|((_, a), (_, b))| nested(a, b, a.name(), changes))
+                .collect::<Vec<_>>();
+            cast(&reads)
+        }
+        _ if same_values(stored, current) => Read::Cast,
+        _ => {
+            changes.push(format!(
+                "{} type has changed from {} to {}",
+                quote_names(path),
+                type_name(stored),
+                type_name(current)
+            ));
+            Read::Same
+        }
     }
+}
+
+/// Returns how a current struct is read as a stored struct, as [`fit`] for fields. A struct
+/// that the plan reads only through the fields `fields` keeps those fields, and the other
+/// fields can change. A struct that is read whole keeps all its fields, which are cast by
+/// name unless a field was renamed in letter case.
+fn fit_struct(
+    stored: &Fields,
+    current: &Fields,
+    fields: Option<&HashMap<String, ColumnUse>>,
+    path: &[String],
+    case_sensitive: bool,
+    type_name: &dyn Fn(&DataType) -> String,
+    changes: &mut Vec<String>,
+) -> Read {
+    let matches = match_fields(stored, current, case_sensitive);
+    let mut reads = Vec::with_capacity(stored.len());
+    let mut same = stored.len() == current.len();
+    let mut cast = fields.is_none();
+    for (i, (field, found)) in stored.iter().zip(matches).enumerate() {
+        let used = match fields {
+            Some(fields) => match fields
+                .iter()
+                .find(|(name, _)| same_name(name, field.name(), case_sensitive))
+            {
+                Some((_, used)) => used.fields(),
+                None => {
+                    same = false;
+                    reads.push(None);
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let read = fit_field(
+            field,
+            found,
+            current,
+            &child_path(path, field.name()),
+            used,
+            case_sensitive,
+            type_name,
+            changes,
+        );
+        if let Some((position, read)) = &read {
+            let renamed = current[*position].name() != field.name();
+            same &= *position == i && !renamed && read == &Read::Same;
+            cast &= !renamed && !matches!(read, Read::Struct(_));
+        }
+        reads.push(read);
+    }
+    if fields.is_none() {
+        for field in current {
+            if !stored
+                .iter()
+                .any(|x| same_name(x.name(), field.name(), case_sensitive))
+            {
+                changes.push(format!(
+                    "{} has been added",
+                    describe_field(&child_path(path, field.name()), field, type_name)
+                ));
+            }
+        }
+    }
+    if same {
+        Read::Same
+    } else if cast {
+        Read::Cast
+    } else {
+        Read::Struct(reads)
+    }
+}
+
+fn child_path(path: &[String], name: &str) -> Vec<String> {
+    let mut path = path.to_vec();
+    path.push(name.to_string());
+    path
+}
+
+/// Returns the field of a cast of a value of `current` to the stored field: the stored
+/// type, whose fields can have nulls now that had none, unless the type cannot be cast to.
+fn cast_target(stored: &Field, current: &Field) -> Field {
+    let data_type = if stored.data_type() == current.data_type() {
+        stored.data_type().clone()
+    } else if can_cast_types(current.data_type(), stored.data_type()) {
+        nullable_field(stored).data_type().clone()
+    } else {
+        current.data_type().clone()
+    };
+    stored.clone().with_data_type(data_type)
+}
+
+/// Returns `value`, a value of the current field, with the fields of the stored struct for
+/// a struct that is built (see [`Read::Struct`]), and as it is otherwise. A field that the
+/// view does not read is null, so every field of a struct that is built can have nulls.
+fn read_value(value: Expr, stored: &Field, current: &Field, read: &Read) -> PlanResult<Expr> {
+    let (Read::Struct(reads), DataType::Struct(stored_fields), DataType::Struct(current_fields)) =
+        (read, stored.data_type(), current.data_type())
+    else {
+        return Ok(value);
+    };
+    let mut args = Vec::with_capacity(stored_fields.len() * 2);
+    for (field, read) in stored_fields.iter().zip(reads) {
+        let value = match read {
+            Some((position, read)) => {
+                let current = &current_fields[*position];
+                let value = get_field().call(vec![value.clone(), lit(current.name().as_str())]);
+                read_value(value, field, current, read)?
+            }
+            None => Expr::Literal(ScalarValue::try_new_null(field.data_type())?, None),
+        };
+        args.push(lit(field.name().as_str()));
+        args.push(Expr::Cast(Cast::new_from_field(
+            Box::new(value),
+            Arc::new(nullable_field(field)),
+        )));
+    }
+    let null = Expr::Literal(
+        ScalarValue::try_new_null(nullable_field(stored).data_type())?,
+        None,
+    );
+    Ok(when(value.is_null(), null).otherwise(named_struct().call(args))?)
 }
 
 fn quote_names(names: &[String]) -> String {
@@ -812,8 +877,8 @@ impl PlanResolver<'_> {
                 name.to_uppercase()
             }
         };
-        let positions = reference
-            .match_columns(&table_schema, self.config.case_sensitive, &type_name)
+        let reads = reference
+            .fit_columns(&table_schema, self.config.case_sensitive, &type_name)
             .map_err(|changes| {
                 PlanError::AnalysisError(format!(
                     "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View {} plan \
@@ -825,6 +890,10 @@ impl PlanResolver<'_> {
                     changes.join("\n- "),
                 ))
             })?;
+        let positions = reads
+            .iter()
+            .map(|read| read.as_ref().map(|(position, _)| *position))
+            .collect::<Vec<_>>();
         // A table with duplicate column names can only be scanned under other names. The
         // scan then reads each column under the name that the view was created with, and a
         // column that the view does not read keeps its name unless two columns would have it.
@@ -885,7 +954,7 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        reference.with_stored_output(bound, &positions, self.config.case_sensitive)
+        reference.with_stored_output(bound, &reads)
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
@@ -1521,64 +1590,6 @@ fn required_columns(
     Ok(required)
 }
 
-/// Returns the value of a struct with the type that the view was created with, from the
-/// current value of a struct that the view reads through some of its fields or whole. A
-/// field that the view does not read is null, so every field of the value can have nulls.
-fn rebuild_struct(
-    expr: Expr,
-    stored: &Field,
-    current: &Field,
-    used: &ColumnUse,
-    case_sensitive: bool,
-) -> PlanResult<Expr> {
-    let (DataType::Struct(stored_fields), DataType::Struct(current_fields)) =
-        (stored.data_type(), current.data_type())
-    else {
-        return Ok(expr);
-    };
-    // A struct that is read whole reads all its fields.
-    let whole;
-    let fields = match used {
-        ColumnUse::Fields(fields) => fields,
-        ColumnUse::Whole => {
-            whole = stored_fields
-                .iter()
-                .map(|x| (x.name().clone(), ColumnUse::Whole))
-                .collect();
-            &whole
-        }
-        ColumnUse::Identity => return Ok(expr),
-    };
-    if stored.data_type() == current.data_type() {
-        return Ok(expr);
-    }
-    let matches = match_fields(stored_fields, current_fields, case_sensitive);
-    let mut args = Vec::with_capacity(stored_fields.len() * 2);
-    for (field, found) in stored_fields.iter().zip(matches) {
-        let used = fields
-            .iter()
-            .find(|(name, _)| same_name(name, field.name(), case_sensitive));
-        let value = match (used, found) {
-            (Some((_, used)), FieldMatch::Found(position)) => {
-                let current = &current_fields[position];
-                let value = get_field().call(vec![expr.clone(), lit(current.name().as_str())]);
-                rebuild_struct(value, field, current, used, case_sensitive)?
-            }
-            _ => Expr::Literal(ScalarValue::try_new_null(field.data_type())?, None),
-        };
-        args.push(lit(field.name().as_str()));
-        args.push(Expr::Cast(Cast::new_from_field(
-            Box::new(value),
-            Arc::new(nullable_field(field)),
-        )));
-    }
-    let null = Expr::Literal(
-        ScalarValue::try_new_null(nullable_field(stored).data_type())?,
-        None,
-    );
-    Ok(when(expr.is_null(), null).otherwise(named_struct().call(args))?)
-}
-
 /// The source of a scan of a table that a temporary view reads again at each read, while
 /// the definition of the view is resolved. All its fields can have nulls, at every level,
 /// so that no decision of the definition depends on a column without nulls, which it may
@@ -1719,7 +1730,7 @@ mod tests {
     use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
     use super::{
-        ColumnUse, TableOrigin, ViewTableReference, needs_cast, required_columns,
+        ColumnUse, Read, TableOrigin, ViewTableReference, fit, required_columns,
         view_definition_source,
     };
     use crate::resolver::query::temp_view::CatalogTableOrigin;
@@ -1758,8 +1769,35 @@ mod tests {
         table: &Schema,
         case_sensitive: bool,
     ) -> Result<Vec<usize>, Vec<String>> {
-        let positions = reference(stored).match_columns(table, case_sensitive, &type_name)?;
-        Ok(positions.into_iter().flatten().collect())
+        Ok(positions(&reference(stored), table, case_sensitive)?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    /// Returns the position in the table of each column of the scan of the reference.
+    fn positions(
+        reference: &ViewTableReference,
+        table: &Schema,
+        case_sensitive: bool,
+    ) -> Result<Vec<Option<usize>>, Vec<String>> {
+        let reads = reference.fit_columns(table, case_sensitive, &type_name)?;
+        Ok(reads
+            .into_iter()
+            .map(|read| read.map(|(position, _)| position))
+            .collect())
+    }
+
+    /// Returns how a column of the field `current` is read as the field `stored`, if it is
+    /// read whole and did not change.
+    fn read_of(stored: &Field, current: &Field) -> Result<Read, Vec<String>> {
+        let mut changes = vec![];
+        let read = fit(stored, current, None, &[], false, &type_name, &mut changes);
+        if changes.is_empty() {
+            Ok(read)
+        } else {
+            Err(changes)
+        }
     }
 
     fn field(name: &str, data_type: DataType) -> Field {
@@ -2120,18 +2158,24 @@ mod tests {
                 value.to_string(),
             )]))
         };
-        assert!(needs_cast(&user("{}"), &user("{\"x\":1}")));
-        assert!(!needs_cast(
-            &with_metadata(field("a", DataType::Int32)),
-            &field("a", DataType::Int32)
-        ));
+        assert_eq!(read_of(&user("{}"), &user("{\"x\":1}")), Ok(Read::Cast));
+        assert_eq!(
+            read_of(
+                &with_metadata(field("a", DataType::Int32)),
+                &field("a", DataType::Int32)
+            ),
+            Ok(Read::Same)
+        );
         let nested = |x: Field| field("s", DataType::Struct(vec![x].into()));
-        assert!(needs_cast(&nested(user("{}")), &nested(user("{\"x\":1}"))));
+        assert_eq!(
+            read_of(&nested(user("{}")), &nested(user("{\"x\":1}"))),
+            Ok(Read::Cast)
+        );
         let in_list = |x: Field| field("l", list(x));
-        assert!(needs_cast(
-            &in_list(user("{}")),
-            &in_list(user("{\"x\":1}"))
-        ));
+        assert_eq!(
+            read_of(&in_list(user("{}")), &in_list(user("{\"x\":1}"))),
+            Ok(Read::Cast)
+        );
     }
 
     #[test]
@@ -2153,7 +2197,7 @@ mod tests {
             field("a", DataType::Int32),
         ]);
         assert_eq!(
-            reference.match_columns(&current, true, &type_name),
+            positions(&reference, &current, true),
             Ok(vec![Some(1), Some(0)])
         );
         for current in [
@@ -2168,7 +2212,7 @@ mod tests {
             ]),
         ] {
             assert_eq!(
-                reference.match_columns(&current, true, &type_name),
+                positions(&reference, &current, true),
                 Ok(vec![Some(0), None]),
                 "{current}"
             );
@@ -2179,14 +2223,14 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]);
         assert_eq!(
-            reference.match_columns(&current, true, &type_name),
+            positions(&reference, &current, true),
             Ok(vec![Some(0), Some(1)])
         );
         assert_eq!(
-            reference.match_columns(
+            positions(
+                &reference,
                 &Schema::new(vec![field("b", DataType::Utf8)]),
-                true,
-                &type_name
+                true
             ),
             Err(vec!["`a` Int32 has been removed".to_string()])
         );
@@ -2214,16 +2258,16 @@ mod tests {
             ]),
         ] {
             assert_eq!(
-                reference.match_columns(&current, true, &type_name),
+                positions(&reference, &current, true),
                 Ok(vec![Some(1), Some(0)]),
                 "{current}"
             );
         }
         assert_eq!(
-            reference.match_columns(
+            positions(
+                &reference,
                 &Schema::new(vec![field("a", DataType::Int32)]),
-                true,
-                &type_name
+                true
             ),
             Err(vec!["`b` Int32 has been removed".to_string()])
         );
@@ -2916,17 +2960,17 @@ mod tests {
                 required: vec![Some(ColumnUse::Whole), None],
                 ..reference(&stored)
             };
-            let positions = reference
-                .match_columns(&table, true, &type_name)
+            let reads = reference
+                .fit_columns(&table, true, &type_name)
                 .map_err(|e| e.join(", "))?;
-            assert_eq!(positions, vec![Some(0), None], "{data_type}");
+            assert_eq!(reads, vec![Some((0, Read::Same)), None], "{data_type}");
             let source =
                 provider_as_source(Arc::new(MemTable::try_new(Arc::new(table), vec![vec![]])?));
             let scan = LogicalPlanBuilder::scan("t", source, Some(vec![0]))?.build()?;
             let LogicalPlan::TableScan(scan) = scan else {
                 return Err("expected a scan".into());
             };
-            let plan = reference.with_stored_output(scan, &positions, true)?;
+            let plan = reference.with_stored_output(scan, &reads)?;
             let output = plan.schema().field(1);
             assert_eq!(output.name(), "c");
             assert_eq!(output.data_type(), &data_type);
@@ -2947,5 +2991,59 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_struct_fields_in_another_order_are_cast_by_name() {
+        let pair = |x: &str, y: &str| {
+            DataType::Struct(vec![field(x, DataType::Int32), field(y, DataType::Utf8)].into())
+        };
+        let stored = field("s", pair("x", "y"));
+        let current = field(
+            "s",
+            DataType::Struct(vec![field("y", DataType::Utf8), field("x", DataType::Int32)].into()),
+        );
+        assert_eq!(read_of(&stored, &current), Ok(Read::Cast));
+        assert_eq!(
+            read_of(
+                &field("l", list(stored.clone())),
+                &field("l", list(current))
+            ),
+            Ok(Read::Cast)
+        );
+        // A field renamed in letter case is read by its position in a struct that is built.
+        let renamed = field("s", pair("X", "y"));
+        assert_eq!(
+            read_of(&stored, &renamed),
+            Ok(Read::Struct(vec![
+                Some((0, Read::Same)),
+                Some((1, Read::Same))
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_struct_fields_renamed_in_letter_case_in_lists_are_column_changes() {
+        let element = |name: &str| {
+            field(
+                "item",
+                DataType::Struct(vec![field(name, DataType::Int32)].into()),
+            )
+        };
+        for (stored, current) in [
+            (list(element("a")), list(element("A"))),
+            (
+                map(Field::new("key", DataType::Utf8, false), element("a")),
+                map(Field::new("key", DataType::Utf8, false), element("A")),
+            ),
+        ] {
+            let changes =
+                read_of(&field("c", stored), &field("c", current)).expect_err("a column change");
+            assert_eq!(changes.len(), 1);
+            assert!(
+                changes[0].contains("has fields renamed in letter case"),
+                "{changes:?}"
+            );
+        }
     }
 }
