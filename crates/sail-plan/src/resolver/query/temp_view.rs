@@ -3037,11 +3037,10 @@ mod tests {
                 map(Field::new("key", DataType::Utf8, false), element("A")),
             ),
         ] {
-            let changes =
-                read_of(&field("c", stored), &field("c", current)).expect_err("a column change");
-            assert_eq!(changes.len(), 1);
+            let changes = read_of(&field("c", stored), &field("c", current)).err();
             assert!(
-                changes[0].contains("has fields renamed in letter case"),
+                changes.as_ref().is_some_and(|changes| changes.len() == 1
+                    && changes[0].contains("has fields renamed in letter case")),
                 "{changes:?}"
             );
         }
