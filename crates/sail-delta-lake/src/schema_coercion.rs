@@ -180,3 +180,395 @@ fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
     Arc::new(field.as_ref().clone().with_data_type(new_type))
 }
 // SPDX-SnippetEnd
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+
+    use super::uniform_dict_schemas;
+
+    const I8: DataType = DataType::Int8;
+    const I16: DataType = DataType::Int16;
+    const I32: DataType = DataType::Int32;
+    const I64: DataType = DataType::Int64;
+    const U8: DataType = DataType::UInt8;
+    const U16: DataType = DataType::UInt16;
+    const U32: DataType = DataType::UInt32;
+    const U64: DataType = DataType::UInt64;
+
+    fn dict(key: DataType, value: DataType) -> DataType {
+        DataType::Dictionary(Box::new(key), Box::new(value))
+    }
+
+    /// Normalizes one single-column schema per input type and returns the
+    /// normalized column types along with the merged type, if `Schema::try_merge`
+    /// succeeds on the normalized schemas.
+    fn normalize(types: &[DataType]) -> (Vec<DataType>, Option<DataType>) {
+        let schemas = types
+            .iter()
+            .map(|t| Schema::new(vec![Field::new("c", t.clone(), true)]))
+            .collect();
+        let schemas = uniform_dict_schemas(schemas);
+        let normalized = schemas
+            .iter()
+            .map(|s| s.field(0).data_type().clone())
+            .collect();
+        let merged = Schema::try_merge(schemas)
+            .ok()
+            .map(|s| s.field(0).data_type().clone());
+        (normalized, merged)
+    }
+
+    /// Checks the inputs in the given order and in reverse order.
+    fn assert_both_orders(
+        name: &str,
+        inputs: &[DataType],
+        expected: &[DataType],
+        merged: Option<DataType>,
+    ) {
+        assert_eq!(
+            normalize(inputs),
+            (expected.to_vec(), merged.clone()),
+            "{name}"
+        );
+        let reversed = |v: &[DataType]| v.iter().rev().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            normalize(&reversed(inputs)),
+            (reversed(expected), merged),
+            "{name} (reversed)"
+        );
+    }
+
+    #[test]
+    fn dictionary_plain_mixtures_are_promoted() {
+        let utf8 = dict(I32, DataType::Utf8);
+        let binary = dict(I32, DataType::Binary);
+        let cases = [
+            (
+                "utf8",
+                vec![utf8.clone(), DataType::Utf8],
+                vec![utf8.clone(), utf8.clone()],
+                Some(utf8.clone()),
+            ),
+            (
+                "binary",
+                vec![binary.clone(), DataType::Binary],
+                vec![binary.clone(), binary.clone()],
+                Some(binary.clone()),
+            ),
+            (
+                "plain files around a dictionary file",
+                vec![DataType::Utf8, utf8.clone(), DataType::Utf8],
+                vec![utf8.clone(), utf8.clone(), utf8.clone()],
+                Some(utf8.clone()),
+            ),
+            (
+                "identical dictionaries",
+                vec![utf8.clone(), utf8.clone()],
+                vec![utf8.clone(), utf8.clone()],
+                Some(utf8.clone()),
+            ),
+            (
+                // `Null` has no value family, so it is left alone, but
+                // `Schema::try_merge` accepts it next to any type.
+                "null column",
+                vec![dict(I8, DataType::Utf8), DataType::Null],
+                vec![dict(I8, DataType::Utf8), DataType::Null],
+                Some(dict(I8, DataType::Utf8)),
+            ),
+            (
+                // An incompatible file does not prevent promoting the others,
+                // but the merge still fails because of it.
+                "incompatible file among compatible files",
+                vec![dict(I8, DataType::Utf8), DataType::Binary, DataType::Utf8],
+                vec![utf8.clone(), DataType::Binary, utf8.clone()],
+                None,
+            ),
+        ];
+        for (name, inputs, expected, merged) in cases {
+            assert_both_orders(name, &inputs, &expected, merged);
+        }
+    }
+
+    #[test]
+    fn dictionary_key_types_widen_to_common_type() {
+        let keys = [I8, I16, I32, I64, U8, U16, U32, U64];
+        // Common key type for each pair of `keys` (rows and columns in the same order).
+        let expected = [
+            [I8, I16, I32, I64, I16, I32, I64, U64],
+            [I16, I16, I32, I64, I16, I32, I64, U64],
+            [I32, I32, I32, I64, I32, I32, I64, U64],
+            [I64, I64, I64, I64, I64, I64, I64, U64],
+            [I16, I16, I32, I64, U8, U16, U32, U64],
+            [I32, I32, I32, I64, U16, U16, U32, U64],
+            [I64, I64, I64, I64, U32, U32, U32, U64],
+            [U64, U64, U64, U64, U64, U64, U64, U64],
+        ];
+        for (a, row) in keys.iter().zip(expected) {
+            for (b, common) in keys.iter().zip(row) {
+                let common = dict(common, DataType::Utf8);
+                assert_eq!(
+                    normalize(&[
+                        dict(a.clone(), DataType::Utf8),
+                        dict(b.clone(), DataType::Utf8)
+                    ]),
+                    (vec![common.clone(), common.clone()], Some(common)),
+                    "{a} + {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plain_field_widens_dictionary_key_to_at_least_int32() {
+        // A plain column may have any number of distinct values, so its key
+        // capacity is treated as `Int32`.
+        for (key, common) in [
+            (I8, I32),
+            (I16, I32),
+            (I32, I32),
+            (I64, I64),
+            (U8, I32),
+            (U16, I32),
+            (U32, I64),
+            (U64, U64),
+        ] {
+            let common = dict(common, DataType::Utf8);
+            assert_both_orders(
+                &format!("{key} + plain"),
+                &[dict(key.clone(), DataType::Utf8), DataType::Utf8],
+                &[common.clone(), common.clone()],
+                Some(common),
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_value_types_widen_to_large_offsets() {
+        let large_utf8 = dict(I32, DataType::LargeUtf8);
+        let large_binary = dict(I32, DataType::LargeBinary);
+        let cases = [
+            (
+                "dictionary utf8 + plain large utf8",
+                vec![dict(I32, DataType::Utf8), DataType::LargeUtf8],
+                large_utf8.clone(),
+            ),
+            (
+                "dictionary large utf8 + plain utf8",
+                vec![large_utf8.clone(), DataType::Utf8],
+                large_utf8.clone(),
+            ),
+            (
+                "dictionary utf8 + dictionary large utf8",
+                vec![dict(I32, DataType::Utf8), large_utf8.clone()],
+                large_utf8.clone(),
+            ),
+            (
+                "dictionary binary + plain large binary",
+                vec![dict(I32, DataType::Binary), DataType::LargeBinary],
+                large_binary.clone(),
+            ),
+            (
+                "dictionary large binary + plain binary",
+                vec![large_binary.clone(), DataType::Binary],
+                large_binary.clone(),
+            ),
+            (
+                "dictionary binary + dictionary large binary",
+                vec![dict(I32, DataType::Binary), large_binary.clone()],
+                large_binary.clone(),
+            ),
+            (
+                "key and value widening together",
+                vec![dict(I8, DataType::Utf8), dict(U16, DataType::LargeUtf8)],
+                large_utf8.clone(),
+            ),
+            (
+                "three files",
+                vec![
+                    dict(U8, DataType::Binary),
+                    DataType::LargeBinary,
+                    dict(I16, DataType::Binary),
+                ],
+                large_binary.clone(),
+            ),
+        ];
+        for (name, inputs, common) in cases {
+            let expected = vec![common.clone(); inputs.len()];
+            assert_both_orders(name, &inputs, &expected, Some(common));
+        }
+    }
+
+    #[test]
+    fn incompatible_types_are_not_promoted() {
+        let nested = |value: DataType| Fields::from(vec![Field::new("v", value, true)]);
+        let cases = [
+            (
+                "utf8 dictionary + binary",
+                vec![dict(I32, DataType::Utf8), DataType::Binary],
+            ),
+            (
+                // The key is not widened for an incompatible plain field.
+                "binary dictionary + utf8",
+                vec![dict(I8, DataType::Binary), DataType::Utf8],
+            ),
+            (
+                "utf8 dictionary + binary dictionary",
+                vec![dict(I32, DataType::Utf8), dict(I32, DataType::Binary)],
+            ),
+            (
+                "large utf8 dictionary + large binary",
+                vec![dict(I32, DataType::LargeUtf8), DataType::LargeBinary],
+            ),
+            (
+                "utf8 dictionary + utf8 view",
+                vec![dict(I32, DataType::Utf8), DataType::Utf8View],
+            ),
+            (
+                "utf8 view dictionary + utf8 view",
+                vec![dict(I32, DataType::Utf8View), DataType::Utf8View],
+            ),
+            (
+                "binary dictionary + binary view",
+                vec![dict(I32, DataType::Binary), DataType::BinaryView],
+            ),
+            (
+                "binary view dictionary + binary view",
+                vec![dict(I32, DataType::BinaryView), DataType::BinaryView],
+            ),
+            (
+                "fixed size binary dictionary + fixed size binary",
+                vec![
+                    dict(I32, DataType::FixedSizeBinary(4)),
+                    DataType::FixedSizeBinary(4),
+                ],
+            ),
+            (
+                "int64 dictionary + int64",
+                vec![dict(I32, DataType::Int64), DataType::Int64],
+            ),
+            (
+                // Keys are only widened for string and binary values.
+                "int64 dictionaries with different keys",
+                vec![dict(I8, DataType::Int64), dict(I32, DataType::Int64)],
+            ),
+            (
+                // Only top-level fields are normalized.
+                "struct with dictionary child + struct with plain child",
+                vec![
+                    DataType::Struct(nested(dict(I32, DataType::Utf8))),
+                    DataType::Struct(nested(DataType::Utf8)),
+                ],
+            ),
+            (
+                "list of dictionary + list of plain",
+                vec![
+                    DataType::new_list(dict(I32, DataType::Utf8), true),
+                    DataType::new_list(DataType::Utf8, true),
+                ],
+            ),
+            (
+                // Without any dictionary, plain types are not widened.
+                "plain utf8 + plain large utf8",
+                vec![DataType::Utf8, DataType::LargeUtf8],
+            ),
+        ];
+        for (name, inputs) in cases {
+            assert_both_orders(name, &inputs, &inputs, None);
+        }
+    }
+
+    #[test]
+    fn first_dictionary_value_family_wins() {
+        // When a column has dictionaries of both the string and binary families,
+        // only files compatible with the first dictionary seen are normalized.
+        // The merge fails either way.
+        let inputs = [
+            dict(I8, DataType::Utf8),
+            dict(I32, DataType::Binary),
+            DataType::Utf8,
+        ];
+        assert_eq!(
+            normalize(&inputs),
+            (
+                vec![
+                    dict(I32, DataType::Utf8),
+                    dict(I32, DataType::Binary),
+                    dict(I32, DataType::Utf8),
+                ],
+                None
+            )
+        );
+        let reversed: Vec<_> = inputs.iter().rev().cloned().collect();
+        assert_eq!(normalize(&reversed), (reversed.clone(), None));
+    }
+
+    #[test]
+    fn multiple_columns_preserve_field_and_schema_properties() {
+        let schema_metadata = HashMap::from([("k".to_string(), "v".to_string())]);
+        let field_metadata = HashMap::from([("m".to_string(), "1".to_string())]);
+        let schemas = vec![
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("a", dict(I8, DataType::Utf8), true)
+                        .with_metadata(field_metadata.clone()),
+                    Field::new("b", DataType::Utf8, false),
+                ],
+                schema_metadata.clone(),
+            ),
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("a", DataType::Utf8, false).with_metadata(field_metadata.clone()),
+                    Field::new("b", DataType::Utf8, true),
+                    Field::new("d", dict(U16, DataType::LargeBinary), true),
+                ],
+                schema_metadata.clone(),
+            ),
+            Schema::new(vec![
+                Field::new("a", DataType::LargeUtf8, true),
+                Field::new("d", DataType::Binary, false),
+                Field::new("e", DataType::Int64, true),
+            ]),
+        ];
+        let a = dict(I32, DataType::LargeUtf8);
+        let d = dict(I32, DataType::LargeBinary);
+        let expected = vec![
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("a", a.clone(), true).with_metadata(field_metadata.clone()),
+                    Field::new("b", DataType::Utf8, false),
+                ],
+                schema_metadata.clone(),
+            ),
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("a", a.clone(), false).with_metadata(field_metadata.clone()),
+                    Field::new("b", DataType::Utf8, true),
+                    Field::new("d", d.clone(), true),
+                ],
+                schema_metadata.clone(),
+            ),
+            Schema::new(vec![
+                Field::new("a", a.clone(), true),
+                Field::new("d", d.clone(), false),
+                Field::new("e", DataType::Int64, true),
+            ]),
+        ];
+        let normalized = uniform_dict_schemas(schemas);
+        assert_eq!(normalized, expected);
+        assert_eq!(
+            Schema::try_merge(normalized).ok(),
+            Some(Schema::new_with_metadata(
+                vec![
+                    Field::new("a", a, true).with_metadata(field_metadata),
+                    Field::new("b", DataType::Utf8, true),
+                    Field::new("d", d, true),
+                    Field::new("e", DataType::Int64, true),
+                ],
+                schema_metadata,
+            ))
+        );
+    }
+}
