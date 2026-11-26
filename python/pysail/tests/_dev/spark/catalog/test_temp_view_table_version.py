@@ -39,10 +39,12 @@ def remote():
 
 
 @pytest.fixture(scope="module")
-def observer(remote):
+def observer(spark, remote):
     """Returns another session of the server of `spark`."""
     with spark_session_factory(remote) as sessions:
-        yield sessions.create()
+        session = sessions.create()
+        assert session.session_id != spark.session_id
+        yield session
 
 
 @pytest.fixture
