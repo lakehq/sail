@@ -2909,6 +2909,26 @@ mod tests {
             true,
         );
         assert_eq!(changes, Ok(vec![0]));
+        // A cast of a map cannot leave out the fields that the structs of its keys gained,
+        // since keys without them can be the same.
+        let key = |names: &[&str]| {
+            field(
+                "c",
+                map(
+                    Field::new("key", fields(names), false),
+                    field("value", DataType::Int32),
+                ),
+            )
+        };
+        let changes = match_columns(
+            &Schema::new(vec![key(&["a"])]),
+            &Schema::new(vec![key(&["a", "d"])]),
+            true,
+        );
+        assert_eq!(
+            changes,
+            Err(vec!["`c`.`key`.`d` Int32 has been added".to_string()])
+        );
     }
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;

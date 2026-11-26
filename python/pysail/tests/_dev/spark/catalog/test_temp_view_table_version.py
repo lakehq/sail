@@ -1172,6 +1172,15 @@ def test_view_reads_a_struct_without_the_fields_that_it_gained(spark, tables, fm
     assert rows(spark, f"SELECT * FROM {view}") == [(2, expected)]
 
 
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_view_of_a_map_whose_key_structs_gained_a_field_must_be_created_again(spark, tables, kind):
+    table = tables("parquet", "id INT, m MAP<STRUCT<a: INT>, INT>")
+    table.insert("(1, map(named_struct('a', 10), 1))")
+    view = table.create_view(kind)
+    table.recreate("id INT, m MAP<STRUCT<a: INT, c: INT>, INT>", "(2, map(named_struct('a', 11, 'c', 31), 2))")
+    assert_view_reads(spark, view, None)
+
+
 # Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The
 # definition of a view is resolved as if its columns had nulls, so the view reads the struct.
 STRUCT_COUNT_QUERIES = {
