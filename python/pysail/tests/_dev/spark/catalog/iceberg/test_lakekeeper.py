@@ -118,3 +118,19 @@ def test_lakekeeper_remove_last_property(spark: SparkSession, lakekeeper_endpoin
         assert "custom" not in reference.refresh().properties
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_snapshot_publication(spark, lakekeeper_endpoint):
+    from pyiceberg.catalog.rest import RestCatalog
+
+    from pysail.testing._dev.spark.iceberg import exercise_snapshot_publication
+
+    catalog = RestCatalog("reference", uri=f"{lakekeeper_endpoint}/catalog", warehouse="demo")
+    table = f"{NAMESPACE}.publication"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg TBLPROPERTIES ('format-version'='2')")
+
+    def load_table():
+        loaded = catalog.load_table(table)
+        return loaded.metadata_location, loaded.metadata.model_dump(by_alias=True)
+
+    exercise_snapshot_publication(spark, table, load_table)

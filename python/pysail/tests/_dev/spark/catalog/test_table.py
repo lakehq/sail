@@ -166,3 +166,9 @@ def test_create_table_returns_readable_dataframe(created_table):
     _, schema, _, result = created_table
     assert result.schema == schema
     assert result.collect() == []
+
+
+@pytest.mark.parametrize(("name", "argument"), [("cherrypick_snapshot", "1"), ("publish_changes", "'audit'")])
+def test_system_table_rejects_snapshot_procedure(spark, name, argument):
+    with pytest.raises(Exception, match="procedure target is not a table"):
+        spark.sql(f"CALL system.system.{name}('system.session.options', {argument})").collect()

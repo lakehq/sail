@@ -20,6 +20,7 @@ use crate::operations::metadata_commit::{
     PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::snapshot::CreatedPathCleanup;
+use crate::procedure::cherrypick::CherryPick;
 use crate::procedure::expire_snapshots::{Expiration, ExpireSnapshots};
 use crate::procedure::rewrite_manifests::RewriteManifests;
 use crate::spec::TableMetadata;
@@ -33,6 +34,7 @@ const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 
 pub(crate) enum ProcedureCommitOperation {
     Snapshot(SnapshotOperation),
+    CherryPick(CherryPick),
     AddFiles(crate::procedure::add_files::AddFiles),
     RewriteManifests(RewriteManifests),
     ExpireSnapshots(ExpireSnapshots),
@@ -41,6 +43,12 @@ pub(crate) enum ProcedureCommitOperation {
 impl From<crate::procedure::add_files::AddFiles> for ProcedureCommitOperation {
     fn from(operation: crate::procedure::add_files::AddFiles) -> Self {
         Self::AddFiles(operation)
+    }
+}
+
+impl From<CherryPick> for ProcedureCommitOperation {
+    fn from(source: CherryPick) -> Self {
+        Self::CherryPick(source)
     }
 }
 
@@ -70,7 +78,7 @@ pub(crate) async fn commit_snapshot_operation(
     operation: impl Into<ProcedureCommitOperation>,
     output_schema: datafusion::arrow::datatypes::SchemaRef,
 ) -> Result<RecordBatch> {
-    let operation = operation.into();
+    let mut operation = operation.into();
     let is_expiration = matches!(&operation, ProcedureCommitOperation::ExpireSnapshots(_));
     let object_store = ctx
         .runtime_env()
@@ -208,7 +216,21 @@ pub(crate) async fn commit_snapshot_operation(
             metadata.ensure_required_format_fields();
         }
         let mut expiration: Option<Expiration> = None;
-        let prepared = match &operation {
+        let prepared = match &mut operation {
+            ProcedureCommitOperation::CherryPick(source) => {
+                let snapshot = source.resolve(&metadata)?;
+                // Retry the same source snapshot even if another writer reuses the WAP ID.
+                *source = CherryPick::Snapshot(snapshot.snapshot_id);
+                crate::procedure::cherrypick::prepare(
+                    &store_context,
+                    table_url,
+                    &metadata,
+                    snapshot,
+                    output_schema.clone(),
+                    commit_mode.uses_catalog_commit(),
+                )
+                .await?
+            }
             ProcedureCommitOperation::AddFiles(operation) => {
                 operation
                     .prepare(
@@ -277,10 +299,18 @@ pub(crate) async fn commit_snapshot_operation(
         let mut use_metadata_location_fallback = commit_mode.uses_metadata_location_update();
         if let Some((table, context)) = catalog_commit {
             cleanup.publication_started();
-            match IcebergCatalogCommitCoordinator::new(ctx, table)
+            let result = IcebergCatalogCommitCoordinator::new(ctx, table)
                 .commit(context, requirements, updates)
-                .await?
+                .await;
+            if let Err(DataFusionError::External(error)) = &result
+                && matches!(
+                    error.downcast_ref::<sail_catalog::error::CatalogError>(),
+                    Some(sail_catalog::error::CatalogError::CommitRejected(_))
+                )
             {
+                cleanup.cleanup().await;
+            }
+            match result? {
                 CatalogCommitOutcome::Committed(committed) => {
                     if is_expiration {
                         validate_expiration_response(

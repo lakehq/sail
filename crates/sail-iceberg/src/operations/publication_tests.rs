@@ -102,6 +102,7 @@ fn commit(url: &Url, file: DataFile) -> IcebergCommitInfo {
         snapshot_properties: Default::default(),
         table_uri: url.to_string(),
         row_count: 1,
+        dynamic_partition_overwrite: false,
         action_summary: None,
         data_files: vec![file],
         delete_files: vec![],

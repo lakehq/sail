@@ -529,6 +529,50 @@ def test_snapshot_procedure_commits_through_rest_catalog(
     assert [row.id for row in rows] == [1]
 
 
+@pytest.mark.parametrize("other_commit", ["append", "publish"])
+def test_publish_changes_after_rest_commit_conflict(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, other_commit
+):
+    name = f"concurrent_publish_{other_commit}"
+    table = f"sail.{NAMESPACE}.{name}"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+    spark.range(1).writeTo(table).append()
+    base = _load_table(iceberg_rest_endpoint, name)["metadata"]["current-snapshot-id"]
+    spark.range(1, 2).writeTo(table).option("snapshot-property.wap.id", "audit").append()
+    source = _load_table(iceberg_rest_endpoint, name)["metadata"]["current-snapshot-id"]
+    spark.sql(f"CALL sail.system.rollback_to_snapshot('{table}', {base})").collect()
+
+    call = f"CALL sail.system.publish_changes('{table}', 'audit')"
+    _, gate = commit_gate_proxy
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as executor:
+        slow = sessions.create()
+        gate.arm(NAMESPACE, name, update_action="set-snapshot-ref")
+        future = executor.submit(lambda: slow.sql(call).first())
+        try:
+            assert gate.arrived.wait(timeout=60)
+            if other_commit == "append":
+                spark.range(2, 3).writeTo(table).append()
+            else:
+                assert tuple(spark.sql(call).first()) == (source, source)
+            winner = _load_table(iceberg_rest_endpoint, name)
+        finally:
+            gate.release.set()
+        if other_commit == "publish":
+            with pytest.raises(Exception, match="published already"):
+                future.result(timeout=60)
+            assert _load_table(iceberg_rest_endpoint, name) == winner
+        else:
+            row = future.result(timeout=60)
+            current = _current_snapshot(_load_table(iceberg_rest_endpoint, name)["metadata"])
+            assert tuple(row) == (source, current["snapshot-id"])
+            assert current["parent-snapshot-id"] == winner["metadata"]["current-snapshot-id"]
+            assert current["summary"]["published-wap-id"] == "audit"
+    assert gate.response_status == HTTP_CONFLICT
+    assert [r.id for r in spark.table(table).orderBy("id").collect()] == (
+        [0, 1, 2] if other_commit == "append" else [0, 1]
+    )
+
+
 def test_rest_catalog_write_honors_absolute_data_path(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
@@ -1766,3 +1810,66 @@ def test_show_table_properties_reads_external_rest_property_commits(
             previous = committed
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+
+
+def test_snapshot_publication(spark, iceberg_rest_endpoint):
+    from pysail.testing._dev.spark.iceberg import exercise_snapshot_publication
+
+    table = f"{NAMESPACE}.publication"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg")
+
+    def load_table():
+        loaded = _load_table(iceberg_rest_endpoint, "publication")
+        return loaded["metadata-location"], loaded["metadata"]
+
+    exercise_snapshot_publication(spark, table, load_table)
+
+
+def test_publish_rejects_concurrently_expired_source(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint
+):
+    from pyiceberg.catalog.rest import RestCatalog
+
+    name = "expire_while_publishing"
+    table = f"{NAMESPACE}.{name}"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg TBLPROPERTIES ('format-version'='2')")
+    spark.range(1).writeTo(table).append()
+    base = _load_table(iceberg_rest_endpoint, name)["metadata"]["current-snapshot-id"]
+    spark.range(1, 2).writeTo(table).option("snapshot-property.wap.id", "audit").append()
+    source = _load_table(iceberg_rest_endpoint, name)["metadata"]["current-snapshot-id"]
+    spark.sql(f"CALL system.rollback_to_snapshot('{table}', {base})").collect()
+    spark.range(2, 3).writeTo(table).append()
+
+    location = _load_table(iceberg_rest_endpoint, name)["metadata"]["location"]
+    initial_keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+    _, gate = commit_gate_proxy
+    gate.arm(NAMESPACE, name, update_action="add-snapshot")
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as executor:
+        slow = sessions.create()
+        future = executor.submit(lambda: slow.sql(f"CALL system.publish_changes('{table}', 'audit')").collect())
+        try:
+            assert gate.arrived.wait(timeout=60)
+            staged_keys = _s3_object_keys(seaweedfs_host_endpoint, location) - initial_keys
+            assert staged_keys
+            assert all(key.endswith(".avro") for key in staged_keys)
+            expired = spark.sql(f"CALL system.expire_snapshots('{table}', snapshot_ids => array({source}L))").first()
+            assert expired.deleted_data_files_count == 1
+            winner = _load_table(iceberg_rest_endpoint, name)
+        finally:
+            gate.release.set()
+        with pytest.raises(Exception, match="commit rejected"):
+            future.result(timeout=60)
+    assert gate.response_status == HTTPStatus.BAD_REQUEST
+    assert staged_keys.isdisjoint(_s3_object_keys(seaweedfs_host_endpoint, location))
+    assert _load_table(iceberg_rest_endpoint, name) == winner
+    catalog = RestCatalog(
+        "reference",
+        uri=iceberg_rest_endpoint,
+        **{
+            "s3.endpoint": seaweedfs_host_endpoint,
+            "s3.access-key-id": "admin",
+            "s3.secret-access-key": "password",
+            "s3.region": "us-east-1",
+        },
+    )
+    assert sorted(catalog.load_table(table).scan().to_arrow()["id"].to_pylist()) == [0, 2]

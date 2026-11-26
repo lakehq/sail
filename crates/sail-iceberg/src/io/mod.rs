@@ -95,6 +95,45 @@ impl StoreContext {
     }
 }
 
+/// Read a snapshot's manifest list, including v1 snapshots that embed paths directly.
+pub(crate) async fn load_snapshot_manifest_list(
+    store: &StoreContext,
+    snapshot: &crate::spec::Snapshot,
+) -> Result<ManifestList, DataFusionError> {
+    if !snapshot.manifest_list().is_empty() {
+        return load_manifest_list(store, snapshot.manifest_list()).await;
+    }
+    let paths = snapshot.manifests().ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Snapshot {} has no manifests",
+            snapshot.snapshot_id
+        ))
+    })?;
+    let mut manifests = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (storage, object) = store.resolve(path)?;
+        let bytes = storage.get(&object).await?.bytes().await?;
+        let (header, entries) =
+            Manifest::try_from_avro_bytes(&bytes).map_err(DataFusionError::Execution)?;
+        // ADDED and DELETED entries identify the snapshot that wrote the manifest.
+        let writer_id = entries
+            .iter()
+            .find(|e| e.status != ManifestStatus::Existing)
+            .and_then(|e| e.snapshot_id)
+            .unwrap_or(snapshot.snapshot_id);
+        let mut writer = crate::spec::ManifestWriter::new(Some(writer_id), None, header);
+        for entry in entries {
+            writer.add_entry(entry);
+        }
+        let mut descriptor = writer
+            .into_manifest_file(path.clone(), 0, writer_id)
+            .map_err(DataFusionError::Execution)?;
+        descriptor.manifest_length = bytes.len() as i64;
+        manifests.push(descriptor);
+    }
+    Ok(ManifestList::new(manifests))
+}
+
 pub async fn load_manifest_list(
     store_ctx: &StoreContext,
     manifest_list_str: &str,

@@ -4,11 +4,11 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
-use datafusion::common::{Result, exec_err, not_impl_err};
+use datafusion::common::{Result, exec_err};
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 
-use crate::io::{StoreContext, load_manifest, load_manifest_list_with_version};
+use crate::io::{StoreContext, load_manifest, load_snapshot_manifest_list};
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
     ManifestStatus, TableMetadata,
@@ -63,15 +63,7 @@ pub(crate) async fn scan_manifests(
     let mut paths = HashSet::new();
     let mut manifests = vec![];
     for snapshot in snapshots {
-        if snapshot.manifest_list().is_empty() {
-            return not_impl_err!("Iceberg metadata scans require a snapshot manifest list");
-        }
-        let list = load_manifest_list_with_version(
-            store,
-            snapshot.manifest_list(),
-            metadata.format_version,
-        )
-        .await?;
+        let list = load_snapshot_manifest_list(store, snapshot).await?;
         for manifest in list.entries() {
             if scope
                 .content

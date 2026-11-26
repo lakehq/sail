@@ -17,9 +17,11 @@ use sail_common_datafusion::lakeprocedure::{
 
 mod add_files;
 mod arguments;
+mod cherrypick;
 mod descriptor;
 mod expire_snapshots;
 mod logical;
+mod manifest;
 mod rewrite_data_files;
 mod rewrite_manifests;
 pub(crate) mod snapshot;
@@ -143,6 +145,22 @@ pub(crate) async fn execute_iceberg_procedure(
                 load_current_metadata(ctx, &table_url, table_properties, lakehouse_table.as_ref())
                     .await?;
             ancestors_output(&metadata, &invocation)
+        }
+        IcebergProcedureType::CherrypickSnapshot | IcebergProcedureType::PublishChanges => {
+            let source = if procedure_type == IcebergProcedureType::CherrypickSnapshot {
+                cherrypick::CherryPick::Snapshot(required_i64(&invocation, "snapshot_id")?)
+            } else {
+                cherrypick::CherryPick::Wap(required_string(&invocation, "wap_id")?)
+            };
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                table_properties,
+                lakehouse_table.as_ref(),
+                source,
+                invocation.procedure.schema(),
+            )
+            .await
         }
         IcebergProcedureType::ExpireSnapshots => {
             let operation = expire_snapshots::ExpireSnapshots::from_invocation(&invocation)?;
@@ -315,11 +333,13 @@ mod tests {
                 "rollback_to_snapshot",
                 "rollback_to_timestamp",
                 "set_current_snapshot",
+                "cherrypick_snapshot",
                 "rewrite_data_files",
                 "rewrite_manifests",
                 "expire_snapshots",
                 "add_files",
                 "ancestors_of",
+                "publish_changes",
                 "fast_forward",
             ]
         );

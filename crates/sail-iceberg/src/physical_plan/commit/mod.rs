@@ -25,6 +25,8 @@ pub struct IcebergCommitInfo {
     #[serde(default)]
     pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    #[serde(default)]
+    pub dynamic_partition_overwrite: bool,
     pub snapshot_update_kind: SnapshotUpdateKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<Schema>,

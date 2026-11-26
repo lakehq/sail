@@ -21,9 +21,7 @@ use futures::stream::{self, TryStreamExt};
 use url::Url;
 
 use crate::datasource::predicate::Predicate;
-use crate::io::{
-    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
-};
+use crate::io::{StoreContext, load_manifest as io_load_manifest, load_snapshot_manifest_list};
 use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, PartitionSpec, Snapshot};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -189,12 +187,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let store_ctx = StoreContext::new(object_store, &table_url_parsed)?;
 
-            let manifest_list_path = snapshot.manifest_list();
-            log::trace!(
-                "IcebergManifestScanExec: loading manifest list from {}",
-                manifest_list_path
-            );
-            let manifest_list = io_load_manifest_list(&store_ctx, manifest_list_path).await?;
+            let manifest_list = load_snapshot_manifest_list(&store_ctx, &snapshot).await?;
 
             // Collect data manifests only (skip delete manifests).
             let data_manifests: Vec<ManifestFile> = manifest_list

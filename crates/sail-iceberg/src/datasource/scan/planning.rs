@@ -13,9 +13,7 @@ use crate::datasource::predicate::Predicate;
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_manifests_by_partition_summaries,
 };
-use crate::io::{
-    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
-};
+use crate::io::{StoreContext, load_manifest as io_load_manifest, load_snapshot_manifest_list};
 use crate::spec::delete_index::{DeleteFileIndex, MatchedDeletes};
 use crate::spec::{DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec};
 use crate::utils::get_object_store_from_session;
@@ -158,10 +156,7 @@ impl IcebergScan {
                 "Iceberg table has no current snapshot".to_string(),
             )
         })?;
-        let manifest_list_str = snapshot.manifest_list();
-        log::trace!("Manifest list path: {}", manifest_list_str);
-        let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
-        Ok(ml)
+        load_snapshot_manifest_list(store_ctx, snapshot).await
     }
 
     /// Load live data files from manifests, preserving per-file data sequence numbers and the

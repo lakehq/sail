@@ -65,7 +65,7 @@ pub struct Snapshot {
     pub timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub manifest_list: String,
     /// V1 snapshots list manifests directly instead of a manifest list file.
     #[serde(skip_serializing_if = "Option::is_none")]

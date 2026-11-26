@@ -112,3 +112,29 @@ def test_nessie_lakehouse_ddl(spark: SparkSession, nessie_iceberg_rest_endpoint:
         assert spark.table(table).first().id == 1
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
+
+
+def test_snapshot_procedures_cannot_publish_hidden_history(spark, nessie_iceberg_rest_endpoint):
+    from pyiceberg.catalog.rest import RestCatalog
+
+    catalog = RestCatalog("reference", uri=nessie_iceberg_rest_endpoint)
+    table = "nessie_publication.items"
+    spark.sql("CREATE NAMESPACE nessie_publication")
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg TBLPROPERTIES ('format-version'='2')")
+        spark.range(1).writeTo(table).option("snapshot-property.wap.id", "audit").append()
+        source = catalog.load_table(table).current_snapshot().snapshot_id
+        spark.range(1, 2).writeTo(table).append()
+        # Nessie exposes only the snapshot at the requested Nessie commit.
+        loaded = catalog.load_table(table)
+        current = loaded.current_snapshot().snapshot_id
+        assert [s.snapshot_id for s in loaded.metadata.snapshots] == [current]
+        assert current != source
+        with pytest.raises(Exception, match="unknown snapshot ID"):
+            spark.sql(f"CALL system.cherrypick_snapshot('{table}', {source})").collect()
+        with pytest.raises(Exception, match="unknown WAP ID"):
+            spark.sql(f"CALL system.publish_changes('{table}', 'audit')").collect()
+        assert catalog.load_table(table).metadata_location == loaded.metadata_location
+        assert [r.id for r in spark.table(table).orderBy("id").collect()] == [0, 1]
+    finally:
+        spark.sql("DROP NAMESPACE nessie_publication CASCADE")

@@ -1156,34 +1156,16 @@ impl<'a> SnapshotProducer<'a> {
         let new_sequence_number = self.tx.next_sequence_number(format_version)?;
 
         let parent_snapshot = self.tx.snapshot();
-        let parent_manifest_list_path_str = parent_snapshot.manifest_list();
         let mut parent_manifest_entries = Vec::new();
-
         if !self.is_bootstrap
             && update_kind.carries_parent_manifests()
-            && !parent_manifest_list_path_str.is_empty()
+            && (!parent_snapshot.manifest_list().is_empty()
+                || parent_snapshot.manifests().is_some())
         {
-            let (store_ref, manifest_list_path) = store_ctx
-                .resolve(parent_manifest_list_path_str)
-                .map_err(|e| format!("{}", e))?;
-
-            log::trace!(
-                "snapshot producer: loading parent manifest list: {}",
-                manifest_list_path
-            );
-            let manifest_list_data = store_ref
-                .get(&manifest_list_path)
-                .await
-                .map_err(|e| format!("Failed to get parent manifest list: {}", e))?
-                .bytes()
-                .await
-                .map_err(|e| format!("Failed to read parent manifest list bytes: {}", e))?;
             let parent_manifest_list =
-                crate::spec::ManifestList::parse_with_version(&manifest_list_data, format_version)?;
-            log::trace!(
-                "snapshot producer: found parent manifest files: {}",
-                parent_manifest_list.entries().len()
-            );
+                crate::io::load_snapshot_manifest_list(store_ctx, parent_snapshot)
+                    .await
+                    .map_err(|e| format!("Failed to load parent manifest list: {e}"))?;
             for mut manifest_file in parent_manifest_list.into_entries() {
                 populate_retained_manifest_counts(store_ctx, &mut manifest_file).await?;
                 parent_manifest_entries.push(manifest_file);

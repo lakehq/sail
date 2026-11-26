@@ -237,3 +237,12 @@ CALL system.rewrite_data_files(
 ```
 
 `rewrite_data_files` performs main-branch binpack compaction. See the [feature matrix](./features#catalogs-and-maintenance) for other maintenance procedures.
+
+To publish a snapshot staged by an Iceberg writer, supply its snapshot ID or its unique WAP ID.
+Choose one call for the source snapshot. Both return `source_snapshot_id` and `current_snapshot_id`.
+
+```sql
+CALL system.cherrypick_snapshot(table => 'users', snapshot_id => 123);
+-- Alternatively, for a snapshot staged with wap.id = 'audit-42'
+CALL system.publish_changes(table => 'users', wap_id => 'audit-42');
+```
