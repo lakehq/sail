@@ -173,8 +173,9 @@ impl ViewTableReference {
     /// Returns, for each column that the scan read when the view was created, its position
     /// in the table and how the scan reads it, or how the columns that the stored plan reads
     /// changed. A column that the plan reads keeps its type (Spark's
-    /// `SchemaUtils.validateSchemaCompatibility`), or only the fields that it reads for a
-    /// struct, or only exists for a column that only tells rows apart or orders them, or
+    /// `SchemaUtils.validateSchemaCompatibility`) or has a type whose values convert exactly
+    /// to it, or keeps only the fields that it reads for a struct, or only exists for a
+    /// column that only tells rows apart or orders them, or
     /// only stays a signed integer for a column that is only an operand (see
     /// [`ColumnUse::Operand`]). A column that the plan does not read has a position only if
     /// it did not change.
@@ -290,9 +291,72 @@ fn is_signed_integer(field: &Field) -> bool {
     matches!(
         field.data_type(),
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-    ) && !LOGICAL_TYPE_METADATA_KEYS
+    ) && !has_logical_type(field)
+}
+
+/// Whether a field has the metadata of a logical type (see [`LOGICAL_TYPE_METADATA_KEYS`]).
+fn has_logical_type(field: &Field) -> bool {
+    LOGICAL_TYPE_METADATA_KEYS
         .iter()
         .any(|key| field.metadata().contains_key(*key))
+}
+
+/// Whether every value of the current field converts exactly to the type of the stored
+/// field, so that the stored plan reads the current values as if the table still had the
+/// stored type. A field of another logical type, such as a user-defined type, does not.
+fn converts_exactly(current: &Field, stored: &Field) -> bool {
+    use DataType::*;
+    // Whether an integer type is signed, its bits, and the decimal digits of its values.
+    let integer = |x: &DataType| -> Option<(bool, u32, i16)> {
+        match x {
+            Int8 => Some((true, 8, 3)),
+            Int16 => Some((true, 16, 5)),
+            Int32 => Some((true, 32, 10)),
+            Int64 => Some((true, 64, 19)),
+            UInt8 => Some((false, 8, 3)),
+            UInt16 => Some((false, 16, 5)),
+            UInt32 => Some((false, 32, 10)),
+            UInt64 => Some((false, 64, 20)),
+            _ => None,
+        }
+    };
+    // The bits of the significand of a floating-point type.
+    let float = |x: &DataType| -> Option<u32> {
+        match x {
+            Float16 => Some(11),
+            Float32 => Some(24),
+            Float64 => Some(53),
+            _ => None,
+        }
+    };
+    let decimal = |x: &DataType| match *x {
+        Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
+            Some((i16::from(p), i16::from(s)))
+        }
+        _ => None,
+    };
+    if has_logical_type(current) || has_logical_type(stored) {
+        return false;
+    }
+    let (current, stored) = (current.data_type(), stored.data_type());
+    if let Some((signed, bits, digits)) = integer(current) {
+        if let Some((stored_signed, stored_bits, _)) = integer(stored) {
+            return stored_bits > bits && (stored_signed || !signed);
+        }
+        if let Some(significand) = float(stored) {
+            return bits - u32::from(signed) <= significand;
+        }
+        if let Some((precision, scale)) = decimal(stored) {
+            return scale >= 0 && precision - scale >= digits;
+        }
+    }
+    if let (Some(bits), Some(stored_bits)) = (float(current), float(stored)) {
+        return stored_bits > bits;
+    }
+    if let (Some((p1, s1)), Some((p2, s2))) = (decimal(current), decimal(stored)) {
+        return s2 >= s1 && p2 - s2 >= p1 - s1;
+    }
+    false
 }
 
 /// The field metadata that is part of the logical type of a field, for types that share an
@@ -489,7 +553,10 @@ impl<'a> Fit<'a> {
             return Read::Same;
         }
         self.logical_type_changes(stored, current, path);
-        let read = self.data_type(stored.data_type(), current.data_type(), used, path);
+        let read = match converts_exactly(current, stored) {
+            true => Read::Cast,
+            false => self.data_type(stored.data_type(), current.data_type(), used, path),
+        };
         let key = SPARK_METADATA_JSON_KEY;
         if read == Read::Same && stored.metadata().get(key) != current.metadata().get(key) {
             Read::Cast
@@ -2077,18 +2144,97 @@ mod tests {
         let types = data_types();
         for stored in &types {
             for current in &types {
+                let (stored_field, current_field) =
+                    (field("c", stored.clone()), field("c", current.clone()));
                 let result = match_columns(
-                    &Schema::new(vec![field("c", stored.clone())]),
-                    &Schema::new(vec![field("c", current.clone())]),
+                    &Schema::new(vec![stored_field.clone()]),
+                    &Schema::new(vec![current_field.clone()]),
                     true,
                 );
-                if one_encoding(stored) == one_encoding(current) {
+                // The types whose values convert exactly have their own test.
+                if one_encoding(stored) == one_encoding(current)
+                    || converts_exactly(&current_field, &stored_field)
+                {
                     assert_eq!(result, Ok(vec![0]), "{stored}");
                 } else {
                     assert!(result.is_err(), "{stored} and {current}");
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_columns_whose_values_convert_exactly_to_the_stored_type_are_cast() {
+        use DataType::*;
+        // The current type and the stored type.
+        let exact = [
+            (Int8, Int16),
+            (Int16, Int64),
+            (Int32, Int64),
+            (UInt8, UInt16),
+            (UInt32, UInt64),
+            (UInt8, Int16),
+            (UInt32, Int64),
+            (Int8, Float16),
+            (UInt8, Float16),
+            (Int16, Float32),
+            (UInt16, Float32),
+            (Int32, Float64),
+            (UInt32, Float64),
+            (Float16, Float32),
+            (Float32, Float64),
+            (Decimal128(5, 2), Decimal128(10, 2)),
+            (Decimal32(5, 2), Decimal256(40, 3)),
+            (Decimal128(5, -2), Decimal64(7, 0)),
+            (Int8, Decimal32(3, 0)),
+            (Int32, Decimal128(10, 0)),
+            (Int64, Decimal128(21, 2)),
+            (UInt64, Decimal128(20, 0)),
+        ];
+        for (current, stored) in exact {
+            let (current, stored) = (field("c", current), field("c", stored));
+            assert_eq!(read_of(&stored, &current), Ok(Read::Cast), "{current:?}");
+            assert!(read_of(&current, &stored).is_err(), "{stored:?}");
+        }
+        let inexact = [
+            (Int8, UInt8),
+            (UInt64, Int64),
+            (Int16, Float16),
+            (Int32, Float32),
+            (Int64, Float64),
+            (UInt64, Float64),
+            (Decimal128(10, 2), Decimal128(10, 3)),
+            (Decimal128(10, 2), Decimal128(11, 1)),
+            (Int64, Decimal128(18, 0)),
+            (UInt64, Decimal128(19, 0)),
+            (Int32, Decimal128(12, -1)),
+            (Int32, Utf8),
+            (Date32, Timestamp(TimeUnit::Microsecond, None)),
+            (
+                Timestamp(TimeUnit::Second, None),
+                Timestamp(TimeUnit::Millisecond, None),
+            ),
+        ];
+        for (current, stored) in inexact {
+            assert!(
+                read_of(&field("c", stored), &field("c", current.clone())).is_err(),
+                "{current}"
+            );
+        }
+        // Values inside lists and structs.
+        let wrap = |x: DataType| list(field("s", DataType::Struct(vec![field("a", x)].into())));
+        assert_eq!(
+            read_of(&field("l", wrap(Int64)), &field("l", wrap(Int32))),
+            Ok(Read::Cast)
+        );
+        // An integer of a user-defined type keeps its type.
+        let udt = |x: DataType| {
+            field("c", x).with_metadata(HashMap::from([(
+                SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                "{}".to_string(),
+            )]))
+        };
+        assert!(read_of(&udt(Int64), &udt(Int32)).is_err());
     }
 
     #[test]

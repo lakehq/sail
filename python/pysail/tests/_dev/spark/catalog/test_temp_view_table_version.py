@@ -233,6 +233,15 @@ COLUMN_CHANGES = {
         "(5, 50, 500)",
         None,
     ),
+    # The current values of the column convert exactly to the type that the view reads.
+    "read column narrowed": (
+        "a INT, b BIGINT, x INT",
+        "(1, 10, 100)",
+        "SELECT a, b FROM {t}",
+        "a INT, b INT, x INT",
+        "(5, 50, 500)",
+        [(5, 50)],
+    ),
     "filter column dropped": (
         "a INT, b INT, x INT",
         "(1, 10, 100)",
@@ -541,7 +550,8 @@ COLUMN_CHANGES = {
         [(5,)],
     ),
     # The resolver casts an integer compared with a FLOAT, or with a DOUBLE after the change,
-    # and adds the rules of DISTINCT to a DOUBLE, so these columns keep their types.
+    # and adds the rules of DISTINCT to a DOUBLE, so these columns keep their types, unless
+    # their current values convert exactly to the stored type.
     "filter column compared with a float widened": (
         "a INT, b INT, f FLOAT",
         "(1, 10, 1.5)",
@@ -556,7 +566,7 @@ COLUMN_CHANGES = {
         "SELECT a FROM {t} WHERE b > f",
         "a INT, b INT, f FLOAT",
         "(5, 7, 1.5)",
-        None,
+        [(5,)],
     ),
     "filter column retyped to a double": (
         "a INT, b INT",
@@ -582,11 +592,13 @@ COLUMN_CHANGES = {
 MATRIX_CASES = {
     "unread column dropped",
     "read column retyped",
+    "read column narrowed",
     "struct field added",
     "unread struct field retyped",
     "distinct row column retyped",
     "filter column widened",
     "column dropped on one side",
+    "column narrowed on one side",
     "type name of a retyped column",
 }
 
@@ -674,6 +686,13 @@ UNION_CHANGES = {
         "a INT, b STRING",
         "(1, 'z'), (1, 'y'), (2, 'y')",
         [(1,), (1,), (1,), (2,), (3,)],
+    ),
+    "column narrowed on one side": (
+        "SELECT b FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
+        "t",
+        "a INT, b SMALLINT",
+        "(1, 7)",
+        [(7,), (10,), (40,)],
     ),
     # The inputs of a union keep the types of the columns that tell its rows apart.
     "distinct row column widened on one side": (
