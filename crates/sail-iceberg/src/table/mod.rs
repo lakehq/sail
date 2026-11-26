@@ -66,8 +66,13 @@ impl Table {
             }
         };
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
-        let metadata_data =
-            metadata_loader::load_metadata_file_bytes(&object_store, &metadata_file).await?;
+        let metadata_data = metadata_loader::load_registered_metadata(
+            runtime,
+            &object_store,
+            Some(&metadata_location),
+            &metadata_file,
+        )
+        .await?;
         let metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
             log::trace!("Failed to parse table metadata: {:?}", e);
             DataFusionError::External(Box::new(e))

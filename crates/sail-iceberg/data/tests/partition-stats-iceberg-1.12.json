@@ -1,0 +1,449 @@
+{
+  "avro_schema": {
+    "type": "record",
+    "name": "table",
+    "fields": [
+      {
+        "name": "partition",
+        "type": {
+          "type": "record",
+          "name": "r1",
+          "fields": [
+            {
+              "name": "b",
+              "type": [
+                "null",
+                "boolean"
+              ],
+              "default": null,
+              "field-id": 1000
+            },
+            {
+              "name": "i",
+              "type": [
+                "null",
+                "int"
+              ],
+              "default": null,
+              "field-id": 1001
+            },
+            {
+              "name": "l",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null,
+              "field-id": 1002
+            },
+            {
+              "name": "f",
+              "type": [
+                "null",
+                "float"
+              ],
+              "default": null,
+              "field-id": 1003
+            },
+            {
+              "name": "d",
+              "type": [
+                "null",
+                "double"
+              ],
+              "default": null,
+              "field-id": 1004
+            },
+            {
+              "name": "date",
+              "type": [
+                "null",
+                {
+                  "type": "int",
+                  "logicalType": "date"
+                }
+              ],
+              "default": null,
+              "field-id": 1005
+            },
+            {
+              "name": "ts",
+              "type": [
+                "null",
+                {
+                  "type": "long",
+                  "logicalType": "timestamp-micros",
+                  "adjust-to-utc": false
+                }
+              ],
+              "default": null,
+              "field-id": 1006
+            },
+            {
+              "name": "s",
+              "type": [
+                "null",
+                "string"
+              ],
+              "default": null,
+              "field-id": 1007
+            },
+            {
+              "name": "uuid",
+              "type": [
+                "null",
+                {
+                  "type": "fixed",
+                  "name": "uuid_fixed",
+                  "size": 16,
+                  "logicalType": "uuid"
+                }
+              ],
+              "default": null,
+              "field-id": 1008
+            },
+            {
+              "name": "fixed",
+              "type": [
+                "null",
+                {
+                  "type": "fixed",
+                  "name": "fixed_7",
+                  "size": 7
+                }
+              ],
+              "default": null,
+              "field-id": 1009
+            },
+            {
+              "name": "bytes",
+              "type": [
+                "null",
+                "bytes"
+              ],
+              "default": null,
+              "field-id": 1010
+            },
+            {
+              "name": "dec_9_0",
+              "type": [
+                "null",
+                {
+                  "type": "fixed",
+                  "name": "decimal_9_0",
+                  "size": 4,
+                  "logicalType": "decimal",
+                  "precision": 9,
+                  "scale": 0
+                }
+              ],
+              "default": null,
+              "field-id": 1011
+            },
+            {
+              "name": "dec_11_2",
+              "type": [
+                "null",
+                {
+                  "type": "fixed",
+                  "name": "decimal_11_2",
+                  "size": 5,
+                  "logicalType": "decimal",
+                  "precision": 11,
+                  "scale": 2
+                }
+              ],
+              "default": null,
+              "field-id": 1012
+            },
+            {
+              "name": "dec_38_10",
+              "type": [
+                "null",
+                {
+                  "type": "fixed",
+                  "name": "decimal_38_10",
+                  "size": 16,
+                  "logicalType": "decimal",
+                  "precision": 38,
+                  "scale": 10
+                }
+              ],
+              "default": null,
+              "field-id": 1013
+            },
+            {
+              "name": "time",
+              "type": [
+                "null",
+                {
+                  "type": "long",
+                  "logicalType": "time-micros"
+                }
+              ],
+              "default": null,
+              "field-id": 1014
+            }
+          ]
+        },
+        "field-id": 1
+      },
+      {
+        "name": "spec_id",
+        "type": "int",
+        "field-id": 2
+      },
+      {
+        "name": "data_record_count",
+        "type": "long",
+        "field-id": 3
+      },
+      {
+        "name": "data_file_count",
+        "type": "int",
+        "field-id": 4
+      },
+      {
+        "name": "total_data_file_size_in_bytes",
+        "type": "long",
+        "field-id": 5
+      },
+      {
+        "name": "position_delete_record_count",
+        "type": [
+          "null",
+          "long"
+        ],
+        "default": null,
+        "field-id": 6
+      },
+      {
+        "name": "position_delete_file_count",
+        "type": [
+          "null",
+          "int"
+        ],
+        "default": null,
+        "field-id": 7
+      },
+      {
+        "name": "equality_delete_record_count",
+        "type": [
+          "null",
+          "long"
+        ],
+        "default": null,
+        "field-id": 8
+      },
+      {
+        "name": "equality_delete_file_count",
+        "type": [
+          "null",
+          "int"
+        ],
+        "default": null,
+        "field-id": 9
+      },
+      {
+        "name": "total_record_count",
+        "type": [
+          "null",
+          "long"
+        ],
+        "default": null,
+        "field-id": 10
+      },
+      {
+        "name": "last_updated_at",
+        "type": [
+          "null",
+          "long"
+        ],
+        "default": null,
+        "field-id": 11
+      },
+      {
+        "name": "last_updated_snapshot_id",
+        "type": [
+          "null",
+          "long"
+        ],
+        "default": null,
+        "field-id": 12
+      }
+    ]
+  },
+  "iceberg_schema": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+      {
+        "id": 1,
+        "name": "partition",
+        "required": true,
+        "type": {
+          "type": "struct",
+          "fields": [
+            {
+              "id": 1000,
+              "name": "b",
+              "required": false,
+              "type": "boolean"
+            },
+            {
+              "id": 1001,
+              "name": "i",
+              "required": false,
+              "type": "int"
+            },
+            {
+              "id": 1002,
+              "name": "l",
+              "required": false,
+              "type": "long"
+            },
+            {
+              "id": 1003,
+              "name": "f",
+              "required": false,
+              "type": "float"
+            },
+            {
+              "id": 1004,
+              "name": "d",
+              "required": false,
+              "type": "double"
+            },
+            {
+              "id": 1005,
+              "name": "date",
+              "required": false,
+              "type": "date"
+            },
+            {
+              "id": 1006,
+              "name": "ts",
+              "required": false,
+              "type": "timestamp"
+            },
+            {
+              "id": 1007,
+              "name": "s",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "id": 1008,
+              "name": "uuid",
+              "required": false,
+              "type": "uuid"
+            },
+            {
+              "id": 1009,
+              "name": "fixed",
+              "required": false,
+              "type": "fixed[7]"
+            },
+            {
+              "id": 1010,
+              "name": "bytes",
+              "required": false,
+              "type": "binary"
+            },
+            {
+              "id": 1011,
+              "name": "dec_9_0",
+              "required": false,
+              "type": "decimal(9, 0)"
+            },
+            {
+              "id": 1012,
+              "name": "dec_11_2",
+              "required": false,
+              "type": "decimal(11, 2)"
+            },
+            {
+              "id": 1013,
+              "name": "dec_38_10",
+              "required": false,
+              "type": "decimal(38, 10)"
+            },
+            {
+              "id": 1014,
+              "name": "time",
+              "required": false,
+              "type": "time"
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "name": "spec_id",
+        "required": true,
+        "type": "int"
+      },
+      {
+        "id": 3,
+        "name": "data_record_count",
+        "required": true,
+        "type": "long"
+      },
+      {
+        "id": 4,
+        "name": "data_file_count",
+        "required": true,
+        "type": "int"
+      },
+      {
+        "id": 5,
+        "name": "total_data_file_size_in_bytes",
+        "required": true,
+        "type": "long"
+      },
+      {
+        "id": 6,
+        "name": "position_delete_record_count",
+        "required": false,
+        "type": "long"
+      },
+      {
+        "id": 7,
+        "name": "position_delete_file_count",
+        "required": false,
+        "type": "int"
+      },
+      {
+        "id": 8,
+        "name": "equality_delete_record_count",
+        "required": false,
+        "type": "long"
+      },
+      {
+        "id": 9,
+        "name": "equality_delete_file_count",
+        "required": false,
+        "type": "int"
+      },
+      {
+        "id": 10,
+        "name": "total_record_count",
+        "required": false,
+        "type": "long"
+      },
+      {
+        "id": 11,
+        "name": "last_updated_at",
+        "required": false,
+        "type": "long"
+      },
+      {
+        "id": 12,
+        "name": "last_updated_snapshot_id",
+        "required": false,
+        "type": "long"
+      }
+    ]
+  },
+  "deflate_block": "Y2JkCgHCw189HJi8bgj5/lbkdGB6tIKJ6cnmxacnX1zPysRTXFKUmZfOxCCoZOwSmlbeMXPV7jN33/1n4mNgZGJmYWVjYgPSTOzRZ0WZGCAkAwNj30v+b4eLH7zzs+e6xNQwqenRBCYGJiY5IAGGDEzPpl5/cyiD6ca5w9cOT97+2hEA"
+}

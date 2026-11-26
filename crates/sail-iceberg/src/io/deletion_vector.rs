@@ -9,9 +9,8 @@ use roaring::{RoaringBitmap, RoaringTreemap};
 use url::Url;
 
 use super::StoreContext;
+use super::puffin::{PUFFIN_MAGIC, append_puffin_footer};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Literal};
-
-const PUFFIN_MAGIC: &[u8; 4] = b"PFA1";
 const VECTOR_MAGIC: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
 
 fn encode_blob(positions: &mut RoaringTreemap) -> Result<Vec<u8>> {
@@ -180,16 +179,7 @@ async fn publish_puffin(
     blobs: Vec<serde_json::Value>,
     mut entries: Vec<DataFile>,
 ) -> Result<Vec<DataFile>> {
-    let footer = serde_json::to_vec(&serde_json::json!({ "blobs": blobs }))
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let footer_size = i32::try_from(footer.len()).map_err(|_| {
-        datafusion_common::exec_datafusion_err!("Iceberg Puffin footer is too large")
-    })?;
-    bytes.extend_from_slice(PUFFIN_MAGIC);
-    bytes.extend_from_slice(&footer);
-    bytes.extend_from_slice(&footer_size.to_le_bytes());
-    bytes.extend_from_slice(&[0; 4]);
-    bytes.extend_from_slice(PUFFIN_MAGIC);
+    append_puffin_footer(&mut bytes, blobs)?;
     let file_size_in_bytes = bytes.len() as u64;
     let name = format!("deletion-vector-{}.puffin", uuid::Uuid::new_v4());
     let file_path = data_url

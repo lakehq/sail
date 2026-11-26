@@ -117,6 +117,27 @@ impl IcebergProcedureType {
         let timestamp = LakeProcedureDataType::TimestampMicros;
         let string_map = LakeProcedureDataType::StringMap;
         let (parameters, output, access) = match self {
+            Self::ComputeTableStats => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("snapshot_id", long),
+                    LakeProcedureParameter::optional("columns", LakeProcedureDataType::StringArray),
+                ],
+                vec![LakeProcedureField::new("statistics_file", string, true)],
+                LakeProcedureAccess::MetadataCommit,
+            ),
+            Self::ComputePartitionStats => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("snapshot_id", long),
+                ],
+                vec![LakeProcedureField::new(
+                    "partition_statistics_file",
+                    string,
+                    true,
+                )],
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::AddFiles => (
                 vec![
                     LakeProcedureParameter::required("table", string),

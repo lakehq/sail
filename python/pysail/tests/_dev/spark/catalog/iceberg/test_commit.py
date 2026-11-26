@@ -50,6 +50,7 @@ class _CommitGate:
         self.response: object = None
         self._target: tuple[list[str], str] | None = None
         self._claimed = False
+        self.repeat = False
         self._lock = threading.Lock()
         self.snapshot_only = True
         self.update_action: str | None = None
@@ -95,7 +96,7 @@ class _CommitGate:
             ):
                 return None
             self.request_count += 1
-            if self._claimed:
+            if self._claimed and not self.repeat:
                 return None
             self._claimed = True
             self.request = payload
@@ -1766,3 +1767,142 @@ def test_show_table_properties_reads_external_rest_property_commits(
             previous = committed
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+
+
+@pytest.mark.parametrize(
+    ("procedure", "key"),
+    [("compute_table_stats", "statistics"), ("compute_partition_stats", "partition-statistics")],
+)
+def test_stats_retry_keeps_selected_snapshot(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint, procedure, key
+):
+    name = f"retry_{procedure}"
+    table = f"{NAMESPACE}.{name}"
+    spark.sql(f"CREATE TABLE {table} (id BIGINT, p INT) USING iceberg PARTITIONED BY (p)")
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1, 1)")  # noqa: S608
+        before = _load_table(iceberg_rest_endpoint, name)["metadata"]
+        selected = before["current-snapshot-id"]
+        _, gate = commit_gate_proxy
+        gate.arm(NAMESPACE, name, snapshot_only=False, update_action=f"set-{key}")
+        gate.apply_commit = False
+        gate.response_fault = HTTP_CONFLICT
+        gate.response_payload = {"error": {"type": "CommitFailedException", "code": HTTP_CONFLICT, "message": "retry"}}
+        with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as pool:
+            client = sessions.create()
+            future = pool.submit(lambda: client.sql(f"CALL system.{procedure}('{table}')").first()[0])
+            try:
+                assert gate.arrived.wait(timeout=30)
+                spark.sql(f"INSERT INTO {table} VALUES (2, 2)")  # noqa: S608
+            finally:
+                gate.release.set()
+            published = future.result(timeout=30)
+        assert gate.request_count == 2
+        metadata = _load_table(iceberg_rest_endpoint, name)["metadata"]
+        assert metadata["current-snapshot-id"] != selected
+        assert [(f["snapshot-id"], f["statistics-path"]) for f in metadata[key]] == [(selected, published)]
+        rejected = gate.request["updates"][0][key]["statistics-path"]
+        keys = _s3_object_keys(seaweedfs_host_endpoint, before["location"])
+        assert urllib.parse.urlparse(published).path.lstrip("/") in keys
+        assert urllib.parse.urlparse(rejected).path.lstrip("/") not in keys
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def test_stats_procedures(spark, iceberg_rest_endpoint):
+    from pysail.tests._dev.spark.catalog.stats_utils import check_iceberg_stats
+
+    check_iceberg_stats(
+        spark, f"{NAMESPACE}.procedure_stats", lambda: _load_table(iceberg_rest_endpoint, "procedure_stats")["metadata"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("procedure", "key"),
+    [("compute_table_stats", "statistics"), ("compute_partition_stats", "partition-statistics")],
+)
+def test_stats_reject_expired_snapshot(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint, procedure, key
+):
+    name = f"expired_{procedure}"
+    table = f"{NAMESPACE}.{name}"
+    spark.sql(f"CREATE TABLE {table} (id INT, p INT) USING iceberg PARTITIONED BY (p)")
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1, 1)")  # noqa: S608
+        before = _load_table(iceberg_rest_endpoint, name)["metadata"]
+        selected = before["current-snapshot-id"]
+        spark.sql(f"INSERT INTO {table} VALUES (2, 2)")  # noqa: S608
+        _, gate = commit_gate_proxy
+        gate.arm(NAMESPACE, name, snapshot_only=False, update_action=f"set-{key}")
+        with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as pool:
+            client = sessions.create()
+            future = pool.submit(lambda: client.sql(f"CALL system.{procedure}('{table}', {selected})").collect())
+            try:
+                assert gate.arrived.wait(timeout=30)
+                spark.sql(
+                    f"CALL system.expire_snapshots('{table}', snapshot_ids => array(CAST({selected} AS BIGINT)))"
+                ).collect()
+            finally:
+                gate.release.set()
+            with pytest.raises(Exception, match=r"commit rejected|Snapshot not found"):
+                future.result(timeout=30)
+        metadata = _load_table(iceberg_rest_endpoint, name)["metadata"]
+        assert selected not in {s["snapshot-id"] for s in metadata["snapshots"]}
+        assert metadata.get(key, []) == []
+        assert set(metadata["refs"]) == {"main"}
+        rejected = next(update[key]["statistics-path"] for update in gate.request["updates"] if key in update)
+        assert urllib.parse.urlparse(rejected).path.lstrip("/") not in _s3_object_keys(
+            seaweedfs_host_endpoint, before["location"]
+        )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    ("procedure", "key"),
+    [("compute_table_stats", "statistics"), ("compute_partition_stats", "partition-statistics")],
+)
+def test_stats_external_metadata_bucket(
+    spark, gated_remote, commit_gate_proxy, seaweedfs_host_endpoint, procedure, key
+):
+    name = f"external_{procedure}"
+    table = f"{NAMESPACE}.{name}"
+    bucket = f"metadata-{key}"
+    location = f"s3://{bucket}/statistics"
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=seaweedfs_host_endpoint,
+        aws_access_key_id="admin",
+        aws_secret_access_key="password",  # noqa: S106
+        region_name="us-east-1",
+    )
+    s3.create_bucket(Bucket=bucket)
+    spark.sql(f"CREATE TABLE {table} (id INT, p INT) USING iceberg PARTITIONED BY (p)")
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1, 1)")  # noqa: S608
+        spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('write.metadata.path'='{location}')")
+        path = spark.sql(f"CALL system.{procedure}('{table}')").first()[0]
+        assert path.startswith(f"{location}/")
+        assert urllib.parse.urlparse(path).path.lstrip("/") in _s3_object_keys(seaweedfs_host_endpoint, location)
+        spark.sql(f"INSERT INTO {table} VALUES (2, 2)")  # noqa: S608
+        _, gate = commit_gate_proxy
+        gate.arm(NAMESPACE, name, snapshot_only=False, update_action=f"set-{key}")
+        # Distributed task retries must see the same definitive catalog rejection.
+        gate.repeat = True
+        gate.apply_commit = False
+        gate.response_fault = HTTPStatus.BAD_REQUEST
+        gate.response_payload = {"error": {"type": "ValidationException", "code": 400, "message": "rejected"}}
+        before = _s3_object_keys(seaweedfs_host_endpoint, location)
+        with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as pool:
+            client = sessions.create()
+            future = pool.submit(lambda: client.sql(f"CALL system.{procedure}('{table}')").collect())
+            try:
+                assert gate.arrived.wait(timeout=30)
+                assert len(_s3_object_keys(seaweedfs_host_endpoint, location) - before) == 1
+            finally:
+                gate.release.set()
+            with pytest.raises(Exception, match="commit rejected"):
+                future.result(timeout=30)
+        assert _s3_object_keys(seaweedfs_host_endpoint, location) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")

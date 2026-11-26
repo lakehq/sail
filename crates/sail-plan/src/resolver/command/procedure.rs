@@ -448,7 +448,10 @@ impl PlanResolver<'_> {
                 .await?;
             validate_procedure_boolean_argument_type(&expression.get_type(&schema)?)?;
         }
-        if data_type == LakeProcedureDataType::Int64Array {
+        if matches!(
+            data_type,
+            LakeProcedureDataType::Int64Array | LakeProcedureDataType::StringArray
+        ) {
             let expression = self
                 .resolve_expression(argument.clone(), &schema, state)
                 .await?;
@@ -474,6 +477,10 @@ impl PlanResolver<'_> {
             LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
+            },
+            LakeProcedureDataType::StringArray => spec::DataType::List {
+                data_type: Box::new(spec::DataType::Utf8),
+                nullable: true,
             },
             LakeProcedureDataType::Int64Array => spec::DataType::List {
                 data_type: Box::new(spec::DataType::Int64),
@@ -635,10 +642,18 @@ fn scalar_to_procedure_value(value: ScalarValue) -> PlanResult<LakeProcedureValu
                 ));
             }
             let values = array.value(0);
+            if let Some(strings) = values.as_any().downcast_ref::<StringArray>() {
+                return Ok(LakeProcedureValue::StringArray(
+                    strings
+                        .iter()
+                        .map(|value| value.map(str::to_owned))
+                        .collect(),
+                ));
+            }
             let values = values
                 .as_any()
                 .downcast_ref::<Int64Array>()
-                .ok_or_else(|| PlanError::invalid("Procedure array elements must be longs"))?;
+                .ok_or_else(|| PlanError::invalid("Unsupported procedure array element type"))?;
             Ok(LakeProcedureValue::Int64Array(values.iter().collect()))
         }
         ScalarValue::Boolean(Some(value)) => Ok(LakeProcedureValue::Boolean(value)),

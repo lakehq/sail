@@ -511,3 +511,42 @@ def test_add_files_uses_registered_glue_partitions(spark, moto_endpoint, tmp_pat
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {target}")
         spark.sql(f"DROP TABLE IF EXISTS {database}.{source}")
+
+
+def test_stats_procedures(spark, tmp_path, moto_endpoint):
+    from pysail.tests._dev.spark.catalog.stats_utils import check_iceberg_stats
+    from pysail.tests._dev.spark.iceberg.utils import _local_file_path
+
+    def read_metadata():
+        return json.loads(_local_file_path(_metadata_location(moto_endpoint, "test_db", "procedure_stats")).read_text())
+
+    check_iceberg_stats(spark, "test_db.procedure_stats", read_metadata, tmp_path / "stats")
+
+
+@pytest.mark.parametrize("transform", ["years(dt)", "months(dt)", "days(dt)", "hours(ts)", "bucket(16, id)"])
+def test_stats_for_glue_partition_transforms(spark, tmp_path, moto_endpoint, transform):
+    import pyarrow.parquet as pq
+
+    from pysail.tests._dev.spark.iceberg.test_iceberg_stats import _blobs
+    from pysail.tests._dev.spark.iceberg.utils import _local_file_path
+
+    name = "test_db.transform_stats"
+    spark.sql(
+        f"CREATE TABLE {name} (id INT, dt DATE, ts TIMESTAMP) USING iceberg PARTITIONED BY ({transform}) "
+        f"LOCATION '{escape_sql_string_literal(str(tmp_path))}'"
+    )
+    try:
+        spark.sql(f"""INSERT INTO {name} VALUES
+            (1, DATE '2023-03-15', TIMESTAMP '2023-03-15 10:30:00'),
+            (2, DATE '2024-06-20', TIMESTAMP '2024-06-20 14:45:00')""")
+        stats = spark.sql(f"CALL system.compute_partition_stats('{name}')").first()[0]
+        spark.sql(f"CALL system.compute_table_stats('{name}')").collect()
+        pointer = _metadata_location(moto_endpoint, "test_db", "transform_stats")
+        metadata = json.loads(_local_file_path(pointer).read_text())
+        expected = {"years": "year", "months": "month", "days": "day", "hours": "hour", "bucket": "bucket[16]"}
+        assert metadata["partition-specs"][0]["fields"][0]["transform"] == expected[transform.split("(")[0]]
+        assert metadata["partition-statistics"][0]["statistics-path"] == stats
+        assert sum(r["data_record_count"] for r in pq.read_table(_local_file_path(stats)).to_pylist()) == 2
+        assert _blobs(metadata["statistics"][0])[1][0] == 2
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

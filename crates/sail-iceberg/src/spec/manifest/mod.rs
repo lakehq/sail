@@ -25,6 +25,7 @@ use apache_avro::to_value;
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
+pub(crate) use schema::partition_stats_schemas;
 pub use writer::*;
 
 use crate::spec::Schema as IcebergSchema;
@@ -118,7 +119,7 @@ fn replace_avro_schema_header_bytes_with_limit(
     Ok(output)
 }
 
-pub(super) fn replace_avro_schema_header(
+pub(crate) fn replace_avro_schema_header(
     bytes: &[u8],
     schema: &AvroSchema,
     partition_type: &StructType,
@@ -195,10 +196,9 @@ fn non_null_avro_schema(schema: &mut JsonValue) -> Option<&mut JsonValue> {
     }
 }
 
-fn partition_avro_fields(schema: &mut JsonValue) -> Result<&mut Vec<JsonValue>, String> {
-    let partition_schema = find_avro_field_type(schema, 102).ok_or_else(|| {
-        "Avro schema is missing the data file partition field (id 102)".to_string()
-    })?;
+fn partition_avro_fields(schema: &mut JsonValue, id: i32) -> Result<&mut Vec<JsonValue>, String> {
+    let partition_schema = find_avro_field_type(schema, id)
+        .ok_or_else(|| format!("Avro schema is missing the partition field (id {id})"))?;
     non_null_avro_schema(partition_schema)
         .and_then(JsonValue::as_object_mut)
         .and_then(|record| record.get_mut("fields"))
@@ -276,12 +276,45 @@ fn expand_partition_fixed_references(partition_fields: &mut [JsonValue]) -> Resu
     Ok(())
 }
 
+/// Iceberg's generic partition writer encodes fixed ByteBuffers using writeBytes,
+/// while UUIDs use writeFixed. Preserve the published header when adapting the reader.
+pub(crate) fn stats_avro_physical_header(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let header = parse_avro_object_header(bytes)?;
+    let raw = header
+        .metadata
+        .get("avro.schema")
+        .ok_or("Missing Avro schema")?;
+    let mut schema: JsonValue = serde_json::from_slice(raw).map_err(|e| e.to_string())?;
+    let fields = partition_avro_fields(&mut schema, 1)?;
+    expand_partition_fixed_references(fields)?;
+    let mut changed = false;
+    for field in fields {
+        if let Some(ty) = field.get_mut("type").and_then(non_null_avro_schema)
+            && ty["type"] == "fixed"
+        {
+            if ty["logicalType"] == "uuid" {
+                if let Some(object) = ty.as_object_mut() {
+                    object.remove("logicalType");
+                }
+            } else if ty["logicalType"].is_null() {
+                *ty = JsonValue::String("bytes".into());
+            }
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    let schema = serde_json::to_vec(&schema).map_err(|e| e.to_string())?;
+    replace_avro_schema_header_bytes(bytes, schema).map(Some)
+}
+
 fn rewrite_partition_schema(
     schema: &mut JsonValue,
     partition_type: &StructType,
     iceberg_codec: bool,
 ) -> Result<(), String> {
-    let partition_fields = partition_avro_fields(schema)?;
+    let partition_fields = partition_avro_fields(schema, 102)?;
     if iceberg_codec {
         let required_rewrites = partition_type
             .fields()
@@ -876,7 +909,7 @@ mod tests {
                 .ok_or_else(|| "Avro schema header metadata is missing".to_string())?,
         )
         .map_err(|error| format!("Avro schema JSON error: {error}"))?;
-        let partition_fields = super::partition_avro_fields(&mut header_schema)?;
+        let partition_fields = super::partition_avro_fields(&mut header_schema, 102)?;
         let (first_field, remaining_fields) = partition_fields
             .split_first_mut()
             .ok_or_else(|| "First partition field is missing".to_string())?;

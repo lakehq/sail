@@ -679,7 +679,7 @@ async fn prepare_append(
             },
         ],
         updates,
-        manifests,
+        staged_files: manifests,
         output: RecordBatch::try_new(
             output_schema,
             vec![

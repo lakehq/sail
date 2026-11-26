@@ -453,6 +453,7 @@ pub(crate) struct PreparedSnapshotCommit {
 pub(crate) struct CreatedPathCleanup {
     store_ctx: StoreContext,
     created_paths: Vec<ObjectPath>,
+    external_paths: Vec<(std::sync::Arc<dyn object_store::ObjectStore>, ObjectPath)>,
     cleanup_on_drop: bool,
 }
 
@@ -461,6 +462,7 @@ impl CreatedPathCleanup {
         Self {
             store_ctx,
             created_paths: Vec::new(),
+            external_paths: Vec::new(),
             cleanup_on_drop: true,
         }
     }
@@ -469,15 +471,33 @@ impl CreatedPathCleanup {
         self.created_paths.push(path);
     }
 
+    pub(crate) fn register_at(
+        &mut self,
+        store: std::sync::Arc<dyn object_store::ObjectStore>,
+        path: ObjectPath,
+    ) {
+        if std::sync::Arc::ptr_eq(&store, &self.store_ctx.prefixed) {
+            self.register(path);
+        } else {
+            self.external_paths.push((store, path));
+        }
+    }
+
     pub(crate) async fn cleanup(&mut self) {
         let paths = std::mem::take(&mut self.created_paths);
         self.cleanup_on_drop = false;
-        cleanup_created_paths(&self.store_ctx, &paths).await;
+        cleanup_created_paths(
+            &self.store_ctx,
+            &paths,
+            std::mem::take(&mut self.external_paths),
+        )
+        .await;
     }
 
     pub(crate) fn disarm(&mut self) {
         self.cleanup_on_drop = false;
         self.created_paths.clear();
+        self.external_paths.clear();
     }
 
     pub(crate) fn publication_started(&mut self) {
@@ -491,15 +511,18 @@ impl CreatedPathCleanup {
 
 impl Drop for CreatedPathCleanup {
     fn drop(&mut self) {
-        if !self.cleanup_on_drop || self.created_paths.is_empty() {
+        if !self.cleanup_on_drop
+            || (self.created_paths.is_empty() && self.external_paths.is_empty())
+        {
             return;
         }
         let store_ctx = self.store_ctx.clone();
         let paths = std::mem::take(&mut self.created_paths);
+        let external = std::mem::take(&mut self.external_paths);
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 handle.spawn(async move {
-                    cleanup_created_paths(&store_ctx, &paths).await;
+                    cleanup_created_paths(&store_ctx, &paths, external).await;
                 });
             }
             Err(error) => {
@@ -538,7 +561,18 @@ impl PreparedSnapshotCommit {
     }
 }
 
-async fn cleanup_created_paths(store_ctx: &StoreContext, paths: &[ObjectPath]) {
+async fn cleanup_created_paths(
+    store_ctx: &StoreContext,
+    paths: &[ObjectPath],
+    external: Vec<(std::sync::Arc<dyn object_store::ObjectStore>, ObjectPath)>,
+) {
+    for (store, path) in external {
+        if let Err(error) = store.delete(&path).await
+            && !matches!(error, object_store::Error::NotFound { .. })
+        {
+            log::warn!("Failed to remove uncommitted Iceberg object {path}: {error}");
+        }
+    }
     let paths = paths.iter().rev().cloned().collect::<Vec<_>>();
     let locations = futures::stream::iter(paths.into_iter().map(Ok));
     let mut deletions = store_ctx.prefixed.delete_stream(Box::pin(locations));

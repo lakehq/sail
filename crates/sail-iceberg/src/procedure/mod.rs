@@ -23,6 +23,7 @@ mod logical;
 mod rewrite_data_files;
 mod rewrite_manifests;
 pub(crate) mod snapshot;
+mod stats;
 pub(crate) mod table;
 
 use arguments::{
@@ -126,6 +127,18 @@ pub(crate) async fn execute_iceberg_procedure(
         );
     };
     match procedure_type {
+        IcebergProcedureType::ComputeTableStats | IcebergProcedureType::ComputePartitionStats => {
+            let operation = stats::ComputeStats::new(procedure_type, &invocation)?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                table_properties,
+                lakehouse_table.as_ref(),
+                operation,
+                invocation.procedure.schema(),
+            )
+            .await
+        }
         IcebergProcedureType::AddFiles => {
             let operation = add_files::AddFiles::from_invocation(&invocation)?;
             commit_snapshot_operation(
@@ -321,6 +334,8 @@ mod tests {
                 "add_files",
                 "ancestors_of",
                 "fast_forward",
+                "compute_table_stats",
+                "compute_partition_stats",
             ]
         );
     }

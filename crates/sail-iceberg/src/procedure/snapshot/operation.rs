@@ -56,7 +56,7 @@ pub(crate) enum SnapshotOperation {
 pub(crate) struct PreparedSnapshotOperation {
     pub(crate) requirements: Vec<TableRequirement>,
     pub(crate) updates: Vec<TableUpdate>,
-    pub(crate) manifests: Vec<(String, Vec<u8>)>,
+    pub(crate) staged_files: Vec<(String, Vec<u8>)>,
     pub(crate) output: RecordBatch,
     pub(crate) changed: bool,
 }
@@ -159,7 +159,7 @@ impl SnapshotOperation {
                 Ok(PreparedSnapshotOperation {
                     requirements: vec![requirement],
                     updates: vec![update],
-                    manifests: vec![],
+                    staged_files: vec![],
                     output,
                     changed: previous != Some(target),
                 })
@@ -217,7 +217,7 @@ fn prepare_main_reference_update(
                 retention,
             },
         }],
-        manifests: vec![],
+        staged_files: vec![],
         output,
         changed: previous != Some(target),
     })

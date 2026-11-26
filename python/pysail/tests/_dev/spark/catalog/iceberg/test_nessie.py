@@ -112,3 +112,20 @@ def test_nessie_lakehouse_ddl(spark: SparkSession, nessie_iceberg_rest_endpoint:
         assert spark.table(table).first().id == 1
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
+
+
+def test_stats_procedures(spark, nessie_iceberg_rest_endpoint):
+    from pysail.tests._dev.spark.catalog.stats_utils import check_iceberg_stats
+
+    spark.sql("CREATE DATABASE IF NOT EXISTS nessie_stats")
+    try:
+        from pyiceberg.catalog.rest import RestCatalog
+
+        catalog = RestCatalog("reference", uri=nessie_iceberg_rest_endpoint)
+        table = "nessie_stats.procedure_stats"
+        # Nessie 0.107 publishes only its branch head in each Iceberg metadata file.
+        check_iceberg_stats(
+            spark, table, lambda: catalog.load_table(table).metadata.model_dump(by_alias=True), retains_history=False
+        )
+    finally:
+        spark.sql("DROP DATABASE IF EXISTS nessie_stats")

@@ -3,6 +3,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
+#[cfg(test)]
 use object_store::path::Path;
 
 use super::operation::{PreparedSnapshotOperation, SnapshotOperation};
@@ -32,6 +33,7 @@ use crate::utils::metadata::metadata_files_for_version;
 const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 
 pub(crate) enum ProcedureCommitOperation {
+    Stats(crate::procedure::stats::ComputeStats),
     Snapshot(SnapshotOperation),
     AddFiles(crate::procedure::add_files::AddFiles),
     RewriteManifests(RewriteManifests),
@@ -41,6 +43,12 @@ pub(crate) enum ProcedureCommitOperation {
 impl From<crate::procedure::add_files::AddFiles> for ProcedureCommitOperation {
     fn from(operation: crate::procedure::add_files::AddFiles) -> Self {
         Self::AddFiles(operation)
+    }
+}
+
+impl From<crate::procedure::stats::ComputeStats> for ProcedureCommitOperation {
+    fn from(operation: crate::procedure::stats::ComputeStats) -> Self {
+        Self::Stats(operation)
     }
 }
 
@@ -70,7 +78,7 @@ pub(crate) async fn commit_snapshot_operation(
     operation: impl Into<ProcedureCommitOperation>,
     output_schema: datafusion::arrow::datatypes::SchemaRef,
 ) -> Result<RecordBatch> {
-    let operation = operation.into();
+    let mut operation = operation.into();
     let is_expiration = matches!(&operation, ProcedureCommitOperation::ExpireSnapshots(_));
     let object_store = ctx
         .runtime_env()
@@ -173,17 +181,25 @@ pub(crate) async fn commit_snapshot_operation(
             Some(location) => metadata_location_to_object_path_string(location)?,
             None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,
         };
-        let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
+        let bytes = crate::table::metadata_loader::load_registered_metadata(
+            &ctx.runtime_env(),
+            &object_store,
+            metadata_location.as_deref(),
+            &metadata_file,
+        )
+        .await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        if is_expiration {
+        if is_expiration || matches!(operation, ProcedureCommitOperation::Stats(_)) {
             if let Some(uuid) = initial_uuid {
                 if metadata.table_uuid != uuid {
-                    return plan_err!("Iceberg table UUID changed during expiration retry");
+                    return plan_err!("Iceberg table UUID changed during procedure retry");
                 }
             } else {
                 initial_uuid = Some(metadata.table_uuid);
             }
+        }
+        if is_expiration {
             let location = crate::procedure::expire_snapshots::checked_path(
                 &store_context,
                 table_url,
@@ -208,7 +224,18 @@ pub(crate) async fn commit_snapshot_operation(
             metadata.ensure_required_format_fields();
         }
         let mut expiration: Option<Expiration> = None;
-        let prepared = match &operation {
+        let prepared = match &mut operation {
+            ProcedureCommitOperation::Stats(operation) => {
+                operation
+                    .prepare(
+                        ctx,
+                        &store_context,
+                        table_url,
+                        &metadata,
+                        output_schema.clone(),
+                    )
+                    .await?
+            }
             ProcedureCommitOperation::AddFiles(operation) => {
                 operation
                     .prepare(
@@ -229,7 +256,7 @@ pub(crate) async fn commit_snapshot_operation(
                     changed: !prepared.updates.is_empty(),
                     requirements: prepared.requirements,
                     updates: prepared.updates,
-                    manifests: vec![],
+                    staged_files: vec![],
                     output: crate::procedure::expire_snapshots::output(
                         output_schema.clone(),
                         [0; 6],
@@ -247,7 +274,7 @@ pub(crate) async fn commit_snapshot_operation(
                     changed: !prepared.updates.is_empty(),
                     requirements: prepared.requirements,
                     updates: prepared.updates,
-                    manifests: prepared.manifests,
+                    staged_files: prepared.manifests,
                     output: prepared.output,
                 }
             }
@@ -256,8 +283,8 @@ pub(crate) async fn commit_snapshot_operation(
             return Ok(prepared.output);
         }
 
-        let requirements = catalog_requirements(&metadata, &prepared.requirements, &[]);
-        let updates = prepared.updates.clone();
+        let mut requirements = catalog_requirements(&metadata, &prepared.requirements, &[]);
+        let mut updates = prepared.updates.clone();
         let catalog_commit = if commit_mode.uses_catalog_commit() {
             let table = catalog_table.as_ref().ok_or_else(|| {
                 DataFusionError::Internal(
@@ -273,14 +300,25 @@ pub(crate) async fn commit_snapshot_operation(
         } else {
             None
         };
-        let mut cleanup = stage_manifests(&store_context, &prepared.manifests).await?;
+        if let (Some(_), ProcedureCommitOperation::Stats(stats)) = (&catalog_commit, &operation) {
+            stats.guard_catalog_commit(&metadata, &mut requirements, &mut updates);
+        }
+        let mut cleanup = stage_files(&store_context, &prepared.staged_files, ctx).await?;
         let mut use_metadata_location_fallback = commit_mode.uses_metadata_location_update();
         if let Some((table, context)) = catalog_commit {
             cleanup.publication_started();
-            match IcebergCatalogCommitCoordinator::new(ctx, table)
+            let outcome = IcebergCatalogCommitCoordinator::new(ctx, table)
                 .commit(context, requirements, updates)
-                .await?
+                .await;
+            if let Err(DataFusionError::External(error)) = &outcome
+                && matches!(
+                    error.downcast_ref::<sail_catalog::error::CatalogError>(),
+                    Some(sail_catalog::error::CatalogError::CommitRejected(_))
+                )
             {
+                cleanup.cleanup().await;
+            }
+            match outcome? {
                 CatalogCommitOutcome::Committed(committed) => {
                     if is_expiration {
                         validate_expiration_response(
@@ -626,15 +664,15 @@ fn procedure_commit_conflict() -> DataFusionError {
     ))
 }
 
-async fn stage_manifests(
+async fn stage_files(
     store: &StoreContext,
-    manifests: &[(String, Vec<u8>)],
+    files: &[(String, Vec<u8>)],
+    ctx: &TaskContext,
 ) -> Result<CreatedPathCleanup> {
     let mut cleanup = CreatedPathCleanup::new(store.clone());
-    for (path, bytes) in manifests {
-        let path = Path::from(path.as_str());
-        match store
-            .prefixed
+    for (path, bytes) in files {
+        let (base, path) = store.statistics_object(ctx, path)?;
+        match base
             .put_opts(
                 &path,
                 bytes.clone().into(),
@@ -645,7 +683,7 @@ async fn stage_manifests(
             )
             .await
         {
-            Ok(_) => cleanup.register(path),
+            Ok(_) => cleanup.register_at(base, path),
             Err(error) => {
                 cleanup.cleanup().await;
                 return Err(error.into());
@@ -665,6 +703,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
+    use datafusion::execution::TaskContext;
     use futures::TryStreamExt;
     use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
@@ -693,7 +732,7 @@ mod tests {
                 let injected = Arc::new(injected);
                 let url = url::Url::parse("memory://bucket/table/").expect("URL");
                 let store = StoreContext::new(injected.clone(), &url).expect("store");
-                let error = stage_manifests(&store, &staged_files())
+                let error = stage_files(&store, &staged_files(), &TaskContext::default())
                     .await
                     .err()
                     .expect("upload failure");
@@ -730,7 +769,11 @@ mod tests {
             .await
             .expect("existing");
         let store = StoreContext::new(injected.clone(), &url).expect("store");
-        assert!(stage_manifests(&store, &staged_files()).await.is_err());
+        assert!(
+            stage_files(&store, &staged_files(), &TaskContext::default())
+                .await
+                .is_err()
+        );
         assert_eq!(
             memory
                 .get(&existing)
@@ -759,7 +802,7 @@ mod tests {
         )
         .expect("store");
         let task = tokio::spawn(async move {
-            let _cleanup = stage_manifests(&store, &staged_files()).await;
+            let _cleanup = stage_files(&store, &staged_files(), &TaskContext::default()).await;
         });
         injected.paused.notified().await;
         task.abort();

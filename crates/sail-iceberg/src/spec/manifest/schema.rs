@@ -312,6 +312,15 @@ fn struct_to_avro_record(
     })
 }
 
+pub(crate) fn partition_stats_schemas(fields: &StructType) -> (AvroSchema, AvroSchema) {
+    let schema =
+        |layout| struct_to_avro_record("partition_stats", fields, layout, &mut BTreeSet::new());
+    (
+        schema(PartitionAvroLayout::Declared),
+        schema(PartitionAvroLayout::Encoded),
+    )
+}
+
 fn partition_record_schema(partition_type: &StructType, layout: PartitionAvroLayout) -> AvroSchema {
     struct_to_avro_record("r102", partition_type, layout, &mut BTreeSet::new())
 }

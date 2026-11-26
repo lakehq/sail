@@ -7519,6 +7519,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "zstd 0.14.4",
 ]
 
 [[package]]

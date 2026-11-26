@@ -326,7 +326,7 @@ fn i32_list_scalar(values: &[i32]) -> Result<ScalarValue> {
     )
 }
 
-fn partition_value(
+pub(crate) fn partition_value(
     metadata: &TableMetadata,
     file: &DataFile,
     partition_type: &StructType,
@@ -483,7 +483,7 @@ fn readable_fields(metadata: &TableMetadata) -> Result<Vec<ReadableField>> {
     Ok(fields)
 }
 
-fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
+pub(crate) fn unified_partition_type(metadata: &TableMetadata) -> Result<StructType> {
     let schema = metadata.current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing the current schema".to_string())
     })?;
