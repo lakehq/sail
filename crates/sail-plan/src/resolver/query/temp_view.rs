@@ -280,46 +280,6 @@ const LOGICAL_TYPE_METADATA_KEYS: [&str; 5] = [
     VARIANT_METADATA_MARKER_KEY,
 ];
 
-/// Adds the change of the logical type of a field whose Arrow type can be the same.
-fn logical_type_changes(
-    stored: &Field,
-    current: &Field,
-    path: &[String],
-    type_name: &dyn Fn(&DataType) -> String,
-    changes: &mut Vec<String>,
-) {
-    let change = LOGICAL_TYPE_METADATA_KEYS.iter().find_map(|key| {
-        let (a, b) = (stored.metadata().get(*key), current.metadata().get(*key));
-        let same = match (a, b) {
-            (Some(a), Some(b)) => {
-                a == b
-                    || matches!(
-                        (
-                            serde_json::from_str::<serde_json::Value>(a),
-                            serde_json::from_str::<serde_json::Value>(b),
-                        ),
-                        (Ok(a), Ok(b)) if a == b
-                    )
-            }
-            (None, None) => true,
-            _ => false,
-        };
-        (!same).then_some((a, b))
-    });
-    if let Some((a, b)) = change {
-        let describe = |field: &Field, value: Option<&String>| match value {
-            Some(value) => format!("{} {value}", type_name(field.data_type())),
-            None => type_name(field.data_type()),
-        };
-        changes.push(format!(
-            "{} type has changed from {} to {}",
-            quote_names(path),
-            describe(stored, a),
-            describe(current, b)
-        ));
-    }
-}
-
 /// The field that a field of a stored schema is in a current schema.
 #[derive(Debug, PartialEq, Eq)]
 enum FieldMatch {
@@ -404,19 +364,6 @@ fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
             })
 }
 
-fn describe_field(
-    path: &[String],
-    field: &Field,
-    type_name: &dyn Fn(&DataType) -> String,
-) -> String {
-    let null = if field.is_nullable() { "" } else { " NOT NULL" };
-    format!(
-        "{} {}{null}",
-        quote_names(path),
-        type_name(field.data_type())
-    )
-}
-
 /// Returns whether two string types or two binary types store the same values in other ways.
 fn same_values(a: &DataType, b: &DataType) -> bool {
     use DataType::*;
@@ -486,7 +433,7 @@ impl<'a> Fit<'a> {
                 Some((position, self.value(field, &current[position], used, path)))
             }
             FieldMatch::Missing => {
-                let change = describe_field(path, field, self.type_name);
+                let change = self.describe_field(path, field);
                 self.changes.push(format!("{change} has been removed"));
                 None
             }
@@ -516,7 +463,7 @@ impl<'a> Fit<'a> {
         if stored == current {
             return Read::Same;
         }
-        logical_type_changes(stored, current, path, self.type_name, &mut self.changes);
+        self.logical_type_changes(stored, current, path);
         let read = self.data_type(stored.data_type(), current.data_type(), used, path);
         let key = SPARK_METADATA_JSON_KEY;
         if read == Read::Same && stored.metadata().get(key) != current.metadata().get(key) {
@@ -628,7 +575,7 @@ impl<'a> Fit<'a> {
                     .iter()
                     .find(|(name, _)| same_name(name, field.name(), self.case_sensitive))
                 {
-                    Some((_, used)) => used.fields(),
+                    Some((_, field_use)) => field_use.fields(),
                     None => {
                         same = false;
                         reads.push(None);
@@ -663,7 +610,7 @@ impl<'a> Fit<'a> {
             for field in current {
                 if !names.contains(&fold(field.name())) {
                     let path = child_path(path, field.name());
-                    let change = describe_field(&path, field, self.type_name);
+                    let change = self.describe_field(&path, field);
                     self.changes.push(format!("{change} has been added"));
                 }
             }
@@ -679,6 +626,49 @@ impl<'a> Fit<'a> {
     /// Returns how a value inside a list, a map or another such type is read, whole.
     fn element(&mut self, stored: &Field, current: &Field, path: &[String], name: &str) -> Read {
         self.value(stored, current, None, &child_path(path, name))
+    }
+
+    /// Adds the change of the logical type of a field whose Arrow type can be the same.
+    fn logical_type_changes(&mut self, stored: &Field, current: &Field, path: &[String]) {
+        let change = LOGICAL_TYPE_METADATA_KEYS.iter().find_map(|key| {
+            let (a, b) = (stored.metadata().get(*key), current.metadata().get(*key));
+            let same = match (a, b) {
+                (Some(a), Some(b)) => {
+                    a == b
+                        || matches!(
+                            (
+                                serde_json::from_str::<serde_json::Value>(a),
+                                serde_json::from_str::<serde_json::Value>(b),
+                            ),
+                            (Ok(a), Ok(b)) if a == b
+                        )
+                }
+                (None, None) => true,
+                _ => false,
+            };
+            (!same).then_some((a, b))
+        });
+        if let Some((a, b)) = change {
+            let describe = |field: &Field, value: Option<&String>| match value {
+                Some(value) => format!("{} {value}", (self.type_name)(field.data_type())),
+                None => (self.type_name)(field.data_type()),
+            };
+            self.changes.push(format!(
+                "{} type has changed from {} to {}",
+                quote_names(path),
+                describe(stored, a),
+                describe(current, b)
+            ));
+        }
+    }
+
+    fn describe_field(&self, path: &[String], field: &Field) -> String {
+        let null = if field.is_nullable() { "" } else { " NOT NULL" };
+        format!(
+            "{} {}{null}",
+            quote_names(path),
+            (self.type_name)(field.data_type())
+        )
     }
 
     /// Returns the read of a value inside a type whose values cannot be given other field
