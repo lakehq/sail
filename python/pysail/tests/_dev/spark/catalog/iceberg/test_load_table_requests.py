@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -322,6 +323,13 @@ def test_write_loads_the_target_table_once_to_plan_the_statement(
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+# The error of a commit of a version of a table that changed since the statement read it.
+CONFLICT = (
+    r"Iceberg commit failed(: reference '\w+' expected snapshot .* but found "
+    r"| after \d+ retries due to concurrent)"
+)
+
+
 def test_write_keeps_a_change_made_to_the_table_after_the_statement_is_planned(
     spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
 ):
@@ -348,26 +356,34 @@ def test_write_keeps_a_change_made_to_the_table_after_the_statement_is_planned(
             session = sessions.create()
             # The target of each statement shares the table load of the statement, which
             # is older than the added row. The commit loads the table again and sees the row.
-            for added, sql in enumerate(
-                [
-                    f"UPDATE {name} SET v = 0 WHERE id = 1",
-                    f"DELETE FROM {name} WHERE id = 2",
+            # The statements that rewrite data files fail since the table changed, and the
+            # statement that only adds files is applied to the table with the added row, with the
+            # rows that it adds for the version that it read.
+            statements = [
+                (f"UPDATE {name} SET v = 0 WHERE id = 1", None),
+                (f"DELETE FROM {name} WHERE id = 2", None),
+                (
                     f"INSERT INTO {name} SELECT id + 10, v FROM sail.{name} WHERE id < 100",
-                ],
-                start=100,
-            ):
+                    lambda before: [*before, *((i + 10, v) for i, v in before if i < 100)],
+                ),
+            ]
+            for added, (sql, change) in enumerate(statements, start=100):
                 before = rows()
                 pending.append(f"INSERT INTO {name} VALUES ({added}, 0)")
                 try:
                     session.sql(sql).collect()
-                    failed = False
-                except Exception:  # noqa: BLE001
-                    failed = True
+                    error = None
+                except Exception as e:  # noqa: BLE001
+                    error = str(e)
                 assert not pending, sql
-                # The statement fails, or it is applied to the table with the added row.
-                assert (added, 0) in rows(), sql
-                if failed:
+                if change is None:
+                    # The catalog rejects the commit of the version that the statement read.
+                    assert error is not None, sql
+                    assert re.search(CONFLICT, error), error
                     assert rows() == sorted([*before, (added, 0)]), sql
+                else:
+                    assert error is None, error
+                    assert rows() == sorted([*change(before), (added, 0)]), sql
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
