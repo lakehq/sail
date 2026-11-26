@@ -27,7 +27,7 @@ use datafusion_common::nested_struct::{
 };
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, ScalarValue, TableReference};
-use datafusion_expr::expr::{Cast, InSubquery, SetComparison};
+use datafusion_expr::expr::{Cast, Exists, InSubquery, SetComparison};
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, SubqueryAlias, TableScan, TableScanBuilder,
     TableSource,
@@ -47,6 +47,8 @@ use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
 use super::read::{CatalogTableRead, rename_source};
 use crate::config::PlanConfig;
@@ -55,7 +57,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::{
     CatalogTableLookup, PlanResolverState, ViewDefinitionReads, table_source_address,
 };
-use crate::shared_cte::{CteReference, replace_scans, visit_nodes, visit_scans};
+use crate::shared_cte::{CteReference, replace_scans, visit_scans};
 
 /// Polls a future on a new stack when little of the stack of the thread remains, since a read
 /// of views nested deeply resolves their definitions inside each other.
@@ -1232,140 +1234,58 @@ fn view_name(view: &TableStatus) -> String {
 /// Returns the columns that the plan reads of each source that a temporary view obtains
 /// again, by the address of the source and the positions of the columns in the source.
 ///
-/// A name is read if it is the name of an output of the plan, of a column that a function
-/// folded away (see `PlanResolverState::folded_columns`), of a column that an expression of an
-/// operator refers to, or of an output of a subquery that the plan reads, in the plan, in its
-/// subqueries and in its CTE definitions. The other operators that read the columns of their
-/// inputs without referring to them, such as a union, which reads its inputs by their
-/// positions, or `DISTINCT`, read all of them. The operators that read only the columns that
-/// their expressions refer to are an allow-list, and every other operator reads all the columns
-/// of its inputs, so the list is checked again when DataFusion adds or changes operators. An
-/// output of a projection that is a column, and a column of a reference to a CTE definition,
-/// pass a name on: the column that they pass on is read if they are read. A column of a scan is
-/// read if its name is read, or the name of the output that a projection right above the scan
-/// passes it on as. The columns of a scan have the names of the table, which the scans of other
-/// tables can have as well. The resolver gives each column a name of its own, so the names can
-/// only count more columns as read than the plan reads, also for the plan of another view that
-/// the plan reads, whose names belong to another resolver state. A scan of a table that such a
-/// view reads reads the columns that the view reads of the table (see
-/// [`ViewDefinitionReads::view_reads`]), which are all the columns that the plan of the view
-/// can read, since the plan reads the table only through the view.
+/// The names that the plan reads are those that decide which rows the plan returns, and
+/// those that a name that the plan reads depends on. The outputs of the plan, the columns
+/// that a function folded away (see `PlanResolverState::folded_columns`), and the columns
+/// that the filters, the join conditions, the sort keys, the grouping keys and the other
+/// expressions of the operators that decide the rows refer to are read. An output of a
+/// projection, an aggregate or a window function depends on the columns that its expression
+/// refers to, an output of a union on the columns at its position in the inputs, an output
+/// of an extension node on the input columns that the node needs for it, and a column of a
+/// reference to a CTE definition on the output of the definition. A subquery in an
+/// expression is read as the expression is. The other operators, such as `DISTINCT`, which
+/// tells rows apart by all their columns, read all the columns of their inputs, so the list
+/// of operators is checked again when DataFusion adds or changes operators. A column of a
+/// scan is read if its name is read, or the name of an output of the projection right
+/// above the scan that depends on it, since the columns of a scan have the names of the
+/// table, which the scans of other tables can have as well. The resolver gives each other
+/// column a name of its own, so the names can only count more columns as read than the
+/// plan reads, also for the plan of another view that the plan reads, whose names belong
+/// to another resolver state. A scan of a table that such a view reads reads the columns
+/// that the view reads of the table (see [`ViewDefinitionReads::view_reads`]), which are
+/// all the columns that the plan of the view can read, since the plan reads the table
+/// only through the view.
 fn read_columns(
     plan: &LogicalPlan,
     reads: &ViewDefinitionReads,
 ) -> PlanResult<HashMap<usize, HashSet<usize>>> {
-    let mut names = plan
-        .schema()
-        .fields()
-        .iter()
-        .map(|x| x.name().clone())
-        .chain(reads.folded_columns.iter().cloned())
-        .collect::<HashSet<_>>();
-    // The name and the position in the source of each column of the scans, the outputs that
-    // the projections right above the scans pass the columns on as, and the names that each
-    // name of the other projections and of the references to CTE definitions passes on.
-    let mut columns: HashMap<usize, Vec<(String, usize)>> = HashMap::new();
-    let mut outputs: HashMap<usize, Vec<(String, String)>> = HashMap::new();
-    let mut passes: HashMap<String, Vec<String>> = HashMap::new();
-    let output_names = |plan: &LogicalPlan| {
-        plan.schema()
+    let mut walk = ReadColumns {
+        reads,
+        names: plan
+            .schema()
             .fields()
             .iter()
             .map(|x| x.name().clone())
-            .collect::<Vec<_>>()
+            .chain(reads.folded_columns.iter().cloned())
+            .collect(),
+        depends: HashMap::new(),
+        columns: HashMap::new(),
+        outputs: HashMap::new(),
+        definitions: HashSet::new(),
     };
-    visit_nodes(plan, &mut |node| {
-        let mut exprs = node.expressions();
-        match node {
-            LogicalPlan::TableScan(scan) => {
-                if let Some(reference) = CteReference::try_from_scan(scan) {
-                    let definition = reference.definition().resolved().schema();
-                    for (i, field) in scan.projected_schema.fields().iter().enumerate() {
-                        let position = scan.projection.as_ref().map_or(i, |p| p[i]);
-                        passes
-                            .entry(field.name().clone())
-                            .or_default()
-                            .push(definition.field(position).name().clone());
-                    }
-                } else if reads.table_origin(&scan.source).is_some() {
-                    let fields = scan.projected_schema.fields().iter().enumerate();
-                    columns
-                        .entry(table_source_address(&scan.source))
-                        .or_default()
-                        .extend(fields.map(|(i, field)| {
-                            let position = scan.projection.as_ref().map_or(i, |p| p[i]);
-                            (field.name().clone(), position)
-                        }));
-                }
-            }
-            LogicalPlan::Projection(projection) => {
-                let scan = match projection.input.as_ref() {
-                    LogicalPlan::TableScan(scan) if reads.table_origin(&scan.source).is_some() => {
-                        Some(table_source_address(&scan.source))
-                    }
-                    _ => None,
-                };
-                let fields = projection.schema.fields();
-                let mut computed = vec![];
-                for (expr, field) in exprs.into_iter().zip(fields) {
-                    let mut value = &expr;
-                    while let Expr::Alias(alias) = value {
-                        value = &alias.expr;
-                    }
-                    let output = field.name().clone();
-                    match (value.try_as_col().map(|x| x.name.clone()), scan) {
-                        (Some(column), Some(address)) => {
-                            outputs.entry(address).or_default().push((output, column))
-                        }
-                        (Some(column), None) => passes.entry(output).or_default().push(column),
-                        (None, _) => computed.push(expr),
-                    }
-                }
-                exprs = computed;
-            }
-            // These operators read the columns that their expressions refer to.
-            LogicalPlan::Filter(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Distinct(Distinct::On(_)) => {}
-            node => {
-                for input in node.inputs() {
-                    names.extend(output_names(input));
-                }
-            }
-        }
-        for expr in &exprs {
-            expr.apply(|e| {
-                match e {
-                    Expr::Column(column) | Expr::OuterReferenceColumn(_, column) => {
-                        names.insert(column.name.clone());
-                    }
-                    // The expression reads the values of the subquery.
-                    Expr::ScalarSubquery(subquery)
-                    | Expr::InSubquery(InSubquery { subquery, .. })
-                    | Expr::SetComparison(SetComparison { subquery, .. }) => {
-                        names.extend(output_names(&subquery.subquery));
-                    }
-                    _ => {}
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
+    walk.plan(plan, None)?;
+    let ReadColumns {
+        mut names,
+        mut depends,
+        columns,
+        mut outputs,
+        ..
+    } = walk;
     let mut pending = names.iter().cloned().collect::<Vec<_>>();
     while let Some(name) = pending.pop() {
-        for passed in passes.remove(&name).unwrap_or_default() {
-            if names.insert(passed.clone()) {
-                pending.push(passed);
+        for input in depends.remove(&name).unwrap_or_default() {
+            if names.insert(input.clone()) {
+                pending.push(input);
             }
         }
     }
@@ -1391,6 +1311,273 @@ fn read_columns(
         read.entry(*address).or_default().extend(positions);
     }
     Ok(read)
+}
+
+/// What a name of an expression is read for: always, or for an output of the plan that
+/// depends on it, or for an output of the projection right above a scan.
+#[derive(Clone, Copy)]
+enum ReadFor<'a> {
+    Rows(Option<&'a str>),
+    Output(&'a str),
+    ScanOutput(usize, &'a str),
+}
+
+/// The names that a plan reads, while [`read_columns`] walks the plan.
+struct ReadColumns<'a> {
+    reads: &'a ViewDefinitionReads,
+    /// The names that are read.
+    names: HashSet<String>,
+    /// The names that each name depends on.
+    depends: HashMap<String, Vec<String>>,
+    /// The name and the position in the source of each column of the scans.
+    columns: HashMap<usize, Vec<(String, usize)>>,
+    /// The outputs of the projections right above the scans and the columns of the scans
+    /// that they depend on.
+    outputs: HashMap<usize, Vec<(String, String)>>,
+    /// The CTE definitions that the walk visited.
+    definitions: HashSet<usize>,
+}
+
+impl ReadColumns<'_> {
+    /// Walks the plan, whose names that decide its rows are read always, or if the output
+    /// `read_by` is read, for the plan of a subquery in an expression of that output.
+    fn plan(&mut self, plan: &LogicalPlan, read_by: Option<&str>) -> datafusion_common::Result<()> {
+        plan.apply(|node| {
+            self.node(node, read_by)?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+
+    fn read(&mut self, name: String, read_for: ReadFor<'_>) {
+        match read_for {
+            ReadFor::Rows(None) => {
+                self.names.insert(name);
+            }
+            ReadFor::Rows(Some(output)) | ReadFor::Output(output) => {
+                self.depends
+                    .entry(output.to_string())
+                    .or_default()
+                    .push(name);
+            }
+            ReadFor::ScanOutput(address, output) => self
+                .outputs
+                .entry(address)
+                .or_default()
+                .push((output.to_string(), name)),
+        }
+    }
+
+    /// Records the columns that the expression refers to, and the subqueries that it reads.
+    fn expr(&mut self, expr: &Expr, read_for: ReadFor<'_>) -> datafusion_common::Result<()> {
+        // The other names that a subquery reads are read for the same output.
+        let subquery_for = match read_for {
+            ReadFor::Rows(read_by) => read_by,
+            ReadFor::Output(output) | ReadFor::ScanOutput(_, output) => Some(output),
+        };
+        expr.apply(|e| {
+            match e {
+                Expr::Column(column) => self.read(column.name.clone(), read_for),
+                Expr::OuterReferenceColumn(_, column) => {
+                    self.read(column.name.clone(), ReadFor::Rows(subquery_for));
+                }
+                // The expression reads the values of the subquery.
+                Expr::ScalarSubquery(subquery)
+                | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. }) => {
+                    for name in output_names(&subquery.subquery) {
+                        self.read(name, ReadFor::Rows(subquery_for));
+                    }
+                    self.plan(&subquery.subquery, subquery_for)?;
+                }
+                Expr::Exists(Exists { subquery, .. }) => {
+                    self.plan(&subquery.subquery, subquery_for)?;
+                }
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+
+    /// Records that each output depends on the input names at its position in `inputs`.
+    fn depend(&mut self, output: &str, inputs: impl IntoIterator<Item = String>) {
+        self.depends
+            .entry(output.to_string())
+            .or_default()
+            .extend(inputs);
+    }
+
+    fn node(&mut self, node: &LogicalPlan, read_by: Option<&str>) -> datafusion_common::Result<()> {
+        let rows = ReadFor::Rows(read_by);
+        match node {
+            LogicalPlan::TableScan(scan) => {
+                if let Some(reference) = CteReference::try_from_scan(scan) {
+                    let definition = reference.definition();
+                    let outputs = definition.resolved().schema();
+                    for (i, field) in scan.projected_schema.fields().iter().enumerate() {
+                        let position = scan.projection.as_ref().map_or(i, |p| p[i]);
+                        let input = outputs.field(position).name().clone();
+                        self.depend(field.name(), [input]);
+                    }
+                    if self.definitions.insert(Arc::as_ptr(definition) as usize) {
+                        self.plan(definition.resolved(), None)?;
+                    }
+                } else if self.reads.table_origin(&scan.source).is_some() {
+                    let fields = scan.projected_schema.fields().iter().enumerate();
+                    self.columns
+                        .entry(table_source_address(&scan.source))
+                        .or_default()
+                        .extend(fields.map(|(i, field)| {
+                            let position = scan.projection.as_ref().map_or(i, |p| p[i]);
+                            (field.name().clone(), position)
+                        }));
+                }
+                for filter in &scan.filters {
+                    self.expr(filter, rows)?;
+                }
+            }
+            LogicalPlan::Projection(projection) => {
+                let scan = match projection.input.as_ref() {
+                    LogicalPlan::TableScan(scan)
+                        if self.reads.table_origin(&scan.source).is_some() =>
+                    {
+                        Some(table_source_address(&scan.source))
+                    }
+                    _ => None,
+                };
+                for (expr, field) in projection.expr.iter().zip(projection.schema.fields()) {
+                    let read_for = match scan {
+                        Some(address) => ReadFor::ScanOutput(address, field.name()),
+                        None => ReadFor::Output(field.name()),
+                    };
+                    self.expr(expr, read_for)?;
+                }
+            }
+            LogicalPlan::Aggregate(aggregate) => {
+                for expr in &aggregate.group_expr {
+                    self.expr(expr, rows)?;
+                }
+                let fields = aggregate.schema.fields();
+                let first = fields.len() - aggregate.aggr_expr.len();
+                for (expr, field) in aggregate.aggr_expr.iter().zip(&fields[first..]) {
+                    self.expr(expr, ReadFor::Output(field.name()))?;
+                }
+            }
+            LogicalPlan::Window(window) => {
+                let fields = window.schema.fields();
+                let first = fields.len() - window.window_expr.len();
+                for (expr, field) in window.window_expr.iter().zip(&fields[first..]) {
+                    self.expr(expr, ReadFor::Output(field.name()))?;
+                }
+            }
+            LogicalPlan::Union(union) => {
+                for (i, field) in union.schema.fields().iter().enumerate() {
+                    let inputs = union
+                        .inputs
+                        .iter()
+                        .map(|input| input.schema().field(i).name().clone())
+                        .collect::<Vec<_>>();
+                    self.depend(field.name(), inputs);
+                }
+            }
+            LogicalPlan::Extension(extension) => {
+                // The column that a partition ID or a monotonically increasing ID node adds
+                // depends only on the partition and the position of each row, and the node
+                // passes the columns of its input on.
+                let node_any = extension.node.as_any();
+                if node_any.is::<MonotonicIdNode>() || node_any.is::<SparkPartitionIdNode>() {
+                    for input in node.inputs() {
+                        for (output, field) in
+                            node.schema().fields().iter().zip(input.schema().fields())
+                        {
+                            self.depend(output.name(), [field.name().clone()]);
+                        }
+                    }
+                    return Ok(());
+                }
+                for expr in node.expressions() {
+                    self.expr(&expr, rows)?;
+                }
+                let inputs = node.inputs();
+                let fields = node.schema().fields();
+                // The input columns that the node needs for itself, and for each output.
+                let needed = (0..=fields.len())
+                    .map(|j| {
+                        let output = if j == 0 { vec![] } else { vec![j - 1] };
+                        extension.node.necessary_children_exprs(&output)
+                    })
+                    .collect::<Option<Vec<_>>>();
+                match needed {
+                    Some(needed) => {
+                        for (j, children) in needed.into_iter().enumerate() {
+                            let names = children
+                                .iter()
+                                .zip(&inputs)
+                                .flat_map(|(indices, input)| {
+                                    let schema = input.schema();
+                                    indices
+                                        .iter()
+                                        .map(|&i| schema.field(i).name().clone())
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>();
+                            if j == 0 {
+                                for name in names {
+                                    self.read(name, rows);
+                                }
+                            } else {
+                                self.depend(fields[j - 1].name(), names);
+                            }
+                        }
+                    }
+                    None => {
+                        for input in inputs {
+                            for name in output_names(input) {
+                                self.read(name, rows);
+                            }
+                        }
+                    }
+                }
+            }
+            // These operators read the columns that their expressions refer to, and pass the
+            // columns of their inputs on under their names.
+            LogicalPlan::Filter(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Distinct(Distinct::On(_)) => {
+                for expr in node.expressions() {
+                    self.expr(&expr, rows)?;
+                }
+            }
+            node => {
+                for expr in node.expressions() {
+                    self.expr(&expr, rows)?;
+                }
+                for input in node.inputs() {
+                    for name in output_names(input) {
+                        self.read(name, rows);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Returns the names of the outputs of the plan.
+fn output_names(plan: &LogicalPlan) -> Vec<String> {
+    plan.schema()
+        .fields()
+        .iter()
+        .map(|x| x.name().clone())
+        .collect()
 }
 
 /// The source of a scan of a table that a temporary view reads again at each read, while
@@ -2186,7 +2373,11 @@ mod tests {
             .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
             .project(vec![col("t_a")])?
             .build()?;
-        assert_eq!(read(&plan, &reads, address)?, [0, 1, 3]);
+        assert_eq!(read(&plan, &reads, address)?, [0, 3]);
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
+            .build()?;
+        assert_eq!(read(&plan, &reads, address)?, [0, 1]);
         // `SELECT a FROM (SELECT * FROM t)` and `SELECT a FROM (SELECT a, b FROM t) s`: the
         // projections pass the columns on, and only the column that is read is read.
         let plan = LogicalPlanBuilder::from(t.clone())
@@ -2262,7 +2453,7 @@ mod tests {
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(read(&plan, &reads, address)?, [0]);
-        assert_eq!(read(&plan, &reads, other)?, [2]);
+        assert_eq!(read(&plan, &reads, other)?, Vec::<usize>::new());
         Ok(())
     }
 
@@ -2287,16 +2478,24 @@ mod tests {
             .aggregate(vec![col("t_a")], vec![max(col("t_b")).alias("total")])?
             .project(vec![col("t_a")])?
             .build()?;
+        assert_eq!(read(&plan, &reads, address)?, [0]);
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .aggregate(vec![col("t_a")], vec![max(col("t_b")).alias("total")])?
+            .build()?;
         assert_eq!(read(&plan, &reads, address)?, [0, 1]);
         let window = row_number()
             .partition_by(vec![col("t_b")])
             .order_by(vec![col("t_c").sort(true, false)])
             .build()?;
         let plan = LogicalPlanBuilder::from(t.clone())
-            .window(vec![window])?
+            .window(vec![window.clone()])?
             .project(vec![col("t_a")])?
             .build()?;
-        assert_eq!(read(&plan, &reads, address)?, [0, 1, 2]);
+        assert_eq!(read(&plan, &reads, address)?, [0]);
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .window(vec![window])?
+            .build()?;
+        assert_eq!(read(&plan, &reads, address)?, [0, 1, 2, 3]);
         let plan = LogicalPlanBuilder::from(t.clone())
             .sort(vec![(-col("t_c")).sort(true, false)])?
             .limit(0, Some(1))?
@@ -2336,8 +2535,8 @@ mod tests {
             .union(u.clone())?
             .project(vec![col("t_a")])?
             .build()?;
-        assert_eq!(read(&plan, &reads, address)?, [0, 1, 2, 3]);
-        assert_eq!(read(&plan, &reads, other)?, [0, 1, 2, 3]);
+        assert_eq!(read(&plan, &reads, address)?, [0]);
+        assert_eq!(read(&plan, &reads, other)?, [0]);
         // `DISTINCT` tells rows apart by all its columns.
         let plan = LogicalPlanBuilder::from(t.clone())
             .distinct()?
@@ -2356,19 +2555,31 @@ mod tests {
                 .project(vec![col("t_a")])?
                 .build()
         };
-        for node in [
-            Arc::new(ExplicitRepartitionNode::new(
-                Arc::clone(&input),
-                Some(3),
-                ExplicitRepartitionKind::RoundRobin,
-            )) as Arc<dyn UserDefinedLogicalNode>,
-            Arc::new(SparkPartitionIdNode::try_new(
-                Arc::clone(&input),
-                "pid".to_string(),
-            )?),
-            Arc::new(BarrierNode::new(vec![], Arc::clone(&input))),
-        ] {
-            assert_eq!(read(&extension(node)?, &reads, address)?, [0, 1, 2, 3]);
+        // An extension node reads the input columns that it needs for its outputs that are
+        // read, or all of them if it does not tell which.
+        let nodes = [
+            (
+                Arc::new(ExplicitRepartitionNode::new(
+                    Arc::clone(&input),
+                    Some(3),
+                    ExplicitRepartitionKind::RoundRobin,
+                )) as Arc<dyn UserDefinedLogicalNode>,
+                vec![0],
+            ),
+            (
+                Arc::new(SparkPartitionIdNode::try_new(
+                    Arc::clone(&input),
+                    "pid".to_string(),
+                )?),
+                vec![0],
+            ),
+            (
+                Arc::new(BarrierNode::new(vec![], Arc::clone(&input))),
+                vec![0, 1, 2, 3],
+            ),
+        ];
+        for (node, expected) in nodes {
+            assert_eq!(read(&extension(node)?, &reads, address)?, expected);
         }
         Ok(())
     }

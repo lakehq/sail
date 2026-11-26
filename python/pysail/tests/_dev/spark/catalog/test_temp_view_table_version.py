@@ -219,6 +219,104 @@ def test_views_over_views_read_a_table_whose_unread_column_changed_its_type(spar
     assert rows(spark, f"SELECT * FROM {view}") == [(5, 30)]
 
 
+# Queries over `t (id INT, k INT, b INT)` that compute a value of `b` that they do not read, and the
+# query without that value.
+UNUSED_VALUE_QUERIES = {
+    "aggregate": (
+        "SELECT id FROM (SELECT id, max(b) AS mb FROM {t} GROUP BY id)",
+        "SELECT id FROM {t} GROUP BY id",
+    ),
+    "window": ("SELECT id FROM (SELECT id, sum(b) OVER (PARTITION BY id) AS s FROM {t})", "SELECT id FROM {t}"),
+    "union": (
+        "SELECT id FROM (SELECT id, b FROM {t} UNION ALL SELECT id, b FROM {t})",
+        "SELECT id FROM {t} UNION ALL SELECT id FROM {t}",
+    ),
+    "column": ("SELECT id, k FROM (SELECT id, k, b AS e FROM {t})", "SELECT id, k FROM {t}"),
+    "expression": ("SELECT id, k FROM (SELECT id, k, b + 1 AS e FROM {t})", "SELECT id, k FROM {t}"),
+    "scalar subquery": (
+        "SELECT id, k FROM (SELECT id, k, (SELECT max(b) FROM {t}) AS e FROM {t})",
+        "SELECT id, k FROM {t}",
+    ),
+    "exists": (
+        "SELECT id, k FROM (SELECT x.id, x.k, EXISTS (SELECT 1 FROM {t} u WHERE u.id = x.b) AS e FROM {t} x)",
+        "SELECT id, k FROM {t}",
+    ),
+    "lateral": (
+        "SELECT id, k FROM (SELECT x.id, x.k, l.e FROM {t} x, LATERAL (SELECT x.b + 1 AS e) l)",
+        "SELECT id, k FROM {t}",
+    ),
+    "cte": ("WITH c AS (SELECT id, k, b + 1 AS e FROM {t}) SELECT id, k FROM c", "SELECT id, k FROM {t}"),
+}
+
+# The changes of `b`: the format of the table, and whether the table is created again with or without
+# `b` under another name, or `b` is dropped or renamed in place.
+UNUSED_VALUE_CHANGES = [
+    ("delta", "drop"),
+    ("delta", "rename"),
+    ("parquet", "drop"),
+    ("parquet", "rename"),
+    ("delta_cm", "alter drop"),
+    ("delta_cm", "alter rename"),
+]
+
+
+def change_unused_value(spark, table, change):
+    if change == "drop":
+        table.recreate("id INT, k INT", "(3, 30)")
+    elif change == "rename":
+        table.recreate("id INT, k INT, c INT", "(3, 30, 300)")
+    elif change == "alter drop":
+        spark.sql(f"ALTER TABLE {table.name} DROP COLUMN b")
+        table.insert("(3, 30)")
+    else:
+        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN b TO c")
+        table.insert("(3, 30, 300)")
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("query", UNUSED_VALUE_QUERIES)
+@pytest.mark.parametrize(("fmt", "change"), UNUSED_VALUE_CHANGES)
+def test_view_reads_a_table_whose_column_of_a_value_that_it_does_not_read_changed(
+    spark, tables, kind, query, fmt, change
+):
+    sql, unused_removed = UNUSED_VALUE_QUERIES[query]
+    using, properties = METADATA_FORMATS[fmt]
+    table = tables(using, "id INT, k INT, b INT", properties)
+    table.insert("(1, 10, 100), (2, 20, 200)")
+    view = table.create_view(kind, sql.format(t=table.name))
+    change_unused_value(spark, table, change)
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, unused_removed.format(t=table.name))
+
+
+@pytest.mark.parametrize(("fmt", "change"), UNUSED_VALUE_CHANGES)
+def test_data_frame_view_reads_a_table_whose_column_of_a_value_that_it_does_not_read_changed(
+    spark, tables, fmt, change
+):
+    using, properties = METADATA_FORMATS[fmt]
+    table = tables(using, "id INT, k INT, b INT", properties)
+    table.insert("(1, 10, 100), (2, 20, 200)")
+    frame = spark.table(table.name).withColumn("e", col("b")).select("id", "k")
+    view = table.create_view("dv", frame=frame)
+    change_unused_value(spark, table, change)
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, f"SELECT id, k FROM {table.name}")
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+def test_view_of_a_window_over_a_sorted_path_reads_files_whose_unread_column_was_retyped(spark, tmp_path, kind):
+    path = str(tmp_path / f"p_{uuid.uuid4().hex}")
+    spark.sql("SELECT 7 AS a, 1 AS b").write.parquet(path)
+    sql = (
+        "SELECT q.a, dense_rank() OVER (PARTITION BY q.a ORDER BY q.a) AS r "
+        f"FROM (SELECT * FROM parquet.`{path}` ORDER BY a) q"
+    )
+    view = create_view(spark, kind, sql)
+    try:
+        spark.sql("SELECT 7 AS a, CAST(1 AS BIGINT) AS b").write.mode("overwrite").parquet(path)
+        assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql) == [(7, 1)]
+    finally:
+        drop_view(spark, view)
+
+
 # Queries over `t (a INT, b INT)` and `w (a INT, c INT)` whose star or natural join reads the column
 # that `t` or `w` gains: the query, the table, its columns and rows then, and the columns of the view.
 GAINED_COLUMN_QUERIES = {
@@ -1010,13 +1108,13 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_chang
 # that the view reads then, or `None` if the view resolves its query again and reads
 # what the query reads now, or fails as the query fails.
 UNION_CHANGES = {
-    # The inputs of a union read all their columns, and the query no longer resolves.
+    # The union reads `b` of neither input.
     "column dropped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
         "w",
         "a INT",
         "(1), (3)",
-        None,
+        [(1,), (1,), (1,), (2,), (3,)],
     ),
     "column retyped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
