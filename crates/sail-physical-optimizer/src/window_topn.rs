@@ -54,9 +54,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use crate::PhysicalOptimizerRule;
 
@@ -103,6 +103,9 @@ use crate::PhysicalOptimizerRule;
 /// - `rn < K` → fetch = K - 1
 /// - `K >= rn` (flipped) → fetch = K
 /// - `K > rn` (flipped) → fetch = K - 1
+///
+/// `rn` may also be wrapped in a `CAST` to an integer type, as in
+/// `CAST(rn AS Int32) <= K` (see [`ranking_column`]).
 ///
 /// # When the Rule Fires
 ///
@@ -353,6 +356,8 @@ impl PhysicalOptimizerRule for WindowTopN {
 /// | `Literal(N) >= Column(idx)` | `(idx, N)` |
 /// | `Literal(N) > Column(idx)` | `(idx, N-1)` |
 ///
+/// `Column(idx)` may also be `CAST(Column(idx) AS <integer type>)`.
+///
 /// # Examples
 ///
 /// - `rn <= 5` → `Some((2, 5))` (assuming rn is column index 2)
@@ -369,10 +374,7 @@ fn extract_window_limit(
     let right = binary.right();
 
     // Try Column op Literal
-    if let (Some(col), Some(lit_val)) = (
-        left.downcast_ref::<Column>(),
-        right.downcast_ref::<Literal>(),
-    ) {
+    if let (Some(col), Some(lit_val)) = (ranking_column(left), right.downcast_ref::<Literal>()) {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
             Operator::LtEq => Some((col.index(), n)),
@@ -382,10 +384,7 @@ fn extract_window_limit(
     }
 
     // Try Literal op Column (flipped)
-    if let (Some(lit_val), Some(col)) = (
-        left.downcast_ref::<Literal>(),
-        right.downcast_ref::<Column>(),
-    ) {
+    if let (Some(lit_val), Some(col)) = (left.downcast_ref::<Literal>(), ranking_column(right)) {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
             Operator::GtEq => Some((col.index(), n)),
@@ -395,6 +394,27 @@ fn extract_window_limit(
     }
 
     None
+}
+
+/// Returns the column compared by a window limit predicate: a bare [`Column`],
+/// or one wrapped in a [`CastExpr`] to an integer type. Sail casts the `UInt64`
+/// output of `ROW_NUMBER`/`RANK`/`DENSE_RANK` to `Int32` to match Spark, and
+/// DataFusion keeps that narrowing cast in the comparison.
+///
+/// The cast does not change which rows the predicate keeps: the caller only
+/// accepts a column produced by one of these functions, whose values are
+/// positive `UInt64`s, and an integer-to-integer cast either returns such a
+/// value unchanged or fails (an error, or NULL for a safe cast) when the
+/// target cannot hold it. `K` is a positive value of the target type, so the
+/// rows the cast leaves unchanged are kept or dropped exactly as without it,
+/// and the rows it fails on rank after `K` and are pruned. A cast that would
+/// error on them is then not evaluated.
+fn ranking_column(expr: &Arc<dyn PhysicalExpr>) -> Option<&Column> {
+    match expr.downcast_ref::<CastExpr>() {
+        Some(cast) if cast.cast_type().is_integer() => cast.expr().downcast_ref::<Column>(),
+        Some(_) => None,
+        None => expr.downcast_ref::<Column>(),
+    }
 }
 
 /// Convert a [`ScalarValue`] to `usize` if it's a positive integer.
@@ -495,4 +515,166 @@ fn column_index_below(col_idx: usize, intermediates: &[Arc<dyn ExecutionPlan>]) 
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{Field, Schema};
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::windows::create_window_expr;
+    use datafusion::physical_plan::{InputOrderMode, displayable};
+    use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+
+    use super::*;
+
+    /// `FilterExec(<predicate>)` over `RANK() OVER (PARTITION BY pk ORDER BY v)`,
+    /// where the window's output column `rank` is at index 2.
+    fn plan(predicate: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("v", DataType::Int32, false),
+        ]));
+        let pk: Arc<dyn PhysicalExpr> = Arc::new(Column::new("pk", 0));
+        let v = PhysicalSortExpr::new_default(Arc::new(Column::new("v", 1)));
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&pk)),
+            v.clone(),
+        ])
+        .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty ordering"))?;
+        let input = Arc::new(SortExec::new(
+            ordering,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        ));
+        let rank = create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(rank_udwf()),
+            "rank".to_string(),
+            &[],
+            &[pk],
+            &[v],
+            Arc::new(WindowFrame::new(Some(true))),
+            schema,
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(BoundedWindowAggExec::try_new(
+            vec![rank],
+            input,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+        Ok(Arc::new(FilterExec::try_new(predicate, window)?))
+    }
+
+    fn rank_column(cast_type: Option<DataType>) -> Arc<dyn PhysicalExpr> {
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("rank", 2));
+        match cast_type {
+            Some(cast_type) => Arc::new(CastExpr::new(column, cast_type, None)),
+            None => column,
+        }
+    }
+
+    fn compare(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(left, op, right))
+    }
+
+    fn literal(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Literal::new(value))
+    }
+
+    /// Runs the rule and returns the rewritten plan's display, asserting that
+    /// the schema is unchanged.
+    fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_window_topn = true;
+        let optimized = WindowTopN::new().optimize(Arc::clone(&plan), &config)?;
+        assert_eq!(plan.schema(), optimized.schema());
+        Ok(displayable(optimized.as_ref()).indent(true).to_string())
+    }
+
+    #[test]
+    fn test_window_topn_through_integer_cast() -> Result<()> {
+        let cases = [
+            // `CAST(rank AS Int32) <= 2`
+            compare(
+                rank_column(Some(DataType::Int32)),
+                Operator::LtEq,
+                literal(ScalarValue::Int32(Some(2))),
+            ),
+            // `CAST(rank AS Int32) < 3`
+            compare(
+                rank_column(Some(DataType::Int32)),
+                Operator::Lt,
+                literal(ScalarValue::Int32(Some(3))),
+            ),
+            // `2 >= CAST(rank AS Int64)`
+            compare(
+                literal(ScalarValue::Int64(Some(2))),
+                Operator::GtEq,
+                rank_column(Some(DataType::Int64)),
+            ),
+            // `3 > CAST(rank AS Int8)`
+            compare(
+                literal(ScalarValue::Int8(Some(3))),
+                Operator::Gt,
+                rank_column(Some(DataType::Int8)),
+            ),
+            // `rank <= 2`
+            compare(
+                rank_column(None),
+                Operator::LtEq,
+                literal(ScalarValue::UInt64(Some(2))),
+            ),
+        ];
+        for predicate in cases {
+            let actual = optimize(plan(predicate)?)?;
+            assert!(!actual.contains("FilterExec"), "{actual}");
+            assert!(
+                actual.contains("PartitionedTopKExec: fn=rank, fetch=2"),
+                "{actual}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_topn_ignores_non_integer_cast() -> Result<()> {
+        let cases = [
+            // `CAST(rank AS Float64) <= 2.0`
+            compare(
+                rank_column(Some(DataType::Float64)),
+                Operator::LtEq,
+                literal(ScalarValue::Float64(Some(2.0))),
+            ),
+            // `CAST(rank AS Decimal128(20, 0)) <= 2`
+            compare(
+                rank_column(Some(DataType::Decimal128(20, 0))),
+                Operator::LtEq,
+                literal(ScalarValue::Decimal128(Some(2), 20, 0)),
+            ),
+            // `CAST(rank AS Int32) = 2`
+            compare(
+                rank_column(Some(DataType::Int32)),
+                Operator::Eq,
+                literal(ScalarValue::Int32(Some(2))),
+            ),
+            // `CAST(rank AS Int32) < 1`
+            compare(
+                rank_column(Some(DataType::Int32)),
+                Operator::Lt,
+                literal(ScalarValue::Int32(Some(1))),
+            ),
+        ];
+        for predicate in cases {
+            let actual = optimize(plan(predicate)?)?;
+            assert!(actual.contains("FilterExec"), "{actual}");
+            assert!(!actual.contains("PartitionedTopKExec"), "{actual}");
+        }
+        Ok(())
+    }
 }
