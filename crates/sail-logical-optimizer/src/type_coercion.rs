@@ -46,7 +46,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, Spans, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -64,7 +64,8 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    AsOfJoin, AsOfMatch, Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, MaterializedCte,
+    MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator, Projection, Union,
     ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -149,78 +150,72 @@ fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Resu
         .as_ref()
         .map(|zone| zone.as_str());
 
-    // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
-    //  so that the body of a materialized CTE is coerced before its continuation.
-    // plan.transform_down_up_with_subqueries(
-    //     |plan| match plan {
-    //         Coercion can change the types of the body, for example the type
-    //         of a `NULL` column of a `UNION`. Coerce the body first, and give
-    //         its new schema to the scans before the continuation is coerced.
-    //         LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-    //             let body = coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
-    //             let continuation = with_materialized_cte_scan_schema(
-    //                 Arc::unwrap_or_clone(cte.continuation),
-    //                 cte.id,
-    //                 body.schema(),
-    //             )?;
-    //             let continuation = coerce_plan_and_subqueries(continuation, config)?;
-    //             Ok(Transformed::new(
-    //                 LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
-    //                     cte: Arc::new(body),
-    //                     continuation: Arc::new(continuation),
-    //                     ..cte
-    //                 })),
-    //                 true,
-    //                 TreeNodeRecursion::Jump,
-    //             ))
-    //         }
-    //         _ => Ok(Transformed::no(plan)),
-    //     },
-    //     |plan| analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone),
-    // )
-    plan.transform_up_with_subqueries(|plan| {
-        analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone)
-    })
+    plan.transform_down_up_with_subqueries(
+        |plan| match plan {
+            // Coercion can change the types of the body, for example the type
+            // of a `NULL` column of a `UNION`. Coerce the body first, and give
+            // its new schema to the scans before the continuation is coerced.
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let body = coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                let continuation = with_materialized_cte_scan_schema(
+                    Arc::unwrap_or_clone(cte.continuation),
+                    cte.id,
+                    body.schema(),
+                )?;
+                let continuation = coerce_plan_and_subqueries(continuation, config)?;
+                Ok(Transformed::new(
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                        cte: Arc::new(body),
+                        continuation: Arc::new(continuation),
+                        ..cte
+                    })),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
+            _ => Ok(Transformed::no(plan)),
+        },
+        |plan| analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone),
+    )
     .map(|t| t.data)
 }
 
 // Give the fields of `body_schema` to each scan of the materialized CTE `id`
 // in `continuation`, also in subquery expressions. A scan keeps its
 // qualifiers.
-// TODO: Uncomment after DataFusion 56
-// fn with_materialized_cte_scan_schema(
-//     continuation: LogicalPlan,
-//     id: MaterializedCteId,
-//     body_schema: &DFSchemaRef,
-// ) -> Result<LogicalPlan> {
-//     continuation
-//         .transform_down_with_subqueries(|node| match node {
-//             // A nested occurrence of the same CTE owns the scans below it.
-//             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
-//                 if nested.id == id =>
-//             {
-//                 Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
-//             }
-//             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
-//                 if scan.id == id && scan.schema.inner() != body_schema.inner() =>
-//             {
-//                 let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
-//                 let schema = DFSchema::from_field_specific_qualified_schema(
-//                     qualifiers,
-//                     body_schema.inner(),
-//                 )?
-//                 .with_functional_dependencies(body_schema.functional_dependencies().clone())?;
-//                 Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-//                     MaterializedCtePlan::Scan(MaterializedCteScan {
-//                         schema: Arc::new(schema),
-//                         ..scan
-//                     }),
-//                 )))
-//             }
-//             _ => Ok(Transformed::no(node)),
-//         })
-//         .map(|t| t.data)
-// }
+fn with_materialized_cte_scan_schema(
+    continuation: LogicalPlan,
+    id: MaterializedCteId,
+    body_schema: &DFSchemaRef,
+) -> Result<LogicalPlan> {
+    continuation
+        .transform_down_with_subqueries(|node| match node {
+            // A nested occurrence of the same CTE owns the scans below it.
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                if nested.id == id =>
+            {
+                Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                if scan.id == id && scan.schema.inner() != body_schema.inner() =>
+            {
+                let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
+                let schema = DFSchema::from_field_specific_qualified_schema(
+                    qualifiers,
+                    body_schema.inner(),
+                )?
+                .with_functional_dependencies(body_schema.functional_dependencies().clone())?;
+                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                    MaterializedCtePlan::Scan(MaterializedCteScan {
+                        schema: Arc::new(schema),
+                        ..scan
+                    }),
+                )))
+            }
+            _ => Ok(Transformed::no(node)),
+        })
+        .map(|t| t.data)
+}
 
 /// use the external schema to handle the correlated subqueries case
 ///
@@ -324,8 +319,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
-            // TODO: Uncomment after DataFusion 56
-            // LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
+            LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             LogicalPlan::Dml(dml) => self.coerce_dml(dml),
@@ -408,36 +402,35 @@ impl<'a> TypeCoercionRewriter<'a> {
         Ok(LogicalPlan::Join(join))
     }
 
-    // TODO: Uncomment after DataFusion 56
     // Coerce ASOF equality and ordered match expressions across input schemas.
-    // pub fn coerce_asof_join(&mut self, mut join: AsOfJoin) -> Result<LogicalPlan> {
-    //     join.on = join
-    //         .on
-    //         .into_iter()
-    //         .map(|(left, right)| {
-    //             self.coerce_binary_op(
-    //                 left,
-    //                 join.left.schema(),
-    //                 Operator::Eq,
-    //                 right,
-    //                 join.right.schema(),
-    //             )
-    //         })
-    //         .collect::<Result<_>>()?;
-    //     let (left, right) = self.coerce_binary_op(
-    //         join.match_condition.left,
-    //         join.left.schema(),
-    //         join.match_condition.op,
-    //         join.match_condition.right,
-    //         join.right.schema(),
-    //     )?;
-    //     join.match_condition = Box::new(AsOfMatch {
-    //         left,
-    //         op: join.match_condition.op,
-    //         right,
-    //     });
-    //     Ok(LogicalPlan::AsOfJoin(join))
-    // }
+    pub fn coerce_asof_join(&mut self, mut join: AsOfJoin) -> Result<LogicalPlan> {
+        join.on = join
+            .on
+            .into_iter()
+            .map(|(left, right)| {
+                self.coerce_binary_op(
+                    left,
+                    join.left.schema(),
+                    Operator::Eq,
+                    right,
+                    join.right.schema(),
+                )
+            })
+            .collect::<Result<_>>()?;
+        let (left, right) = self.coerce_binary_op(
+            join.match_condition.left,
+            join.left.schema(),
+            join.match_condition.op,
+            join.match_condition.right,
+            join.right.schema(),
+        )?;
+        join.match_condition = Box::new(AsOfMatch {
+            left,
+            op: join.match_condition.op,
+            right,
+        });
+        Ok(LogicalPlan::AsOfJoin(join))
+    }
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
@@ -1335,22 +1328,17 @@ fn coerce_window_frame(
                 .transpose()?;
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
-                    // TODO: Check the later keys of a range frame after DataFusion 56.
-                    //  Sail's window functions default to a range frame, which DataFusion 55
-                    //  supports for any later key.
-                    // Some(target_type) => {
-                    //     if window_frame_is_ree_range(&window_frame) {
-                    //         // The first key established the target type above, but
-                    //         // every later key also participates in peer comparison.
-                    //         check_free_range_order_by_types(&expressions[1..], schema)?;
-                    //     }
-                    //     target_type
-                    // }
-                    // TODO: Remove after DataFusion 56
-                    Some(target_type) => target_type,
+                    Some(target_type) => {
+                        if window_frame.free_range() {
+                            // The first key established the target type above, but
+                            // every later key also participates in peer comparison.
+                            check_free_range_order_by_types(&expressions[1..], schema)?;
+                        }
+                        target_type
+                    }
                     // A free range frame has no offsets to coerce. Check whether
                     // its ORDER BY types are supported by the free-range fallback.
-                    None if window_frame_is_ree_range(&window_frame) => {
+                    None if window_frame.free_range() => {
                         check_free_range_order_by_types(expressions, schema)?;
                         return Ok(window_frame);
                     }
@@ -1368,7 +1356,7 @@ fn coerce_window_frame(
                 // Tracked at https://github.com/apache/arrow-rs/issues/10891).
                 let supports_offset_arithmetic = !matches!(col_type, DataType::RunEndEncoded(_, _))
                     && (target_type.is_numeric() || is_interval(&target_type));
-                if !supports_offset_arithmetic && !window_frame_is_ree_range(&window_frame) {
+                if !supports_offset_arithmetic && !window_frame.free_range() {
                     return plan_err!(
                         "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {target_type}"
                     );
@@ -1383,16 +1371,6 @@ fn coerce_window_frame(
     window_frame.start_bound = coerce_frame_bound(&target_type, window_frame.start_bound)?;
     window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
-}
-
-// TODO: Remove after DataFusion 56
-/// Returns whether the window frame is "free range"; i.e. its start/end
-/// bounds are UNBOUNDED or CURRENT ROW.
-fn window_frame_is_ree_range(window_frame: &WindowFrame) -> bool {
-    (window_frame.start_bound.is_unbounded()
-        || window_frame.start_bound == WindowFrameBound::CurrentRow)
-        && (window_frame.end_bound.is_unbounded()
-            || window_frame.end_bound == WindowFrameBound::CurrentRow)
 }
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
@@ -1942,51 +1920,10 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     let WriteOp::MergeInto(_) = &dml.op else {
         return Ok(None);
     };
-    merge_dml_schema(dml).map(Some)
+    dml.merge_schema().map(Some)
 }
 // SPDX-SnippetEnd
 
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
-// TODO: Remove after DataFusion 56
-/// Build the target-plus-source schema used by MERGE expressions.
-#[expect(clippy::disallowed_types)]
-pub fn merge_dml_schema(dml: &datafusion_expr::DmlStatement) -> Result<DFSchema> {
-    let WriteOp::MergeInto(_) = &dml.op else {
-        return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
-    };
-    // TODO: Use the operation's target qualifier after DataFusion 56.
-    //  DataFusion 55 qualifies the MERGE target with the table name.
-    expression_merge_op_schema_for(&dml.table_name, &dml.target.schema(), dml.input.schema())
-}
-// SPDX-SnippetEnd
-
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
-// TODO: Remove after DataFusion 56
-/// Build a MERGE expression schema before constructing the operation.
-fn expression_merge_op_schema_for(
-    target_qualifier: &TableReference,
-    target_schema: &Schema,
-    source_schema: &DFSchema,
-) -> Result<DFSchema> {
-    if source_schema.iter().any(|(qualifier, _)| {
-        qualifier.is_some_and(|qualifier| qualifier.resolved_eq(target_qualifier))
-    }) {
-        return plan_err!(
-            "MERGE target qualifier '{}' conflicts with a source qualifier",
-            target_qualifier
-        );
-    }
-
-    DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
-        .join(source_schema)
-}
-// SPDX-SnippetEnd
-
-// TODO: Remove after DataFusion 56
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr_schema.rs#L862-L919
@@ -2047,7 +1984,6 @@ fn cast_subquery_columns(subquery: Subquery, cast_to_types: &[DataType]) -> Resu
 }
 // SPDX-SnippetEnd
 
-// TODO: Remove after DataFusion 56
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr.rs#L1405-L1451
@@ -2224,9 +2160,7 @@ mod test {
         Ok(())
     }
 
-    // TODO: Enable after DataFusion 56, which infers the type of a LIMIT parameter.
     #[test]
-    #[ignore]
     fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
         let plan = LogicalPlan::Limit(Limit {
             input: empty(),

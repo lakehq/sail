@@ -41,7 +41,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::functions_window::rank::rank_udwf;
+use datafusion::functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::execution_plan::replace_children_if_necessary;
@@ -264,15 +264,13 @@ impl WindowTopN {
         // operator appends a single column, and it has to reproduce the whole
         // of the window node's output schema. With two or more the window node
         // stays and computes them as before.
-        // TODO: Uncomment after DataFusion 56
-        // let ranking_field = if window_exprs.len() == 1 {
-        //     Some(matched_expr.field().ok()?)
-        // } else {
-        //     None
-        // };
+        let ranking_field = if window_exprs.len() == 1 {
+            Some(matched_expr.field().ok()?)
+        } else {
+            None
+        };
 
-        // TODO: make `mut` after DataFusion 56
-        let partitioned_topk = PartitionedTopKExec::try_new(
+        let mut partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
             expr,
             partition_prefix_len,
@@ -281,12 +279,11 @@ impl WindowTopN {
         )
         .ok()?;
 
-        // TODO: Uncomment after DataFusion 56
-        // if let Some(field) = &ranking_field {
-        //     partitioned_topk = partitioned_topk
-        //         .with_ranking_field(Arc::clone(field))
-        //         .ok()?;
-        // }
+        if let Some(field) = &ranking_field {
+            partitioned_topk = partitioned_topk
+                .with_ranking_field(Arc::clone(field))
+                .ok()?;
+        }
 
         // Step 7: Rebuild the pipeline above the operator.
         //
@@ -297,14 +294,10 @@ impl WindowTopN {
         // its window expressions' fields, which is what the operator now
         // produces, so the nodes above it keep referencing the same column
         // indices. Drop it.
-        // TODO: Uncomment after DataFusion 56
-        // let mut result: Arc<dyn ExecutionPlan> = Arc::new(partitioned_topk);
-        // if ranking_field.is_none() {
-        //     result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
-        // }
-        // TODO: Remove this line after DataFusion 56
-        let mut result =
-            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)]).ok()?;
+        let mut result: Arc<dyn ExecutionPlan> = Arc::new(partitioned_topk);
+        if ranking_field.is_none() {
+            result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
+        }
 
         // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
@@ -443,13 +436,11 @@ fn supported_window_fn(
         Some(WindowFnKind::RowNumber)
     } else if fun == &rank_udwf() {
         Some(WindowFnKind::Rank)
+    } else if fun == &dense_rank_udwf() {
+        Some(WindowFnKind::DenseRank)
     } else {
         None
     }
-    // TODO: Uncomment after DataFusion 56
-    // else if fun == &dense_rank_udwf() {
-    //     Some(WindowFnKind::DenseRank)
-    // }
 }
 
 type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>);
