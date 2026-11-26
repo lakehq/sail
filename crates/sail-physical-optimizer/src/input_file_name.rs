@@ -753,7 +753,7 @@ mod tests {
         ]))))
     }
 
-    fn metadata_expressions(schema: &Schema) -> Vec<ProjectionExpr> {
+    fn metadata_expressions() -> Vec<ProjectionExpr> {
         let expressions = [
             ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")]),
             ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
@@ -763,7 +763,7 @@ mod tests {
         ];
         create_physical_exprs(
             &expressions,
-            &DFSchema::try_from(schema.clone()).unwrap(),
+            &DFSchema::empty(),
             &ExecutionProps::default(),
             &PhysicalPlanningContext::default(),
         )
@@ -780,10 +780,7 @@ mod tests {
             ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
         Arc::new(
             ProjectionExec::try_new(
-                identity
-                    .iter()
-                    .cloned()
-                    .chain(metadata_expressions(&schema)),
+                identity.iter().cloned().chain(metadata_expressions()),
                 input,
             )
             .unwrap(),
@@ -933,7 +930,7 @@ mod tests {
             Some(vec![2]),
             columns("r"),
         );
-        let metadata = metadata_expressions(&join.schema());
+        let metadata = metadata_expressions();
         let expression = Arc::new(BinaryExpr::new(
             Arc::new(LambdaVariable::new(
                 1,

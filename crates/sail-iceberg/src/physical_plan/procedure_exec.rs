@@ -309,6 +309,9 @@ impl ExecutionPlan for IcebergProcedureExec {
                 Some(table) => table,
                 None => {
                     let target = prepare_lake_procedure_execution(context.as_ref(), &call).await?;
+                    if matches!(target, sail_common_datafusion::lakeprocedure::LakeProcedureExecutionTarget::Catalog { .. }) {
+                        return crate::procedure::migration::execute(&context, &call).await;
+                    }
                     ProcedureTable::from_execution_target(target).await?
                 }
             };

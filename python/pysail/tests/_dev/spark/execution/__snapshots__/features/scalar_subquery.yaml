@@ -194,6 +194,9 @@ data:
                     Projection: column1 AS #4, column2 AS #5
                       Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -343,6 +346,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -448,6 +454,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -539,6 +548,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -665,9 +677,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -915,6 +924,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1043,6 +1055,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1096,7 +1111,7 @@ data:
     initial_physical_plan_with_stats:
     SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -1134,6 +1149,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -1273,9 +1291,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -1523,6 +1538,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1651,6 +1669,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1704,7 +1725,7 @@ data:
     initial_physical_plan_with_stats:
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -1742,6 +1763,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -1881,9 +1905,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2206,6 +2227,9 @@ data:
                     Projection: column1 AS #4, column2 AS #5
                       Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2380,6 +2404,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2483,6 +2510,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -2606,6 +2636,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -2767,9 +2800,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -3068,6 +3098,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3209,6 +3242,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3275,7 +3311,7 @@ data:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       SortExec: expr=[#12@0 ASC, #13@1 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
         ProjectionExec: expr=[#2@0 as #12, #3@1 as #13, #11@2 as #14], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-          HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+          HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -3330,6 +3366,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -3509,9 +3548,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -3742,6 +3778,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3856,6 +3895,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3915,9 +3957,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64]
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
@@ -3938,6 +3980,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -4049,9 +4094,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -4239,6 +4281,9 @@ data:
             Projection: column1 AS #0
               Values: (Int32(1)), (Int32(2))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4354,6 +4399,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4416,9 +4464,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64;N]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
@@ -4441,6 +4489,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -4561,9 +4612,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -4756,6 +4804,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4875,6 +4926,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -5000,6 +5054,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after EliminateConstantJoin:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -5115,9 +5172,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -5342,6 +5396,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -5461,6 +5518,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -5584,6 +5644,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -5716,9 +5779,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -5929,6 +5989,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6044,6 +6107,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6135,6 +6201,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -6252,9 +6321,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -6430,6 +6496,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6545,6 +6614,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6640,6 +6712,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -6766,9 +6841,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -6986,6 +7058,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7115,6 +7190,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7215,6 +7293,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -7342,9 +7423,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -7556,6 +7634,9 @@ data:
                             Values: (Int32(1)), (Int32(2))
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7672,6 +7753,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7772,6 +7856,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -7904,9 +7991,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -8111,6 +8195,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8226,6 +8313,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8321,6 +8411,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -8447,9 +8540,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -8641,6 +8731,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8756,6 +8849,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8851,6 +8947,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -8977,9 +9076,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -9187,6 +9283,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9303,6 +9402,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9403,6 +9505,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -9532,9 +9637,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -9751,6 +9853,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9870,6 +9975,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9935,7 +10043,7 @@ data:
       SortExec: expr=[#7@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
         ProjectionExec: expr=[#1@0 as #7, #3@1 as #8], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[#1@0 as #1, #3@2 as #3], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
-            HashJoinExec: mode=Auto, join_type=Inner, on=[(l.#1 + #6@1, CAST(r.#3 AS Int64)@1)], statistics=[Rows=Inexact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+            HashJoinExec: mode=Auto, join_type=Inner, on=[(l.#1 + #6@1, CAST(r.#3 AS Int64)@1)], statistics=[Rows=Inexact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
               ProjectionExec: expr=[#1@0 as #1, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as l.#1 + #6], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                 ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
@@ -9989,6 +10097,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -10154,9 +10265,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -10367,6 +10475,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10487,6 +10598,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10599,6 +10713,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -10731,9 +10848,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -10926,6 +11040,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11043,6 +11160,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11144,6 +11264,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -11284,9 +11407,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -11490,6 +11610,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11605,6 +11728,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11696,6 +11822,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -11813,9 +11942,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -11991,6 +12117,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12106,6 +12235,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12201,6 +12333,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -12310,9 +12445,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -12492,6 +12624,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12608,6 +12743,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12704,6 +12842,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -12827,9 +12968,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -13025,6 +13163,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -13141,6 +13282,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -13237,6 +13381,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -13360,9 +13507,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -13571,6 +13715,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -13687,6 +13834,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -13783,6 +13933,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -13909,9 +14062,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:

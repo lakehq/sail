@@ -77,18 +77,17 @@ fn dictionary_value_type(data_type: &DataType) -> &DataType {
     }
 }
 
-fn int96_read_type(options: &TableParquetOptions) -> Result<Option<DataType>> {
-    options
-        .global
-        .coerce_int96
-        .as_deref()
-        .map(|setting| {
-            Ok(DataType::Timestamp(
-                parse_coerce_int96_string(setting)?,
-                options.global.coerce_int96_tz.as_deref().map(Arc::from),
-            ))
-        })
-        .transpose()
+fn int96_read_type(options: &TableParquetOptions) -> Option<DataType> {
+    options.global.coerce_int96.map(|unit| {
+        DataType::Timestamp(
+            unit.into(),
+            options
+                .global
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| Arc::from(tz.as_str())),
+        )
+    })
 }
 
 // Wrapping integer casts and reading decimal storage as bytes or text can change value order.
@@ -438,10 +437,10 @@ impl ReadFormat for ParquetReadFormat {
         files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         fail_for_encryption_factory(&options)?;
 
-        let int96_type = int96_read_type(&options)?;
+        let int96_type = int96_read_type(&options);
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
@@ -498,7 +497,8 @@ impl ReadFormat for ParquetReadFormat {
             .config_options()
             .execution
             .time_zone
-            .as_deref()
+            .as_ref()
+            .map(|tz| tz.as_str())
             .unwrap_or("UTC");
         let merge_schema = self.options.merge_schema == Some(true);
         // Spark merges adjusted-to-UTC timestamps in the session timezone regardless of the
@@ -561,7 +561,7 @@ impl ReadFormat for ParquetReadFormat {
         file_schema: SchemaRef,
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
             object_store_url,
@@ -696,10 +696,10 @@ impl ReadFormat for ParquetReadFormat {
     // SPDX-License-Identifier: Apache-2.0
     // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-parquet/src/file_format.rs
     async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         fail_for_encryption_factory(&options)?;
 
-        let int96_type = int96_read_type(&options)?;
+        let int96_type = int96_read_type(&options);
 
         // Partition columns have no physical field. Validate only projected file columns.
         let file_schema = input.schema.file_schema();
@@ -995,21 +995,6 @@ fn clear_metadata(schema: Schema, has_spark_schema: bool) -> Schema {
     Schema::new(fields)
 }
 // SPDX-SnippetEnd
-
-/// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
-///
-/// This is adapted from DataFusion's Parquet data source implementation.
-pub fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
-    match setting.to_lowercase().as_str() {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -234,6 +234,19 @@ pub async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
 ) -> Result<String> {
+    latest_metadata_file(object_store, table_url)
+        .await?
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "No metadata files found in table location: {table_url}"
+            ))
+        })
+}
+
+pub(crate) async fn latest_metadata_file(
+    object_store: &Arc<dyn object_store::ObjectStore>,
+    table_url: &Url,
+) -> Result<Option<String>> {
     use futures::TryStreamExt;
 
     log::trace!("Finding latest metadata file");
@@ -278,9 +291,9 @@ pub async fn find_latest_metadata_file(
                     version,
                     latest_file
                 );
-                Ok(latest_file.clone())
+                Ok(Some(latest_file.clone()))
             } else {
-                plan_err!("No metadata files found in table location: {}", table_url)
+                Ok(None)
             }
         }
         Err(e) => {

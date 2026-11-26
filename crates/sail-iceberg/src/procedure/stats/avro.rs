@@ -25,7 +25,7 @@ pub(super) fn write(
     fields: &StructType,
     partition: &StructType,
 ) -> Result<Vec<u8>> {
-    let (schema, physical) = partition_stats_schemas(fields);
+    let (schema, physical) = partition_stats_schemas(fields).map_err(DataFusionError::Execution)?;
     let mut writer = create_avro_writer(&physical, Vec::new()).map_err(external)?;
     for row in 0..batch.num_rows() {
         writer
@@ -68,7 +68,10 @@ fn encode_record(fields: &StructType, columns: &[ArrayRef], row: usize) -> Resul
                     let len = Type::decimal_required_bytes(*precision)
                         .map_err(DataFusionError::Execution)?
                         as usize;
-                    Value::Decimal(apache_avro::Decimal::from(&v.to_be_bytes()[16 - len..]))
+                    Value::Decimal(
+                        apache_avro::Decimal::new(&v.to_be_bytes()[16 - len..])
+                            .map_err(external)?,
+                    )
                 }
                 (Type::Primitive(P::Fixed(_)), L::Binary(v)) => Value::Bytes(v),
                 (Type::Primitive(P::Uuid), L::UInt128(v)) => {

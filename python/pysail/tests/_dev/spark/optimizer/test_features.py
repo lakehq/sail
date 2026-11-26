@@ -12,17 +12,14 @@ from pysail.testing.spark.utils.common import shares_deterministic_ctes
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail optimizer behavior")
 
-COLLECTED_KEY_LIMIT = 60_000
-
-
 scenarios("features")
 
 
 @pytest.mark.parametrize(
     ("limit", "expected_n", "expected_total"),
-    [(COLLECTED_KEY_LIMIT, 150, 8_700), (65_536, 164, 9_512), (70_000, 175, 10_150)],
+    [(60_000, 150, 8_700), (65_536, 164, 9_512), (70_000, 175, 10_150)],
 )
-def test_early_filters_respect_key_byte_threshold(spark, tmp_path, limit, expected_n, expected_total):
+def test_early_filters_collect_estimated_keys(spark, tmp_path, limit, expected_n, expected_total):
     facts = str(tmp_path / "facts")
     dimension = str(tmp_path / "dimension")
     spark.range(400_000).selectExpr("(id % 1000) * 400 AS k1", "id % 7 AS k2").write.parquet(facts)
@@ -41,11 +38,8 @@ def test_early_filters_respect_key_byte_threshold(spark, tmp_path, limit, expect
 
     plan = spark.sql(f"EXPLAIN {query}").first()[0]
     reductions = [line for line in plan.splitlines() if "HashJoinExec" in line and "__early_join_key_0" in line]
-    if limit == COLLECTED_KEY_LIMIT:
-        assert len(reductions) == 1, plan
-        assert "mode=CollectLeft" in reductions[0], plan
-    else:
-        assert not reductions, plan
+    assert len(reductions) == 1, plan
+    assert "mode=CollectLeft" in reductions[0], plan
 
 
 def test_early_filters_deduplicate_dimension_keys(spark, tmp_path):

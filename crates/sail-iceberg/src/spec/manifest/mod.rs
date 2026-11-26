@@ -479,7 +479,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     partition_type: &StructType,
     version: FormatVersion,
 ) -> Result<usize, String> {
-    let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version);
+    let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version)?;
     let mut avro_writer = create_avro_writer(&encoding_schema, Vec::new())
         .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
@@ -647,11 +647,29 @@ mod tests {
     use apache_avro::{Writer as AvroWriter, to_value};
     use serde_json::{Value as JsonValue, json};
 
-    use super::{read_data_files_from_avro, rewrite_partition_schema};
+    use super::{read_data_files_from_avro, rewrite_partition_schema, write_data_files_to_avro};
     use crate::spec::types::{NestedField, PrimitiveType, StructType, Type};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, PrimitiveLiteral, Schema,
     };
+
+    #[test]
+    fn data_file_writer_rejects_zero_decimal_precision() {
+        let partition_type = StructType::new(vec![Arc::new(NestedField::optional(
+            1000,
+            "p",
+            Type::Primitive(PrimitiveType::Decimal {
+                precision: 0,
+                scale: 0,
+            }),
+        ))]);
+        let mut output = Vec::new();
+        assert_eq!(
+            write_data_files_to_avro(&mut output, [], &partition_type, FormatVersion::V2),
+            Err("Avro decimal precision must be positive".to_string())
+        );
+        assert!(output.is_empty());
+    }
 
     #[test]
     fn test_rewrite_partition_schema_preserves_external_record_layout() {
@@ -778,7 +796,7 @@ mod tests {
             Type::Primitive(PrimitiveType::Long),
         ))]);
         let (_, encoding_schema) =
-            super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
+            super::schema::data_file_schemas(&partition_type, FormatVersion::V2)?;
         let mut schema =
             serde_json::to_value(&encoding_schema).map_err(|error| error.to_string())?;
         let partition = super::find_avro_field_type(&mut schema, 102).ok_or("missing partition")?;
@@ -873,7 +891,7 @@ mod tests {
             content_size_in_bytes: None,
         };
         let (legacy_schema, _) =
-            super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
+            super::schema::data_file_schemas(&partition_type, FormatVersion::V2)?;
         let mut null_partition_file = data_file.clone();
         null_partition_file.partition = vec![None, None];
         let null_value = to_value(super::_serde::DataFileSerde::from_data_file(

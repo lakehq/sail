@@ -222,6 +222,7 @@ mod tests {
                 vec![],
             )?),
             path_glob_filter: None,
+            partition_directories_only: false,
             compression: CompressionTypeVariant::UNCOMPRESSED,
         })?;
         LogicalPlanBuilder::scan(name, Arc::new(source), None)

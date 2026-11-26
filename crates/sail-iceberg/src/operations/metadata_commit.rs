@@ -249,6 +249,15 @@ pub(crate) fn apply_snapshot_updates(
 ) -> Result<()> {
     let previous_entry =
         previous_metadata_log_entry(table_url, previous_metadata_file, metadata.last_updated_ms)?;
+    apply_snapshot_actions(metadata, updates)?;
+    metadata.metadata_log.push(previous_entry);
+    Ok(())
+}
+
+pub(crate) fn apply_snapshot_actions(
+    metadata: &mut TableMetadata,
+    updates: &[TableUpdate],
+) -> Result<()> {
     let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     for update in updates {
         match update {
@@ -351,7 +360,6 @@ pub(crate) fn apply_snapshot_updates(
         }
     }
     metadata.last_updated_ms = timestamp_ms;
-    metadata.metadata_log.push(previous_entry);
     Ok(())
 }
 

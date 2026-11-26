@@ -53,17 +53,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 2073
+    numAddedBytes: 2067
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 2073
+    numOutputBytes: 2067
     numOutputFiles: 3
     numOutputRows: 3
-    numRemovedBytes: 725
+    numRemovedBytes: 723
     numRemovedFiles: 1
     numSourceRows: 1
-    numTargetBytesAdded: 2073
-    numTargetBytesRemoved: 725
+    numTargetBytesAdded: 2067
+    numTargetBytesRemoved: 723
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0

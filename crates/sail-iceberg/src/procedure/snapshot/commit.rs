@@ -3,7 +3,6 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
-#[cfg(test)]
 use object_store::path::Path;
 
 use super::operation::{PreparedSnapshotOperation, SnapshotOperation};
@@ -243,7 +242,7 @@ pub(crate) async fn commit_snapshot_operation(
                         &store_context,
                         table_url,
                         &metadata,
-                        output_schema.clone(),
+                        crate::procedure::add_files::ImportOutput::AddFiles(output_schema.clone()),
                     )
                     .await?
             }
@@ -303,7 +302,14 @@ pub(crate) async fn commit_snapshot_operation(
         if let (Some(_), ProcedureCommitOperation::Stats(stats)) = (&catalog_commit, &operation) {
             stats.guard_catalog_commit(&metadata, &mut requirements, &mut updates);
         }
-        let mut cleanup = stage_files(&store_context, &prepared.staged_files, ctx).await?;
+        let mut cleanup = if matches!(&operation, ProcedureCommitOperation::Stats(_)) {
+            stage_files(&store_context, &prepared.staged_files, |path| {
+                store_context.statistics_object(ctx, path)
+            })
+            .await?
+        } else {
+            stage_manifests(&store_context, &prepared.staged_files).await?
+        };
         let mut use_metadata_location_fallback = commit_mode.uses_metadata_location_update();
         if let Some((table, context)) = catalog_commit {
             cleanup.publication_started();
@@ -664,14 +670,24 @@ fn procedure_commit_conflict() -> DataFusionError {
     ))
 }
 
+pub(crate) async fn stage_manifests(
+    store: &StoreContext,
+    files: &[(String, Vec<u8>)],
+) -> Result<CreatedPathCleanup> {
+    stage_files(store, files, |path| {
+        Ok((store.prefixed.clone(), Path::from(path)))
+    })
+    .await
+}
+
 async fn stage_files(
     store: &StoreContext,
     files: &[(String, Vec<u8>)],
-    ctx: &TaskContext,
+    resolve: impl Fn(&str) -> Result<(std::sync::Arc<dyn object_store::ObjectStore>, Path)>,
 ) -> Result<CreatedPathCleanup> {
     let mut cleanup = CreatedPathCleanup::new(store.clone());
     for (path, bytes) in files {
-        let (base, path) = store.statistics_object(ctx, path)?;
+        let (base, path) = resolve(path)?;
         match base
             .put_opts(
                 &path,
@@ -732,7 +748,7 @@ mod tests {
                 let injected = Arc::new(injected);
                 let url = url::Url::parse("memory://bucket/table/").expect("URL");
                 let store = StoreContext::new(injected.clone(), &url).expect("store");
-                let error = stage_files(&store, &staged_files(), &TaskContext::default())
+                let error = stage_manifests(&store, &staged_files())
                     .await
                     .err()
                     .expect("upload failure");
@@ -769,11 +785,7 @@ mod tests {
             .await
             .expect("existing");
         let store = StoreContext::new(injected.clone(), &url).expect("store");
-        assert!(
-            stage_files(&store, &staged_files(), &TaskContext::default())
-                .await
-                .is_err()
-        );
+        assert!(stage_manifests(&store, &staged_files()).await.is_err());
         assert_eq!(
             memory
                 .get(&existing)
@@ -802,7 +814,7 @@ mod tests {
         )
         .expect("store");
         let task = tokio::spawn(async move {
-            let _cleanup = stage_files(&store, &staged_files(), &TaskContext::default()).await;
+            let _cleanup = stage_manifests(&store, &staged_files()).await;
         });
         injected.paused.notified().await;
         task.abort();

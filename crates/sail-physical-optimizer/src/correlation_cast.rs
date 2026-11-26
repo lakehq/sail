@@ -94,14 +94,20 @@ fn rewrite_projection(
                 let scaled: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
                     Arc::clone(cast.expr()),
                     DataType::Timestamp(unit, None),
-                    Some(cast.cast_options().clone()),
+                    Some(datafusion::arrow::compute::CastOptions {
+                        safe: false,
+                        format_options: datafusion::common::format::DEFAULT_FORMAT_OPTIONS,
+                    }),
                 ));
                 let integer: Arc<dyn PhysicalExpr> =
                     Arc::new(CastExpr::new(scaled, DataType::Int64, None));
                 Arc::new(CastExpr::new_with_target_field(
                     integer,
                     cast.return_field(&schema)?,
-                    Some(cast.cast_options().clone()),
+                    Some(datafusion::arrow::compute::CastOptions {
+                        safe: false,
+                        format_options: datafusion::common::format::DEFAULT_FORMAT_OPTIONS,
+                    }),
                 ))
             } else if CorrelationCast::supports(&from, cast.cast_type()) {
                 let field = cast.return_field(&schema)?;
@@ -268,7 +274,11 @@ mod tests {
                         false,
                     );
                     let result = super::rewrite_projection(Arc::clone(&old), &Arc::default())?;
-                    assert_eq!(result.transformed, !ordered);
+                    assert!(ordered || result.transformed);
+                    assert!(super::same_properties(
+                        old.properties(),
+                        result.data.properties()
+                    ));
                     assert_eq!(old.schema(), result.data.schema());
                     properties += 1;
                 }
@@ -416,7 +426,11 @@ mod tests {
                                     improved += 1;
                                 }
                                 (Err(a), Err(b), None) => {
-                                    assert_eq!(a.to_string(), b.to_string());
+                                    // DataFusion adds field and target labels at each cast.
+                                    assert_eq!(
+                                        a.find_root().to_string(),
+                                        b.find_root().to_string()
+                                    );
                                     overflow += 1;
                                 }
                                 x => {
@@ -433,7 +447,7 @@ mod tests {
             }
         }
         println!(
-            "PASS actual staged helper: property/decline cases={properties}; runtime cases={cases}; exact={same}; valid improvements={improved}; identical overflow errors={overflow}"
+            "PASS actual staged helper: property/decline cases={properties}; runtime cases={cases}; exact={same}; valid improvements={improved}; matching overflow causes={overflow}"
         );
         Ok(())
     }
@@ -827,10 +841,10 @@ mod codec_contracts {
                 assert_eq!(candidate.schema(), original.schema());
                 let native_wire = roundtrip(Arc::clone(&original), &context)?;
                 let candidate_wire = roundtrip(candidate, &context)?;
-                assert_ne!(
+                assert_eq!(
                     native_wire.schema(),
                     original.schema(),
-                    "fixture must exercise the native codec's override loss"
+                    "the native codec preserves the projection metadata overrides"
                 );
                 assert_eq!(
                     native_wire.schema(),

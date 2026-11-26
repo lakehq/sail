@@ -457,6 +457,13 @@ enum ReadPathSyntax {
     HadoopLiteral,
 }
 
+/// The path in a Hadoop file URI with one slash after the scheme.
+fn hadoop_local_uri_path(uri: &str) -> Option<&str> {
+    let (scheme, path) = uri.split_once(':')?;
+    (scheme.eq_ignore_ascii_case("file") && path.starts_with('/') && !path.starts_with("//"))
+        .then_some(path)
+}
+
 impl GlobUrl {
     pub fn new(base: Url, glob: Option<Pattern>) -> Self {
         Self { base, glob }
@@ -472,10 +479,7 @@ impl GlobUrl {
         }
         // Hadoop also accepts file:/absolute/path without an authority.
         if syntax != ReadPathSyntax::UrlGlob
-            && let Some((scheme, path)) = s.split_once(':')
-            && scheme.eq_ignore_ascii_case("file")
-            && path.starts_with('/')
-            && !path.starts_with("//")
+            && let Some(path) = hadoop_local_uri_path(s)
         {
             return Self::parse_file_path(path, syntax);
         }
@@ -1031,11 +1035,46 @@ fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
     Url::parse(&format!("file:///{path}")).ok()
 }
 
+/// Resolve aliases even when the last components do not exist yet.
+pub fn canonical_local_path(url: &Url) -> Result<PathBuf> {
+    let path = url
+        .to_file_path()
+        .map_err(|_| DataFusionError::Plan(format!("Invalid local path: {url}")))?;
+    for ancestor in path.ancestors() {
+        match ancestor.canonicalize() {
+            Ok(canonical) => {
+                let suffix = path
+                    .strip_prefix(ancestor)
+                    .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+                return Ok(if suffix.as_os_str().is_empty() {
+                    canonical
+                } else {
+                    canonical.join(suffix)
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A dangling link has no physical location to validate.
+                if ancestor.symlink_metadata().is_ok() {
+                    return Err(DataFusionError::External(Box::new(error)));
+                }
+            }
+            Err(error) => return Err(DataFusionError::External(Box::new(error))),
+        }
+    }
+    plan_err!("Invalid local path: {url}")
+}
+
 /// Resolve a single table directory without caller-supplied glob patterns.
 pub fn resolve_table_url(path: String) -> Result<Url> {
     if path.is_empty() {
         return plan_err!("table path cannot be empty");
     }
+    // Use the URL parser's file:/// spelling for Hadoop's file:/ locations.
+    // This keeps URI escaping and glob validation identical for both spellings.
+    let path = match hadoop_local_uri_path(&path) {
+        Some(local) => format!("file://{local}"),
+        None => path,
+    };
     let path = fill_directory_root_path(path)?;
     let raw_path = if std::path::Path::new(&path).is_absolute() {
         path.as_str()
@@ -1464,10 +1503,19 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_hadoop_file_table_url() -> Result<()> {
+        let url = resolve_table_url("file:/tmp/table%20name".into())?;
+        assert_eq!(url, resolve_table_url("file:///tmp/table%20name".into())?);
+        assert_eq!(url.as_str(), "file:///tmp/table%20name/");
+        Ok(())
+    }
+
+    #[test]
     fn test_resolve_table_url_rejects_globs() {
         for root in [
             "s3://bucket/table/",
             "file:///tmp/table/",
+            "file:/tmp/table/",
             "/tmp/table/",
             "table/",
         ] {

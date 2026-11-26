@@ -237,9 +237,7 @@ impl<T: ByteViewType> ConcatBuilder for ConcatByteViewBuilder<T> {
         let array = unsafe {
             GenericByteViewArray::<T>::new_unchecked(
                 ScalarBuffer::from(self.views),
-                // TODO: Uncomment after DataFusion 56
-                // buffers.into(),
-                buffers,
+                buffers.into(),
                 null_buffer,
             )
         };
@@ -959,9 +957,7 @@ impl StringViewArrayBuilder {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                // TODO: Uncomment after DataFusion 56
-                // self.completed.into(),
-                self.completed,
+                self.completed.into(),
                 null_buffer,
             )
         };

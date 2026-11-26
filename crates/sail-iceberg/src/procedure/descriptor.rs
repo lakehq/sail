@@ -138,6 +138,50 @@ impl IcebergProcedureType {
                 )],
                 LakeProcedureAccess::MetadataCommit,
             ),
+            Self::Migrate | Self::Snapshot => {
+                let migrate = self == Self::Migrate;
+                let mut params = if migrate {
+                    vec![LakeProcedureParameter::required("table", string)]
+                } else {
+                    vec![
+                        LakeProcedureParameter::required("source_table", string),
+                        LakeProcedureParameter::required("table", string),
+                        LakeProcedureParameter::optional("location", string),
+                    ]
+                };
+                params.push(LakeProcedureParameter::optional("properties", string_map));
+                if migrate {
+                    params.push(LakeProcedureParameter::optional(
+                        "drop_backup",
+                        LakeProcedureDataType::Boolean,
+                    ));
+                    params.push(LakeProcedureParameter::optional(
+                        "backup_table_name",
+                        string,
+                    ));
+                }
+                params.push(LakeProcedureParameter::optional(
+                    "parallelism",
+                    LakeProcedureDataType::Int32,
+                ));
+                params.push(LakeProcedureParameter::optional(
+                    "ignore_missing_files",
+                    LakeProcedureDataType::Boolean,
+                ));
+                (
+                    params,
+                    vec![LakeProcedureField::new(
+                        if migrate {
+                            "migrated_files_count"
+                        } else {
+                            "imported_files_count"
+                        },
+                        long,
+                        false,
+                    )],
+                    LakeProcedureAccess::MetadataCommit,
+                )
+            }
             Self::AddFiles => (
                 vec![
                     LakeProcedureParameter::required("table", string),
@@ -300,7 +344,11 @@ impl IcebergProcedureType {
             parameters,
             output,
             access,
-            target: LakeProcedureTarget::table("table"),
+            target: if matches!(self, Self::Migrate | Self::Snapshot) {
+                LakeProcedureTarget::Catalog
+            } else {
+                LakeProcedureTarget::table("table")
+            },
         })
     }
 

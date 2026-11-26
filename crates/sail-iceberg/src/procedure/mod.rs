@@ -19,7 +19,9 @@ mod add_files;
 mod arguments;
 mod descriptor;
 mod expire_snapshots;
+mod import_schema;
 mod logical;
+pub(crate) mod migration;
 mod rewrite_data_files;
 mod rewrite_manifests;
 pub(crate) mod snapshot;
@@ -94,6 +96,14 @@ impl LakeProcedureProvider for IcebergLakeSource {
                     LakeProcedureAccess::MetadataRead => Some(table),
                     LakeProcedureAccess::MetadataCommit => None,
                 }
+            }
+            LakeProcedurePlanningTarget::Catalog { .. }
+                if matches!(
+                    procedure_type,
+                    IcebergProcedureType::Migrate | IcebergProcedureType::Snapshot
+                ) =>
+            {
+                None
             }
             LakeProcedurePlanningTarget::Catalog { .. } => {
                 return plan_err!("Iceberg system procedures require a table target");
@@ -331,6 +341,8 @@ mod tests {
                 "rewrite_data_files",
                 "rewrite_manifests",
                 "expire_snapshots",
+                "migrate",
+                "snapshot",
                 "add_files",
                 "ancestors_of",
                 "fast_forward",
