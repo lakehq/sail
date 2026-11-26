@@ -253,24 +253,24 @@ async fn test_delta_table_created_again_is_read_at_the_snapshot_of_the_first_rea
 }
 
 #[tokio::test]
-async fn test_delta_table_created_again_after_a_read_without_files_is_read_at_its_latest_version()
+async fn test_delta_table_created_again_after_a_read_without_files_fails_the_statement()
 -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     fixture.commit_on_request("t", &store, vec![commit(0, "second"), commit(1, "second")])?;
     // The first read reads the snapshot without its files, and the read of the data after
-    // the table was created again reads the new table.
+    // the table was created again would read another table.
     let plan = union_all(vec![
         read_path("delta", LOCATION, &[("metadataAsDataRead", "true")]),
         read_table(&["t"], &[]),
         read_table(&["d"], &[]),
         read_path("delta", LOCATION, &[]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1, 1]);
+    assert_replaced(fixture.delta_versions(plan).await);
     Ok(())
 }
 
 #[tokio::test]
-async fn test_delta_table_created_again_with_fewer_versions_after_a_read_without_files()
+async fn test_delta_table_created_again_with_fewer_versions_after_a_read_without_files_fails()
 -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     put(&store, commit(1, "first")).await?;
@@ -295,8 +295,15 @@ async fn test_delta_table_created_again_with_fewer_versions_after_a_read_without
         read_table(&["d"], &[]),
         read_path("delta", LOCATION, &[]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![1, 0, 0]);
+    assert_replaced(fixture.delta_versions(plan).await);
     Ok(())
+}
+
+/// Asserts that the statement failed since the Delta table was created again while the
+/// statement was planned.
+fn assert_replaced(versions: TestResult<Vec<i64>>) {
+    let error = versions.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(error.contains("was replaced by another table"), "{error}");
 }
 
 #[tokio::test]

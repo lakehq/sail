@@ -866,16 +866,20 @@ pub(crate) async fn load_delta_read_state(
             let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
             match pinned {
                 Some(pinned) => {
-                    // A table that was created again at the location has another ID, and
-                    // may not have the version, and the read reads its latest version. A
-                    // version that the same table cannot load is an error.
+                    // The read loads the files of the version of the same table that the
+                    // statement read. A table that was created again at the location has
+                    // another ID, and the statement would read two tables.
                     let id = pinned.metadata().id();
-                    let loaded = deltalake_table.load_version(pinned.version()).await;
+                    let version = pinned.version();
+                    let loaded = deltalake_table.load_version(version).await;
                     if loaded.is_err() || deltalake_table.snapshot()?.metadata().id() != id {
-                        deltalake_table.load().await?;
-                        if deltalake_table.snapshot()?.metadata().id() == id {
-                            loaded?;
-                        }
+                        let cause = loaded.err().map(|e| format!(" ({e})")).unwrap_or_default();
+                        return Err(DataFusionError::Plan(format!(
+                            "The Delta Lake table at {table_url} was replaced by another table, \
+                            or no longer has the version {version} that the statement read \
+                            earlier, while the statement was planned{cause}. Run the statement \
+                            again."
+                        )));
                     }
                 }
                 // Load the table state according to the provided time travel options.
