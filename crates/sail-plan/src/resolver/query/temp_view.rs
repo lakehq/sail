@@ -21,9 +21,14 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::datasource::source_as_provider;
+use datafusion::functions_aggregate::average::Avg;
+use datafusion::functions_aggregate::count::Count;
+use datafusion::functions_aggregate::sum::Sum;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, ScalarValue};
-use datafusion_expr::expr::{Cast, InSubquery, SetComparison};
+use datafusion_expr::expr::{
+    AggregateFunction, AggregateFunctionParams, BinaryExpr, Cast, InList, InSubquery, SetComparison,
+};
 use datafusion_expr::{
     Distinct, Expr, LogicalPlan, Projection, ScalarUDF, TableScan, TableScanBuilder, TableSource,
     UserDefinedLogicalNode, lit, when,
@@ -50,6 +55,7 @@ use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use super::read::{CatalogTableRead, rename_source};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::is_comparison;
 use crate::resolver::state::{PlanResolverState, ViewDefinitionReads, table_source_address};
 use crate::shared_cte::{CteReference, replace_scans, visit_nodes, visit_scans};
 
@@ -168,8 +174,10 @@ impl ViewTableReference {
     /// in the table and how the scan reads it, or how the columns that the stored plan reads
     /// changed. A column that the plan reads keeps its type (Spark's
     /// `SchemaUtils.validateSchemaCompatibility`), or only the fields that it reads for a
-    /// struct, or only exists for a column that only tells rows apart. A column that the
-    /// plan does not read has a position only if it did not change.
+    /// struct, or only exists for a column that only tells rows apart or orders them, or
+    /// only stays a signed integer for a column that is only an operand (see
+    /// [`ColumnUse::Operand`]). A column that the plan does not read has a position only if
+    /// it did not change.
     fn fit_columns(
         &self,
         table: &Schema,
@@ -183,6 +191,11 @@ impl ViewTableReference {
             let path = [field.name().clone()];
             let read = match (used, found) {
                 (Some(ColumnUse::Identity), FieldMatch::Found(position)) => {
+                    Some((position, Read::Same))
+                }
+                (Some(ColumnUse::Operand), FieldMatch::Found(position))
+                    if is_signed_integer(field) && is_signed_integer(table.field(position)) =>
+                {
                     Some((position, Read::Same))
                 }
                 (Some(used), found) => {
@@ -268,6 +281,18 @@ impl ViewTableReference {
             Arc::new(LogicalPlan::TableScan(scan)),
         )?))
     }
+}
+
+/// Whether a field has one of the signed integer types, which the resolver plans the same way
+/// for an operand (see [`ColumnUse::Operand`]). An integer of another logical type, such as a
+/// user-defined type or an extension type, is not one of them.
+fn is_signed_integer(field: &Field) -> bool {
+    matches!(
+        field.data_type(),
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    ) && !LOGICAL_TYPE_METADATA_KEYS
+        .iter()
+        .any(|key| field.metadata().contains_key(*key))
 }
 
 /// The field metadata that is part of the logical type of a field, for types that share an
@@ -1148,9 +1173,20 @@ pub(in crate::resolver) enum ColumnUse {
     /// The plan reads the values of some fields of a struct.
     Fields(HashMap<String, ColumnUse>),
     /// The plan only tells rows apart by the column, as a key of `DISTINCT` or `GROUP BY`
-    /// whose value is not read. The current values of the column tell the rows apart, of
-    /// whatever type they are now.
+    /// whose value is not read, or orders rows by it, as a key of `ORDER BY`. The current
+    /// values of the column tell the rows apart or order them, of whatever type they are now.
     Identity,
+    /// The plan only reads the column as an operand: a comparison operand, or the argument
+    /// of `count`, `sum` or `avg`. The resolver plans these the same way for each signed
+    /// integer type (`Int8` to `Int64`), the analyzer coerces the current column, and they
+    /// return the same type for each of them, so a column of one of these types can have
+    /// another one. Two things keep this exact. The operand is the column itself in the
+    /// stored plan, since the resolver casts the column only for the types that it plans
+    /// another way (such as an integer compared with a `FLOAT` in ANSI mode), and then the
+    /// column is not an operand. And no other type is accepted: unsigned integers have
+    /// other coercions and other `sum` types, and an integer of a user-defined type or an
+    /// extension type is another logical type, so such a column must keep its type.
+    Operand,
 }
 
 impl ColumnUse {
@@ -1172,13 +1208,20 @@ impl ColumnUse {
     /// Adds another use of the column, and returns whether this use changed.
     fn merge(&mut self, other: &ColumnUse) -> bool {
         match (&mut *self, other) {
-            (ColumnUse::Whole, _) | (ColumnUse::Identity, ColumnUse::Identity) => false,
+            (ColumnUse::Whole, _)
+            | (ColumnUse::Identity, ColumnUse::Identity)
+            | (ColumnUse::Operand, ColumnUse::Identity | ColumnUse::Operand) => false,
             (ColumnUse::Fields(fields), ColumnUse::Fields(others)) => {
                 let mut changed = false;
                 for (name, other) in others {
                     changed |= add_use(fields, name.clone(), other);
                 }
                 changed
+            }
+            // An operand that also tells rows apart keeps a signed integer type.
+            (ColumnUse::Identity, ColumnUse::Operand) => {
+                *self = ColumnUse::Operand;
+                true
             }
             // Rows told apart by a struct whose fields are also read need the struct as
             // it was.
@@ -1238,6 +1281,33 @@ fn add_expression_uses(
             return Ok(TreeNodeRecursion::Jump);
         }
         match e {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(*op) => {
+                add_column_uses([left.as_ref(), right.as_ref()], &ColumnUse::Operand, uses)?;
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Expr::InList(InList { expr, list, .. }) => {
+                let operands = std::iter::once(expr.as_ref()).chain(list);
+                add_column_uses(operands, &ColumnUse::Operand, uses)?;
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Expr::AggregateFunction(AggregateFunction { func, params })
+                if func.inner().is::<Count>()
+                    || func.inner().is::<Sum>()
+                    || func.inner().is::<Avg>() =>
+            {
+                let AggregateFunctionParams {
+                    args,
+                    filter,
+                    order_by,
+                    ..
+                } = params;
+                add_column_uses(args, &ColumnUse::Operand, uses)?;
+                let others = filter.as_deref().into_iter();
+                for e in others.chain(order_by.iter().map(|x| &x.expr)) {
+                    add_expression_uses(e, uses)?;
+                }
+                return Ok(TreeNodeRecursion::Jump);
+            }
             Expr::Column(column) | Expr::OuterReferenceColumn(_, column) => {
                 add_use(uses, column.name.clone(), &ColumnUse::Whole);
             }
@@ -1255,16 +1325,18 @@ fn add_expression_uses(
     Ok(())
 }
 
-/// Adds the uses of the keys of `DISTINCT` or `GROUP BY`. A key that is a column only tells
-/// rows apart.
-fn add_key_uses(
-    exprs: &[Expr],
+/// Adds the uses of expressions that read a column that is one of them as `used`, such as
+/// the keys of `DISTINCT` or `GROUP BY`, which only tell rows apart. A column of an outer
+/// query has the type of the column when the plan was resolved, so it is read whole.
+fn add_column_uses<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    used: &ColumnUse,
     uses: &mut HashMap<String, ColumnUse>,
 ) -> datafusion_common::Result<()> {
     for expr in exprs {
         match expr {
             Expr::Column(column) => {
-                add_use(uses, column.name.clone(), &ColumnUse::Identity);
+                add_use(uses, column.name.clone(), used);
             }
             expr => add_expression_uses(expr, uses)?,
         }
@@ -1323,7 +1395,9 @@ impl<K: Eq + Hash + Clone> Derivation<K> {
     fn add_reads(&self, used: &ColumnUse, uses: &mut HashMap<K, ColumnUse>) -> Vec<K> {
         let reads = match self {
             Derivation::Column(column) => vec![(column, used)],
-            Derivation::Value(column) if used == &ColumnUse::Identity => {
+            Derivation::Value(column)
+                if matches!(used, ColumnUse::Identity | ColumnUse::Operand) =>
+            {
                 vec![(column, &ColumnUse::Whole)]
             }
             Derivation::Value(column) => vec![(column, used)],
@@ -1495,7 +1569,9 @@ fn scan_lineage(
 ///
 /// The plan reads its outputs and the columns of the expressions of its operators. A
 /// projection or a union reads its inputs only for the outputs that are read. `DISTINCT`
-/// and grouping columns tell rows apart. Operators that pass their inputs on read the
+/// and grouping columns tell rows apart, sort columns order them, and columns that are
+/// compared, join keys, or arguments of `count`, `sum` or `avg` are only operands
+/// ([`ColumnUse::Operand`]). Operators that pass their inputs on read the
 /// columns of their outputs that are read, and so do extension nodes for the outputs that
 /// they report to pass on. Any other operator reads all its inputs. The uses are
 /// propagated once the plan, its subqueries and its CTE definitions are visited, so the
@@ -1564,19 +1640,32 @@ fn required_columns(
                 }
             }
             LogicalPlan::Distinct(Distinct::On(on)) if on.sort_expr.is_none() => {
-                add_key_uses(&on.on_expr, &mut uses)?;
+                add_column_uses(&on.on_expr, &ColumnUse::Identity, &mut uses)?;
                 let outputs = on.select_expr.iter().zip(on.schema.fields());
                 add_derivations(outputs, &mut derivations)?;
             }
             LogicalPlan::Aggregate(aggregate) => {
                 // The keys decide the rows, and an aggregate value reads its arguments
                 // when it is read. The values are the last outputs.
-                add_key_uses(&aggregate.group_expr, &mut uses)?;
+                add_column_uses(&aggregate.group_expr, &ColumnUse::Identity, &mut uses)?;
                 let fields = aggregate.schema.fields().iter().rev();
                 add_derivations(
                     aggregate.aggr_expr.iter().rev().zip(fields),
                     &mut derivations,
                 )?;
+            }
+            LogicalPlan::Sort(sort) => {
+                // A key that is a column orders the rows that the sort passes on.
+                let keys = sort.expr.iter().map(|x| &x.expr);
+                add_column_uses(keys, &ColumnUse::Identity, &mut uses)?;
+            }
+            LogicalPlan::Join(join) => {
+                // Each pair of keys is compared, and the join passes its input columns on.
+                let keys = join.on.iter().flat_map(|(left, right)| [left, right]);
+                add_column_uses(keys, &ColumnUse::Operand, &mut uses)?;
+                if let Some(filter) = &join.filter {
+                    add_expression_uses(filter, &mut uses)?;
+                }
             }
             LogicalPlan::Window(window) => {
                 // The input columns are passed on, and a window value reads its arguments
@@ -1597,8 +1686,6 @@ fn required_columns(
                 // may read all of them.
                 let passes_on = match node {
                     LogicalPlan::Filter(_)
-                    | LogicalPlan::Sort(_)
-                    | LogicalPlan::Join(_)
                     | LogicalPlan::Limit(_)
                     | LogicalPlan::SubqueryAlias(_)
                     | LogicalPlan::Repartition(_)
@@ -1783,13 +1870,13 @@ mod tests {
         DataType, Field, Fields, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
     };
     use datafusion::datasource::{MemTable, provider_as_source};
-    use datafusion::functions_aggregate::expr_fn::{count, sum};
+    use datafusion::functions_aggregate::expr_fn::{avg, count, max, sum};
     use datafusion::functions_nested::expr_fn::make_array;
     use datafusion::functions_window::expr_fn::row_number;
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::{Column, JoinType, ScalarValue};
     use datafusion_expr::expr::Exists;
-    use datafusion_expr::expr_fn::{exists, in_subquery, scalar_subquery};
+    use datafusion_expr::expr_fn::{cast, exists, in_list, in_subquery, scalar_subquery};
     use datafusion_expr::{
         Expr, ExprFunctionExt, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, TableScan,
         UserDefinedLogicalNode, col, lit,
@@ -2346,6 +2433,97 @@ mod tests {
     }
 
     #[test]
+    fn test_columns_that_are_only_operands_can_change_between_signed_integer_types() {
+        let integers = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+        ];
+        for stored in &integers {
+            let table = Schema::new(vec![field("b", stored.clone())]);
+            let reference = ViewTableReference {
+                required: vec![Some(ColumnUse::Operand)],
+                ..reference(&table)
+            };
+            for current in &integers {
+                let current = Schema::new(vec![field("b", current.clone())]);
+                assert_eq!(positions(&reference, &current, true), Ok(vec![Some(0)]));
+            }
+            for current in [
+                DataType::UInt8,
+                DataType::UInt64,
+                DataType::Float32,
+                DataType::Float64,
+                DataType::Decimal128(20, 0),
+                DataType::Utf8,
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
+            ] {
+                let current = Schema::new(vec![field("b", current)]);
+                assert!(positions(&reference, &current, true).is_err(), "{current}");
+            }
+            // An integer of an extension type is another logical type.
+            let extension = |data_type: DataType| {
+                field("b", data_type).with_metadata(HashMap::from([(
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    "arrow.bool8".to_string(),
+                )]))
+            };
+            let current = Schema::new(vec![extension(DataType::Int8)]);
+            assert!(positions(&reference, &current, true).is_err(), "{current}");
+            let stored = Schema::new(vec![extension(stored.clone())]);
+            let reference = ViewTableReference {
+                required: vec![Some(ColumnUse::Operand)],
+                ..reference(&stored)
+            };
+            let current = Schema::new(vec![field("b", DataType::Int64)]);
+            assert!(positions(&reference, &current, true).is_err(), "{current}");
+        }
+    }
+
+    #[test]
+    fn test_operands_have_the_same_result_type_for_each_signed_integer_type() -> TestResult {
+        // `count`, `sum` and `avg` (the functions that the resolver plans for Spark), and a
+        // comparison, of each signed integer type.
+        for data_type in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+        ] {
+            let schema = Arc::new(Schema::new(vec![field("b", data_type)]));
+            let source = provider_as_source(Arc::new(MemTable::try_new(schema, vec![vec![]])?));
+            let plan = LogicalPlanBuilder::scan("t", source, None)?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![
+                        count(col("b")),
+                        count(col("b")).distinct().build()?,
+                        sum(col("b")),
+                        avg(col("b")),
+                    ],
+                )?
+                .build()?;
+            let types = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|x| x.data_type().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                types,
+                [
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Float64
+                ]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_a_name_that_matches_several_columns_is_a_column_change() {
         let stored = Schema::new(vec![field("id", DataType::Int32)]);
         let current = Schema::new(vec![
@@ -2525,6 +2703,14 @@ mod tests {
         Some(positions.iter().map(|i| (*i, ColumnUse::Whole)).collect())
     }
 
+    /// The columns that are read whole, and the column that is only an operand.
+    fn operand(positions: &[usize], operand: usize) -> Uses {
+        let mut uses = whole(positions).unwrap_or_default();
+        uses.push((operand, ColumnUse::Operand));
+        uses.sort_by_key(|(i, _)| *i);
+        Some(uses)
+    }
+
     fn get(expr: Expr, name: &str) -> Expr {
         get_field().call(vec![expr, lit(name)])
     }
@@ -2546,14 +2732,14 @@ mod tests {
             .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
             .project(vec![col("t_a")])?
             .build()?;
-        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 2]));
+        assert_eq!(uses(&plan, &reads, address)?, operand(&[0], 2));
         // The computed output is read.
         let plan = LogicalPlanBuilder::from(t)
             .filter(col("t_c").gt(lit(0)))?
             .project(vec![col("t_a"), (col("t_b") + lit(1)).alias("y")])?
             .project(vec![col("y")])?
             .build()?;
-        assert_eq!(uses(&plan, &reads, address)?, whole(&[1, 2]));
+        assert_eq!(uses(&plan, &reads, address)?, operand(&[1], 2));
         Ok(())
     }
 
@@ -2609,7 +2795,7 @@ mod tests {
             .filter(exists(Arc::new(rows)))?
             .project(vec![col("t_a")])?
             .build()?;
-        assert_eq!(uses(&plan, &reads, other)?, whole(&[1]));
+        assert_eq!(uses(&plan, &reads, other)?, operand(&[], 1));
         // A scalar subquery in an output that is read or not.
         let value = LogicalPlanBuilder::from(u)
             .aggregate(Vec::<Expr>::new(), vec![sum(col("u_c")).alias("m")])?
@@ -2628,7 +2814,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(outputs)
             .project(vec![col("v")])?
             .build()?;
-        assert_eq!(uses(&plan, &reads, other)?, whole(&[2]));
+        assert_eq!(uses(&plan, &reads, other)?, operand(&[], 2));
         Ok(())
     }
 
@@ -2650,19 +2836,20 @@ mod tests {
         let mut reads = ViewDefinitionReads::default();
         let (t, address) = read_table(&mut reads, "t")?;
         let plan = LogicalPlanBuilder::from(t.clone())
-            .aggregate(vec![col("t_a")], vec![sum(col("t_b")).alias("total")])?
+            .aggregate(vec![col("t_a")], vec![max(col("t_b")).alias("total")])?
             .project(vec![col("t_a"), col("total")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
         let plan = LogicalPlanBuilder::from(t.clone())
-            .sort(vec![col("t_c").sort(true, false)])?
+            .sort(vec![(-col("t_c")).sort(true, false)])?
             .limit(0, Some(1))?
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 2]));
         let (u, other) = read_table(&mut reads, "u")?;
+        let keys = (col("t_c") + lit(1)).eq(col("u_b") + lit(1));
         let plan = LogicalPlanBuilder::from(t)
-            .join_on(u, JoinType::Inner, vec![col("t_c").eq(col("u_b"))])?
+            .join_on(u, JoinType::Inner, vec![keys])?
             .project(vec![col("t_a")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 2]));
@@ -2698,7 +2885,7 @@ mod tests {
             uses(&plan, &reads, address)?,
             Some(vec![
                 (0, ColumnUse::Whole),
-                (1, ColumnUse::Whole),
+                (1, ColumnUse::Operand),
                 (2, ColumnUse::Identity)
             ])
         );
@@ -2732,6 +2919,103 @@ mod tests {
             .project(vec![col("x0")])?
             .build()?;
         assert_eq!(uses(&plan, &reads, address)?, Some(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn test_columns_that_are_only_operands_or_order_rows_are_found() -> TestResult {
+        let mut reads = ViewDefinitionReads::default();
+        let (t, address) = read_table(&mut reads, "t")?;
+        let (u, other) = read_table(&mut reads, "u")?;
+        let filtered = |predicate: Expr| -> Result<Uses, Box<dyn std::error::Error>> {
+            let plan = LogicalPlanBuilder::from(t.clone())
+                .filter(predicate)?
+                .project(vec![col("t_a")])?
+                .build()?;
+            uses(&plan, &reads, address)
+        };
+        // A comparison, an IN list, and `BETWEEN` as the resolver writes it.
+        assert_eq!(filtered(col("t_b").gt(lit(0)))?, operand(&[0], 1));
+        assert_eq!(filtered(lit(0).lt_eq(col("t_b")))?, operand(&[0], 1));
+        let list = in_list(col("t_b"), vec![lit(1), col("t_c")], false);
+        assert_eq!(
+            filtered(list)?,
+            Some(vec![
+                (0, ColumnUse::Whole),
+                (1, ColumnUse::Operand),
+                (2, ColumnUse::Operand)
+            ])
+        );
+        let between = col("t_b").gt_eq(lit(1)).and(col("t_b").lt_eq(lit(9)));
+        assert_eq!(filtered(between)?, operand(&[0], 1));
+        // An operand that the resolver casts, or that is computed, is read whole.
+        assert_eq!(
+            filtered(cast(col("t_b"), DataType::Float64).gt(lit(0.5)))?,
+            whole(&[0, 1])
+        );
+        assert_eq!(filtered((col("t_b") + lit(1)).gt(lit(0)))?, whole(&[0, 1]));
+        // A column that is also read whole is read whole.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .filter(col("t_b").gt(lit(0)))?
+            .project(vec![col("t_a"), col("t_b")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
+        // The arguments of `count`, `sum` and `avg`, but not of other aggregate functions.
+        for (value, used) in [
+            (count(col("t_b")), ColumnUse::Operand),
+            (count(col("t_b")).distinct().build()?, ColumnUse::Operand),
+            (sum(col("t_b")), ColumnUse::Operand),
+            (avg(col("t_b")), ColumnUse::Operand),
+            (max(col("t_b")), ColumnUse::Whole),
+            (sum(col("t_b") + lit(1)), ColumnUse::Whole),
+        ] {
+            let plan = LogicalPlanBuilder::from(t.clone())
+                .aggregate(vec![col("t_a")], vec![value.alias("v")])?
+                .project(vec![col("t_a"), col("v")])?
+                .build()?;
+            let expected = Some(vec![(0, ColumnUse::Whole), (1, used)]);
+            assert_eq!(uses(&plan, &reads, address)?, expected);
+        }
+        // A sort key that is a column orders rows, and an operand that also orders rows is
+        // an operand.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .sort(vec![
+                col("t_b").sort(false, true),
+                col("t_c").sort(true, false),
+            ])?
+            .filter(col("t_c").gt(lit(0)))?
+            .limit(0, Some(1))?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(
+            uses(&plan, &reads, address)?,
+            Some(vec![
+                (0, ColumnUse::Whole),
+                (1, ColumnUse::Identity),
+                (2, ColumnUse::Operand)
+            ])
+        );
+        // The keys of a join, compared in pairs.
+        let plan = LogicalPlanBuilder::from(t.clone())
+            .join_on(u, JoinType::Inner, vec![col("t_c").eq(col("u_b"))])?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, operand(&[0], 2));
+        assert_eq!(uses(&plan, &reads, other)?, operand(&[], 1));
+        // The inputs of a union keep the types of the columns that are operands.
+        let union = LogicalPlanBuilder::from(t.clone())
+            .project(vec![col("t_a"), col("t_b")])?
+            .union(
+                LogicalPlanBuilder::from(t)
+                    .project(vec![col("t_c"), col("t_a")])?
+                    .build()?,
+            )?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(union)
+            .filter(col("t_b").gt(lit(0)))?
+            .project(vec![col("t_a")])?
+            .build()?;
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2]));
         Ok(())
     }
 
@@ -2945,8 +3229,9 @@ mod tests {
             .filter(exists)?
             .project(vec![col("t_a")])?
             .build()?;
+        // The outer reference has the type of the column when the plan was resolved.
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1]));
-        assert_eq!(uses(&plan, &reads, other)?, whole(&[0]));
+        assert_eq!(uses(&plan, &reads, other)?, operand(&[], 0));
         // A lateral join reads the columns of its left side in its right side, which is
         // visited after its left side.
         let left = LogicalPlanBuilder::from(t)

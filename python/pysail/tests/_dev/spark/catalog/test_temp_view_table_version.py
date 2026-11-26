@@ -489,6 +489,91 @@ COLUMN_CHANGES = {
         "(5, named_struct('a', 'q', 'b', 23))",
         None,
     ),
+    # A column that is only compared, or counted, summed or averaged, can change to another
+    # signed integer type, as Spark analyzes the query of the view again.
+    "filter column widened": (
+        "a INT, b INT",
+        "(1, 10), (2, -5)",
+        "SELECT a FROM {t} WHERE b > 0",
+        "a INT, b BIGINT",
+        "(5, 3000000000), (6, -3000000000)",
+        [(5,)],
+    ),
+    "filter column narrowed": (
+        "a INT, b BIGINT",
+        "(1, 3000000000), (2, -5)",
+        "SELECT a FROM {t} WHERE b IN (7, 3000000000)",
+        "a INT, b TINYINT",
+        "(5, 7), (6, -1)",
+        [(5,)],
+    ),
+    "sum column widened": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT a, sum(b) AS s FROM {t} GROUP BY a",
+        "a INT, b BIGINT",
+        "(5, 3000000000), (5, 3000000000)",
+        [(5, 6000000000)],
+    ),
+    "having column widened": (
+        "a INT, b INT",
+        "(1, 10), (2, -5)",
+        "SELECT a FROM {t} GROUP BY a HAVING count(DISTINCT b) > 1 OR avg(b) > 0",
+        "a INT, b BIGINT",
+        "(5, 3000000000), (6, -3000000000), (6, 3000000000), (7, -1)",
+        [(5,), (6,)],
+    ),
+    "join key widened": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT x.a FROM {t} x JOIN {t} y ON x.b = y.b",
+        "a INT, b BIGINT",
+        "(5, 3000000000), (6, 7)",
+        [(5,), (6,)],
+    ),
+    # A sort column can change to any type, and the rows are in the order of its values now.
+    "sort column retyped to a string": (
+        "a INT, b INT",
+        "(1, 10), (2, 9)",
+        "SELECT a FROM {t} ORDER BY b LIMIT 1",
+        "a INT, b STRING",
+        "(5, '10'), (6, '9')",
+        [(5,)],
+    ),
+    # The resolver casts an integer compared with a FLOAT, or with a DOUBLE after the change,
+    # and adds the rules of DISTINCT to a DOUBLE, so these columns keep their types.
+    "filter column compared with a float widened": (
+        "a INT, b INT, f FLOAT",
+        "(1, 10, 1.5)",
+        "SELECT a FROM {t} WHERE b > f",
+        "a INT, b BIGINT, f FLOAT",
+        "(5, 3000000000, 1.5)",
+        None,
+    ),
+    "filter column compared with a float narrowed": (
+        "a INT, b BIGINT, f FLOAT",
+        "(1, 10, 1.5)",
+        "SELECT a FROM {t} WHERE b > f",
+        "a INT, b INT, f FLOAT",
+        "(5, 7, 1.5)",
+        None,
+    ),
+    "filter column retyped to a double": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT a FROM {t} WHERE b > 0",
+        "a INT, b DOUBLE",
+        "(5, 0.5)",
+        None,
+    ),
+    "count distinct column retyped to a double": (
+        "a INT, b INT",
+        "(1, 10)",
+        "SELECT count(DISTINCT b) AS n FROM {t}",
+        "a INT, b DOUBLE",
+        "(5, 0.0), (6, -0.0)",
+        None,
+    ),
 }
 
 
@@ -500,6 +585,7 @@ MATRIX_CASES = {
     "struct field added",
     "unread struct field retyped",
     "distinct row column retyped",
+    "filter column widened",
     "column dropped on one side",
     "type name of a retyped column",
 }
@@ -895,6 +981,58 @@ def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tables, cas
     spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN {changed} TYPE BIGINT")
     table.insert("(5, 5, named_struct('x', 9, 'y', 1))")
     assert_view_reads(spark, view, None if changed == "s.x" else rows(spark, sql))
+
+
+# Queries over `t (a INT, b INT)` that only compare `b`, sort by it, or count, sum or average it.
+OPERAND_QUERIES = {
+    "filter": "SELECT a FROM {t} WHERE b > 0",
+    "between": "SELECT a FROM {t} WHERE b BETWEEN 0 AND 3000000000",
+    "sort": "SELECT a FROM {t} ORDER BY b DESC LIMIT 1",
+    "count distinct": "SELECT count(DISTINCT b) AS n FROM {t}",
+    "sum": "SELECT sum(b) AS s FROM {t}",
+    "avg": "SELECT avg(b) AS m FROM {t}",
+    "join key": "SELECT x.a FROM {t} x JOIN {t} y ON x.b = y.b",
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize(
+    ("fmt", "properties"), [("delta", " TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"), ("iceberg", "")]
+)
+@pytest.mark.parametrize("case", OPERAND_QUERIES)
+def test_view_reads_a_column_widened_in_place_that_it_only_uses_as_an_operand(
+    spark, tables, kind, fmt, properties, case
+):
+    table = tables(fmt, "a INT, b INT", properties)
+    table.insert("(1, 1), (2, -5), (3, 7)")
+    query = OPERAND_QUERIES[case].format(t=table.name)
+    view = table.create_view(kind, query)
+    spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN b TYPE BIGINT")
+    table.insert("(5, 3000000000), (6, -3000000000)")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, query)
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+def test_view_joins_on_a_key_widened_on_one_side(spark, tables, kind, fmt):
+    # The analyzer coerces the keys of the join to a common type again.
+    left = tables(fmt, "a INT, b INT")
+    left.insert("(1, 10), (2, 20)")
+    right = tables(fmt, "b INT, c INT")
+    right.insert("(10, 100), (30, 300)")
+    query = f"SELECT l.a, r.c FROM {left.name} l JOIN {right.name} r ON l.b = r.b"
+    view = left.create_view(kind, query)
+    left.recreate("a INT, b BIGINT", "(5, 30), (6, 3000000000)")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, query) == [(5, 300)]
+
+
+def test_view_fails_to_sort_by_a_column_retyped_to_a_map(spark, tables):
+    # Spark fails to analyze the query again, and Sail fails to sort by a map.
+    table = tables("delta", "a INT, b INT")
+    table.insert("(1, 10)")
+    view = table.create_view("sv", f"SELECT a FROM {table.name} ORDER BY b")
+    table.recreate("a INT, b MAP<STRING, INT>", "(5, map('x', 1)), (6, map('y', 2))")
+    assert COLUMNS_CHANGED not in error(spark, f"SELECT * FROM {view}")
 
 
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and
