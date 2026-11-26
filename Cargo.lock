@@ -7767,6 +7767,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "stacker",
  "thiserror",
  "tokio",
  "tonic",

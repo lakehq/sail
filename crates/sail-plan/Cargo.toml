@@ -39,6 +39,7 @@ chrono = { workspace = true }
 chumsky = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
+stacker = { workspace = true }
 lazy_static = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }

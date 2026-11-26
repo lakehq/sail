@@ -14,8 +14,11 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::hash::Hash;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::compute::can_cast_types;
@@ -28,7 +31,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, ScalarValue, TableReference};
+use datafusion_common::{Column, DataFusionError, ScalarValue, TableReference};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, BinaryExpr, Cast, InList, InSubquery, SetComparison,
 };
@@ -66,6 +69,23 @@ use crate::resolver::state::{
     CatalogTableLookup, PlanResolverState, ViewDefinitionReads, table_source_address,
 };
 use crate::shared_cte::{CteReference, replace_scans, visit_nodes, visit_scans};
+
+/// The most temporary views whose definitions a read resolves again inside each other, as
+/// Spark's default `spark.sql.view.maxNestedViewDepth`.
+const MAX_NESTED_VIEW_DEPTH: usize = 100;
+
+/// Polls a future on a new stack when little of the stack of the thread remains, since a read
+/// of views nested deeply resolves their definitions inside each other.
+struct GrowStack<F>(Pin<Box<F>>);
+
+impl<F: Future> Future for GrowStack<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let future = self.0.as_mut();
+        stacker::maybe_grow(2 << 20, 16 << 20, || future.poll(cx))
+    }
+}
 
 /// What the source of a table scan reads, for the sources that a temporary view obtains
 /// again at each read.
@@ -1095,9 +1115,8 @@ impl PlanResolver<'_> {
         // A view whose query read tables that its plan does not scan resolves its query
         // again at each read, as a view over it does.
         if let Some(definition) = definition.as_ref().filter(|x| x.reads_folded_tables)
-            && let Some(plan) = self
-                .resolve_view_definition(plan, view, definition, state)
-                .await?
+            && let Some(plan) =
+                Box::pin(self.resolve_view_definition(plan, view, definition, state)).await?
         {
             return Ok(plan);
         }
@@ -1129,9 +1148,9 @@ impl PlanResolver<'_> {
                     // The query fails with the error of the columns that changed if it no
                     // longer resolves, which names the column that the query no longer has.
                     if let Some(definition) = &definition
-                        && let Ok(Some(plan)) = self
-                            .resolve_view_definition(&plan, view, definition, state)
-                            .await
+                        && let Some(plan) = self
+                            .resolve_view_definition_if_possible(&plan, view, definition, state)
+                            .await?
                     {
                         return Ok(plan);
                     }
@@ -1151,9 +1170,8 @@ impl PlanResolver<'_> {
         // The stored plan remains if the query no longer resolves.
         if gained_columns
             && let Some(definition) = &definition
-            && let Ok(Some(plan)) = self
-                .resolve_view_definition(&plan, view, definition, state)
-                .await
+            && let Ok(Some(plan)) =
+                Box::pin(self.resolve_view_definition(&plan, view, definition, state)).await
         {
             return Ok(plan);
         }
@@ -1206,6 +1224,23 @@ impl PlanResolver<'_> {
         Ok(Some(Arc::clone(definition)))
     }
 
+    /// Returns the plan of a read of a temporary view for its definition resolved again (see
+    /// [`Self::resolve_view_definition`]), or `None` if the definition no longer resolves. A
+    /// read whose views are nested too deeply fails.
+    async fn resolve_view_definition_if_possible(
+        &self,
+        plan: &LogicalPlan,
+        view: &TableStatus,
+        definition: &Arc<TemporaryViewDefinition>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<LogicalPlan>> {
+        match Box::pin(self.resolve_view_definition(plan, view, definition, state)).await {
+            Err(e @ PlanError::DataFusionError(DataFusionError::ResourcesExhausted(_))) => Err(e),
+            Err(_) => Ok(None),
+            Ok(plan) => Ok(plan),
+        }
+    }
+
     /// Returns the plan of a read of a temporary view whose plan no longer fits the tables
     /// that it reads, for the SQL definition of the view. The query is resolved again as
     /// when the view was created (see [`ViewDefinitionScope`]), in a state that has only the
@@ -1219,6 +1254,16 @@ impl PlanResolver<'_> {
         definition: &Arc<TemporaryViewDefinition>,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<LogicalPlan>> {
+        // A read of each view in a chain of views over a table that changed resolves the
+        // definition of the view again inside that of the view over it.
+        if self.view_depth >= MAX_NESTED_VIEW_DEPTH {
+            return Err(DataFusionError::ResourcesExhausted(format!(
+                "[VIEW_EXCEED_MAX_NESTED_DEPTH] The depth of view {} exceeds the maximum view \
+                resolution depth ({MAX_NESTED_VIEW_DEPTH}).",
+                view_name(view)
+            ))
+            .into());
+        }
         let Ok(config) = Arc::clone(&definition.config).downcast::<PlanConfig>() else {
             return Ok(None);
         };
@@ -1228,13 +1273,16 @@ impl PlanResolver<'_> {
             config,
             share_ctes: self.share_ctes,
             schema_only: self.schema_only,
+            view_depth: self.view_depth + 1,
         };
         let scope = Arc::new(ViewDefinitionScope::Resolve(Arc::clone(definition)));
         let mut query_state = PlanResolverState::new();
         state.swap_statement(&mut query_state);
-        let query = scope
-            .run(resolver.resolve_view_query(&definition.query, &mut query_state))
-            .await;
+        // The views that the definition reads can resolve their definitions again as well.
+        let query = GrowStack(Box::pin(
+            scope.run(resolver.resolve_view_query(&definition.query, &mut query_state)),
+        ))
+        .await;
         state.swap_statement(&mut query_state);
         let query = query?;
         let names = Self::get_field_names(query.schema(), state)?;

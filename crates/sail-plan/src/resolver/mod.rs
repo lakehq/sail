@@ -28,6 +28,9 @@ pub struct PlanResolver<'a> {
     share_ctes: bool,
     /// Whether the plan is resolved only for its schema.
     schema_only: bool,
+    /// The number of temporary views whose definitions the plan is resolved within, when
+    /// reads resolve them again.
+    view_depth: usize,
 }
 
 impl<'a> PlanResolver<'a> {
@@ -37,6 +40,7 @@ impl<'a> PlanResolver<'a> {
             config,
             share_ctes: false,
             schema_only: false,
+            view_depth: 0,
         }
     }
 

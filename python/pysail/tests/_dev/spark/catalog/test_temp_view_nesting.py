@@ -113,3 +113,45 @@ def test_view_keeps_the_persistent_view_that_it_was_created_with(spark, names):
     assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
     spark.sql(f"DROP VIEW {persistent}")
     assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+
+
+# The first view of a chain of views over `t (id BIGINT, b INT)` that reads the rows `(1, 1)`, the
+# change of the table, and the row of the first view after the change. Each view over it adds 1 to `id`.
+CHANGED_CHAINS = {
+    "retyped": ("SELECT id, b FROM {t}", ("id INT, b STRING", "(1, 'x')"), (1, "x")),
+    "gained": (
+        "SELECT id, to_json(struct(*)) AS b FROM {t}",
+        ("id BIGINT, b INT, c INT", "(1, 1, 2)"),
+        (1, '{"id":1,"b":1,"c":2}'),
+    ),
+    "folded": ("SELECT 1L AS id, typeof((SELECT b FROM {t} LIMIT 1)) AS b", ("b STRING", "('x')"), (1, "string")),
+}
+
+
+@pytest.mark.parametrize("change", CHANGED_CHAINS)
+@pytest.mark.parametrize("shape", ["chain", "replaced"])
+@pytest.mark.parametrize("depth", [30, 100, 101])
+def test_views_nested_deeply_resolve_their_queries_again_after_their_table_changed(
+    spark, tables, names, change, shape, depth
+):
+    first, columns, (i, value) = CHANGED_CHAINS[change]
+    table = tables("delta", "id BIGINT, b INT")
+    table.insert("(1, 1)")
+    view = names()
+    spark.sql(f"CREATE TEMPORARY VIEW {view} AS {first.format(t=table.name)}")
+    for _ in range(depth - 1):
+        inner = view
+        if shape == "chain":
+            view = names()
+        spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {view} AS SELECT id + 1 AS id, b FROM {inner}")
+    table.recreate(*columns)
+    if depth <= 100:
+        assert rows(spark, f"SELECT * FROM {view}") == [(i + depth - 1, value)]
+        assert spark.table(view).columns == ["id", "b"]
+    elif change == "gained":
+        # The plans of the views fit their table, so that the views nested more deeply read them.
+        assert len(rows(spark, f"SELECT * FROM {view}")) == 1
+    else:
+        # Spark fails to analyze views nested more deeply as well.
+        with pytest.raises(Exception, match="VIEW_EXCEED_MAX_NESTED_DEPTH"):
+            spark.sql(f"SELECT * FROM {view}").collect()
