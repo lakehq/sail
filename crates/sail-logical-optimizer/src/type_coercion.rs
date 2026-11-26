@@ -180,6 +180,7 @@ fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Resu
     .map(|t| t.data)
 }
 
+// TODO: Use `MaterializedCteScan::with_body_schema` after DataFusion 57.
 // Give the fields of `body_schema` to each scan of the materialized CTE `id`
 // in `continuation`, also in subquery expressions. A scan keeps its
 // qualifiers.
