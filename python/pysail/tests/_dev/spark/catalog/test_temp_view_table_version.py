@@ -2351,12 +2351,15 @@ def test_view_over_a_persistent_view_reads_its_current_definition(spark, tables,
             assert rows(spark, f"SELECT id FROM {persistent}") == expected
             assert rows(spark, f"SELECT * FROM {view}") == expected
             assert rows(spark, f"SELECT * FROM {outer}") == expected
-        # A definition that no longer has the column, and a dropped view.
+            assert spark.table(view).schema == spark.sql(f"SELECT id FROM {persistent}").schema
+        # A definition that no longer has the column, and a dropped view. A request for the schema
+        # gets the columns that the view was created with.
         spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 1 AS other")
         error(spark, f"SELECT * FROM {view}")
         spark.sql(f"DROP VIEW {persistent}")
         for name in (view, outer):
             assert NOT_FOUND in error(spark, f"SELECT * FROM {name}")
+            assert spark.table(name).columns == ["id"]
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {persistent}")
 

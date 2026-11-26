@@ -890,12 +890,14 @@ impl PlanResolver<'_> {
             state.record_star_in_function();
         }
         // A view whose query read persistent views, or tables that its plan does not scan,
-        // resolves its query again at each read, as a view over it does.
-        if let Some(definition) = definition.as_ref().filter(|x| x.resolves_at_each_read)
-            && let Some(plan) =
-                Box::pin(self.resolve_view_definition(plan, view, definition, state)).await?
-        {
-            return Ok(plan);
+        // resolves its query again at each read, as a view over it does. A request for the
+        // schema gets the columns of the stored plan if the query no longer resolves.
+        if let Some(definition) = definition.as_ref().filter(|x| x.resolves_at_each_read) {
+            match Box::pin(self.resolve_view_definition(plan, view, definition, state)).await {
+                Ok(Some(plan)) => return Ok(plan),
+                Err(error) if !self.schema_only => return Err(error),
+                _ => {}
+            }
         }
         let plan = plan.clone();
         let mut scans = HashMap::new();
