@@ -1721,9 +1721,9 @@ def test_plan_view_over_a_persistent_view_reads_the_current_rows(spark, table, k
         view = table.create_view(kind, f"SELECT * FROM {persistent}")
         table.insert("(2)")
         assert rows(spark, f"SELECT * FROM {view}") == [(1001,), (1002,)]
-        # The view keeps the definition of the persistent view that it was created with.
+        # The view reads the current definition of the persistent view.
         spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 55L AS id")
-        assert rows(spark, f"SELECT * FROM {view}") == [(1001,), (1002,)]
+        assert rows(spark, f"SELECT * FROM {view}") == [(55,)]
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {persistent}")
 
