@@ -834,8 +834,9 @@ impl PlanResolver<'_> {
     /// scan of a source that the view obtains again at each read has a reference to what
     /// it reads in the place of the source, in the plan, in its subqueries, and in the
     /// CTE definitions that the plan refers to. A plan without such a scan is stored as
-    /// it is. Also returns whether the definition read a table that the plan does not
-    /// scan, such as the table of a scalar subquery that `typeof` folded into a value.
+    /// it is. Also returns whether the view resolves its query at each read: the definition
+    /// read a persistent view, or a table that the plan does not scan, such as the table of
+    /// a scalar subquery that `typeof` folded into a value.
     pub(in crate::resolver) fn store_view_plan(
         plan: LogicalPlan,
         reads: &ViewDefinitionReads,
@@ -846,7 +847,8 @@ impl PlanResolver<'_> {
             scanned.insert(table_source_address(&scan.source));
             Ok(())
         })?;
-        let reads_folded_tables = reads.sources().any(|x| !scanned.contains(&x));
+        let resolves_at_each_read =
+            reads.reads_persistent_view || reads.sources().any(|x| !scanned.contains(&x));
         // The stored plan has its own CTE definitions, and the stored scans have the
         // nullability of the tables, which the plan above them was resolved without.
         let plan = replace_scans(
@@ -862,7 +864,7 @@ impl PlanResolver<'_> {
                 Ok(LogicalPlan::TableScan(scan))
             },
         )?;
-        Ok((plan, reads_folded_tables))
+        Ok((plan, resolves_at_each_read))
     }
 
     /// Returns the plan of a read of a temporary view, for the stored plan of the view.
@@ -887,9 +889,9 @@ impl PlanResolver<'_> {
         if definition.as_ref().is_some_and(|x| x.star_in_function) {
             state.record_star_in_function();
         }
-        // A view whose query read tables that its plan does not scan resolves its query
-        // again at each read, as a view over it does.
-        if let Some(definition) = definition.as_ref().filter(|x| x.reads_folded_tables)
+        // A view whose query read persistent views, or tables that its plan does not scan,
+        // resolves its query again at each read, as a view over it does.
+        if let Some(definition) = definition.as_ref().filter(|x| x.resolves_at_each_read)
             && let Some(plan) =
                 Box::pin(self.resolve_view_definition(plan, view, definition, state)).await?
         {

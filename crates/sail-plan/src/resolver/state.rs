@@ -215,6 +215,8 @@ pub(super) struct ViewDefinitionReads {
     /// Whether the definition expands a star inside the arguments of a function, which
     /// expands to the columns that the tables have when the definition is resolved.
     pub star_in_function: bool,
+    /// Whether the definition reads a persistent view, which can be defined again.
+    pub reads_persistent_view: bool,
 }
 
 impl ViewDefinitionReads {

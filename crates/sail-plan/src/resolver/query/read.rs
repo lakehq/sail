@@ -585,6 +585,9 @@ impl PlanResolver<'_> {
         table_reference: TableReference,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        if let Some(reads) = state.view_definition_mut() {
+            reads.reads_persistent_view = true;
+        }
         let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
         let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
         let plan = match spec_plan {

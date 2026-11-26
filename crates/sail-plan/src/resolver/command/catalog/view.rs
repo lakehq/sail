@@ -160,7 +160,7 @@ impl PlanResolver<'_> {
         let input = rename_logical_plan(input, &fields)?;
         // The view reads its tables again at each read, so its plan does not keep the
         // table sources that the definition was resolved with.
-        let (input, reads_folded_tables) = Self::store_view_plan(input, &reads)?;
+        let (input, resolves_at_each_read) = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
         // A view that reads no table has a plan that always fits, and keeps no query, which
         // can hold the rows of a local relation.
@@ -174,7 +174,7 @@ impl PlanResolver<'_> {
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
                 catalogs: manager.session_local_catalogs()?,
                 star_in_function: reads.star_in_function,
-                reads_folded_tables,
+                resolves_at_each_read,
             }))
         } else {
             None

@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 from pyspark.sql.functions import array, col, count, explode, pandas_udf, rand, udf, xxhash64
-from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -2333,21 +2333,30 @@ def test_dataframe_view_fails_when_a_column_that_it_reads_was_dropped(spark, tab
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_whose_definition_no_longer_resolves_fails_with_the_column_change(spark, tables, kind):
-    table = tables("delta", "id INT, b BIGINT")
-    other = tables("delta", "k INT")
-    table.insert("(1, 7)")
-    other.insert("(5)")
+def test_view_over_a_persistent_view_reads_its_current_definition(spark, tables, kind):
+    table = tables("delta", "id INT, b INT")
+    table.insert("(1, 10), (2, 20)")
     persistent = f"pv_{uuid.uuid4().hex}"
     try:
-        spark.sql(f"CREATE VIEW {persistent} AS SELECT k FROM {other.name}")
-        view = table.create_view(kind, f"SELECT t.id, t.b, p.k FROM {table.name} t CROSS JOIN {persistent} p")
-        # The definition no longer resolves, and the plan does not fit the table. The schema of the
-        # view is the schema that it was created with.
+        spark.sql(f"CREATE VIEW {persistent} AS SELECT id FROM {table.name} WHERE b > 10")
+        view = table.create_view(kind, f"SELECT * FROM {persistent}")
+        outer = table.create_view("sv", f"SELECT id FROM {view}")
+        assert rows(spark, f"SELECT * FROM {outer}") == [(2,)]
+        # The persistent view is defined again over the same table, which did not change.
+        for definition, expected in [
+            (f"SELECT id FROM {table.name}", [(1,), (2,)]),
+            (f"SELECT b, id * 10 AS id FROM {table.name}", [(10,), (20,)]),
+        ]:
+            spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS {definition}")
+            assert rows(spark, f"SELECT id FROM {persistent}") == expected
+            assert rows(spark, f"SELECT * FROM {view}") == expected
+            assert rows(spark, f"SELECT * FROM {outer}") == expected
+        # A definition that no longer has the column, and a dropped view.
         spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 1 AS other")
-        table.recreate("id INT, b INT", "(2, 3)")
-        assert spark.table(view).schema["b"].dataType == LongType()
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+        error(spark, f"SELECT * FROM {view}")
+        spark.sql(f"DROP VIEW {persistent}")
+        for name in (view, outer):
+            assert NOT_FOUND in error(spark, f"SELECT * FROM {name}")
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {persistent}")
 
