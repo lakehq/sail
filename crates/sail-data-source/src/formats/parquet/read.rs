@@ -38,7 +38,9 @@ use sail_common_datafusion::parquet_schema::{
     SAIL_PARQUET_STORAGE_METADATA_KEY, is_parquet_integer_target, normalize_parquet_field,
     parquet_integer_cast_wraps, parquet_temporal_storage_cast, validate_parquet_field,
 };
-use sail_common_datafusion::scan::load_parquet_scan_metadata_with_validation;
+use sail_common_datafusion::scan::{
+    load_parquet_scan_metadata_with_validation, with_parquet_options,
+};
 use sail_common_datafusion::schema::nullable_query_field;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastMode, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
@@ -710,8 +712,7 @@ impl ReadFormat for ParquetReadFormat {
                 .collect(),
             None => file_schema.fields().clone(),
         };
-        let mut source =
-            ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
+        let mut source = with_parquet_options(ParquetSource::new(input.schema), options.clone());
 
         let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
@@ -765,10 +766,6 @@ impl ReadFormat for ParquetReadFormat {
             CachedParquetFileReaderFactory::new(store, metadata_cache),
         ));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
-
-        if let Some(metadata_size_hint) = options.global.metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
-        }
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)

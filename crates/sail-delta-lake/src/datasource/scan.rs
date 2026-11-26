@@ -28,7 +28,7 @@ use object_store::path::Path;
 use parquet::arrow::RowNumber;
 use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_common_datafusion::scan::{load_parquet_scan_metadata, with_parquet_options};
 use sail_common_datafusion::schema_evolution::{
     FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -472,9 +472,9 @@ pub async fn build_file_scan_config(
         Arc::clone(&store),
         Arc::clone(&metadata_cache),
     ));
-    let mut parquet_source = ParquetSource::new(table_schema)
-        .with_table_parquet_options(parquet_options)
-        .with_parquet_file_reader_factory(reader_factory);
+    let mut parquet_source =
+        with_parquet_options(ParquetSource::new(table_schema), parquet_options)
+            .with_parquet_file_reader_factory(reader_factory);
 
     if let Some(predicate) = params.pushdown_filter
         && config.enable_parquet_pushdown

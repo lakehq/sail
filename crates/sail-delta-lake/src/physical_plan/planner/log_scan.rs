@@ -5,6 +5,7 @@ use std::sync::{Arc, LazyLock};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -24,6 +25,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::schema::{clear_metadata, mark_partially_present_fields_nullable};
 
 use super::context::PlannerContext;
@@ -507,12 +509,14 @@ pub async fn build_delta_log_datasource_scans_with_options(
         .build();
 
     let parquet_checkpoint_scan: Option<Arc<dyn ExecutionPlan>> = {
-        let mut source =
-            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone())
-                .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
-                    Arc::clone(&store),
-                    metadata_cache,
-                )));
+        let mut source = with_parquet_options(
+            datafusion::datasource::physical_plan::ParquetSource::new(table_schema.clone()),
+            TableParquetOptions::default(),
+        )
+        .with_parquet_file_reader_factory(Arc::new(CachedParquetFileReaderFactory::new(
+            Arc::clone(&store),
+            metadata_cache,
+        )));
         if let Some(predicate) = &options.parquet_predicate {
             source = source.with_predicate(Arc::clone(predicate));
         }

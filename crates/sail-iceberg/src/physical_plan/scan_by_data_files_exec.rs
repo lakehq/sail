@@ -37,7 +37,7 @@ use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
-use sail_common_datafusion::scan::load_parquet_scan_metadata;
+use sail_common_datafusion::scan::{load_parquet_scan_metadata, with_parquet_options};
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
@@ -275,8 +275,9 @@ impl ScanByDataFilesState {
                 &self.context.session_id(),
             ),
         ));
-        let source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(crate::datasource::parquet::parquet_options(
+        let source = with_parquet_options(
+            ParquetSource::new(table_schema),
+            crate::datasource::parquet::parquet_options(
                 &schema,
                 false,
                 self.context
@@ -285,8 +286,9 @@ impl ScanByDataFilesState {
                     .execution
                     .parquet
                     .clone(),
-            ))
-            .with_parquet_file_reader_factory(reader);
+            ),
+        )
+        .with_parquet_file_reader_factory(reader);
         let config = FileScanConfigBuilder::new(object_store_url, Arc::new(source))
             .with_file_groups(vec![FileGroup::from(vec![partitioned])])
             .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
@@ -566,9 +568,9 @@ impl ScanByDataFilesState {
             object_store,
             metadata_cache,
         ));
-        let mut parquet_source = ParquetSource::new(Arc::clone(file_schema))
-            .with_table_parquet_options(parquet_options)
-            .with_parquet_file_reader_factory(reader_factory);
+        let mut parquet_source =
+            with_parquet_options(ParquetSource::new(Arc::clone(file_schema)), parquet_options)
+                .with_parquet_file_reader_factory(reader_factory);
         if let Some(predicate) = predicate {
             parquet_source = parquet_source.with_predicate(predicate.clone());
         }

@@ -115,6 +115,7 @@ use sail_common_datafusion::input_file::{
 };
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionCastMode, SchemaEvolutionDefaultExpr,
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
@@ -776,14 +777,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     } else {
                         Arc::new(cached_reader)
                     };
-                let metadata_size_hint = options.global.metadata_size_hint;
-                let mut source = ParquetSource::new(table_schema)
-                    .with_parquet_file_reader_factory(reader_factory)
-                    .with_table_parquet_options(options);
-                // The file opener reads the hint from the source, not from the options.
-                if let Some(metadata_size_hint) = metadata_size_hint {
-                    source = source.with_metadata_size_hint(metadata_size_hint);
-                }
+                let mut source = with_parquet_options(ParquetSource::new(table_schema), options)
+                    .with_parquet_file_reader_factory(reader_factory);
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }

@@ -42,6 +42,7 @@ use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::scan::with_parquet_options;
 use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
@@ -402,9 +403,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     global: session.config().options().execution.parquet.clone(),
                     ..Default::default()
                 };
-                let source =
-                    ParquetSource::new(TableSchema::from(Arc::clone(&descriptor.storage_schema)))
-                        .with_table_parquet_options(parquet_options);
+                let source = with_parquet_options(
+                    ParquetSource::new(TableSchema::from(Arc::clone(&descriptor.storage_schema))),
+                    parquet_options,
+                );
                 let file_groups = descriptor
                     .partitions
                     .iter()

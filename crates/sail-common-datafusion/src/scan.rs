@@ -2,14 +2,27 @@
 
 use std::sync::Arc;
 
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::FileGroup;
 use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
+use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
 use datafusion::execution::cache::cache_manager::FileMetadataCache;
 use datafusion::object_store::ObjectStore;
 use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
+
+/// Sets the Parquet options and applies their metadata size hint to the source.
+///
+/// The file opener reads the hint from the source, not from the options.
+pub fn with_parquet_options(source: ParquetSource, options: TableParquetOptions) -> ParquetSource {
+    let metadata_size_hint = options.global.metadata_size_hint;
+    let source = source.with_table_parquet_options(options);
+    match metadata_size_hint {
+        Some(metadata_size_hint) => source.with_metadata_size_hint(metadata_size_hint),
+        None => source,
+    }
+}
 
 /// Planning-only Parquet metadata attached to a `PartitionedFile`.
 ///

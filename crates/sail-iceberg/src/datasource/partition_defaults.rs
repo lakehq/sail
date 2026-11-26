@@ -19,7 +19,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
 use sail_cache::scope::scoped_file_metadata_cache;
-use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
+use sail_common_datafusion::scan::{
+    ParquetScanMetadata, load_parquet_scan_metadata, with_parquet_options,
+};
 use sail_common_datafusion::schema_evolution::{
     FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionCastColumnExpr, StructFieldMatching,
     encode_field_default,
@@ -240,8 +242,10 @@ pub(crate) fn create_data_scan_with_partition_defaults(
             .map(|_| Partitioning::UnknownPartitioning(file_groups.len()));
         let source: Arc<dyn FileSource> =
             if let Some(parquet) = original_source.downcast_ref::<ParquetSource>() {
-                let mut source = ParquetSource::new(table_schema)
-                    .with_table_parquet_options(parquet.table_parquet_options().clone());
+                let mut source = with_parquet_options(
+                    ParquetSource::new(table_schema),
+                    parquet.table_parquet_options().clone(),
+                );
                 if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
                     source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
                 }
