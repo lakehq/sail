@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -10,13 +11,15 @@ use datafusion::common::Result;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
+use sail_common_datafusion::session::repartition::DEFAULT_REPARTITION_BUFFER_SIZE;
 
 use crate::partition_pair_join::PartitionPairJoinExec;
+use crate::repartition::ExplicitRepartitionExec;
 use crate::replay::ReplayExec;
 
 #[derive(Debug)]
@@ -132,6 +135,43 @@ async fn concurrent_pair_tasks_materialize_each_source_partition_once() -> Resul
     drop(join);
     assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
     assert_eq!(context.memory_pool().reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn pair_preparation_drains_bounded_repartition_outputs_concurrently() -> Result<()> {
+    let context = Arc::new(TaskContext::default());
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![0, 1]))])?;
+    let batches = DEFAULT_REPARTITION_BUFFER_SIZE + 2;
+    let source = MemorySourceConfig::try_new_exec(&[vec![batch; batches]], schema, None)?;
+    let repartition = Arc::new(ExplicitRepartitionExec::new(
+        source,
+        Partitioning::RoundRobinBatch(2),
+    ));
+    let pair = PartitionPairJoinExec::try_new(
+        Arc::new(ReplayExec::try_new(repartition)?),
+        Arc::new(ReplayExec::try_new(CountingExec::new(1)?)?),
+        None,
+        None,
+    )?;
+    for partition in 0..2 {
+        let stream = pair.execute(partition, context.clone())?;
+        let result = tokio::time::timeout(Duration::from_secs(10), stream.try_collect::<Vec<_>>())
+            .await
+            .map_err(|_| {
+                datafusion::common::exec_datafusion_err!(
+                    "timed out reading partition pair {partition}"
+                )
+            })??;
+        assert_eq!(
+            result.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            batches
+        );
+    }
+    drop(pair);
+    assert_eq!(context.memory_pool().reserved(), 0);
+    assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
     Ok(())
 }
 

@@ -13,6 +13,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use futures::future::{BoxFuture, Shared};
+use futures::stream::FuturesUnordered;
 use futures::{FutureExt, TryStreamExt, stream};
 use sail_common_datafusion::replay::{check_bounded, replay_error};
 
@@ -186,12 +187,11 @@ impl ExecutionPlan for PartitionPairJoinExec {
                     // Workers already have this barrier at their materialized input stages.
                     for input in inputs {
                         if let Some(replay) = input.downcast_ref::<ReplayExec>() {
-                            for partition in 0..input.output_partitioning().partition_count() {
-                                replay
-                                    .materialize(partition, context.clone())
-                                    .await
-                                    .map_err(Arc::new)?;
-                            }
+                            // A repartition producer can block on any full output queue.
+                            let mut pending = (0..input.output_partitioning().partition_count())
+                                .map(|partition| replay.materialize(partition, context.clone()))
+                                .collect::<FuturesUnordered<_>>();
+                            while pending.try_next().await?.is_some() {}
                         }
                     }
                     Ok(())

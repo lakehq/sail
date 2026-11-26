@@ -199,6 +199,7 @@ pub fn check_bounded(input: &dyn datafusion::physical_plan::ExecutionPlan) -> Re
 mod tests {
     use datafusion::arrow::array::Int64Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatchOptions;
     use futures::TryStreamExt;
 
     use super::*;
@@ -269,6 +270,26 @@ mod tests {
         assert_eq!(context.memory_pool().reserved(), 0);
         drop(replay);
         assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_preserves_rows_without_columns() -> Result<()> {
+        let context = TaskContext::default();
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(7)),
+        )?;
+        let mut writer = ReplayWriter::try_new(&context, schema)?;
+        writer.append(&batch)?;
+        let replay = writer.finish()?;
+        for _ in 0..2 {
+            let batches: Vec<_> = replay.open(&context)?.try_collect().await?;
+            assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 7);
+        }
         Ok(())
     }
 

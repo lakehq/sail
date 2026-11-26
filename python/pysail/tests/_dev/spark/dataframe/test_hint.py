@@ -136,6 +136,16 @@ def test_partition_pair_join_null_safe_residual_and_projection(spark, side, righ
     assert sorted(tuple(r) for r in query.collect()) == sorted(expected)
 
 
+def test_partition_pair_join_counts_rows_without_projected_columns(spark):
+    # Filtering one side makes COUNT(*) execute the join instead of using exact range statistics.
+    result = spark.sql("""
+        SELECT /*+ SHUFFLE_REPLICATE_NL(l) */ count(*) AS n
+        FROM (SELECT * FROM range(0, 7, 1, 3) WHERE id % 2 = 0) l
+        CROSS JOIN range(0, 5, 1, 2) r
+    """)
+    assert result.collect() == [Row(n=20)]
+
+
 @pytest.mark.parametrize("parameter", [1, 1.5, True, [1, 2]])
 def test_join_hint_rejects_non_relation_parameters(spark, parameter):
     with pytest.raises(AnalysisException):

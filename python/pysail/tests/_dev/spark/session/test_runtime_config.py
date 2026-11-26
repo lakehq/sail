@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql import Row
 from pyspark.sql.functions import udtf
 from pyspark.sql.types import StringType, StructField, StructType
@@ -36,6 +37,22 @@ def test_sql_set_preserves_config_value(spark, value):
     finally:
         spark.sql(f"RESET {key}")
     assert spark.conf.get(key, None) is None
+
+
+@pytest.mark.parametrize(
+    ("key", "value"), [("spark.sql.optimizer.disableHints", " TrUe "), ("spark.sql.adaptive.enabled", " FaLsE ")]
+)
+def test_invalid_hint_config_preserves_previous_value(config_sessions, key, value):
+    session = config_sessions.create()
+    session.conf.set(key, value)
+    with pytest.raises(PySparkException, match="boolean"):
+        session.conf.set(key, "oops")
+    with pytest.raises(PySparkException, match="boolean"):
+        session.sql(f"SET {key}=oops").collect()
+    assert session.conf.get(key) == value
+    query = session.sql("SELECT 1 AS one")
+    assert query.schema.names == ["one"]
+    assert query.collect() == [Row(one=1)]
 
 
 @pytest.mark.spark(version=">=4.3", cross_version=True, reason="Uses a Spark 4.3 configuration default")

@@ -174,11 +174,12 @@ impl SparkRuntimeConfig {
                 is invalid. It should be a/an 'int' value. SQLSTATE: 22022"
             )));
         }
-        // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
-        // rather than at the point of use, so that a rejected value leaves both the session
-        // configuration and the mirrored DataFusion Parquet option as they were.
-        if key == SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
-            && value.trim().to_lowercase().parse::<bool>().is_err()
+        if matches!(
+            key.as_str(),
+            SparkConfigKey::SPARK_SQL_ADAPTIVE_ENABLED
+                | SparkConfigKey::SPARK_SQL_OPTIMIZER_DISABLE_HINTS
+                | SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
+        ) && value.trim().to_ascii_lowercase().parse::<bool>().is_err()
         {
             return Err(SparkError::invalid(format!(
                 "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
@@ -261,10 +262,10 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
-        if let Some(value) = config.get_option("spark.sql.optimizer.disableHints") {
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_OPTIMIZER_DISABLE_HINTS) {
             output.disable_hints = value.trim().to_ascii_lowercase().parse()?;
         }
-        if let Some(value) = config.get_option("spark.sql.adaptive.enabled") {
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_ADAPTIVE_ENABLED) {
             output.adaptive_enabled = value.trim().to_ascii_lowercase().parse()?;
         }
         for key in [
