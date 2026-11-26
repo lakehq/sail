@@ -373,18 +373,23 @@ async fn test_catalog_managed_delta_reads_request_the_ratified_commits_once() ->
 #[tokio::test]
 async fn test_catalog_managed_delta_read_of_files_after_a_read_without_them_requests_no_commits()
 -> TestResult {
-    let (fixture, _) = Fixture::try_new_with_delta_table().await?;
+    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     fixture
         .catalog
         .ratifies_delta_commits
         .store(true, Ordering::SeqCst);
     // The read of the data loads the files of the snapshot that the first read read
-    // without them, with the commits that the catalog ratified for that snapshot.
+    // without them, with the commits that the catalog ratified for that snapshot. The
+    // catalog has the commits after version 0 only.
+    for version in 1..=2 {
+        put(&store, commit(version, "first")).await?;
+    }
+    fixture.catalog.ratified_version.store(2, Ordering::SeqCst);
     let plan = union_all(vec![
         read_table(&["d"], &[("metadataAsDataRead", "true")]),
         read_table(&["d"], &[]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
+    assert_eq!(fixture.delta_versions(plan).await?, vec![2, 2]);
     let requests = fixture
         .catalog
         .ratified_commit_requests

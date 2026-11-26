@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -15,7 +15,8 @@ use datafusion_common::plan_datafusion_err;
 use futures::future::BoxFuture;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::lakehouse::{
-    DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCapability,
+    DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
@@ -65,8 +66,10 @@ struct SnapshotCatalogProvider {
     /// another table in the middle of a statement.
     on_request: Mutex<Vec<(String, BoxFuture<'static, ()>)>>,
     /// Whether the catalog ratifies the commits of its managed Delta Lake tables, as Unity
-    /// Catalog does, with the latest version of each table at version 0.
+    /// Catalog does.
     ratifies_delta_commits: AtomicBool,
+    /// The latest version of each table that the catalog ratified, which is 0 by default.
+    ratified_version: AtomicI64,
     /// The requests for the commits that the catalog ratified.
     ratified_commit_requests: AtomicUsize,
 }
@@ -99,6 +102,7 @@ impl SnapshotCatalogProvider {
             session_local: false,
             on_request: Mutex::new(vec![]),
             ratifies_delta_commits: AtomicBool::new(false),
+            ratified_version: AtomicI64::new(0),
             ratified_commit_requests: AtomicUsize::new(0),
         }
     }
@@ -139,9 +143,20 @@ impl CatalogProvider for SnapshotCatalogProvider {
         _request: DeltaRatifiedCommitRequest,
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         self.ratified_commit_requests.fetch_add(1, Ordering::SeqCst);
+        // The commits after version 0 are the published commits of the table.
+        let latest_table_version = self.ratified_version.load(Ordering::SeqCst);
+        let commits = (1..=latest_table_version)
+            .map(|version| DeltaRatifiedCommit {
+                version,
+                timestamp: version,
+                file_name: format!("_delta_log/{version:020}.json"),
+                file_size: 0,
+                file_modification_timestamp: version,
+            })
+            .collect();
         Ok(DeltaRatifiedCommitResponse {
-            latest_table_version: 0,
-            commits: vec![],
+            latest_table_version,
+            commits,
         })
     }
 
