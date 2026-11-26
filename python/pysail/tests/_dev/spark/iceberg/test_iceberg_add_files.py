@@ -179,19 +179,18 @@ def _write_source_file(path, file_format, rows):
             pq.write_table(table, path)
 
 
-@pytest.mark.parametrize("file_format", ["avro", "orc"])
 @pytest.mark.parametrize("partitioned", [False, True])
-def test_imported_file_metadata_as_data_filter(spark, tmp_path, file_format, partitioned):
+def test_imported_file_metadata_as_data_filter(spark, tmp_path, partitioned):
     source = tmp_path / "source"
     directory = source / "p=a" if partitioned else source
-    _write_source_file(directory / f"data.{file_format}", file_format, [(1, "first"), (2, "second")])
+    _write_source_file(directory / "data.avro", "avro", [(1, "first"), (2, "second")])
     name = "imported_file_filter"
     target = tmp_path / "target"
     columns = "id BIGINT, value STRING" + (", p STRING" if partitioned else "")
     partition = "PARTITIONED BY (p)" if partitioned else ""
     spark.sql(f"CREATE TABLE {name} ({columns}) USING iceberg {partition} LOCATION '{target}'")
     try:
-        assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        assert _add(spark, name, f"avro.`{source}`") == (1, None)
         frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(str(target))
         matched = frame.where("id = 2").select("value")
         assert [row.value for row in matched.collect()] == ["second"]
@@ -200,18 +199,66 @@ def test_imported_file_metadata_as_data_filter(spark, tmp_path, file_format, par
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("file_format", ["avro", "orc"])
-def test_imported_file_row_level_operations(spark, tmp_path, file_format):
+def test_add_files_rejects_orc(spark, tmp_path):
+    source = tmp_path / "data.orc"
+    _write_source_file(source, "orc", [(1, "x")])
+    target = tmp_path / "target"
+    name = "add_files_orc"
+    spark.sql(f"CREATE TABLE {name} (id BIGINT, value STRING) USING iceberg LOCATION '{target}'")
+    try:
+        before = _find_latest_metadata(target)
+        with pytest.raises(Exception, match="Unsupported add_files source format: orc"):
+            _add(spark, name, f"orc.`{source}`")
+        assert _find_latest_metadata(target) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_scan_existing_orc_file(spark, sql_catalog, tmp_path):
+    from pyiceberg.manifest import DataFile, DataFileContent, FileFormat
+    from pyiceberg.schema import Schema
+    from pyiceberg.typedef import Record
+    from pyiceberg.types import LongType as IcebergLongType
+    from pyiceberg.types import NestedField, StringType
+
+    table = sql_catalog.create_table(
+        "default.existing_orc",
+        Schema(NestedField(1, "id", IcebergLongType()), NestedField(2, "value", StringType())),
+    )
+    try:
+        source = tmp_path / "data.orc"
+        _write_source_file(source, "orc", [(1, "x")])
+        file = DataFile.from_args(
+            content=DataFileContent.DATA,
+            file_path=source.as_uri(),
+            file_format=FileFormat.ORC,
+            partition=Record(),
+            record_count=1,
+            file_size_in_bytes=source.stat().st_size,
+            spec_id=table.spec().spec_id,
+        )
+        with table.transaction() as transaction, transaction.update_snapshot().fast_append() as append:
+            append.append_data_file(file)
+        for metadata_as_data in ("false", "true"):
+            with pytest.raises(Exception, match="Unsupported Iceberg data file format: Orc"):
+                spark.read.format("iceberg").option("metadataAsDataRead", metadata_as_data).load(
+                    table.location()
+                ).collect()
+    finally:
+        sql_catalog.drop_table("default.existing_orc")
+
+
+def test_imported_file_row_level_operations(spark, tmp_path):
     source = tmp_path / "source"
     target = tmp_path / "target"
     rows = [(1, "first"), (2, "second")]
-    _write_source_file(source / "p=a" / f"data.{file_format}", file_format, rows)
+    _write_source_file(source / "p=a" / "data.avro", "avro", rows)
     name = "imported_file_dml"
     spark.sql(
         f"CREATE TABLE {name} (id BIGINT, value STRING, p STRING) USING iceberg PARTITIONED BY (p) LOCATION '{target}'"
     )
     try:
-        assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        assert _add(spark, name, f"avro.`{source}`") == (1, None)
         spark.sql(f"INSERT INTO {name} VALUES (3, 'third', 'b')")
         metadata = _find_latest_metadata(target)
         for statement in [
@@ -233,15 +280,14 @@ def test_imported_file_row_level_operations(spark, tmp_path, file_format):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("file_format", ["avro", "orc"])
 @pytest.mark.parametrize("partitioned", [False, True])
-def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
+def test_add_files_source_formats(spark, tmp_path, partitioned):
     source = tmp_path / "source"
     if partitioned:
         for part, row in [("a", (1, "x")), ("__HIVE_DEFAULT_PARTITION__", (2, "y"))]:
-            _write_source_file(source / f"p={part}" / f"data.{file_format}", file_format, [row])
+            _write_source_file(source / f"p={part}" / "data.avro", "avro", [row])
     else:
-        _write_source_file(source / f"data.{file_format}", file_format, [(1, "x", "a"), (2, "y", None)])
+        _write_source_file(source / "data.avro", "avro", [(1, "x", "a"), (2, "y", None)])
     name = "add_files_format"
     partition = "PARTITIONED BY (p)" if partitioned else ""
     spark.sql(
@@ -250,7 +296,7 @@ def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
     )
     try:
         count = 2 if partitioned else 1
-        assert _add(spark, name, f"{file_format}.`{source}`") == (count, None)
+        assert _add(spark, name, f"avro.`{source}`") == (count, None)
         expected = [(1, "x", "a"), (2, "y", None)]
         assert [tuple(row) for row in spark.table(name).select("id", "value", "p").orderBy("id").collect()] == expected
         assert [row.value for row in spark.table(name).where("id = 2").select("value").collect()] == ["y"]
@@ -277,12 +323,11 @@ def test_add_files_mixed_formats_with_parquet_position_deletes(spark, tmp_path):
         spark.sql(f"DELETE FROM {name} WHERE id = 2")
         metadata = _find_latest_metadata(tmp_path / "target")
         assert metadata["snapshots"][-1]["summary"]["added-position-deletes"] == "1"
-        for i, file_format in enumerate(["avro", "orc"], 3):
-            source = tmp_path / file_format
-            _write_source_file(source / f"data.{file_format}", file_format, [(i, file_format)])
-            assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        source = tmp_path / "avro"
+        _write_source_file(source / "data.avro", "avro", [(3, "avro")])
+        assert _add(spark, name, f"avro.`{source}`") == (1, None)
         rows = spark.table(name).orderBy("id").select("value").collect()
-        assert [row.value for row in rows] == ["keep", "avro", "orc"]
+        assert [row.value for row in rows] == ["keep", "avro"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
@@ -308,9 +353,9 @@ def test_add_files_mixed_formats_with_equality_deletes(spark, tmp_path, sql_cata
         if not delete_applies_to_import:
             _append_equality_delete_snapshot(table, key, [1])
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(table.location())}'")
-        source = tmp_path / "orc"
-        _write_source_file(source / "data.orc", "orc", [(2, "imported")])
-        assert _add(spark, name, f"orc.`{source}`") == (1, None)
+        source = tmp_path / "avro"
+        _write_source_file(source / "data.avro", "avro", [(2, "imported")])
+        assert _add(spark, name, f"avro.`{source}`") == (1, None)
         if delete_applies_to_import:
             _append_equality_delete_snapshot(table, key, [1])
             with pytest.raises(Exception, match="Row-level operations on imported Avro/ORC files are not supported"):
@@ -329,15 +374,15 @@ def test_add_files_mixed_formats_lazy_read_and_rewrite(spark, tmp_path):
         f"CREATE TABLE {name} (id BIGINT, value STRING) USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'"
     )
     try:
-        for index, file_format in enumerate(["avro", "orc", "parquet"]):
+        for index, file_format in enumerate(["avro", "parquet"]):
             source = tmp_path / file_format
             _write_source_file(source / f"data.{file_format}", file_format, [(index, file_format)])
             assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
-        # Put all three formats in one manifest batch on the reader.
-        assert tuple(spark.sql(f"CALL system.rewrite_manifests('{name}')").first()) == (3, 1)
+        # Put both formats in one manifest batch on the reader.
+        assert tuple(spark.sql(f"CALL system.rewrite_manifests('{name}')").first()) == (2, 1)
         frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(str(path))
-        assert [tuple(row) for row in frame.orderBy("id").collect()] == [(0, "avro"), (1, "orc"), (2, "parquet")]
-        assert [row.value for row in frame.where("id = 1").select("value").collect()] == ["orc"]
+        assert [tuple(row) for row in frame.orderBy("id").collect()] == [(0, "avro"), (1, "parquet")]
+        assert [row.value for row in frame.where("id = 0").select("value").collect()] == ["avro"]
         snapshot = _find_latest_metadata(path)["current-snapshot-id"]
         with pytest.raises(Exception, match="rewrite_data_files supports only Parquet"):
             spark.sql(f"CALL system.rewrite_data_files('{name}', options => map('rewrite-all', 'true'))").collect()
@@ -431,7 +476,7 @@ def test_add_files_invalid_partition_import_preserves_state(
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("file_format", ["avro", "orc", "parquet"])
+@pytest.mark.parametrize("file_format", ["avro", "parquet"])
 def test_add_files_single_file_source(spark, tmp_path, file_format):
     source = tmp_path / f"input.{file_format}"
     _write_source_file(source, file_format, [(1, "x", "a"), (2, "y", None)])

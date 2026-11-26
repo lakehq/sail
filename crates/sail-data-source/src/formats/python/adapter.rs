@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
@@ -46,7 +47,7 @@ fn inject_load_path(options: &mut HashMap<String, String>, paths: &[String]) {
 /// For session-registered data sources, the pickled class bytes are embedded directly
 /// in the adapter instance. For entry-point discovered data sources, the bytes are
 /// looked up from the global registry.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PythonDataSourceAdapter {
     /// The name of the Python datasource
     name: String,
@@ -117,13 +118,13 @@ impl PythonDataSourceAdapter {
     /// `paths` carries positional `.load(path)` paths; a single one is forwarded
     /// as the `"path"` option unless explicitly set.
     fn create_datasource(
-        &self,
+        self,
         options: &[HashMap<String, String>],
         paths: &[String],
     ) -> Result<PythonDataSource> {
         // Get pickled class bytes: prefer embedded (session-scoped) over global registry
-        let pickled_class = match &self.pickled_class {
-            Some(bytes) => bytes.clone(),
+        let pickled_class = match self.pickled_class {
+            Some(bytes) => bytes,
             None => {
                 // Lookup from global registry for entry-point discovered data sources
                 let entry = DATA_SOURCE_REGISTRY.get(&self.name).ok_or_else(|| {
@@ -145,12 +146,11 @@ impl PythonDataSourceAdapter {
         inject_load_path(&mut merged_options, paths);
 
         // Create datasource instance with options
-        self.instantiate_datasource(&pickled_class, merged_options)
+        Self::instantiate_datasource(&pickled_class, merged_options)
     }
 
     /// Instantiate a Python datasource with the given options.
     fn instantiate_datasource(
-        &self,
         pickled_class: &[u8],
         options: HashMap<String, String>,
     ) -> Result<PythonDataSource> {
@@ -214,22 +214,25 @@ impl DataSource for PythonDataSourceAdapter {
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
-        let datasource = self.create_datasource(&opaque_options, &info.paths)?;
+        let adapter = self.clone();
+        // Data-source setup and schema discovery can run user code during planning.
+        let (command, schema) = SpawnedTask::spawn_blocking(move || {
+            let datasource = adapter.create_datasource(&opaque_options, &info.paths)?;
 
-        // Get schema (use provided schema or discover from Python).
-        // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
-        // the catalog stores an empty schema. Fall back to Python discovery in that case.
-        let schema = match info.schema {
-            Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
-            _ => datasource.schema()?,
-        };
+            // An empty catalog schema also requires discovery, for example after
+            // CREATE TABLE without column definitions.
+            let schema = match info.schema {
+                Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
+                _ => datasource.schema()?,
+            };
 
-        // Create executor (MVP: in-process via PyO3)
-        let executor: Arc<dyn super::executor::PythonExecutor> = Arc::new(InProcessExecutor::new());
+            Ok::<_, DataFusionError>((datasource.command().to_vec(), schema))
+        })
+        .await
+        .map_err(|error| DataFusionError::ExecutionJoin(Box::new(error)))??;
 
-        // Create TableProvider with executor and command bytes
-        let provider = PythonTableProvider::new(executor, datasource.command().to_vec(), schema);
-
+        let executor = Arc::new(InProcessExecutor::new());
+        let provider = PythonTableProvider::new(executor, command, schema);
         Ok(provider_as_source(Arc::new(provider)))
     }
 
@@ -367,7 +370,10 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
         };
         // Writes already carry `.save(path)` in the options (see `create_writer`), so
         // there are no positional paths to forward here.
-        let datasource = adapter.create_datasource(&opaque_options, &[])?;
+        let datasource =
+            SpawnedTask::spawn_blocking(move || adapter.create_datasource(&opaque_options, &[]))
+                .await
+                .map_err(|error| DataFusionError::ExecutionJoin(Box::new(error)))??;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();

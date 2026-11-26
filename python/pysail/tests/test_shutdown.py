@@ -1,0 +1,255 @@
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from contextlib import contextmanager
+
+import pytest
+
+pytestmark = [
+    pytest.mark.skipif(os.name != "posix", reason="requires Unix process signals"),
+    pytest.mark.timeout(30),
+]
+
+
+@contextmanager
+def _sail_process(args, ready, **env_vars):
+    command = [sys.executable, "-m", "pysail", *args]
+    with subprocess.Popen(command, env={**os.environ, **env_vars}, stderr=subprocess.PIPE, text=True) as process:
+        try:
+            for line in process.stderr:
+                if match := re.search(ready, line):
+                    yield process, f"127.0.0.1:{match[1]}"
+                    return
+            pytest.fail(f"{args[0]} exited during startup")
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+
+def _server(protocol, mode, *, ready=r"Starting the .* server on 127\.0\.0\.1:(\d+)", **env_vars):
+    env = {"SAIL_MODE": mode, "RUST_LOG": "sail_cli=info", **env_vars}
+    return _sail_process([protocol, "server", "--port", "0"], ready, **env)
+
+
+def _worker():
+    return _sail_process(
+        ["worker"], r"worker \d+ server is ready on port (\d+)", RUST_LOG="sail_execution::worker::actor=info"
+    )
+
+
+@pytest.mark.parametrize("mode", ["local", "local-cluster"])
+def test_flight_sigterm_cancels_running_query(mode):
+    from adbc_driver_flightsql import dbapi
+    from pyarrow import flight
+
+    with _server("flight", mode) as (server, address), dbapi.connect(f"grpc://{address}") as conn, conn.cursor() as cur:
+        partitions, _ = cur.adbc_execute_partitions("SELECT id FROM range(0, 1000000000, 1, 1)")
+        ticket = flight.FlightInfo.deserialize(partitions[0]).endpoints[0].ticket
+        with flight.FlightClient(f"grpc://{address}") as client:
+            reader = client.do_get(ticket)
+            assert reader.read_chunk().data.num_rows > 0
+            server.send_signal(signal.SIGTERM)
+            with pytest.raises(flight.FlightCancelledError, match="query cancelled"):
+                for _ in reader:
+                    pass
+        assert server.wait(timeout=10) == 0
+
+
+def test_cluster_driver_stop_reports_partial_flight_result():
+    from adbc_driver_flightsql import dbapi
+
+    env = {"SAIL_FLIGHT__SESSION_TIMEOUT_SECS": "1", "RUST_LOG": "sail_cli=info,sail_session=info"}
+    with _server("flight", "local-cluster", **env) as (server, address):
+        with dbapi.connect(f"grpc://{address}") as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM range(0, 1000000000, 1, 1)")
+            reader = cur.fetch_record_batch()
+            assert reader.read_next_batch().num_rows > 0
+            assert any("removing idle session" in line for line in server.stderr)
+            with pytest.raises(OSError, match="query cancelled because the driver is shutting down"):
+                for _ in reader:
+                    pass
+        server.send_signal(signal.SIGTERM)
+        assert server.wait(timeout=10) == 0
+
+
+@pytest.mark.parametrize("mode", ["local", "local-cluster"])
+def test_spark_sigterm_cancels_running_query(mode):
+    import grpc
+    from pyspark.sql.connect.proto import ExecutePlanRequest
+    from pyspark.sql.connect.proto.base_pb2_grpc import SparkConnectServiceStub
+
+    with _server("spark", mode) as (server, address), grpc.insecure_channel(address) as channel:
+        request = ExecutePlanRequest(session_id=str(uuid.uuid4()))
+        request.user_context.user_id = "test"
+        request.plan.root.range.end = 1000000000
+        request.plan.root.range.step = 1
+        request.plan.root.range.num_partitions = 1
+        responses = SparkConnectServiceStub(channel).ExecutePlan(request, timeout=20, wait_for_ready=True)
+        assert any(response.arrow_batch.row_count > 0 for response in responses)
+        server.send_signal(signal.SIGTERM)
+        with pytest.raises(grpc.RpcError, match="query cancelled") as err:
+            for _ in responses:
+                pass
+        assert err.value.code() == grpc.StatusCode.CANCELLED
+        assert server.wait(timeout=10) == 0
+
+
+def test_sigterm_closes_stalled_flight_connection():
+    from adbc_driver_flightsql import dbapi
+
+    with _server("flight", "local") as (server, addr), dbapi.connect(f"grpc://{addr}") as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM range(0, 1000000000, 1, 1)")
+        reader = cur.fetch_record_batch()
+        assert reader.read_next_batch().num_rows > 0
+        server.send_signal(signal.SIGTERM)
+        # Keep the RPC open without consuming further batches until the server exits.
+        assert server.wait(timeout=12) == 0
+
+
+@pytest.mark.parametrize("service", ["flight", "driver-gateway", "worker"])
+def test_sigterm_force_closes_connection_after_grace_period(service):
+    import grpc
+
+    if service == "driver-gateway":
+        process = _server(
+            "flight",
+            "local-cluster",
+            ready=r"driver server is ready on port (\d+)",
+            RUST_LOG="sail_session=info",
+            SAIL_CLUSTER__DRIVER_LISTEN_HOST="127.0.0.1",
+            SAIL_CLUSTER__DRIVER_LISTEN_PORT="0",
+        )
+    else:
+        process = _worker() if service == "worker" else _server("flight", "local")
+    with process as (server, address), grpc.insecure_channel(address) as channel:
+        # The watch stays open until the transport closes the connection.
+        watch = channel.unary_stream("/grpc.health.v1.Health/Watch")(b"", timeout=20, wait_for_ready=True)
+        assert next(watch)
+        started = time.monotonic()
+        server.send_signal(signal.SIGTERM)
+        with pytest.raises(grpc.RpcError) as err:
+            next(watch)
+        assert err.value.code() == grpc.StatusCode.UNAVAILABLE
+        assert 5 <= time.monotonic() - started < 12
+        assert server.wait(timeout=5) == 0
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "scalar",
+        "scalar_literal",
+        "iterator",
+        pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1", reason="Requires UDTF analysis")),
+        pytest.param(
+            "source_schema", marks=pytest.mark.spark(version=">=4.1", reason="Requires Python data source registration")
+        ),
+    ],
+)
+def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
+    import grpc
+    from pyspark.sql import SparkSession, functions
+    from pyspark.sql.connect.proto import ExecutePlanRequest
+    from pyspark.sql.connect.proto.base_pb2_grpc import SparkConnectServiceStub
+    from pyspark.sql.types import LongType
+
+    if kind in {"analyze", "source_schema"}:
+        pytest.importorskip("pyspark", minversion="4.1")
+
+    released = tmp_path / "client_received_error"
+    timed_out = tmp_path / "udf_timed_out"
+    with _server("spark", "local", TOKIO_WORKER_THREADS="1") as (server, address):
+        server_pid = server.pid
+
+        def wait_for_client():
+            assert os.getpid() == server_pid
+            os.kill(server_pid, signal.SIGTERM)
+            deadline = time.monotonic() + 10
+            while not released.exists():
+                if time.monotonic() > deadline:
+                    timed_out.touch()
+                    break
+                time.sleep(0.025)
+
+        def scalar(value):
+            wait_for_client()
+            return value
+
+        def iterator(batches):
+            for batch in batches:
+                wait_for_client()
+                yield batch
+
+        spark = SparkSession.builder.remote(f"sc://{address}").create()
+        try:
+            df = spark.range(0, 1, 1, 1)
+            if kind in {"scalar", "scalar_literal"}:
+                arg = functions.lit(1) if kind == "scalar_literal" else functions.col("id")
+                df = df.select(functions.udf(scalar, LongType())(arg))
+            elif kind == "iterator":
+                df = df.mapInPandas(iterator, "id long")
+            elif kind == "analyze":
+                from pyspark.sql.types import StructType
+                from pyspark.sql.udtf import AnalyzeResult
+
+                @functions.udtf
+                class BlockingAnalysis:
+                    @staticmethod
+                    def analyze():
+                        wait_for_client()
+                        return AnalyzeResult(StructType().add("id", LongType()))
+
+                    def eval(self):
+                        yield (1,)
+
+                df = BlockingAnalysis()
+            else:
+                from pyspark import cloudpickle
+                from pyspark.sql.datasource import DataSource
+
+                class BlockingSource(DataSource):
+                    def schema(self):
+                        wait_for_client()
+                        return "id long"
+
+                df = spark.read.format(BlockingSource.name()).load()
+            # Use a non-reattachable RPC so client retries cannot hide a truncated result.
+            request = ExecutePlanRequest(session_id=str(uuid.uuid4()))
+            request.user_context.user_id = "test"
+            request.plan.CopyFrom(df._plan.to_proto(spark.client))  # noqa: SLF001
+        finally:
+            spark.stop()
+
+        with grpc.insecure_channel(address) as channel:
+            execute = SparkConnectServiceStub(channel).ExecutePlan
+            if kind == "source_schema":
+                register = ExecutePlanRequest(session_id=request.session_id, user_context=request.user_context)
+                source = register.plan.command.register_data_source
+                source.name = BlockingSource.name()
+                source.python_data_source.command = cloudpickle.dumps(BlockingSource)
+                list(execute(register, timeout=10, wait_for_ready=True))
+            responses = execute(request, timeout=20, wait_for_ready=True)
+            try:
+                with pytest.raises(grpc.RpcError, match="query cancelled") as err:
+                    for _ in responses:
+                        pass
+                assert err.value.code() == grpc.StatusCode.CANCELLED
+            finally:
+                released.touch()
+        assert server.wait(timeout=10) == 0
+        assert not timed_out.exists()
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_worker_handles_signals_at_readiness(signum):
+    with _worker() as (worker, _address):
+        worker.send_signal(signum)
+        status = worker.wait(timeout=10)
+        assert status == 0 or (signum == signal.SIGINT and status == -signal.SIGINT)
+        assert "server has stopped" in worker.stderr.read()

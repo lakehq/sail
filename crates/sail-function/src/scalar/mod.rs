@@ -19,6 +19,7 @@ pub mod mixed_numeric;
 pub mod multi_expr;
 pub mod normalize_float_keys;
 pub mod predicate;
+pub mod spark_order_key;
 pub mod string;
 pub mod r#struct;
 pub mod table_input;

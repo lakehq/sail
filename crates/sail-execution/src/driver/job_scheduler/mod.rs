@@ -15,6 +15,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::session::job::QueryCancellation;
 use sail_telemetry::events::SystemEventReporter;
 pub use state::{JobState, TaskState};
 
@@ -25,6 +26,7 @@ use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
+    shutdown: Arc<QueryCancellation>,
     options: JobSchedulerOptions,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
@@ -36,6 +38,7 @@ impl JobScheduler {
     pub fn new(options: JobSchedulerOptions, event_reporter: SystemEventReporter) -> Self {
         Self {
             options,
+            shutdown: Arc::new(QueryCancellation::default()),
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec: Box::new(RemoteExecutionCodec),
@@ -64,6 +67,14 @@ pub enum JobAction {
     FailJobOutput {
         handle: JobOutputHandle,
         cause: CommonErrorCause,
+    },
+    /// Reads the split points of a range shuffle on the driver, for the number of
+    /// partitions of the shuffle (see [`crate::job_graph::RangeShuffle`]).
+    ReadRangeSplitPoints {
+        job_id: JobId,
+        shuffle: usize,
+        key: TaskStreamKey,
+        schema: SchemaRef,
     },
     CleanUpJob {
         job_id: JobId,

@@ -6,7 +6,6 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::{Result, plan_err};
 use educe::Educe;
-use pyo3::Python;
 use sail_common_datafusion::udf::{StreamUDF, StreamUDFProjection};
 
 use crate::buffer::PyPassthroughBuffer;
@@ -14,6 +13,7 @@ use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::python::spark::PySpark;
+use crate::python::with_blocking_python;
 use crate::stream::PyMapStream;
 
 #[derive(Debug, PartialEq, Eq, Hash, Educe)]
@@ -101,7 +101,7 @@ impl StreamUDF for PySparkScalarPandasIterUDF {
     ) -> Result<SendableRecordBatchStream> {
         let passthrough_columns = self.output_schema.fields().len() - 1;
         let output_name = self.output_schema.field(passthrough_columns).name();
-        let function = Python::attach(|py| -> PyUdfResult<_> {
+        let function = with_blocking_python(|py| -> PyUdfResult<_> {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::scalar_pandas_iter_udf(
                 py,
