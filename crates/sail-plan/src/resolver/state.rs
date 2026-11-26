@@ -216,6 +216,9 @@ pub(super) struct ViewDefinitionReads {
     /// names that the read gives their outputs. The field IDs in such a plan belong to
     /// another resolver state.
     pub view_plans: Vec<(DFSchemaRef, Vec<String>)>,
+    /// Whether the definition expands a star inside the arguments of a function, which
+    /// expands to the columns that the tables have when the definition is resolved.
+    pub star_in_function: bool,
 }
 
 impl ViewDefinitionReads {
@@ -650,6 +653,14 @@ impl PlanResolverState {
     /// Returns what the definition of a temporary view reads, while it is resolved.
     pub fn view_definition_mut(&mut self) -> Option<&mut ViewDefinitionReads> {
         self.view_definition.as_mut()
+    }
+
+    /// Records that the definition of a temporary view, if one is resolved, expands a star
+    /// inside the arguments of a function.
+    pub fn record_star_in_function(&mut self) {
+        if let Some(reads) = self.view_definition.as_mut() {
+            reads.star_in_function = true;
+        }
     }
 
     /// Swaps the parts of the state that belong to the whole statement with those of another

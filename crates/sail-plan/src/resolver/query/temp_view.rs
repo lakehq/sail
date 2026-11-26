@@ -1080,21 +1080,27 @@ impl PlanResolver<'_> {
             Ok(())
         })?;
         let definition = self.rebound_view_definition(view, &references)?;
+        // A view created over this view expands the star again as well.
+        if definition.as_ref().is_some_and(|x| x.star_in_function) {
+            state.record_star_in_function();
+        }
         let plan = plan.clone();
         let mut scans = HashMap::new();
         // Whether a scan has another schema than the scan that the view was created with,
         // which is the case when only the metadata of its columns or the constraints of
         // the table changed. The nodes above the scan then compute their schemas again.
         let mut recompute_schemas = false;
+        // Whether a table gained columns, which a star inside the arguments of a function
+        // expands to when the query of a SQL view is resolved again.
+        let mut gained_columns = false;
         let recorded = state.view_definition_mut().map(|reads| reads.clone());
         for scan in references {
             let address = table_source_address(&scan.source);
             if scans.contains_key(&address) {
                 continue;
             }
-            let rebinds = definition.is_some();
-            let bound = match self
-                .bind_view_table_scan(&scan, view, rebinds, state)
+            let (bound, gained) = match self
+                .bind_view_table_scan(&scan, view, definition.as_deref(), state)
                 .await?
             {
                 Ok(bound) => bound,
@@ -1117,8 +1123,18 @@ impl PlanResolver<'_> {
                     };
                 }
             };
+            gained_columns |= gained;
             recompute_schemas |= bound.schema() != &scan.projected_schema;
             scans.insert(address, bound);
+        }
+        // The stored plan remains if the query no longer resolves.
+        if gained_columns
+            && let Some(definition) = &definition
+            && let Ok(Some(plan)) = self
+                .resolve_view_definition(&plan, view, definition, state)
+                .await
+        {
+            return Ok(plan);
         }
         let mut bind = |scan: TableScan| {
             Ok(match scans.get(&table_source_address(&scan.source)) {
@@ -1235,16 +1251,17 @@ impl PlanResolver<'_> {
         )?)))
     }
 
-    /// Returns the scan of a read of the view, for a scan of the stored plan of the view, or
-    /// the error of the columns that changed, for a view that `rebinds` its SQL query (see
-    /// [`ViewTableReference::fit_columns`]) or not.
+    /// Returns the scan of a read of the view, for a scan of the stored plan of the view, and
+    /// whether the table gained columns that a star of the SQL definition of the view expands
+    /// to, or the error of the columns that changed. A view with a `definition` that a read
+    /// resolves again rebinds its query (see [`ViewTableReference::fit_columns`]).
     async fn bind_view_table_scan(
         &self,
         scan: &TableScan,
         view: &TableStatus,
-        rebinds: bool,
+        definition: Option<&TemporaryViewDefinition>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<PlanResult<LogicalPlan>> {
+    ) -> PlanResult<PlanResult<(LogicalPlan, bool)>> {
         let Some(reference) = ViewTableReference::try_from_scan(scan) else {
             return Err(PlanError::internal("scan without a view table reference"));
         };
@@ -1278,6 +1295,7 @@ impl PlanResolver<'_> {
         };
         // The columns are matched as the definition of the view matched them.
         let case_sensitive = reference.origin.read_case_sensitive();
+        let rebinds = definition.is_some();
         let reads = match reference.fit_columns(&table_schema, case_sensitive, rebinds, &type_name)
         {
             Ok(reads) => reads,
@@ -1293,6 +1311,12 @@ impl PlanResolver<'_> {
                 ))));
             }
         };
+        let gained = definition.is_some_and(|x| x.star_in_function)
+            && has_new_fields(
+                reference.table.fields(),
+                table_schema.fields(),
+                case_sensitive,
+            );
         let positions = reads
             .iter()
             .map(|read| read.as_ref().map(|(position, _)| *position))
@@ -1357,11 +1381,10 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        Ok(Ok(reference.with_stored_output(
-            bound,
-            &reads,
-            case_sensitive,
-        )?))
+        Ok(Ok((
+            reference.with_stored_output(bound, &reads, case_sensitive)?,
+            gained,
+        )))
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
@@ -1471,6 +1494,22 @@ impl PlanResolver<'_> {
         let (status, resolved) = lookup;
         Ok((status, Some(resolved)))
     }
+}
+
+/// Whether `current` has a field, also in a struct, that `stored` does not have.
+fn has_new_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> bool {
+    current.iter().any(|field| {
+        let old = stored
+            .iter()
+            .find(|x| same_name(x.name(), field.name(), case_sensitive));
+        match (old.map(|x| x.data_type()), field.data_type()) {
+            (None, _) => true,
+            (Some(DataType::Struct(old)), DataType::Struct(new)) => {
+                has_new_fields(old, new, case_sensitive)
+            }
+            _ => false,
+        }
+    })
 }
 
 /// Returns the quoted name of a temporary view.

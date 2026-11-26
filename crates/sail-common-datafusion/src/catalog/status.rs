@@ -185,6 +185,9 @@ pub struct TemporaryViewDefinition {
     pub objects: TemporaryViewObjects,
     /// The configuration that the query was resolved with.
     pub config: Arc<dyn Any + Send + Sync>,
+    /// Whether the query expands a star inside the arguments of a function, which Spark
+    /// expands again to the columns that the tables have at each read.
+    pub star_in_function: bool,
 }
 
 impl PartialEq for TemporaryViewDefinition {
@@ -194,6 +197,7 @@ impl PartialEq for TemporaryViewDefinition {
             && self.catalog == other.catalog
             && self.database == other.database
             && Arc::ptr_eq(&self.config, &other.config)
+            && self.star_in_function == other.star_in_function
     }
 }
 

@@ -2132,3 +2132,53 @@ def test_sql_view_reads_a_field_through_a_container_whose_other_field_changed_in
         spark.sql(f"ALTER TABLE {table.name} {change}")
     table.insert("(2, NULL, NULL)")
     assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+
+
+# Queries over `t (a INT, s STRUCT<x: INT>)` that expand a star inside the arguments of a function.
+STAR_IN_FUNCTION_QUERIES = [
+    "SELECT to_json(struct(*)) AS j FROM {t}",
+    "SELECT to_json(struct(s.*)) AS j FROM {t}",
+    "SELECT count(DISTINCT *) AS c FROM {t}",
+]
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", SQL_KINDS)
+@pytest.mark.parametrize("query", STAR_IN_FUNCTION_QUERIES)
+def test_sql_view_expands_a_star_inside_a_function_again_when_the_table_gained_columns(spark, tables, fmt, kind, query):
+    table = tables(fmt, "a INT, s STRUCT<x: INT>")
+    table.insert("(1, named_struct('x', 1)), (1, named_struct('x', 1))")
+    sql = query.format(t=table.name)
+    view = table.create_view(kind, sql)
+    table.recreate(
+        "a INT, s STRUCT<x: INT, y: INT>, b INT",
+        "(1, named_struct('x', 1, 'y', 2), 3), (1, named_struct('x', 1, 'y', 4), 3)",
+    )
+    outer = table.create_view("sv", f"SELECT * FROM {view}")
+    table.recreate(
+        "a INT, s STRUCT<x: INT, y: INT, z: INT>, b INT, c INT",
+        "(1, named_struct('x', 1, 'y', 2, 'z', 5), 3, 6), (1, named_struct('x', 1, 'y', 2, 'z', 7), 3, 6)",
+    )
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    assert rows(spark, f"SELECT * FROM {outer}") == rows(spark, sql)
+
+
+@pytest.mark.parametrize("kind", ["dv", "dgv"])
+@pytest.mark.parametrize("query", [STAR_IN_FUNCTION_QUERIES[0], STAR_IN_FUNCTION_QUERIES[2]])
+def test_dataframe_view_keeps_the_columns_that_a_star_inside_a_function_expanded_to(spark, tables, kind, query):
+    table = tables("delta", "a INT, s STRUCT<x: INT>")
+    table.insert("(1, named_struct('x', 1)), (1, named_struct('x', 1))")
+    sql = query.format(t=table.name)
+    created = rows(spark, sql)
+    view = table.create_view(kind, sql)
+    table.recreate("a INT, s STRUCT<x: INT>, b INT", "(1, named_struct('x', 1), 2), (1, named_struct('x', 1), 3)")
+    assert rows(spark, f"SELECT * FROM {view}") == created
+
+
+def test_sql_view_keeps_its_plan_when_its_query_no_longer_has_its_columns_after_a_star_expanded(spark, tables):
+    table = tables("delta", "a INT")
+    table.insert("(1)")
+    view = table.create_view("sv", f"SELECT *, to_json(struct(*)) AS j FROM {table.name}")
+    # The query now has two columns named `j`, so the view reads its stored plan.
+    table.recreate("a INT, j STRING", "(1, 'x')")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1, '{"a":1}')]
