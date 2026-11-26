@@ -6,12 +6,14 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, not_impl_err, plan_err};
 use url::Url;
 
-use super::manifest::{missing_counts, populate_counts, read_entries};
+use super::manifest::{
+    MAX_ENTRIES, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, missing_counts, populate_counts, read_entries,
+};
 use super::snapshot::operation::{
     PreparedSnapshotOperation, ancestor_chain, main_snapshot_id, prepare_main_reference_update,
     snapshot_change_batch,
 };
-use crate::io::{StoreContext, load_snapshot_manifest_list};
+use crate::io::{ManifestReadBudget, StoreContext, load_snapshot_manifest_list_with_budget};
 use crate::operations::snapshot::assign_parent_row_ids;
 use crate::operations::write::partition::build_partition_dir;
 use crate::spec::delete_index::PartitionKey;
@@ -24,7 +26,7 @@ use crate::spec::{
     ManifestStatus, ManifestWriter, Operation, Snapshot, SnapshotBuilder, Summary, TableMetadata,
     TableRequirement, TableUpdate,
 };
-use crate::table::files::manifest_entries;
+use crate::table::files::inherit_manifest_entries;
 use crate::table::metadata_loader::table_metadata_location;
 
 const STAGED_WAP_ID: &str = "wap.id";
@@ -147,9 +149,9 @@ pub(super) async fn prepare(
     };
     let output = snapshot_change_batch(schema, Some(id), snapshot_id, false)?;
     let mut prepared = prepare_main_reference_update(metadata, current, snapshot_id, output)?;
-    let mut replay = Replay {
+    let mut replay = Replay::new(
         url,
-        context: ManifestListWriteContext {
+        ManifestListWriteContext {
             version: metadata.format_version,
             snapshot_id,
             parent_snapshot_id: current,
@@ -157,19 +159,12 @@ pub(super) async fn prepare(
             first_row_id: (metadata.format_version == FormatVersion::V3)
                 .then_some(metadata.next_row_id.unwrap_or(0)),
         },
-        manifests: Vec::new(),
-        artifacts: Vec::new(),
-        deleted_paths: HashSet::new(),
-        partitions: HashSet::new(),
-        partition_metrics: HashMap::new(),
-        partition_limit: metadata
+        metadata
             .properties
             .get("write.summary.partition-limit")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
-        metrics: HashMap::new(),
-        replaced_manifests: 0,
-    };
+    );
     replay.pick_changes(store, source, dynamic).await?;
     if dynamic {
         for ancestor in ancestors
@@ -208,15 +203,7 @@ pub(super) async fn prepare(
             .with_first_row_id(start)
             .with_added_rows(next - start);
     }
-    let mut list = ManifestListWriter::new();
-    for manifest in replay.manifests {
-        list.append(manifest);
-    }
-    let bytes = list
-        .to_bytes_with_context(replay.context)
-        .map_err(DataFusionError::Execution)?;
-    replay.artifacts.push((list_path, bytes));
-    prepared.manifests = replay.artifacts;
+    prepared.manifests = replay.finish(list_path)?;
     prepared.updates.insert(
         0,
         TableUpdate::AddSnapshot {
@@ -262,6 +249,8 @@ pub(super) async fn prepare(
 struct Replay<'a> {
     url: &'a Url,
     context: ManifestListWriteContext,
+    input: ManifestReadBudget,
+    remaining_output_bytes: usize,
     manifests: Vec<ManifestFile>,
     artifacts: Vec<(String, Vec<u8>)>,
     deleted_paths: HashSet<String>,
@@ -272,18 +261,49 @@ struct Replay<'a> {
     replaced_manifests: usize,
 }
 
-impl Replay<'_> {
+impl<'a> Replay<'a> {
+    fn new(url: &'a Url, context: ManifestListWriteContext, partition_limit: usize) -> Self {
+        Self {
+            url,
+            context,
+            partition_limit,
+            input: ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES),
+            remaining_output_bytes: MAX_OUTPUT_BYTES,
+            manifests: Vec::new(),
+            artifacts: Vec::new(),
+            deleted_paths: HashSet::new(),
+            partitions: HashSet::new(),
+            partition_metrics: HashMap::new(),
+            metrics: HashMap::new(),
+            replaced_manifests: 0,
+        }
+    }
+
+    fn finish(mut self, list_path: String) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut list = ManifestListWriter::new();
+        for manifest in self.manifests {
+            list.append(manifest);
+        }
+        let bytes = list
+            .to_bytes_with_context_and_limit(self.context, self.remaining_output_bytes)
+            .map_err(DataFusionError::Execution)?;
+        self.artifacts.push((list_path, bytes));
+        Ok(self.artifacts)
+    }
+
     async fn manifest_list(
-        &self,
+        &mut self,
         store: &StoreContext,
         snapshot: &Snapshot,
     ) -> Result<Vec<ManifestFile>> {
         if snapshot.key_id.is_some() {
             return not_impl_err!("Cherry-pick cannot read encrypted Iceberg manifest lists");
         }
-        Ok(load_snapshot_manifest_list(store, snapshot)
-            .await?
-            .into_entries())
+        Ok(
+            load_snapshot_manifest_list_with_budget(store, snapshot, &mut self.input)
+                .await?
+                .into_entries(),
+        )
     }
 
     async fn pick_changes(
@@ -301,7 +321,8 @@ impl Replay<'_> {
                 m.content == ManifestContentType::Data && m.added_snapshot_id == source.snapshot_id
             })
         {
-            let (mut header, entries, _) = read_entries(store, &descriptor, usize::MAX).await?;
+            let (mut header, entries, _) =
+                read_entries(store, &descriptor, &mut self.input).await?;
             header.format_version = self.context.version;
             let spec = UnboundPartitionSpec::from(&header.partition_spec);
             let schema = header.schema.clone();
@@ -332,7 +353,7 @@ impl Replay<'_> {
         Ok(())
     }
 
-    async fn validate_partitions(&self, store: &StoreContext, since: &Snapshot) -> Result<()> {
+    async fn validate_partitions(&mut self, store: &StoreContext, since: &Snapshot) -> Result<()> {
         for manifest in self
             .manifest_list(store, since)
             .await?
@@ -341,7 +362,12 @@ impl Replay<'_> {
                 m.content == ManifestContentType::Data && m.added_snapshot_id == since.snapshot_id
             })
         {
-            for entry in manifest_entries(store, &manifest).await? {
+            let (header, mut entries, _) = self
+                .input
+                .read_manifest(store, &manifest.manifest_path, |entry, _| Ok(entry))
+                .await?;
+            inherit_manifest_entries(&manifest, header.format_version, &mut entries)?;
+            for entry in entries {
                 let file = entry.data_file;
                 if entry.status == ManifestStatus::Added
                     && self
@@ -425,7 +451,7 @@ impl Replay<'_> {
             self.manifests.push(descriptor);
             return Ok(());
         }
-        let (mut header, entries, _) = read_entries(store, &descriptor, usize::MAX).await?;
+        let (mut header, entries, _) = read_entries(store, &descriptor, &mut self.input).await?;
         if fill_counts {
             populate_counts(&mut descriptor, &entries)?;
         }
@@ -459,7 +485,7 @@ impl Replay<'_> {
     fn write_manifest(&mut self, writer: ManifestWriter) -> Result<()> {
         let path = format!("metadata/{}.avro", uuid::Uuid::new_v4());
         let bytes = writer
-            .to_avro_bytes_v2()
+            .to_avro_bytes_with_limit(self.remaining_output_bytes)
             .map_err(DataFusionError::Execution)?;
         let mut descriptor = writer
             .into_manifest_file(
@@ -470,6 +496,7 @@ impl Replay<'_> {
             .map_err(DataFusionError::Execution)?;
         descriptor.manifest_length = bytes.len() as i64;
         self.manifests.push(descriptor);
+        self.remaining_output_bytes -= bytes.len();
         self.artifacts.push((path, bytes));
         Ok(())
     }
@@ -630,5 +657,191 @@ impl Replay<'_> {
             }
         }
         summary
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use object_store::ObjectStoreExt;
+    use object_store::path::Path;
+
+    use super::*;
+    use crate::procedure::rewrite_manifests::tests::{entry, rewrite_fixture};
+
+    fn replay(url: &Url, version: FormatVersion) -> Replay<'_> {
+        Replay::new(
+            url,
+            ManifestListWriteContext {
+                version,
+                snapshot_id: 20,
+                parent_snapshot_id: Some(10),
+                sequence_number: 1,
+                first_row_id: None,
+            },
+            0,
+        )
+    }
+
+    #[tokio::test]
+    async fn replay_shares_input_budget_across_reads() {
+        let version = FormatVersion::V2;
+        let (store, url, metadata, descriptors) = rewrite_fixture(
+            version,
+            vec![(0, vec![entry(1, version)]), (0, vec![entry(2, version)])],
+            false,
+        )
+        .await;
+        let snapshot = metadata.current_snapshot().expect("source");
+        let list_size = store
+            .prefixed
+            .head(&Path::from(snapshot.manifest_list()))
+            .await
+            .expect("list size")
+            .size;
+        let source_size = list_size
+            + descriptors
+                .iter()
+                .map(|d| d.manifest_length as u64)
+                .sum::<u64>();
+
+        // Two descriptors and two file entries exactly exhaust the source allowance.
+        let mut pick = replay(&url, version);
+        pick.input = ManifestReadBudget::new(source_size, 4);
+        pick.pick_changes(&store, snapshot, false)
+            .await
+            .expect("exact budget");
+        for (bytes, entries, error) in [
+            (list_size - 1, 4, "Manifest input byte limit exceeded"),
+            (list_size, 1, "Manifest entry limit exceeded"),
+            (source_size - 1, 4, "Manifest input byte limit exceeded"),
+            (source_size, 3, "Manifest entry limit exceeded"),
+        ] {
+            let mut pick = replay(&url, version);
+            pick.input = ManifestReadBudget::new(bytes, entries);
+            let err = pick
+                .pick_changes(&store, snapshot, false)
+                .await
+                .expect_err("bounded source");
+            assert!(err.to_string().contains(error), "{err}");
+        }
+        let mut pick = replay(&url, version);
+        pick.input = ManifestReadBudget::new(source_size + list_size, 6);
+        pick.pick_changes(&store, snapshot, true)
+            .await
+            .expect("source");
+        let err = pick
+            .validate_partitions(&store, snapshot)
+            .await
+            .expect_err("bounded history");
+        assert!(
+            err.to_string()
+                .contains("Manifest input byte limit exceeded"),
+            "{err}"
+        );
+
+        let mut pick = replay(&url, version);
+        pick.input = ManifestReadBudget::new(u64::MAX, 6);
+        pick.pick_changes(&store, snapshot, true)
+            .await
+            .expect("source");
+        pick.deleted_paths.insert("data/1.parquet".into());
+        let err = pick
+            .apply_to_parent(&store, Some(snapshot), 1)
+            .await
+            .expect_err("bounded parent");
+        assert!(
+            err.to_string().contains("Manifest entry limit exceeded"),
+            "{err}"
+        );
+
+        // Always charge the object size even if a descriptor understates it.
+        let mut descriptor = descriptors[0].clone();
+        descriptor.manifest_length = 0;
+        let mut budget = ManifestReadBudget::new(1, 1);
+        let err = read_entries(&store, &descriptor, &mut budget)
+            .await
+            .expect_err("actual size");
+        assert!(
+            err.to_string()
+                .contains("Manifest input byte limit exceeded"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn inline_v1_manifest_reads_consume_replay_budget() {
+        let version = FormatVersion::V1;
+        let (store, url, metadata, descriptors) =
+            rewrite_fixture(version, vec![(0, vec![entry(1, version)])], false).await;
+        let mut snapshot = metadata.current_snapshot().expect("source").clone();
+        snapshot.manifest_list.clear();
+        snapshot.manifests = Some(vec![descriptors[0].manifest_path.clone()]);
+        snapshot.snapshot_id = 11; // The fixture's ADDED entry identifies its writer.
+        let size = descriptors[0].manifest_length as u64;
+        for (bytes, entries, error) in [
+            (2 * size, 3, None),
+            (0, 0, Some("Manifest entry limit exceeded")),
+            (2 * size - 1, 3, Some("Manifest input byte limit exceeded")),
+            (2 * size, 2, Some("Manifest entry limit exceeded")),
+        ] {
+            let mut pick = replay(&url, version);
+            pick.input = ManifestReadBudget::new(bytes, entries);
+            let result = pick.pick_changes(&store, &snapshot, false).await;
+            if let Some(error) = error {
+                let err = result.expect_err("bounded inline manifests");
+                assert!(err.to_string().contains(error), "{err}");
+            } else {
+                result.expect("inline descriptors and replayed entries fit");
+                assert_eq!(pick.artifacts.len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_shares_output_budget_with_final_manifest_list() {
+        let version = FormatVersion::V2;
+        let (store, url, metadata, _) = rewrite_fixture(
+            version,
+            vec![(0, vec![entry(1, version)]), (0, vec![entry(2, version)])],
+            false,
+        )
+        .await;
+        let source = metadata.current_snapshot().expect("source");
+        let mut pick = replay(&url, version);
+        pick.pick_changes(&store, source, false)
+            .await
+            .expect("source");
+        let artifacts = pick.finish("list".into()).expect("output");
+        assert_eq!(artifacts.len(), 3);
+        let manifests_size: usize = artifacts[..2].iter().map(|(_, bytes)| bytes.len()).sum();
+        let total = manifests_size + artifacts[2].1.len();
+        for limit in [manifests_size - 1, total - 1, total] {
+            let mut pick = replay(&url, version);
+            pick.remaining_output_bytes = limit;
+            let result = pick.pick_changes(&store, source, false).await;
+            if limit < manifests_size {
+                let err = result.expect_err("second manifest exceeds remaining budget");
+                assert!(
+                    err.to_string()
+                        .contains("Manifest output byte limit exceeded"),
+                    "{err}"
+                );
+                assert_eq!(pick.artifacts.len(), 1);
+                continue;
+            }
+            result.expect("both manifests fit");
+            let result = pick.finish("list".into());
+            if limit < total {
+                let err = result.expect_err("final list exceeds remaining budget");
+                assert!(
+                    err.to_string()
+                        .contains("Manifest output byte limit exceeded"),
+                    "{err}"
+                );
+            } else {
+                assert_eq!(result.expect("exact budget").len(), 3);
+            }
+        }
     }
 }

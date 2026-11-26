@@ -3,16 +3,20 @@
 use std::collections::{HashMap, HashSet};
 
 use datafusion::common::{DataFusionError, Result, exec_err, not_impl_err};
-use object_store::ObjectStoreExt;
 use serde::Deserialize;
 
-use crate::io::StoreContext;
+use crate::io::{ManifestReadBudget, StoreContext};
 use crate::spec::manifest::deserialize_optional_vec;
 use crate::spec::{
-    DataContentType, Datum, FormatVersion, Manifest, ManifestEntry, ManifestFile, ManifestMetadata,
+    DataContentType, Datum, FormatVersion, ManifestEntry, ManifestFile, ManifestMetadata,
     ManifestStatus, PrimitiveLiteral, PrimitiveType,
 };
 use crate::table::files::{EntrySelection, inherit_manifest_entries};
+
+// Coordinator procedures retain manifest records and encoded output in memory.
+pub(super) const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) const MAX_ENTRIES: usize = 1_000_000;
+pub(super) const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 
 pub(super) fn missing_counts(descriptor: &ManifestFile) -> bool {
     descriptor.added_files_count.is_none()
@@ -100,20 +104,18 @@ fn restore_bounds(raw: Option<Vec<RawBound>>, decoded: &mut HashMap<i32, Datum>)
 pub(super) async fn read_entries(
     store: &StoreContext,
     descriptor: &ManifestFile,
-    max_entries: usize,
+    budget: &mut ManifestReadBudget,
 ) -> Result<(ManifestMetadata, Vec<ManifestEntry>, bool)> {
     if descriptor.key_metadata.is_some() {
         return not_impl_err!("Cannot rewrite encrypted Iceberg manifests");
     }
-    let (object_store, path) = store.resolve(&descriptor.manifest_path)?;
-    let bytes = object_store.get(&path).await?.bytes().await?;
-    let (manifest_metadata, decoded) =
-        Manifest::decode_avro_entries_with_limit(&bytes, max_entries, |entry, value| {
+    let (manifest_metadata, decoded, _) = budget
+        .read_manifest(store, &descriptor.manifest_path, |entry, value| {
             apache_avro::from_value::<RawEntry>(value)
                 .map(|raw| (entry, raw))
                 .map_err(|error| format!("Avro decode manifest bounds error: {error}"))
         })
-        .map_err(DataFusionError::Execution)?;
+        .await?;
     let (mut entries, raw_entries): (Vec<_>, Vec<_>) = decoded.into_iter().unzip();
     let needs_normalization = entries.iter().any(|entry| {
         entry.status != ManifestStatus::Existing

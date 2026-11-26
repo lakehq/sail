@@ -126,6 +126,49 @@ def test_pick_dynamic_overwrite(spark, target, concurrent):
         assert [r.id for r in spark.table(table).orderBy("id").collect()] == [20, 30]
 
 
+def test_pick_overwrite_across_partition_specs(spark, target):
+    table, path = target
+    write(spark, table, 10, 1)
+    base = _find_latest_metadata(path)["current-snapshot-id"]
+    write(spark, table, 20, 1, overwrite=True)
+    source = _find_latest_metadata(path)["current-snapshot-id"]
+    rollback(spark, table, base)
+    spark.sql(f"ALTER TABLE {table} ADD PARTITION FIELD id")
+    write(spark, table, 30, 1)
+
+    spark.sql(f"CALL system.cherrypick_snapshot('{table}', {source})").collect()
+    assert [tuple(r) for r in spark.table(table).orderBy("id").collect()] == [(20, 1), (30, 1)]
+    assert {r.spec_id for r in spark.table(f"{table}.files").select("spec_id").collect()} == {0, 1}
+
+
+def test_pick_replayed_overwrite(spark, target):
+    table, path = target
+    write(spark, table, 10, 1)
+    base = _find_latest_metadata(path)["current-snapshot-id"]
+    write(spark, table, 20, 1, overwrite=True)
+    source = _find_latest_metadata(path)["current-snapshot-id"]
+    rollback(spark, table, base)
+    write(spark, table, 30, 2)
+    parent = _find_latest_metadata(path)["current-snapshot-id"]
+    pick_original = f"CALL system.cherrypick_snapshot('{table}', {source})"
+    spark.sql(pick_original).collect()
+    replayed = _current_snapshot(_find_latest_metadata(path))
+    assert "replace-partitions" not in replayed["summary"]
+    replay_id = replayed["snapshot-id"]
+    pick_replayed = f"CALL system.cherrypick_snapshot('{table}', {replay_id})"
+
+    rollback(spark, table, parent)
+    assert tuple(spark.sql(pick_replayed).first()) == (replay_id, replay_id)
+    rollback(spark, table, parent)
+    write(spark, table, 40, 3)
+    before = _find_latest_metadata(path)
+    with pytest.raises(PySparkException, match="not append, dynamic overwrite, or fast-forward"):
+        spark.sql(pick_replayed).collect()
+    assert _find_latest_metadata(path) == before
+    spark.sql(pick_original).collect()
+    assert [r.id for r in spark.table(table).orderBy("id").collect()] == [20, 30, 40]
+
+
 def test_publish_requires_unique_staged_id(spark, target):
     table, path = target
     for identifier in (1, 2):

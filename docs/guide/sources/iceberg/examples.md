@@ -246,3 +246,8 @@ CALL system.cherrypick_snapshot(table => 'users', snapshot_id => 123);
 -- Alternatively, for a snapshot staged with wap.id = 'audit-42'
 CALL system.publish_changes(table => 'users', wap_id => 'audit-42');
 ```
+
+When publication requires replay, each attempt can read up to 256 MiB of manifests and manifest lists,
+decode up to 1,000,000 records across those reads, and produce up to 256 MiB of manifests including
+the final manifest list. Exceeding a limit fails the attempt before commit. A fast-forward updates only
+the snapshot reference and does not read or rewrite manifests.

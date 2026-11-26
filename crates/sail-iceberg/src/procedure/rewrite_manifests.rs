@@ -9,8 +9,10 @@ use datafusion::common::{DataFusionError, Result, exec_err, not_impl_err, plan_e
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
 
 use super::arguments::{optional_bool, optional_i32};
-use super::manifest::{missing_counts, populate_counts};
-use crate::io::StoreContext;
+use super::manifest::{
+    MAX_ENTRIES, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, missing_counts, populate_counts, read_entries,
+};
+use crate::io::{ManifestReadBudget, StoreContext};
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::snapshots::{SnapshotRetention, Summary};
 use crate::spec::{
@@ -23,11 +25,6 @@ use crate::table::metadata_loader::table_metadata_location;
 
 const TARGET_SIZE_PROPERTY: &str = "commit.manifest.target-size-bytes";
 const DEFAULT_TARGET_SIZE: u64 = 8 * 1024 * 1024;
-// This coordinator implementation does not spill or distribute manifest entries.
-const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_ENTRIES: usize = 1_000_000;
-const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
-
 // Counts encoded payloads retained across all groups and the final manifest list.
 // Decoded entries, descriptors and serializer temporaries are not an RSS budget.
 struct OutputBudget {
@@ -245,7 +242,7 @@ impl RewriteManifests {
         };
         let mut added = vec![];
         let mut live_entries = 0usize;
-        let mut remaining_entries = max_entries;
+        let mut input = ManifestReadBudget::new(MAX_INPUT_BYTES, max_entries);
         let mut replaced = HashSet::new();
         for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
             // Retain the original schema when rewriting historical manifests: using only the
@@ -256,7 +253,7 @@ impl RewriteManifests {
                 .filter(|m| m.content == content && selected.contains(&m.manifest_path))
             {
                 let (mut manifest_metadata, entries, mut needs_normalization) =
-                    read_entries(store, descriptor, &mut remaining_entries).await?;
+                    read_entries(store, descriptor, &mut input).await?;
                 needs_normalization |= manifest_metadata.format_version != metadata.format_version;
                 if metadata.format_version != FormatVersion::V1 && missing_counts(descriptor) {
                     needs_normalization = true;
@@ -385,8 +382,7 @@ impl RewriteManifests {
                         "rewrite_manifests supports at most {MAX_INPUT_BYTES} bytes of input manifests per call"
                     );
                 }
-                let (_, entries, _) =
-                    read_entries(store, descriptor, &mut remaining_entries).await?;
+                let (_, entries, _) = read_entries(store, descriptor, &mut input).await?;
                 populate_counts(descriptor, &entries)?;
             }
         }
@@ -587,16 +583,6 @@ fn encode_manifests_with_budget(
         });
     }
     Ok(output)
-}
-
-async fn read_entries(
-    store: &StoreContext,
-    descriptor: &ManifestFile,
-    remaining_entries: &mut usize,
-) -> Result<(ManifestMetadata, Vec<ManifestEntry>, bool)> {
-    let decoded = super::manifest::read_entries(store, descriptor, *remaining_entries).await?;
-    *remaining_entries -= decoded.1.len();
-    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -1498,7 +1484,7 @@ pub(crate) mod tests {
             );
             let mut original = vec![];
             let mut live = vec![];
-            let mut remaining_entries = MAX_ENTRIES;
+            let mut input = ManifestReadBudget::new(MAX_INPUT_BYTES, MAX_ENTRIES);
             for index in 1..=2 {
                 let mut entry = entry(index, FormatVersion::V2);
                 entry.data_file.partition = vec![Some(Literal::Primitive(value.clone())); 2];
@@ -1535,7 +1521,7 @@ pub(crate) mod tests {
                     .await
                     .expect("write input");
                 live.extend(
-                    read_entries(&store, &descriptor, &mut remaining_entries)
+                    read_entries(&store, &descriptor, &mut input)
                         .await
                         .expect("read input")
                         .1,
@@ -1560,7 +1546,7 @@ pub(crate) mod tests {
                 entry.status = ManifestStatus::Existing;
             }
             assert_eq!(
-                read_entries(&store, &descriptor, &mut remaining_entries)
+                read_entries(&store, &descriptor, &mut input)
                     .await
                     .expect("read rewritten")
                     .1,

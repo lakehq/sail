@@ -9,7 +9,8 @@ use url::Url;
 
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::{
-    FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec,
+    FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestList, ManifestMetadata,
+    ManifestStatus, PartitionSpec,
 };
 
 pub(crate) mod deletion_vector;
@@ -95,13 +96,85 @@ impl StoreContext {
     }
 }
 
+/// Cumulative input consumed by manifest and manifest-list reads during one preparation.
+pub(crate) struct ManifestReadBudget {
+    remaining_bytes: u64,
+    remaining_entries: usize,
+}
+
+impl ManifestReadBudget {
+    pub(crate) fn new(bytes: u64, entries: usize) -> Self {
+        Self {
+            remaining_bytes: bytes,
+            remaining_entries: entries,
+        }
+    }
+
+    async fn read_bytes(
+        &mut self,
+        store: &StoreContext,
+        path: &str,
+    ) -> Result<bytes::Bytes, DataFusionError> {
+        let (storage, object) = store.resolve(path)?;
+        let result = storage.get(&object).await?;
+        // Check the size from this GET before buffering its payload. Manifest descriptors
+        // in the table may contain stale or incorrect lengths.
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(result.meta.size)
+            .ok_or_else(|| {
+                DataFusionError::Execution("Manifest input byte limit exceeded".into())
+            })?;
+        Ok(result.bytes().await?)
+    }
+
+    pub(crate) async fn read_manifest<T>(
+        &mut self,
+        store: &StoreContext,
+        path: &str,
+        decode: impl Fn(ManifestEntry, &apache_avro::types::Value) -> Result<T, String>,
+    ) -> Result<(ManifestMetadata, Vec<T>, usize), DataFusionError> {
+        let bytes = self.read_bytes(store, path).await?;
+        let (header, entries) =
+            Manifest::decode_avro_entries_with_limit(&bytes, self.remaining_entries, decode)
+                .map_err(DataFusionError::Execution)?;
+        self.consume_entries(entries.len())?;
+        Ok((header, entries, bytes.len()))
+    }
+
+    fn consume_entries(&mut self, count: usize) -> Result<(), DataFusionError> {
+        self.remaining_entries = self
+            .remaining_entries
+            .checked_sub(count)
+            .ok_or_else(|| DataFusionError::Execution("Manifest entry limit exceeded".into()))?;
+        Ok(())
+    }
+}
+
 /// Read a snapshot's manifest list, including v1 snapshots that embed paths directly.
 pub(crate) async fn load_snapshot_manifest_list(
     store: &StoreContext,
     snapshot: &crate::spec::Snapshot,
 ) -> Result<ManifestList, DataFusionError> {
+    load_snapshot_manifest_list_with_budget(
+        store,
+        snapshot,
+        &mut ManifestReadBudget::new(u64::MAX, usize::MAX),
+    )
+    .await
+}
+
+pub(crate) async fn load_snapshot_manifest_list_with_budget(
+    store: &StoreContext,
+    snapshot: &crate::spec::Snapshot,
+    budget: &mut ManifestReadBudget,
+) -> Result<ManifestList, DataFusionError> {
     if !snapshot.manifest_list().is_empty() {
-        return load_manifest_list(store, snapshot.manifest_list()).await;
+        let bytes = budget.read_bytes(store, snapshot.manifest_list()).await?;
+        let list = ManifestList::parse_with_limit(&bytes, budget.remaining_entries)
+            .map_err(DataFusionError::Execution)?;
+        budget.consume_entries(list.entries().len())?;
+        return Ok(list);
     }
     let paths = snapshot.manifests().ok_or_else(|| {
         DataFusionError::Execution(format!(
@@ -109,12 +182,12 @@ pub(crate) async fn load_snapshot_manifest_list(
             snapshot.snapshot_id
         ))
     })?;
+    budget.consume_entries(paths.len())?;
     let mut manifests = Vec::with_capacity(paths.len());
     for path in paths {
-        let (storage, object) = store.resolve(path)?;
-        let bytes = storage.get(&object).await?.bytes().await?;
-        let (header, entries) =
-            Manifest::try_from_avro_bytes(&bytes).map_err(DataFusionError::Execution)?;
+        let (header, entries, length) = budget
+            .read_manifest(store, path, |entry, _| Ok(entry))
+            .await?;
         // ADDED and DELETED entries identify the snapshot that wrote the manifest.
         let writer_id = entries
             .iter()
@@ -128,7 +201,7 @@ pub(crate) async fn load_snapshot_manifest_list(
         let mut descriptor = writer
             .into_manifest_file(path.clone(), 0, writer_id)
             .map_err(DataFusionError::Execution)?;
-        descriptor.manifest_length = bytes.len() as i64;
+        descriptor.manifest_length = length as i64;
         manifests.push(descriptor);
     }
     Ok(ManifestList::new(manifests))
