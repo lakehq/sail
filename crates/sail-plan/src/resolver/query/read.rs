@@ -332,7 +332,11 @@ impl PlanResolver<'_> {
                     .await?;
                 let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
                 let origin = CatalogTableOrigin {
-                    session_table: manager.session_catalog_table(&name)?,
+                    session_table: if state.view_definition_mut().is_some() {
+                        manager.session_catalog_table(&name)?
+                    } else {
+                        None
+                    },
                     name,
                     lake_relation: lake_relation
                         .as_ref()

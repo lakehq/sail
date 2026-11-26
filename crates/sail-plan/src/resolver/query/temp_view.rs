@@ -76,7 +76,8 @@ pub(in crate::resolver) struct CatalogTableOrigin {
     /// The fully qualified name of the table: the catalog, the database, and the table.
     pub name: Vec<String>,
     /// The table in the catalog instance of the session, if each session has its own
-    /// instance of the catalog.
+    /// instance of the catalog. It is set only while a temporary view is created, since
+    /// only the origins that a view stores use it.
     pub session_table: Option<SessionCatalogTable>,
     /// The name of the relation of the table that is read, such as a metadata table.
     pub lake_relation: Option<String>,
