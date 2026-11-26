@@ -824,11 +824,7 @@ impl PlanResolver<'_> {
                 Err(error) => error,
                 Ok(Err(error)) => {
                     // A view that the query creates does not read the scans bound so far.
-                    if let (Some(reads), Some(recorded)) =
-                        (state.view_definition_mut(), recorded.take())
-                    {
-                        *reads = recorded;
-                    }
+                    state.replace_view_definition(recorded.take());
                     if let Some(definition) = &definition
                         && let Some(plan) = self
                             .resolve_view_definition_if_possible(&plan, view, definition, state)
@@ -851,19 +847,14 @@ impl PlanResolver<'_> {
             // A view that the query creates reads the scans of the query resolved again, or
             // the scans bound so far if the stored plan remains since the query no longer
             // resolves.
-            let bound = match (state.view_definition_mut(), recorded.take()) {
-                (Some(reads), Some(recorded)) => Some(std::mem::replace(reads, recorded)),
-                _ => None,
-            };
+            let bound = state.replace_view_definition(recorded.take());
             if let Some(plan) = self
                 .resolve_view_definition_if_possible(&plan, view, definition, state)
                 .await
             {
                 return Ok(plan);
             }
-            if let (Some(reads), Some(bound)) = (state.view_definition_mut(), bound) {
-                *reads = bound;
-            }
+            state.replace_view_definition(bound);
         }
         let mut bind = |scan: TableScan| {
             Ok(match scans.get(&table_source_address(&scan.source)) {
@@ -1327,13 +1318,20 @@ fn read_columns(
     Ok(read)
 }
 
-/// What a name of an expression is read for: always, or for an output of the plan that
-/// depends on it, or for an output of the projection right above a scan.
+/// What a name of an expression is read for: the rows of the plan, an output of the plan
+/// that depends on it, or an output of the projection right above a scan.
 #[derive(Clone, Copy)]
 enum ReadFor<'a> {
-    Rows(Option<&'a str>),
+    Rows,
     Output(&'a str),
     ScanOutput(usize, &'a str),
+}
+
+impl<'a> ReadFor<'a> {
+    /// The rows of the plan, or of a subquery in an expression of the output `read_by`.
+    fn rows(read_by: Option<&'a str>) -> Self {
+        read_by.map_or(Self::Rows, Self::Output)
+    }
 }
 
 /// The names that a plan reads, while [`read_columns`] walks the plan.
@@ -1365,15 +1363,10 @@ impl ReadColumns<'_> {
 
     fn read(&mut self, name: String, read_for: ReadFor<'_>) {
         match read_for {
-            ReadFor::Rows(None) => {
+            ReadFor::Rows => {
                 self.names.insert(name);
             }
-            ReadFor::Rows(Some(output)) | ReadFor::Output(output) => {
-                self.depends
-                    .entry(output.to_string())
-                    .or_default()
-                    .push(name);
-            }
+            ReadFor::Output(output) => self.depend(output, [name]),
             ReadFor::ScanOutput(address, output) => self
                 .outputs
                 .entry(address)
@@ -1386,21 +1379,21 @@ impl ReadColumns<'_> {
     fn expr(&mut self, expr: &Expr, read_for: ReadFor<'_>) -> datafusion_common::Result<()> {
         // The other names that a subquery reads are read for the same output.
         let subquery_for = match read_for {
-            ReadFor::Rows(read_by) => read_by,
+            ReadFor::Rows => None,
             ReadFor::Output(output) | ReadFor::ScanOutput(_, output) => Some(output),
         };
         expr.apply(|e| {
             match e {
                 Expr::Column(column) => self.read(column.name.clone(), read_for),
                 Expr::OuterReferenceColumn(_, column) => {
-                    self.read(column.name.clone(), ReadFor::Rows(subquery_for));
+                    self.read(column.name.clone(), ReadFor::rows(subquery_for));
                 }
                 // The expression reads the values of the subquery.
                 Expr::ScalarSubquery(subquery)
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::SetComparison(SetComparison { subquery, .. }) => {
                     for name in output_names(&subquery.subquery) {
-                        self.read(name, ReadFor::Rows(subquery_for));
+                        self.read(name, ReadFor::rows(subquery_for));
                     }
                     self.plan(&subquery.subquery, subquery_for)?;
                 }
@@ -1423,7 +1416,7 @@ impl ReadColumns<'_> {
     }
 
     fn node(&mut self, node: &LogicalPlan, read_by: Option<&str>) -> datafusion_common::Result<()> {
-        let rows = ReadFor::Rows(read_by);
+        let rows = ReadFor::rows(read_by);
         match node {
             LogicalPlan::TableScan(scan) => {
                 if let Some(reference) = CteReference::try_from_scan(scan) {

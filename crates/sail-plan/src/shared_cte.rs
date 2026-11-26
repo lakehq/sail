@@ -504,48 +504,34 @@ pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
     .data()
 }
 
-/// Calls `visit` for each node of the plan, of its subqueries, and of the CTE definitions
-/// that the plan refers to, once for each definition, in the order of
-/// [`LogicalPlan::apply_with_subqueries`]. The definition that a reference refers to is
-/// visited after the reference.
-pub fn visit_nodes(
-    plan: &LogicalPlan,
-    visit: &mut dyn FnMut(&LogicalPlan) -> Result<TreeNodeRecursion>,
-) -> Result<()> {
-    fn apply(
-        plan: &LogicalPlan,
-        visit: &mut dyn FnMut(&LogicalPlan) -> Result<TreeNodeRecursion>,
-        visited: &mut HashSet<usize>,
-    ) -> Result<()> {
-        plan.apply_with_subqueries(|plan| {
-            let recursion = visit(plan)?;
-            if let LogicalPlan::TableScan(scan) = plan
-                && let Some(reference) = CteReference::try_from_scan(scan)
-                && visited.insert(reference.definition.index)
-            {
-                apply(&reference.definition.resolved, visit, visited)?;
-            }
-            Ok(recursion)
-        })?;
-        Ok(())
-    }
-    apply(plan, visit, &mut HashSet::new())
-}
-
 /// Calls `visit` for each scan that is not a reference to a CTE definition, in the plan,
-/// in its subqueries, and in the CTE definitions that the plan refers to.
+/// in its subqueries, and in the CTE definitions that the plan refers to, once for each
+/// definition, in the order of [`LogicalPlan::apply_with_subqueries`]. The definition that
+/// a reference refers to is visited after the reference.
 pub fn visit_scans(
     plan: &LogicalPlan,
     visit: &mut dyn FnMut(&TableScan) -> Result<()>,
 ) -> Result<()> {
-    visit_nodes(plan, &mut |plan| {
-        if let LogicalPlan::TableScan(scan) = plan
-            && CteReference::try_from_scan(scan).is_none()
-        {
-            visit(scan)?;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
+    fn apply(
+        plan: &LogicalPlan,
+        visit: &mut dyn FnMut(&TableScan) -> Result<()>,
+        visited: &mut HashSet<usize>,
+    ) -> Result<()> {
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan {
+                match CteReference::try_from_scan(scan) {
+                    Some(reference) if visited.insert(reference.definition.index) => {
+                        apply(&reference.definition.resolved, visit, visited)?;
+                    }
+                    Some(_) => {}
+                    None => visit(scan)?,
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    apply(plan, visit, &mut HashSet::new())
 }
 
 /// Returns the plan in which each reference to a definition whose top projection computes

@@ -657,6 +657,18 @@ impl PlanResolverState {
         self.view_definition.as_mut()
     }
 
+    /// Replaces what the definition of a temporary view reads, if one is resolved and
+    /// `reads` is given, and returns what it read.
+    pub fn replace_view_definition(
+        &mut self,
+        reads: Option<ViewDefinitionReads>,
+    ) -> Option<ViewDefinitionReads> {
+        match (self.view_definition.as_mut(), reads) {
+            (Some(current), Some(reads)) => Some(std::mem::replace(current, reads)),
+            _ => None,
+        }
+    }
+
     /// Swaps the parts of the state that belong to the whole statement with those of another
     /// state: the generators of IDs, the fields, the sources and lookups of the tables that the
     /// statement reads, its shared CTE definitions, and what the definition of a view that the
