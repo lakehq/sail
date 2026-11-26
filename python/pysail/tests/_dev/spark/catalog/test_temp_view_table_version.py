@@ -793,6 +793,31 @@ def test_view_of_the_type_of_a_scalar_subquery_reads_the_current_type(spark, tab
             assert NOT_FOUND in error(spark, f"SELECT * FROM {name}")
 
 
+@pytest.mark.parametrize("fmt", ["parquet", "delta"])
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+def test_view_groups_a_cast_to_an_interval_of_a_column_without_nulls(spark, tables, fmt, kind):
+    table = tables(fmt, "s INT NOT NULL")
+    table.insert("(1), (2), (2)")
+    query = f"SELECT CAST(s AS INTERVAL YEAR) AS x FROM {table.name}"
+    view = table.create_view(kind, query)
+    # Spark Connect cannot collect year-month intervals, so the groups are counted.
+    groups = "SELECT count(*) FROM (SELECT x, count(*) FROM {} GROUP BY x)"
+    assert rows(spark, groups.format(view)) == rows(spark, groups.format(f"({query})")) == [(2,)]
+
+
+@pytest.mark.parametrize(
+    ("data_type", "value"), [("TIMESTAMP", "TIMESTAMP '2020-01-01 00:00:00'"), ("DECIMAL(10,2)", "1.5")]
+)
+def test_view_over_a_data_frame_view_groups_a_column_that_has_no_nulls_now(spark, tables, data_type, value):
+    table = tables("parquet", f"k INT, c {data_type}")
+    table.insert(f"(1, {value}), (2, {value})")
+    inner = table.create_view("dv", f"SELECT k, c FROM {table.name}")
+    table.recreate(f"k INT, c {data_type} NOT NULL", f"(1, {value}), (2, {value})")
+    outer = table.create_view("sv", f"SELECT c, count(*) AS n FROM {inner} GROUP BY c")
+    direct = f"SELECT c, count(*) AS n FROM {table.name} GROUP BY c"
+    assert rows(spark, f"SELECT * FROM {outer}") == rows(spark, direct)
+
+
 # DataFrames of the distinct rows of a table `(a, b)` by both columns, which read only `a`.
 DISTINCT_FRAMES = {
     "distinct": lambda frame: frame.distinct().select("a"),

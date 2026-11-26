@@ -655,7 +655,10 @@ impl<'a> Fit<'a> {
             return Read::Same;
         }
         self.logical_type_changes(stored, current, path);
-        let read = match !self.rebinds && converts_exactly(current, stored) {
+        let read = match !self.rebinds
+            && stored.data_type() != current.data_type()
+            && converts_exactly(current, stored)
+        {
             true => Read::Cast,
             false => self.data_type(stored.data_type(), current.data_type(), used, path),
         };
@@ -2694,6 +2697,9 @@ mod tests {
     #[test]
     fn test_nullability_changes_of_each_type_are_not_column_changes() {
         for data_type in data_types() {
+            let required = Field::new("c", data_type.clone(), false);
+            assert_eq!(read_of(&field("c", data_type.clone()), &required), Ok(Read::Same));
+            assert_eq!(read_of(&required, &field("c", data_type.clone())), Ok(Read::Same));
             let nullable = Schema::new(vec![field("c", data_type.clone())]);
             let required = Schema::new(vec![Field::new("c", data_type.clone(), false)]);
             assert_eq!(

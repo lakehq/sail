@@ -12,8 +12,10 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference};
 use datafusion_expr::utils::{conjunction, disjunction};
+use datafusion_expr::expr::Cast;
+use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
+    Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
     TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource, Union,
 };
 use indexmap::IndexMap;
@@ -505,7 +507,33 @@ pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
                 schema: Arc::new(schema),
             })))
         }
-        plan => Ok(Transformed::yes(plan.recompute_schema()?)),
+        plan => {
+            // A cast to a field has the nullability of the field in the physical plan, and
+            // that of its input in the logical plan, so the field takes that of its input.
+            let schema = merge_schema(&plan.inputs());
+            let plan = plan
+                .map_expressions(|expr| {
+                    expr.transform_up(|expr| match expr {
+                        Expr::Cast(Cast { expr, field })
+                            if !field.name().is_empty()
+                                || !field.is_nullable()
+                                || !field.metadata().is_empty() =>
+                        {
+                            match expr.nullable(&schema) {
+                                Ok(nullable) if nullable != field.is_nullable() => {
+                                    let field = field.as_ref().clone().with_nullable(nullable);
+                                    let cast = Cast::new_from_field(expr, Arc::new(field));
+                                    Ok(Transformed::yes(Expr::Cast(cast)))
+                                }
+                                _ => Ok(Transformed::no(Expr::Cast(Cast { expr, field }))),
+                            }
+                        }
+                        expr => Ok(Transformed::no(expr)),
+                    })
+                })?
+                .data;
+            Ok(Transformed::yes(plan.recompute_schema()?))
+        }
     })
     .data()
 }
