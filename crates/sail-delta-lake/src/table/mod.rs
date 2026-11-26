@@ -864,7 +864,14 @@ pub(crate) async fn load_delta_read_state(
         Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
         pinned => {
             match pinned {
-                Some(pinned) => deltalake_table.load_version(pinned.version()).await?,
+                Some(pinned) => {
+                    deltalake_table.load_version(pinned.version()).await?;
+                    // A table that was created again at the location has another ID, and
+                    // the read reads its latest version.
+                    if deltalake_table.snapshot()?.metadata().id() != pinned.metadata().id() {
+                        deltalake_table.load().await?;
+                    }
+                }
                 // Load the table state according to the provided time travel options.
                 None => load_table_by_options(&mut deltalake_table, &options).await?,
             }
