@@ -520,7 +520,7 @@ impl Fixture {
         columns: &[&str],
         location: &str,
     ) -> TestResult {
-        let mut options = create_table_options(columns, vec![]);
+        let mut options = create_table_options(columns);
         options.location = Some(location.to_string());
         self.session
             .extension::<CatalogManager>()?
@@ -591,24 +591,25 @@ fn take<T>(items: &Mutex<Vec<T>>) -> TestResult<Vec<T>> {
     Ok(std::mem::take(&mut *items))
 }
 
+/// A `BIGINT` column with nulls.
+fn column(name: &str) -> CreateTableColumnOptions {
+    CreateTableColumnOptions {
+        metadata: Default::default(),
+        name: name.to_string(),
+        data_type: DataType::Int64,
+        nullable: true,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+        identity: None,
+    }
+}
+
 /// The options to create a table with `BIGINT` columns directly in a catalog. The test
 /// data sources have no lakehouse support, so a statement cannot create their tables.
-fn create_table_options(columns: &[&str], properties: Vec<(String, String)>) -> CreateTableOptions {
-    let columns = columns
-        .iter()
-        .map(|name| CreateTableColumnOptions {
-            metadata: Default::default(),
-            name: name.to_string(),
-            data_type: DataType::Int64,
-            nullable: true,
-            comment: None,
-            default: None,
-            generated_always_as: None,
-            identity: None,
-        })
-        .collect();
+fn create_table_options(columns: &[&str]) -> CreateTableOptions {
     CreateTableOptions {
-        columns,
+        columns: columns.iter().map(|name| column(name)).collect(),
         comment: None,
         constraints: vec![],
         location: Some("memory:///table".to_string()),
@@ -617,7 +618,7 @@ fn create_table_options(columns: &[&str], properties: Vec<(String, String)>) -> 
         sort_by: vec![],
         bucket_by: None,
         mode: CreateTableMode::Create,
-        properties,
+        properties: vec![],
         is_external: false,
         is_write_precondition: false,
     }
@@ -660,16 +661,7 @@ fn read_path(format: &str, path: &str, options: &[(&str, &str)]) -> spec::QueryP
 
 /// A read of a table by identifier, as `spark.read.format("iceberg").load(..)` sends it.
 fn read_identifier(identifier: &str) -> spec::QueryPlan {
-    spec::QueryPlan::new(spec::QueryNode::Read {
-        is_streaming: false,
-        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
-            format: Some("iceberg".to_string()),
-            schema: None,
-            options: vec![],
-            paths: vec![identifier.to_string()],
-            predicates: vec![],
-        })),
-    })
+    read_path("iceberg", identifier, &[])
 }
 
 fn union(left: spec::QueryPlan, right: spec::QueryPlan) -> spec::Plan {

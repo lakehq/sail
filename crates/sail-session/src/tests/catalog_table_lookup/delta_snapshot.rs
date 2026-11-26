@@ -54,7 +54,7 @@ impl Fixture {
             .extension::<DataSourceRegistry>()?
             .register_data_source(Arc::new(DeltaLakeSource))?;
         put(&store, commit(0, "first")).await?;
-        let mut options = create_table_options(&["k", "v"], vec![]);
+        let mut options = create_table_options(&["k", "v"]);
         options.format = "delta".to_string();
         options.location = Some(LOCATION.to_string());
         fixture
