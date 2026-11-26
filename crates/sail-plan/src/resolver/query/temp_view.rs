@@ -1232,21 +1232,23 @@ fn view_name(view: &TableStatus) -> String {
 /// again, by the address of the source and the positions of the columns in the source.
 ///
 /// A name is read if it is the name of an output of the plan, of a column that a function
-/// folded away (see `PlanResolverState::folded_columns`), of a column that an expression of
-/// an operator refers to, or of an output of a subquery that the plan reads, in the plan, in
-/// its subqueries and in its CTE definitions. The other operators that read the columns of
-/// their inputs without referring to them, such as a union, which reads its inputs by their
-/// positions, or `DISTINCT`, read all of them. The operators that read only the columns
-/// that their expressions refer to are an allow-list, and every other operator reads all
-/// the columns of its inputs, so the list is checked again when DataFusion adds or changes
-/// operators. An output of a projection that is a column, and a column of a reference to a
-/// CTE definition, pass a name on: the column that they pass on is read if they are read.
-/// A column of a scan is read if its name is read. The resolver gives each column a name
-/// of its own, so the names can only count more columns as read than the plan reads, also
-/// for the plan of another view that the plan reads, whose names belong to another resolver
-/// state. A scan of a table that such a view reads reads the columns that the view reads
-/// of the table (see [`ViewDefinitionReads::view_reads`]), which are all the columns that
-/// the plan of the view can read, since the plan reads the table only through the view.
+/// folded away (see `PlanResolverState::folded_columns`), of a column that an expression of an
+/// operator refers to, or of an output of a subquery that the plan reads, in the plan, in its
+/// subqueries and in its CTE definitions. The other operators that read the columns of their
+/// inputs without referring to them, such as a union, which reads its inputs by their
+/// positions, or `DISTINCT`, read all of them. The operators that read only the columns that
+/// their expressions refer to are an allow-list, and every other operator reads all the columns
+/// of its inputs, so the list is checked again when DataFusion adds or changes operators. An
+/// output of a projection that is a column, and a column of a reference to a CTE definition,
+/// pass a name on: the column that they pass on is read if they are read. A column of a scan is
+/// read if its name is read, or the name of the output that a projection right above the scan
+/// passes it on as. The columns of a scan have the names of the table, which the scans of other
+/// tables can have as well. The resolver gives each column a name of its own, so the names can
+/// only count more columns as read than the plan reads, also for the plan of another view that
+/// the plan reads, whose names belong to another resolver state. A scan of a table that such a
+/// view reads reads the columns that the view reads of the table (see
+/// [`ViewDefinitionReads::view_reads`]), which are all the columns that the plan of the view
+/// can read, since the plan reads the table only through the view.
 fn read_columns(
     plan: &LogicalPlan,
     reads: &ViewDefinitionReads,
@@ -1258,9 +1260,11 @@ fn read_columns(
         .map(|x| x.name().clone())
         .chain(reads.folded_columns.iter().cloned())
         .collect::<HashSet<_>>();
-    // The name and the position in the source of each column of the scans, and the names
-    // that each name passes on.
+    // The name and the position in the source of each column of the scans, the outputs that
+    // the projections right above the scans pass the columns on as, and the names that each
+    // name of the other projections and of the references to CTE definitions passes on.
     let mut columns: HashMap<usize, Vec<(String, usize)>> = HashMap::new();
+    let mut outputs: HashMap<usize, Vec<(String, String)>> = HashMap::new();
     let mut passes: HashMap<String, Vec<String>> = HashMap::new();
     let output_names = |plan: &LogicalPlan| {
         plan.schema()
@@ -1294,6 +1298,12 @@ fn read_columns(
                 }
             }
             LogicalPlan::Projection(projection) => {
+                let scan = match projection.input.as_ref() {
+                    LogicalPlan::TableScan(scan) if reads.table_origin(&scan.source).is_some() => {
+                        Some(table_source_address(&scan.source))
+                    }
+                    _ => None,
+                };
                 let fields = projection.schema.fields();
                 let mut computed = vec![];
                 for (expr, field) in exprs.into_iter().zip(fields) {
@@ -1301,11 +1311,13 @@ fn read_columns(
                     while let Expr::Alias(alias) = value {
                         value = &alias.expr;
                     }
-                    match value.try_as_col().map(|x| x.name.clone()) {
-                        Some(column) => {
-                            passes.entry(field.name().clone()).or_default().push(column)
+                    let output = field.name().clone();
+                    match (value.try_as_col().map(|x| x.name.clone()), scan) {
+                        (Some(column), Some(address)) => {
+                            outputs.entry(address).or_default().push((output, column))
                         }
-                        None => computed.push(expr),
+                        (Some(column), None) => passes.entry(output).or_default().push(column),
+                        (None, _) => computed.push(expr),
                     }
                 }
                 exprs = computed;
@@ -1362,9 +1374,14 @@ fn read_columns(
         .into_iter()
         .filter(|(address, _)| !reads.view_reads.contains_key(address));
     for (address, columns) in scans {
+        let passed = outputs.remove(&address).unwrap_or_default();
         let positions = read.entry(address).or_default();
         for (name, position) in columns {
-            if names.contains(&name) {
+            let is_read = names.contains(&name)
+                || passed
+                    .iter()
+                    .any(|(output, input)| input == &name && names.contains(output));
+            if is_read {
                 positions.insert(position);
             }
         }
