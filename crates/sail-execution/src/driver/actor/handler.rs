@@ -428,9 +428,12 @@ impl DriverActor {
     }
 
     fn run_job_action(&mut self, ctx: &mut ActorContext<Self>, action: JobAction) {
-        debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { region } => {
+                debug!(
+                    "scheduling task region with {} task sets",
+                    region.tasks.len()
+                );
                 if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
                     // Failing one task fails the entire region. Report this as a
                     // separate message so that the current job actions finish first.
@@ -457,6 +460,7 @@ impl DriverActor {
                 }
             }
             JobAction::CancelTask { key } => {
+                debug!("canceling task {}", TaskKeyDisplay(&key));
                 self.task_assigner.exclude_task(&key);
                 if let Some(assignment) = self.unassign_task(ctx, &key) {
                     match assignment {
@@ -480,6 +484,7 @@ impl DriverActor {
                 schema,
                 retry_cause,
             } => {
+                debug!("extending job output with {}", TaskStreamKeyDisplay(&key));
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
                 let (result, receiver) = oneshot::channel();
@@ -537,6 +542,7 @@ impl DriverActor {
                 });
             }
             JobAction::FailJobOutput { handle, cause } => {
+                debug!("failing job output");
                 ctx.spawn(async move {
                     handle.send(JobOutputItem::Error { cause }).await;
                 });
@@ -548,6 +554,7 @@ impl DriverActor {
                 key,
                 schema,
             } => {
+                debug!("reading split points for job {job_id} range shuffle {shuffle}");
                 // The split points are picked on the driver, so their stream is local.
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
@@ -576,6 +583,7 @@ impl DriverActor {
                                     ))
                                 })?;
                         RangeShuffleUpdate::try_new(
+                            job_id,
                             &graph,
                             shuffle,
                             range_split_from_batches(&batches)?.partitions(),
@@ -599,6 +607,7 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                debug!("cleaning up job {job_id} stage {stage:?}");
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
                 // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {

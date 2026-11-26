@@ -10,12 +10,13 @@ use sail_common_datafusion::error::CommonErrorCause;
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job_graph::{JobGraph, OutputDistribution, OutputMode, Stage};
+use crate::id::JobId;
+use crate::job_graph::{JobGraph, OutputDistribution, Stage};
 use crate::proto::{
     RemoteExecutionCodec, encode_remote_partitioning, encode_remote_physical_expr,
     encode_remote_physical_plan,
 };
-use crate::task::definition::{TaskOutputDistribution, TaskOutputLocator};
+use crate::task::definition::TaskOutputDistribution;
 
 /// The parts of a task definition that are independent of task assignments.
 #[derive(Debug)]
@@ -107,9 +108,15 @@ pub struct RangeShuffleUpdate {
 }
 
 impl RangeShuffleUpdate {
-    pub fn try_new(graph: &JobGraph, shuffle: usize, partitions: usize) -> ExecutionResult<Self> {
+    pub fn try_new(
+        job_id: JobId,
+        graph: &JobGraph,
+        shuffle: usize,
+        partitions: usize,
+    ) -> ExecutionResult<Self> {
         let mut graph = graph.clone();
         let changed = graph.resize_range_shuffle(shuffle, partitions)?;
+        log::debug!("job {job_id} job graph after range shuffle {shuffle}\n{graph}");
         let topology = JobTopology::try_new(&graph)?;
         let changed = changed
             .into_iter()
@@ -246,16 +253,6 @@ impl JobDescriptor {
         self.regions = TaskRegionDescriptor::new_regions(&self.topology);
         self.range_shuffles[shuffle] = RangeShuffleState::Resolved;
         Ok(updated)
-    }
-
-    pub fn output_locator(&self, stage: usize) -> TaskOutputLocator {
-        match self.graph.stages()[stage].mode {
-            OutputMode::Pipelined => TaskOutputLocator::Pipelined {
-                replicas: self.graph.replicas(stage),
-                bounded: self.graph.bounded_output(stage),
-            },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
-        }
     }
 
     /// Whether the stage waits for the partitions of a range shuffle.

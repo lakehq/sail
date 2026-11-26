@@ -7,6 +7,7 @@ use indexmap::IndexSet;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{InputMode, JobGraph, OutputMode};
+use crate::task::definition::TaskOutputLocator;
 
 #[derive(Debug)]
 #[readonly::make]
@@ -36,13 +37,29 @@ pub struct StageTopology {
     /// The indices refer to the indices of stages in [`JobTopology`],
     /// which is the same as the indices of stages in [`JobGraph`].
     pub consumers: Vec<usize>,
+    pub output_locator: TaskOutputLocator,
+    /// The distribution shown in stage history.
+    pub distribution_description: String,
 }
 
 impl JobTopology {
     /// Groups pipelined stages into components and builds the topology of task regions and stages.
     pub fn try_new(graph: &JobGraph) -> ExecutionResult<Self> {
-        let mut stages = (0..graph.stages().len())
-            .map(|_| StageTopology { consumers: vec![] })
+        let mut stages = graph
+            .stages()
+            .iter()
+            .enumerate()
+            .map(|(s, stage)| StageTopology {
+                consumers: vec![],
+                output_locator: match stage.mode {
+                    OutputMode::Pipelined => TaskOutputLocator::Pipelined {
+                        replicas: graph.replicas(s),
+                        bounded: graph.bounded_output(s),
+                    },
+                    OutputMode::Blocking => TaskOutputLocator::Blocking,
+                },
+                distribution_description: stage.distribution.to_string(),
+            })
             .collect::<Vec<_>>();
 
         let mut pipelined_adjacency = vec![vec![]; graph.stages().len()];

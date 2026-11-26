@@ -7,7 +7,7 @@ use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlanProperties;
 use indexmap::{IndexMap, IndexSet};
-use log::{debug, warn};
+use log::warn;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -74,7 +74,7 @@ impl JobScheduler {
                     inputs: stage.inputs.iter().map(Into::into).collect(),
                     group: stage.group.clone(),
                     mode: stage.mode.to_string(),
-                    distribution: stage.distribution.to_string(),
+                    distribution: job.topology.stages[s].distribution_description.clone(),
                     placement: stage.placement.to_string(),
                     status: descriptor.state.status().to_string(),
                     created_at: Utc::now(),
@@ -295,13 +295,9 @@ impl JobScheduler {
                         stage: s as u64,
                         partitions: stage.plan.output_partitioning().partition_count() as u64,
                         inputs: stage.inputs.iter().map(Into::into).collect(),
-                        distribution: stage.distribution.to_string(),
+                        distribution: job.topology.stages[s].distribution_description.clone(),
                     });
                 }
-                debug!(
-                    "job {job_id} job graph after range shuffle {shuffle}\n{}",
-                    job.graph
-                );
                 return vec![];
             }
         };
@@ -806,7 +802,7 @@ impl JobScheduler {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = TaskOutput {
             distribution: encoded.distribution.clone(),
-            locator: job.output_locator(key.stage),
+            locator: job.topology.stages[key.stage].output_locator.clone(),
         };
         let definition = TaskDefinition {
             plan: encoded.plan.clone(),
@@ -1607,7 +1603,7 @@ pub(super) mod tests {
         assert!(scheduled(&scheduler.refresh_job(job_id)).is_empty());
 
         // The split points give 2 partitions, so the stages after them have 2 tasks.
-        let update = RangeShuffleUpdate::try_new(&scheduler.jobs[&job_id].graph, 0, 2)?;
+        let update = RangeShuffleUpdate::try_new(job_id, &scheduler.jobs[&job_id].graph, 0, 2)?;
         assert!(
             scheduler
                 .resolve_range_shuffle(job_id, 0, Ok(update))
@@ -1671,7 +1667,7 @@ pub(super) mod tests {
             }
             for action in &actions {
                 if let JobAction::ReadRangeSplitPoints { graph, shuffle, .. } = action {
-                    let update = RangeShuffleUpdate::try_new(graph, *shuffle, 2)?;
+                    let update = RangeShuffleUpdate::try_new(job_id, graph, *shuffle, 2)?;
                     assert!(
                         scheduler
                             .resolve_range_shuffle(job_id, *shuffle, Ok(update))
@@ -1808,12 +1804,12 @@ pub(super) mod tests {
             JobState::Draining,
             Arc::new(TaskContext::default()),
         );
-        assert_eq!(job.graph.stages().len(), 2);
-        for s in 0..2 {
+        assert_eq!(job.topology.stages.len(), 2);
+        for (s, stage) in job.topology.stages.iter().enumerate() {
             // The first stage is read by the second stage, which is read by the driver.
             // The tasks that produce the result of the job never wait for the client.
             assert!(matches!(
-                job.output_locator(s),
+                stage.output_locator,
                 TaskOutputLocator::Pipelined { bounded, .. } if bounded == (s == 0)
             ));
         }
