@@ -159,6 +159,26 @@ def test_view_reads_a_column_renamed_only_in_letter_case(spark, table, kind):
     assert rows(spark, f"SELECT id, count(*) FROM {view} WHERE id > 0 GROUP BY id") == [(2, 1)]
 
 
+@pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("created", ["false", "true"])
+def test_view_matches_columns_as_the_session_did_when_it_was_created(spark, table, kind, created):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    try:
+        table.insert("(1)")
+        spark.conf.set("spark.sql.caseSensitive", created)
+        view = table.create_view(kind)
+        table.recreate("ID BIGINT", "(2)")
+        spark.conf.set("spark.sql.caseSensitive", "true" if created == "false" else "false")
+        if created == "false":
+            assert rows(spark, f"SELECT * FROM {view}") == [(2,)]
+        else:
+            # A definition that was resolved case-sensitively can tell `id` from `ID`.
+            assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
+
+
 @pytest.mark.parametrize("kind", PLAN_KINDS)
 def test_view_keeps_the_column_metadata_that_it_was_created_with(spark, tables, kind):
     table = tables("delta")

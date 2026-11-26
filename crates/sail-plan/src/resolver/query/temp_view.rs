@@ -69,6 +69,17 @@ pub(in crate::resolver) enum TableOrigin {
     LakePath(LakePathOrigin),
 }
 
+impl TableOrigin {
+    /// Whether the read matched the names of columns case-sensitively, as the session did
+    /// when the query was resolved.
+    fn read_case_sensitive(&self) -> bool {
+        match self {
+            Self::CatalogTable(origin) => origin.read_case_sensitive,
+            Self::LakePath(origin) => origin.read_case_sensitive,
+        }
+    }
+}
+
 /// A read of paths in a format. A temporary view stores it for a read of a Delta Lake or
 /// Iceberg table by its path.
 #[derive(Debug)]
@@ -1103,8 +1114,10 @@ impl PlanResolver<'_> {
                 name.to_uppercase()
             }
         };
+        // The columns are matched as the definition of the view matched them.
+        let case_sensitive = reference.origin.read_case_sensitive();
         let reads = reference
-            .fit_columns(&table_schema, self.config.case_sensitive, &type_name)
+            .fit_columns(&table_schema, case_sensitive, &type_name)
             .map_err(|changes| {
                 PlanError::AnalysisError(format!(
                     "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View {} plan \
@@ -1180,7 +1193,7 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        reference.with_stored_output(bound, &reads, self.config.case_sensitive)
+        reference.with_stored_output(bound, &reads, case_sensitive)
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
