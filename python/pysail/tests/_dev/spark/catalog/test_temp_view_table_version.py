@@ -788,8 +788,8 @@ def test_view_reads_a_struct_whose_field_was_renamed_in_letter_case(spark, table
     assert spark.table(view).schema.simpleString() == schema.simpleString()
 
 
-# Queries that read a field of a struct inside an array or a map, over a table `(k, c)`, and the
-# type of `c` with the field `a`.
+# Queries that read a field of a struct inside an array or a map, over a table `(k, c)` or a
+# table `(k, s STRUCT<c>)`, and the type of `c` with the field `a`.
 NESTED_STRUCT_QUERIES = {
     "array": (
         "SELECT c[0].a AS y FROM {t}",
@@ -801,22 +801,44 @@ NESTED_STRUCT_QUERIES = {
         "MAP<STRING, STRUCT<{a}: INT, b: INT>>",
         "map('x', named_struct('{a}', 1, 'b', 2))",
     ),
+    "array in a struct": (
+        "SELECT c[0].a AS y FROM (SELECT s.c AS c FROM {t})",
+        "STRUCT<c: ARRAY<STRUCT<{a}: INT, b: INT>>>",
+        "named_struct('c', array(named_struct('{a}', 1, 'b', 2)))",
+    ),
+    "map in a struct": (
+        "SELECT c['x'].a AS y FROM (SELECT s.c AS c FROM {t})",
+        "STRUCT<c: MAP<STRING, STRUCT<{a}: INT, b: INT>>>",
+        "named_struct('c', map('x', named_struct('{a}', 1, 'b', 2)))",
+    ),
 }
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("case", NESTED_STRUCT_QUERIES)
 def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
-    # A known limit: the view reads the array or the map whole, and does not give the fields
-    # of the structs in it the names of the view, so the access to the field fails.
+    # A known limit: the view reads the array or the map whole and casts it, which matches the
+    # fields of the structs in it by name, so it cannot read a field renamed in letter case.
     query, data_type, value = NESTED_STRUCT_QUERIES[case]
-    table = tables("parquet", f"k INT, c {data_type.format(a='a')}")
+    column = "s" if "STRUCT<c:" in data_type else "c"
+    table = tables("parquet", f"k INT, {column} {data_type.format(a='a')}")
     table.insert(f"(1, {value.format(a='a')})")
     view = table.create_view(kind, query.format(t=table.name))
     assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-    table.recreate(f"k INT, c {data_type.format(a='A')}", f"(2, {value.format(a='A')})")
-    with pytest.raises(Exception, match="not found"):
-        spark.sql(f"SELECT * FROM {view}").collect()
+    table.recreate(f"k INT, {column} {data_type.format(a='A')}", f"(2, {value.format(a='A')})")
+    assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+def test_view_reads_a_struct_whose_fields_changed_order_in_the_order_of_the_view(spark, tables, kind, fmt):
+    table = tables(fmt, "s STRUCT<x: INT, y: STRING>")
+    table.insert("(named_struct('x', 1, 'y', 'a'))")
+    view = table.create_view(kind, f"SELECT s FROM {table.name}")
+    schema = spark.table(view).schema
+    table.recreate("s STRUCT<y: STRING, x: INT>", "(named_struct('y', 'b', 'x', 2))")
+    assert spark.table(view).schema.simpleString() == schema.simpleString()
+    assert rows(spark, f"SELECT s.x, s.y, s = named_struct('x', 2, 'y', 'b') FROM {view}") == [(2, "b", True)]
 
 
 # Queries over `t (a, b, s STRUCT<x, y>)` whose key `s.x` or `b` only tells rows apart, and the
