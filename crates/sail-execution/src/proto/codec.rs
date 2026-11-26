@@ -776,9 +776,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     } else {
                         Arc::new(cached_reader)
                     };
+                let metadata_size_hint = options.global.metadata_size_hint;
                 let mut source = ParquetSource::new(table_schema)
                     .with_parquet_file_reader_factory(reader_factory)
                     .with_table_parquet_options(options);
+                // The file opener reads the hint from the source, not from the options.
+                if let Some(metadata_size_hint) = metadata_size_hint {
+                    source = source.with_metadata_size_hint(metadata_size_hint);
+                }
                 if let Some(predicate) = predicate {
                     source = source.with_predicate(predicate);
                 }
@@ -8563,6 +8568,54 @@ mod tests {
         assert_eq!(
             decoded.evaluate(&batch)?.into_array(2)?.to_data(),
             expression.evaluate(&batch)?.into_array(2)?.to_data()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_parquet_source_preserves_metadata_size_hint() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+        let mut options = TableParquetOptions::default();
+        options.global.metadata_size_hint = Some(12345);
+        let source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(options)
+            .with_metadata_size_hint(12345);
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            Arc::new(source),
+        )
+        .build();
+        let plan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+        let (_, parquet_source) = decoded
+            .downcast_to_file_source::<ParquetSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source is not Parquet"))?;
+
+        assert_eq!(
+            parquet_source
+                .table_parquet_options()
+                .global
+                .metadata_size_hint,
+            Some(12345)
+        );
+        // The source field is private, so compare against the same source with the hint applied.
+        assert_eq!(
+            format!("{parquet_source:?}"),
+            format!(
+                "{:?}",
+                parquet_source.clone().with_metadata_size_hint(12345)
+            )
         );
         Ok(())
     }
