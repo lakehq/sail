@@ -64,36 +64,68 @@ pub(crate) async fn alter_table_with_lock(
     options: Vec<AlterTableOptions>,
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
-    let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
-    // TODO: Distinguish HMS lock/heartbeat/alter failures that make commit
-    // state unknown from ordinary conflicts or external errors.
-    let result = async {
-        let mut hms_table = HmsCatalogProvider::get_table_with_client(
-            &client,
-            db_name,
-            table_name,
-            "Failed to fetch HMS table for locked alter",
-        )
-        .await?;
-        for options in options {
-            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+    let (db_name, table_name) = (db_name.to_owned(), table_name.to_owned());
+    let (mut reply, receive) = tokio::sync::oneshot::channel();
+    // Once a lock request is sent, the server can grant it even if the caller
+    // disconnects. Keep ownership of the lock until it is released.
+    provider.primary.spawn(async move {
+        let result = async {
+            if reply.is_closed() {
+                return Ok(());
+            }
+            let Some(lock_id) =
+                acquire_table_lock(&client, &db_name, &table_name, &mut reply).await?
+            else {
+                return Ok(());
+            };
+            let prepare = async {
+                let mut table = HmsCatalogProvider::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table_name,
+                    "Failed to fetch HMS table for locked alter",
+                )
+                .await?;
+                for option in options {
+                    apply_alter_table_options(&mut table, &db_name, &table_name, option)?;
+                }
+                Ok::<_, CatalogError>(table)
+            };
+            let prepared = tokio::select! {
+                biased;
+                () = reply.closed() => Ok(None),
+                table = prepare => table.map(Some),
+            };
+            let result = match prepared {
+                Ok(Some(table)) if !reply.is_closed() => {
+                    HmsCatalogProvider::alter_table_with_client(
+                        &client,
+                        &db_name,
+                        &table_name,
+                        table,
+                    )
+                    .await
+                }
+                Ok(_) => Ok(()),
+                Err(error) => Err(error),
+            };
+            let unlock = release_table_lock(&client, &db_name, &table_name, lock_id).await;
+            result.and(unlock)
         }
-        HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
-    }
-    .await;
-    let unlock_result = release_table_lock(&client, db_name, table_name, lock_id).await;
-    match (result, unlock_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+        .await;
+        let _ = reply.send(result);
+    });
+    receive
+        .await
+        .map_err(|error| CatalogError::Internal(error.to_string()))?
 }
 
 async fn acquire_table_lock(
     client: &ThriftHiveMetastoreClient,
     db_name: &str,
     table_name: &str,
-) -> CatalogResult<i64> {
+    reply: &mut tokio::sync::oneshot::Sender<CatalogResult<()>>,
+) -> CatalogResult<Option<i64>> {
     let mut response = match client
         .lock(LockRequest {
             component: vec![LockComponent {
@@ -139,7 +171,7 @@ async fn acquire_table_lock(
     let start = Instant::now();
     loop {
         match response.state {
-            state if state == LockState::ACQUIRED => return Ok(response.lockid),
+            state if state == LockState::ACQUIRED => return Ok(Some(response.lockid)),
             state if state == LockState::WAITING => {
                 if start.elapsed() >= HMS_LOCK_ACQUIRE_TIMEOUT {
                     let _ = release_table_lock(client, db_name, table_name, response.lockid).await;
@@ -147,15 +179,25 @@ async fn acquire_table_lock(
                         "Timed out while waiting for HMS lock on '{db_name}.{table_name}'"
                     )));
                 }
-                tokio::time::sleep(HMS_LOCK_CHECK_INTERVAL).await;
-                response = match client
-                    .check_lock(CheckLockRequest {
-                        lockid: response.lockid,
-                        txnid: None,
-                        elapsed_ms: Some(start.elapsed().as_millis() as i64),
-                    })
-                    .await
-                {
+                let check = async {
+                    tokio::time::sleep(HMS_LOCK_CHECK_INTERVAL).await;
+                    client
+                        .check_lock(CheckLockRequest {
+                            lockid: response.lockid,
+                            txnid: None,
+                            elapsed_ms: Some(start.elapsed().as_millis() as i64),
+                        })
+                        .await
+                };
+                let checked = tokio::select! {
+                    biased;
+                    () = reply.closed() => {
+                        release_table_lock(client, db_name, table_name, response.lockid).await?;
+                        return Ok(None);
+                    }
+                    checked = check => checked,
+                };
+                response = match checked {
                     Ok(MaybeException::Ok(response)) => response,
                     Ok(MaybeException::Exception(err)) => {
                         let _ =

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use futures::stream::{self, BoxStream};
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
@@ -54,26 +54,49 @@ impl RuntimeAwareObjectStore {
             return result;
         }
 
-        let meta = result.meta.clone();
-        let range = result.range.clone();
-        let attributes = std::mem::take(&mut result.attributes);
-        let extensions = std::mem::take(&mut result.extensions);
-        let handle = self.handle.clone();
-        let stream = if matches!(result.payload, GetResultPayload::File { .. }) {
-            // A positional range read checks for premature EOF if the file shrinks.
-            stream::once(async move { AbortOnDropHandle::new(handle.spawn(result.bytes())).await? })
-                .boxed()
-        } else {
-            spawn_stream_on(handle, (), move |_| result.into_stream())
+        let stream = match result.payload {
+            GetResultPayload::File(file, path) => {
+                file_stream(self.handle.clone(), file, path, result.range.clone())
+            }
+            GetResultPayload::Stream(stream) => {
+                spawn_stream_on(self.handle.clone(), (), move |_| stream)
+            }
         };
-        GetResult {
-            payload: GetResultPayload::Stream(stream),
-            meta,
-            range,
-            attributes,
-            extensions,
-        }
+        result.payload = GetResultPayload::Stream(stream);
+        result
     }
+}
+
+/// Read a local range incrementally. An early EOF means the file changed after
+/// the store returned its metadata.
+fn file_stream(
+    handle: Handle,
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    range: Range<u64>,
+) -> BoxStream<'static, Result<Bytes>> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    const CHUNK_SIZE: usize = 64 * 1024;
+    spawn_stream_on(handle, (), move |_| {
+        async_stream::try_stream! {
+            let read_error = |source: std::io::Error| object_store::Error::Generic {
+                store: "LocalFileSystem",
+                source: format!("failed to read {}: {source}", path.display()).into(),
+            };
+            let mut file = tokio::fs::File::from_std(file);
+            file.seek(std::io::SeekFrom::Start(range.start)).await.map_err(read_error)?;
+            let mut remaining = range.end - range.start;
+            while remaining > 0 {
+                let len = remaining.min(CHUNK_SIZE as u64) as usize;
+                let mut buffer = vec![0; len];
+                file.read_exact(&mut buffer).await.map_err(read_error)?;
+                remaining -= len as u64;
+                yield Bytes::from(buffer);
+            }
+        }
+        .boxed()
+    })
 }
 
 #[derive(Clone)]
@@ -95,8 +118,10 @@ impl GetResultExt for GetResult {
     }
 
     fn read_stream(self) -> BoxStream<'static, Result<Bytes>> {
-        if let Some(runtime) = self.extensions.get::<FileReadRuntime>().cloned() {
-            return spawn_stream_on(runtime.0, (), move |_| self.into_stream());
+        if let Some(runtime) = self.extensions.get::<FileReadRuntime>()
+            && let GetResultPayload::File(file, path) = self.payload
+        {
+            return file_stream(runtime.0.clone(), file, path, self.range);
         }
         self.into_stream()
     }
@@ -473,6 +498,33 @@ mod tests {
                 .await?
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_range_is_delivered_in_chunks() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let data = vec![42; 1024 * 1024];
+        std::fs::write(directory.path().join("body"), &data)?;
+        let store = object_store::local::LocalFileSystem::new_with_prefix(directory.path())?;
+        let store = RuntimeAwareObjectStore::new(Arc::new(store), Handle::current());
+        let result = store
+            .get_opts(
+                &Path::from("body"),
+                GetOptions {
+                    range: Some((1..data.len() as u64).into()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let mut chunks = result.into_stream();
+        let first = chunks.next().await.ok_or("missing first chunk")??;
+        assert!(!first.is_empty() && first.len() < data.len() - 1);
+        let mut len = first.len();
+        while let Some(chunk) = chunks.next().await {
+            len += chunk?.len();
+        }
+        assert_eq!(len, data.len() - 1);
         Ok(())
     }
 

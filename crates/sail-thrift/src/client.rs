@@ -15,8 +15,10 @@ use thrift::protocol::{
 };
 use thrift::{ApplicationError, ApplicationErrorKind};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, BufReader};
+use tokio::runtime::Handle;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::codec::invalid_data;
 use crate::transport::Transport;
@@ -63,7 +65,10 @@ pub enum MaybeException<T, E> {
 }
 
 #[derive(Clone)]
-pub struct Client(Arc<ClientInner>);
+pub struct Client {
+    inner: Arc<ClientInner>,
+    runtime: Option<Handle>,
+}
 
 struct ClientInner {
     connector: Arc<dyn Connector>,
@@ -91,18 +96,43 @@ struct IdleConnection {
 
 impl Client {
     pub fn new(connector: impl Connector + 'static, transport: Transport) -> Self {
-        Self(Arc::new(ClientInner {
-            connector: Arc::new(connector),
-            transport,
-            idle: Mutex::new(IdlePool::default()),
-            permits: Semaphore::new(MAX_CONCURRENT_CALLS),
-        }))
+        Self {
+            inner: Arc::new(ClientInner {
+                connector: Arc::new(connector),
+                transport,
+                idle: Mutex::new(IdlePool::default()),
+                permits: Semaphore::new(MAX_CONCURRENT_CALLS),
+            }),
+            runtime: None,
+        }
+    }
+
+    /// Run socket operations and idle connection cleanup on the specified runtime.
+    pub fn with_runtime(mut self, runtime: Handle) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    async fn run_io<T: Send + 'static>(
+        &self,
+        io: impl Future<Output = Result<T, ClientError>> + Send + 'static,
+    ) -> Result<T, ClientError> {
+        match &self.runtime {
+            Some(handle)
+                if !Handle::try_current().is_ok_and(|current| current.id() == handle.id()) =>
+            {
+                AbortOnDropHandle::new(handle.spawn(io))
+                    .await
+                    .map_err(|error| ClientError::Transport(std::io::Error::other(error)))?
+            }
+            _ => io.await,
+        }
     }
 
     async fn take_idle_connection(&self) -> Option<Connection> {
         loop {
             let idle = {
-                let mut idle = self.0.idle.lock().await;
+                let mut idle = self.inner.idle.lock().await;
                 idle.connections
                     .retain(|idle| idle.since.elapsed() < IDLE_TIMEOUT);
                 idle.connections.pop()
@@ -126,14 +156,15 @@ impl Client {
     }
 
     async fn put_idle_connection(&self, connection: Connection) {
-        let mut idle = self.0.idle.lock().await;
+        let mut idle = self.inner.idle.lock().await;
         idle.connections.push(IdleConnection {
             connection,
             since: Instant::now(),
         });
         if !idle.expiring {
             idle.expiring = true;
-            tokio::spawn(Self::expire_idle_connections(Arc::downgrade(&self.0)));
+            let runtime = self.runtime.clone().unwrap_or_else(Handle::current);
+            runtime.spawn(Self::expire_idle_connections(Arc::downgrade(&self.inner)));
         }
     }
 
@@ -160,27 +191,14 @@ impl Client {
         }
     }
 
-    /// Invoke a generated RPC using synchronous codecs and asynchronous network I/O.
-    pub async fn call<T>(
-        &self,
-        method: &str,
-        encode: impl FnOnce(&mut dyn TOutputProtocol) -> thrift::Result<()>,
-        decode: impl FnOnce(&mut dyn TInputProtocol) -> thrift::Result<T>,
-    ) -> Result<T, ClientError> {
-        let _permit = self
-            .0
-            .permits
-            .acquire()
-            .await
-            .map_err(|e| ClientError::Transport(std::io::Error::other(e.to_string())))?;
-        let idle = self.take_idle_connection().await;
+    async fn checkout(&self) -> Result<Connection, ClientError> {
         // A call owns its connection across every await. Cancellation or any error
         // drops it, so partially written/read messages can never enter the idle pool.
-        let mut connection = match idle {
+        Ok(match self.take_idle_connection().await {
             Some(connection) => connection,
             None => {
                 let (reader, writer) = self
-                    .0
+                    .inner
                     .connector
                     .connect()
                     .await
@@ -191,7 +209,24 @@ impl Client {
                     sequence: 0,
                 }
             }
-        };
+        })
+    }
+
+    /// Invoke a generated RPC using synchronous codecs and asynchronous network I/O.
+    pub async fn call<T>(
+        &self,
+        method: &str,
+        encode: impl FnOnce(&mut dyn TOutputProtocol) -> thrift::Result<()>,
+        decode: impl FnOnce(&mut dyn TInputProtocol) -> thrift::Result<T>,
+    ) -> Result<T, ClientError> {
+        let _permit = self
+            .inner
+            .permits
+            .acquire()
+            .await
+            .map_err(|e| ClientError::Transport(std::io::Error::other(e.to_string())))?;
+        let client = self.clone();
+        let mut connection = self.run_io(async move { client.checkout().await }).await?;
 
         connection.sequence = connection.sequence.wrapping_add(1);
         let sequence = connection.sequence;
@@ -207,12 +242,18 @@ impl Client {
             protocol.write_message_end()?;
         }
 
-        crate::transport::write_message(&mut connection.writer, self.0.transport, &request)
-            .await
-            .map_err(ClientError::io)?;
-        let response = crate::transport::read_message(&mut connection.reader, self.0.transport)
-            .await
-            .map_err(ClientError::io)?;
+        let transport = self.inner.transport;
+        let (connection, response) = self
+            .run_io(async move {
+                crate::transport::write_message(&mut connection.writer, transport, &request)
+                    .await
+                    .map_err(ClientError::io)?;
+                let response = crate::transport::read_message(&mut connection.reader, transport)
+                    .await
+                    .map_err(ClientError::io)?;
+                Ok((connection, response))
+            })
+            .await?;
         let mut cursor = Cursor::new(response.as_slice());
         let result = {
             let config = thrift::TConfiguration::builder()

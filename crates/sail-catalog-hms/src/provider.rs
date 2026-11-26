@@ -47,6 +47,7 @@ pub struct HmsCatalogConfig {
 }
 
 pub struct HmsCatalogProvider {
+    pub(crate) primary: tokio::runtime::Handle,
     name: String,
     config: HmsCatalogConfig,
     min_sasl_qop: SaslQop,
@@ -406,7 +407,7 @@ impl HmsCatalogProvider {
     pub fn try_new(
         name: String,
         config: HmsCatalogConfig,
-        _runtime: RuntimeHandle,
+        runtime: RuntimeHandle,
     ) -> CatalogResult<Self> {
         let min_sasl_qop = parse_min_sasl_qop(&config)?;
         let normalized = split_hms_uri_list(&config.uris)?;
@@ -416,6 +417,7 @@ impl HmsCatalogProvider {
             .collect::<Vec<_>>();
 
         Ok(Self {
+            primary: runtime.primary().clone(),
             name,
             config,
             min_sasl_qop,
@@ -462,8 +464,12 @@ impl HmsCatalogProvider {
         let endpoint = self.endpoints.get(index).ok_or_else(|| {
             CatalogError::Internal(format!("HMS endpoint index out of bounds: {index}"))
         })?;
-        let address = tokio::net::lookup_host(endpoint.uri.as_str())
+        let lookup = self
+            .primary
+            .spawn(tokio::net::lookup_host(endpoint.uri.clone()));
+        let address = tokio_util::task::AbortOnDropHandle::new(lookup)
             .await
+            .map_err(|error| CatalogError::Internal(error.to_string()))?
             .map_err(|error| {
                 CatalogError::External(format!(
                     "dns error: failed to resolve HMS URI '{}': {error}",
@@ -495,15 +501,18 @@ impl HmsCatalogProvider {
                 )));
             }
         };
-        let client = ThriftHiveMetastoreClient(Client::new(
-            HmsConnector {
-                address,
-                auth,
-                qop: self.min_sasl_qop,
-                timeout: connect_timeout(&self.config),
-            },
-            transport,
-        ));
+        let client = ThriftHiveMetastoreClient(
+            Client::new(
+                HmsConnector {
+                    address,
+                    auth,
+                    qop: self.min_sasl_qop,
+                    timeout: connect_timeout(&self.config),
+                },
+                transport,
+            )
+            .with_runtime(self.primary.clone()),
+        );
         Ok(client)
     }
 

@@ -28,10 +28,18 @@ pub(crate) async fn run<T: Send + 'static>(
             .await
             .map_err(|e| Status::internal(format!("query task failed: {e}")))?
     };
+    until_shutdown(cancellation, run).await
+}
+
+/// Keep control RPCs responsive to shutdown on the server runtime.
+pub async fn until_shutdown<T>(
+    cancellation: &QueryCancellation,
+    rpc: impl Future<Output = Result<T, Status>>,
+) -> Result<T, Status> {
     tokio::select! {
         biased;
         () = cancellation.cancelled() => Err(query_cancelled()),
-        result = run => result,
+        result = rpc => result,
     }
 }
 

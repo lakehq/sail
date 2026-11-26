@@ -254,10 +254,7 @@ pub fn create_catalog_manager(
                         min_sasl_qop: min_sasl_qop.clone(),
                         connect_timeout_secs: *connect_timeout_secs,
                     };
-                    let provider = RuntimeAwareCatalogProvider::try_new(
-                        || HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone()),
-                        runtime.primary().clone(),
-                    )?;
+                    let provider = HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone())?;
                     let provider =
                         wrap_catalog_provider(Arc::new(provider), name, cache, &cache_manager)?;
                     Ok((name.to_string(), provider))

@@ -290,9 +290,21 @@ async fn dropping_client_closes_idle_connections() -> TestResult {
     Ok(())
 }
 
-#[tokio::test]
-async fn cancellation_discards_inflight_connection() -> TestResult {
-    let (client, mut peers, count) = client(Transport::Buffered);
+#[test]
+fn cancellation_discards_inflight_connection() -> TestResult {
+    let caller = tokio::runtime::Runtime::new()?;
+    let primary = tokio::runtime::Runtime::new()?;
+    for runtime in [None, Some(primary.handle().clone())] {
+        caller.block_on(cancel_inflight_request(runtime))?;
+    }
+    Ok(())
+}
+
+async fn cancel_inflight_request(runtime: Option<tokio::runtime::Handle>) -> TestResult {
+    let (mut client, mut peers, count) = client(Transport::Buffered);
+    if let Some(runtime) = runtime {
+        client.0 = client.0.with_runtime(runtime);
+    }
     let first = client.clone();
     let task = tokio::spawn(async move { first.get_all_databases().await });
     let peer = peers.recv().await.unwrap();
@@ -300,6 +312,15 @@ async fn cancellation_discards_inflight_connection() -> TestResult {
     read_message(&mut first_peer, Transport::Buffered).await?;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read(&mut first_peer, &mut byte)
+        )
+        .await??,
+        0
+    );
     let server = tokio::spawn(async move {
         let peer = peers.recv().await.unwrap();
         let (reader, mut writer) = tokio::io::split(peer);

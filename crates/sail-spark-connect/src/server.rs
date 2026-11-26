@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_session::session_manager::SessionManager;
+use sail_session::shutdown;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -298,13 +299,23 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
-        let stream = self
-            .session_manager
-            .run_query(Self::handle_execute_plan(
-                self.session_manager.clone(),
-                request,
-            ))
-            .await?;
+        use crate::spark::connect::command::CommandType;
+
+        let streaming_control = matches!(
+            request.plan.as_ref().and_then(|plan| plan.op_type.as_ref()),
+            Some(plan::OpType::Command(Command {
+                command_type: Some(
+                    CommandType::StreamingQueryCommand(_)
+                        | CommandType::StreamingQueryManagerCommand(_)
+                ),
+            }))
+        );
+        let rpc = Self::handle_execute_plan(self.session_manager.clone(), request);
+        let stream = if streaming_control {
+            shutdown::until_shutdown(cancellation, rpc).await?
+        } else {
+            self.session_manager.run_query(rpc).await?
+        };
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 
@@ -505,13 +516,11 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
-        let stream = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => {
-                return Err(Status::cancelled("query cancelled because the server is shutting down"));
-            }
-            result = Self::handle_reattach_execute(self.session_manager.clone(), request) => result?,
-        };
+        let stream = shutdown::until_shutdown(
+            cancellation,
+            Self::handle_reattach_execute(self.session_manager.clone(), request),
+        )
+        .await?;
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 

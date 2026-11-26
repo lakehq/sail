@@ -7052,6 +7052,7 @@ dependencies = [
  "sail-thrift",
  "serde_json",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -8045,6 +8046,7 @@ dependencies = [
  "thiserror",
  "thrift",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
