@@ -1394,7 +1394,7 @@ impl PlanResolver<'_> {
 
     /// Returns the source of a read of a catalog table that a temporary view was created
     /// over, with the catalog table lookups and the table sources of the query, or the error
-    /// that the name of the table is now the name of a view.
+    /// that the table is not found or that its name is now the name of a view.
     async fn resolve_view_catalog_table_source(
         &self,
         origin: &CatalogTableOrigin,
@@ -1416,7 +1416,7 @@ impl PlanResolver<'_> {
         let (status, resolved) = match lookup {
             Ok(lookup) => lookup,
             Err(CatalogError::NotFound(object, _)) => {
-                return Err(CatalogError::NotFound(
+                return Ok(Err(CatalogError::NotFound(
                     object,
                     format!(
                         "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {} (read by the \
@@ -1425,7 +1425,7 @@ impl PlanResolver<'_> {
                         view_name(view),
                     ),
                 )
-                .into());
+                .into()));
             }
             Err(error) => return Err(error.into()),
         };
