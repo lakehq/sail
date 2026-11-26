@@ -827,25 +827,10 @@ pub(crate) async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
-        Some(lakehouse_table) => {
-            load_catalog_managed_commits_for_snapshot(
-                &ctx,
-                lakehouse_table,
-                &table_url,
-                log_store.clone(),
-                options.version_as_of,
-            )
-            .await?
-        }
-        None => None,
-    };
-
+    let managed_commit_context = catalog_managed_commit_context(lakehouse_table.as_ref());
+    let catalog_managed = managed_commit_context.is_some();
     let mut table_config = delta_read_snapshot_config(metadata_only, &options);
-    let catalog_managed = catalog_managed_commits.is_some();
-    table_config.catalog_managed_commits = catalog_managed_commits;
     let require_files = table_config.require_files;
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
     // The reads of a table in a statement read the snapshot that the first of them read,
     // unless they travel in time or read changes. A read that needs the files of the
@@ -863,6 +848,20 @@ pub(crate) async fn load_delta_read_state(
     let snapshot = match pinned {
         Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
         pinned => {
+            // The commits that the catalog ratified, up to the version of a snapshot that a
+            // read with the files of the snapshot loads again. A pinned snapshot has them.
+            if let Some(context) = managed_commit_context {
+                let version = pinned.as_ref().map(|x| x.version()).or(options.version_as_of);
+                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                    &ctx,
+                    context,
+                    &table_url,
+                    log_store.clone(),
+                    version,
+                )
+                .await?;
+            }
+            let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
             match pinned {
                 Some(pinned) => {
                     // A table that was created again at the location has another ID, and
