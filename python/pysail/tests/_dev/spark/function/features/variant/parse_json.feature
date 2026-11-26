@@ -87,7 +87,7 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error DATATYPE_MISMATCH
 
-  Rule: Numeric preservation (Sail currently diverges from Spark)
+  Rule: Numeric preservation
 
     Scenario Outline: Numeric: <case>
       When query
@@ -99,31 +99,13 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | <result> |
 
       Examples:
-        | case                                                      | json       | result |
-        | parse_json negative scientific notation                   | '1.5e-1'   | 0.15   |
-        | parse_json negative zero                                  | '-0'       | 0      |
-        | parse_json accepts trailing garbage (Spark parses prefix) | '42 extra' | 42     |
+        | case                                                      | json                   | result               |
+        | parse_json negative zero                                  | '-0'                   | 0                    |
+        | parse_json preserves large number beyond i64              | '99999999999999999999' | 99999999999999999999 |
+        | parse_json negative scientific notation                   | '1.5e-1'               | 0.15                 |
+        | parse_json scientific notation preserves decimal          | '1.5e3'                | 1500.0               |
+        | parse_json accepts trailing garbage (Spark parses prefix) | '42 extra'             | 42                   |
 
-    @sail-bug
-    Scenario Outline: Numeric (sail-bug): <case>
-      When query
-        """
-        SELECT to_json(parse_json(<json>)) AS result
-        """
-      Then query result
-        | result   |
-        | <result> |
-
-      Examples:
-        | case                                             | json                   | result               |
-        | parse_json scientific notation preserves decimal | '1.5e3'                | 1500.0               |
-        | parse_json preserves large number beyond i64     | '99999999999999999999' | 99999999999999999999 |
-
-    @sail-bug
-    # Spark keeps scientific negative zero as -0.0 (the exponent makes it a DOUBLE);
-    # only the non-exponent forms `-0`/`-0.0` normalize to 0. Sail can't match this:
-    # serde_json discards the exponent, and Sail renders -0.0 as `-0` anyway
-    # (Sail-wide double->string formatting gap, same root cause as `1e10` -> `1.0E10`).
     Scenario: parse_json scientific negative zero keeps sign
       When query
         """

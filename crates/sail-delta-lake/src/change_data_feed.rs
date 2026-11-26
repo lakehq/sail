@@ -621,7 +621,7 @@ fn read_compatible_field(historical: &Field, read: &Field) -> bool {
     if historical.is_nullable() && !read.is_nullable()
         || ["delta.columnMapping.id", "delta.columnMapping.physicalName"]
             .iter()
-            .any(|key| historical.metadata().get(*key) != read.metadata().get(*key))
+            .any(|key| historical.metadata().get(key) != read.metadata().get(key))
     {
         return false;
     }

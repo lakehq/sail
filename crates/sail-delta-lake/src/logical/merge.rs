@@ -341,7 +341,7 @@ pub(super) fn ensure_row_level_metadata_columns(
                             .with_projection(projection)
                             .with_filters(scan.filters.clone())
                             .with_fetch(scan.fetch)
-                            .with_statistics_requests(scan.statistics_requests.clone())
+                            .with_statistics_requests(scan.statistics_requests.as_ref().clone())
                             .build()?,
                     );
                     trace!(

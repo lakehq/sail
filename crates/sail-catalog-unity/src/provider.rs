@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Metadata};
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
@@ -580,7 +580,7 @@ impl CatalogProvider for UnityCatalogProvider {
                             &col.name,
                             &col.data_type,
                             col.nullable,
-                            &HashMap::new(),
+                            &Metadata::new(),
                         )?
                         .to_string(),
                     ),

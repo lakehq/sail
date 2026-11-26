@@ -205,28 +205,16 @@ from pysail.testing.spark.utils.common import is_jvm_spark
             id="correlated-scalar-subquery-computed-key",
         ),
         # An empty scalar subquery is NULL next to a seeded call.
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#24516, #24534)
         pytest.param(
             "SELECT id, rand(42) AS r, s FROM (SELECT id, (SELECT id FROM range(1) WHERE id > 5) AS s "
             "FROM range(0, 3, 1, 1)) ORDER BY id",
             [(0, 0.619189370225301, None), (1, 0.5096018842446481, None), (2, 0.8325259388871524, None)],
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                strict=True,
-                reason="DataFusion types an empty scalar subquery as non-nullable",
-            ),
             id="empty-scalar-subquery",
         ),
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#24516, #24534)
         pytest.param(
             "SELECT id, rand(42) + s AS r, rand(42) AS q FROM (SELECT id, (SELECT id FROM range(1) WHERE id > 5) AS s "
             "FROM range(0, 3, 1, 1)) ORDER BY id",
             [(0, None, 0.619189370225301), (1, None, 0.5096018842446481), (2, None, 0.8325259388871524)],
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                strict=True,
-                reason="DataFusion types an empty scalar subquery as non-nullable",
-            ),
             id="empty-scalar-subquery-arithmetic",
         ),
         # An unused seeded column does not drop the input sort that other operators depend on.
@@ -535,42 +523,24 @@ def test_seeded_random_case_with_pandas_iterator_udf(spark):
     [
         # A seeded call in a `CASE` with boolean results advances its generator only for the
         # rows that evaluate it, also when the condition has a seeded call.
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count_if(b) AS c, sum(IF(b, id, 0)) AS s FROM (SELECT id, "
             "CASE WHEN rand(42) < 0.5 THEN id % 3 = 0 ELSE rand(7) < 0.5 END AS b FROM range(0, 20000, 1, 1))",
             [(8286, 82652296)],
             id="boolean-case-with-seeded-condition",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count_if(b) AS c, sum(IF(b, id, 0)) AS s FROM (SELECT id, "
             "CASE WHEN rand(42) < 0.5 THEN id % 3 = 0 ELSE rand(7) < 0.5 END AS b FROM range(0, 20000, 1, 3))",
             [(8380, 83907453)],
             id="boolean-case-with-seeded-condition-partitions",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count_if(b) AS c, sum(IF(b, id, 0)) AS s FROM (SELECT id, "
             "CASE WHEN rand(1) < 0.3 THEN true WHEN rand(2) < 0.5 THEN rand(3) < 0.5 ELSE false END AS b "
             "FROM range(0, 20000, 1, 1))",
             [(9438, 94240347)],
             id="boolean-case-with-seeded-conditions",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
         # The right side of an operator whose result is null for a null left side is evaluated
         # only for the rows where the left side is not null.
@@ -645,34 +615,16 @@ def test_seeded_random_in_lazily_evaluated_arguments(spark, query, expected):
 @pytest.mark.parametrize(
     "query",
     [
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count_if(NOT c) FROM (SELECT CASE WHEN rand() < 0.5 THEN id >= 0 ELSE id >= 0 END AS c "
             "FROM range(0, 10000, 1, 2))",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count(*) FROM range(0, 10000, 1, 2) WHERE NOT (CASE WHEN rand() < 0.5 THEN id >= 0 ELSE id >= 0 END)",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
-        # TODO: remove xfail after upgrading to DataFusion 56 (apache/datafusion#25143)
         pytest.param(
             "SELECT count_if(NOT c) FROM (SELECT CASE WHEN rand() < 0.3 THEN id >= 0 WHEN rand() < 0.5 THEN id >= 0 "
             "ELSE id >= 0 END AS c FROM range(0, 10000, 1, 2))",
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(),
-                reason="DataFusion rewrites boolean CASE with volatile WHEN into AND/OR",
-                strict=True,
-            ),
         ),
     ],
 )

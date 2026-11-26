@@ -31,10 +31,6 @@ impl OptimizerRule for PullUpCorrelatedFiltersAbovePartitionSensitiveNodes {
         "pull_up_correlated_filters_above_partition_sensitive_nodes"
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

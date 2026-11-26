@@ -2029,7 +2029,7 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .generation_expression()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -2044,7 +2044,7 @@ fn extract_default_expressions(logical_schema: Option<&DFSchema>) -> HashMap<Str
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .current_default()
                 .map(|expr| (field.name().clone(), expr))
         })
@@ -2075,7 +2075,7 @@ fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRe
         .fields()
         .iter()
         .map(|field| {
-            let features = ColumnFeatures::from_map(field.metadata());
+            let features = ColumnFeatures::from_field(field);
             let mut metadata = field.metadata().clone();
             if features.is_not_null_constraint() {
                 changed = true;
@@ -2103,7 +2103,7 @@ fn extract_identity_columns(
         .fields()
         .iter()
         .filter_map(|field| {
-            ColumnFeatures::from_map(field.metadata())
+            ColumnFeatures::from_field(field)
                 .identity()
                 .map(|identity| (field.name().clone(), identity))
         })

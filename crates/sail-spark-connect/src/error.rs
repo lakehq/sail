@@ -480,6 +480,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if x.starts_with("[NULL_MAP_KEY]") {
+                    SparkThrowable::SparkRuntimeException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)

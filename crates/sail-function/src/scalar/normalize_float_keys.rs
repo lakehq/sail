@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, MapArray, StructArray, make_array};
 use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
-use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -121,7 +121,7 @@ fn normalize(array: &ArrayRef, nan: bool) -> Result<ArrayRef> {
         return if nan {
             normalize_nan_and_zero(array)
         } else {
-            Ok(normalize_float_zero(array))
+            Ok(normalize_floats(array))
         };
     }
     if let DataType::Map(field, sorted) = array.data_type() {
