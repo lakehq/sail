@@ -154,7 +154,7 @@ async fn test_temporary_view_reads_the_table_as_the_catalog_returns_it_now() -> 
         for _ in 0..2 {
             let snapshot = fixture.next_snapshot();
             let sql = format!("SELECT * FROM {view}");
-            let sources = fixture.resolve(&sql).await?.expect(1, 1, &sql);
+            let sources = fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
             assert_eq!(sources[0].snapshot, snapshot, "{sql}");
             assert_eq!(sources[0].catalog_table, Some(full_name()), "{sql}");
         }
@@ -199,7 +199,7 @@ async fn test_temporary_view_shares_the_catalog_load_of_the_statement() -> TestR
         ]);
         for sql in &statements {
             let snapshot = fixture.next_snapshot();
-            let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+            let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
             assert_eq!(sources[0].snapshot, snapshot, "{sql}");
             fixture.execute(sql).await?;
         }
@@ -222,7 +222,7 @@ async fn test_write_shares_the_catalog_load_of_the_temporary_view_that_it_reads(
             let snapshot = fixture.next_snapshot();
             let resolution = fixture.resolve(&sql).await?;
             let writes = resolution.writes.clone();
-            let sources = resolution.expect(1, 1, &sql);
+            let sources = resolution.assert_loads(1, 1, &sql);
             assert_eq!(sources[0].snapshot, snapshot, "{sql}");
             assert_eq!(writes.len(), 1, "{sql}");
             assert_eq!(writes[0].snapshot, Some(snapshot), "{sql}");
@@ -247,7 +247,7 @@ async fn test_temporary_view_without_a_table_takes_no_catalog_load() -> TestResu
     ] {
         let resolution = fixture.resolve(sql).await?;
         assert_eq!(resolution.requests, Vec::<String>::new(), "{sql}");
-        resolution.expect(0, 0, sql);
+        resolution.assert_loads(0, 0, sql);
     }
     // The stored plan of such a view is the plan that the query resolved to.
     let stored = fixture.stored_view_plan(&["lit"]).await?;
@@ -317,7 +317,7 @@ async fn temporary_view_over_views_reads_one_table_load() -> TestResult {
         "SELECT * FROM v3 JOIN v1 USING (k) JOIN t USING (k) JOIN over_pv USING (k)",
     ] {
         let snapshot = fixture.next_snapshot();
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot, "{sql}");
     }
     // A view that is replaced by a query over itself, as
@@ -331,7 +331,7 @@ async fn temporary_view_over_views_reads_one_table_load() -> TestResult {
             .await?;
         let snapshot = fixture.next_snapshot();
         let sql = "SELECT * FROM r JOIN t USING (k)";
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot);
     }
     Ok(())
@@ -359,7 +359,7 @@ async fn deep_chain_of_temporary_views_reads_one_table_load() -> TestResult {
         "SELECT * FROM c101 JOIN c50 USING (k) JOIN t USING (k)",
     ] {
         let snapshot = fixture.next_snapshot();
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot, "{sql}");
     }
     Ok(())
@@ -386,19 +386,19 @@ async fn test_temporary_view_keeps_the_table_that_its_definition_named() -> Test
     ] {
         let resolution = fixture.resolve(sql).await?;
         assert_eq!(resolution.requests, ["table t"], "{sql}");
-        let sources = resolution.expect(1, 1, sql);
+        let sources = resolution.assert_loads(1, 1, sql);
         assert_eq!(sources[0].catalog_table, Some(full_name()), "{sql}");
     }
     // The table of the same name in the current database is another table.
     let sql = "SELECT * FROM named a JOIN t b ON a.k = b.k";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     fixture.execute("USE DATABASE default").await?;
     // A temporary view that takes the name of the table later.
     fixture
         .execute("CREATE TEMPORARY VIEW t AS SELECT 1L AS x")
         .await?;
     for sql in ["SELECT k, v FROM named", "SELECT k, v FROM named_df"] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     }
     fixture.execute("DROP VIEW t").await?;
     // A CTE of the query that reads the view, with the name of the table.
@@ -406,7 +406,7 @@ async fn test_temporary_view_keeps_the_table_that_its_definition_named() -> Test
         "WITH t AS (SELECT 1L AS x) SELECT k, v FROM named",
         "WITH t AS (SELECT 1L AS x) SELECT k, v FROM named_df JOIN t ON k = x",
     ] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     }
     Ok(())
 }
@@ -421,17 +421,17 @@ async fn test_temporary_view_keeps_its_read_options_and_time_travel() -> TestRes
     for _ in 0..2 {
         let snapshot = fixture.next_snapshot();
         let sql = "SELECT * FROM old";
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot);
         assert_eq!(sources[0].options.len(), 1);
         assert_eq!(sources[0].options[0].1, "1");
         let sql = "SELECT * FROM opt";
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].options, owned(&[("a", "1")]));
     }
     // The view and the table have their own sources over one catalog load.
     let sql = "SELECT * FROM old a JOIN t b ON a.k = b.k JOIN opt c ON a.k = c.k";
-    let mut sources = fixture.resolve(sql).await?.expect(1, 3, sql);
+    let mut sources = fixture.resolve(sql).await?.assert_loads(1, 3, sql);
     sources.sort_by(|a, b| a.options.cmp(&b.options));
     assert_eq!(sources[0].options, vec![]);
     assert_eq!(sources[1].options, owned(&[("a", "1")]));
@@ -439,7 +439,7 @@ async fn test_temporary_view_keeps_its_read_options_and_time_travel() -> TestRes
     assert!(sources.iter().all(|x| x.snapshot == sources[0].snapshot));
     // A direct read of the same version shares the source of the view.
     let sql = "SELECT * FROM old a JOIN t VERSION AS OF 1 b ON a.k = b.k";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     Ok(())
 }
 
@@ -474,14 +474,14 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
         .execute("CREATE TEMPORARY VIEW narrow AS SELECT * FROM cols_sv")
         .await?;
     let sql = "SELECT * FROM wide";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     fixture.execute(sql).await?;
     // The new column is dropped again. The views that do not read it still read the table.
     fixture
         .replace_table(&["t"], vec![column("k"), column("v")])
         .await?;
     for sql in ["SELECT * FROM cols_sv", "SELECT * FROM narrow"] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         fixture.execute(sql).await?;
     }
     // The view is defined by a SQL query, which no longer resolves, so the view fails with the
@@ -502,7 +502,7 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
 }
 
 #[tokio::test]
-async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> TestResult {
+async fn test_temporary_view_fails_for_a_dropped_column_and_resolves_a_retyped_one() -> TestResult {
     let changes: Vec<(Vec<CreateTableColumnOptions>, &str)> = vec![
         (vec![column("k")], "- `v` BIGINT has been removed"),
         (
@@ -561,7 +561,7 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             .await?;
         for view in &views {
             let sql = format!("SELECT * FROM {view}");
-            fixture.resolve(&sql).await?.expect(1, 1, &sql);
+            fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
             fixture.execute(&sql).await?;
         }
     }
@@ -645,7 +645,7 @@ async fn test_temporary_view_plans_when_only_the_column_metadata_changed() -> Te
                 format!("SELECT a.k, count(*) FROM {view} a JOIN t b ON a.k = b.k GROUP BY a.k"),
                 format!("SELECT DISTINCT k FROM {view} UNION SELECT k FROM t"),
             ] {
-                fixture.resolve(&sql).await?.expect(1, 1, &sql);
+                fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
                 fixture.execute(&sql).await?;
             }
         }
@@ -687,7 +687,7 @@ async fn temporary_view_of_a_missing_table_is_not_found() -> TestResult {
     fixture.create_table(&["t"], &["k", "v", "w"]).await?;
     for view in &views {
         let sql = format!("SELECT * FROM {view}");
-        fixture.resolve(&sql).await?.expect(1, 1, &sql);
+        fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
     }
     // A catalog view takes the name of the table.
     fixture.drop_table(&["t"]).await?;
@@ -719,7 +719,7 @@ async fn test_replaced_and_dropped_temporary_views() -> TestResult {
     assert_eq!(count_scans(&stored)?, (0, 1));
     let resolution = fixture.resolve("SELECT * FROM moving").await?;
     assert_eq!(resolution.requests, ["table u"]);
-    resolution.expect(1, 1, "replaced view");
+    resolution.assert_loads(1, 1, "replaced view");
     fixture.execute("DROP VIEW moving").await?;
     assert_eq!(count_scans(&stored)?, (0, 1));
     assert!(
@@ -744,12 +744,12 @@ async fn test_temporary_view_over_a_table_with_duplicate_column_names() -> TestR
     for _ in 0..2 {
         let snapshot = fixture.next_snapshot();
         let sql = "SELECT * FROM dup_v";
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot);
         fixture.execute(sql).await?;
     }
     let sql = "SELECT * FROM dup_v, dup";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     Ok(())
 }
 
@@ -811,7 +811,7 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
         "SELECT * FROM global_temp.xs_mine a JOIN global_temp.xs_mine_df b ON a.k = b.k",
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
-        let sources = reader.resolve(sql).await?.expect(0, 1, sql);
+        let sources = reader.resolve(sql).await?.assert_loads(0, 1, sql);
         assert_eq!(sources[0].snapshot, before.0.to_string(), "{sql}");
         assert_eq!(loads(&creator), (before.0 + 1, before.1), "{sql}");
         assert_eq!(loads(&reader), snapshot, "{sql}");
@@ -824,7 +824,7 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
         .await?;
     let sql = "SELECT a.v, b.w FROM global_temp.xs_mine a JOIN mine b ON a.k = b.k";
     let before = loads(&creator);
-    reader.resolve(sql).await?.expect(1, 2, sql);
+    reader.resolve(sql).await?.assert_loads(1, 2, sql);
     assert_eq!(loads(&creator), (before.0 + 1, before.1));
     // A table in a catalog that is the same in every session is read in the catalog of
     // the reader, with the other references to the table in the statement.
@@ -835,7 +835,7 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
             JOIN global_temp.xs_shared_df c ON a.k = c.k",
     ] {
         let (before, snapshot) = (loads(&creator), loads(&reader));
-        let sources = reader.resolve(sql).await?.expect(0, 1, sql);
+        let sources = reader.resolve(sql).await?.assert_loads(0, 1, sql);
         assert_eq!(sources[0].snapshot, snapshot.1.to_string(), "{sql}");
         assert_eq!(loads(&reader), (snapshot.0, snapshot.1 + 1), "{sql}");
         assert_eq!(loads(&creator), before, "{sql}");
@@ -863,7 +863,7 @@ async fn test_global_temporary_view_in_another_session() -> TestResult {
     drop(creator);
     let before = catalog.loads.load(Ordering::SeqCst);
     let sql = "SELECT * FROM global_temp.xs_mine";
-    reader.resolve(sql).await?.expect(0, 1, sql);
+    reader.resolve(sql).await?.assert_loads(0, 1, sql);
     assert_eq!(catalog.loads.load(Ordering::SeqCst), before + 1);
     Ok(())
 }

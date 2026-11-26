@@ -53,20 +53,17 @@ def table(tables, request):
 
 
 def assert_view_reads(spark, view, expected):
-    """Asserts that the view reads the rows, or that its plan no longer fits its tables if `expected` is
-    `None`. The view then resolves its definition again: it reads its columns of what the query or the
-    DataFrame reads now, or it fails as that fails."""
-    if expected is None and view in DEFINITIONS:
+    """Asserts that the view reads the rows, or, if `expected` is `None`, what its definition reads now: the
+    view then resolves its definition again and reads its columns of what the query or the DataFrame reads
+    now, or it fails as that fails."""
+    if expected is None:
         definition, columns = DEFINITIONS[view]
         try:
             expected = rows(spark, definition.select(*(col(f"`{x}`") for x in columns)))
         except Exception:  # noqa: BLE001
             error(spark, f"SELECT * FROM {view}")
             return
-    if expected is None:
-        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
-    else:
-        assert rows(spark, f"SELECT * FROM {view}") == expected
+    assert rows(spark, f"SELECT * FROM {view}") == expected
 
 
 @pytest.mark.parametrize("table", FORMATS, indirect=True)
@@ -1212,9 +1209,7 @@ KEY_QUERIES = {
 
 
 @pytest.mark.parametrize("case", KEY_QUERIES)
-def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tables, case):
-    # A known limit: a struct field that only tells rows apart counts as read, while a
-    # column that only tells rows apart may change its type.
+def test_view_reads_a_key_whose_type_changed(spark, tables, case):
     query, changed = KEY_QUERIES[case]
     table = tables("iceberg", "a INT, b INT, s STRUCT<x: INT, y: INT>")
     table.insert("(1, 1, named_struct('x', 1, 'y', 1)), (1, 2, named_struct('x', 2, 'y', 1))")
@@ -1222,7 +1217,7 @@ def test_view_fails_for_a_struct_field_key_whose_type_changed(spark, tables, cas
     view = table.create_view("sv", sql)
     spark.sql(f"ALTER TABLE {table.name} ALTER COLUMN {changed} TYPE BIGINT")
     table.insert("(5, 5, named_struct('x', 9, 'y', 1))")
-    assert_view_reads(spark, view, None if changed == "s.x" else rows(spark, sql))
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 # Queries over `t (a INT, b INT)` that only compare `b`, sort by it, or count, sum or average it.

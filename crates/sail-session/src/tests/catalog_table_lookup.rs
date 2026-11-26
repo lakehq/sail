@@ -466,7 +466,7 @@ struct Resolution {
 
 impl Resolution {
     /// Asserts that the statement resolved with `loads` catalog loads and returns its sources.
-    fn expect(self, loads: usize, sources: usize, context: &str) -> Vec<CreatedSource> {
+    fn assert_loads(self, loads: usize, sources: usize, context: &str) -> Vec<CreatedSource> {
         assert_eq!(self.error, None, "{context}");
         assert_eq!(self.loads, loads, "catalog loads of {context}");
         assert_eq!(self.sources.len(), sources, "sources of {context}");
@@ -706,17 +706,38 @@ fn read_identifier(identifier: &str) -> spec::QueryPlan {
     read_path("iceberg", identifier, &[])
 }
 
+fn union_plan(left: spec::QueryPlan, right: spec::QueryPlan) -> spec::QueryPlan {
+    spec::QueryPlan::new(spec::QueryNode::SetOperation(spec::SetOperation {
+        left: Box::new(left),
+        right: Box::new(right),
+        set_op_type: spec::SetOpType::Union,
+        is_all: true,
+        by_name: false,
+        allow_missing_columns: false,
+    }))
+}
+
 fn union(left: spec::QueryPlan, right: spec::QueryPlan) -> spec::Plan {
-    spec::Plan::Query(spec::QueryPlan::new(spec::QueryNode::SetOperation(
-        spec::SetOperation {
-            left: Box::new(left),
-            right: Box::new(right),
-            set_op_type: spec::SetOpType::Union,
-            is_all: true,
-            by_name: false,
-            allow_missing_columns: false,
-        },
-    )))
+    read(union_plan(left, right))
+}
+
+/// The `UNION ALL` of the reads, which are resolved in order.
+fn union_all(reads: impl IntoIterator<Item = spec::QueryPlan>) -> TestResult<spec::Plan> {
+    let plan = reads.into_iter().reduce(union_plan).ok_or("no reads")?;
+    Ok(read(plan))
+}
+
+/// The columns of the read.
+fn select(input: spec::QueryPlan, columns: &[&str]) -> spec::QueryPlan {
+    let column = |name: &&str| spec::Expr::UnresolvedAttribute {
+        name: spec::ObjectName::bare(*name),
+        plan_id: None,
+        is_metadata_column: false,
+    };
+    spec::QueryPlan::new(spec::QueryNode::Project {
+        input: Some(Box::new(input)),
+        expressions: columns.iter().map(column).collect(),
+    })
 }
 
 fn read(plan: spec::QueryPlan) -> spec::Plan {
@@ -744,7 +765,7 @@ async fn test_table_spellings_share_one_catalog_load() -> TestResult {
     for a in SPELLINGS {
         for b in SPELLINGS {
             let sql = format!("SELECT (SELECT max(v) FROM {a}), (SELECT max(v) FROM {b})");
-            fixture.resolve(&sql).await?.expect(1, 1, &sql);
+            fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
         }
     }
     let sql = format!(
@@ -753,18 +774,18 @@ async fn test_table_spellings_share_one_catalog_load() -> TestResult {
             .map(|x| format!("(SELECT max(v) FROM {x})"))
             .join(", ")
     );
-    fixture.resolve(&sql).await?.expect(1, 1, &sql);
+    fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
     // The source carries the full name of the table, whichever name comes first.
     for sql in [
         "SELECT * FROM t a JOIN sail.default.t b ON a.k = b.k",
         "SELECT * FROM sail.default.t a JOIN t b ON a.k = b.k",
     ] {
-        let sources = fixture.resolve(sql).await?.expect(1, 1, sql);
+        let sources = fixture.resolve(sql).await?.assert_loads(1, 1, sql);
         assert_eq!(sources[0].catalog_table, Some(full_name()), "{sql}");
     }
     // Each statement loads the table again.
-    let first = fixture.resolve(&sql).await?.expect(1, 1, &sql);
-    let second = fixture.resolve(&sql).await?.expect(1, 1, &sql);
+    let first = fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
+    let second = fixture.resolve(&sql).await?.assert_loads(1, 1, &sql);
     assert_ne!(first[0].snapshot, second[0].snapshot);
     Ok(())
 }
@@ -806,7 +827,7 @@ async fn table_spellings_share_one_catalog_load_across_query_shapes(
         // A set operation.
         "SELECT * FROM t UNION ALL SELECT * FROM default.t UNION ALL SELECT * FROM sail.default.t",
     ] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     }
     Ok(())
 }
@@ -822,17 +843,17 @@ async fn test_temporary_view_is_not_merged_with_the_table_of_the_same_name() -> 
         "SELECT (SELECT max(x) FROM t), (SELECT max(v) FROM sail.default.t), \
             (SELECT max(x) FROM `t`), (SELECT max(v) FROM default.t)",
     ] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     }
     // The temporary view alone loads nothing from the catalog.
     let sql = "SELECT (SELECT max(x) FROM t), (SELECT max(x) FROM t)";
-    fixture.resolve(sql).await?.expect(0, 0, sql);
+    fixture.resolve(sql).await?.assert_loads(0, 0, sql);
     // An identifier read does not see temporary views, so `t` is the table here.
     let plan = union(read_identifier("t"), read_identifier("default.t"));
     fixture
         .resolve_plan(plan)
         .await?
-        .expect(1, 1, "identifier read");
+        .assert_loads(1, 1, "identifier read");
     Ok(())
 }
 
@@ -852,10 +873,10 @@ async fn test_global_temporary_view_is_not_merged_with_the_table_of_the_same_nam
         "SELECT (SELECT max(x) FROM global_temp.g), (SELECT max(v) FROM sail.global_temp.g)",
         "SELECT (SELECT max(v) FROM sail.global_temp.g), (SELECT max(x) FROM global_temp.g)",
     ] {
-        fixture.resolve(sql).await?.expect(1, 1, sql);
+        fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     }
     let sql = "SELECT (SELECT max(x) FROM global_temp.g), (SELECT max(x) FROM global_temp.g)";
-    fixture.resolve(sql).await?.expect(0, 0, sql);
+    fixture.resolve(sql).await?.assert_loads(0, 0, sql);
     // A missing global temporary view is not looked up in the catalog.
     let resolution = fixture.resolve("SELECT * FROM global_temp.t").await?;
     assert_eq!(resolution.loads, 0);
@@ -871,7 +892,10 @@ async fn test_table_spellings_keep_their_own_read_options() -> TestResult {
         read_table(&["t"], &[("a", "1")]),
         read_table(&["default", "t"], &[("b", "2")]),
     );
-    let mut sources = fixture.resolve_plan(plan).await?.expect(1, 2, "options");
+    let mut sources = fixture
+        .resolve_plan(plan)
+        .await?
+        .assert_loads(1, 2, "options");
     sources.sort_by(|a, b| a.options.cmp(&b.options));
     assert_eq!(sources[0].options, owned(&[("a", "1")]));
     assert_eq!(sources[1].options, owned(&[("b", "2")]));
@@ -881,7 +905,10 @@ async fn test_table_spellings_keep_their_own_read_options() -> TestResult {
         read_table(&["sail", "default", "t"], &[]),
         read_table(&["t"], &[("a", "1")]),
     );
-    let mut sources = fixture.resolve_plan(plan).await?.expect(1, 2, "options");
+    let mut sources = fixture
+        .resolve_plan(plan)
+        .await?
+        .assert_loads(1, 2, "options");
     sources.sort_by(|a, b| a.options.cmp(&b.options));
     assert_eq!(sources[0].options, vec![]);
     assert_eq!(sources[1].options, owned(&[("a", "1")]));
@@ -891,7 +918,10 @@ async fn test_table_spellings_keep_their_own_read_options() -> TestResult {
         read_table(&["t"], &[("a", "1")]),
         read_table(&["default", "t"], &[("a", "1")]),
     );
-    fixture.resolve_plan(plan).await?.expect(1, 1, "options");
+    fixture
+        .resolve_plan(plan)
+        .await?
+        .assert_loads(1, 1, "options");
     Ok(())
 }
 
@@ -900,7 +930,7 @@ async fn test_table_spellings_keep_their_own_time_travel() -> TestResult {
     let fixture = Fixture::try_new(&[]).await?;
     let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t VERSION AS OF 1), \
         (SELECT max(v) FROM sail.default.t VERSION AS OF 2)";
-    let mut sources = fixture.resolve(sql).await?.expect(1, 3, sql);
+    let mut sources = fixture.resolve(sql).await?.assert_loads(1, 3, sql);
     sources.sort_by(|a, b| a.options.cmp(&b.options));
     assert_eq!(sources[0].options, vec![]);
     assert_eq!(sources[1].options.len(), 1);
@@ -911,7 +941,7 @@ async fn test_table_spellings_keep_their_own_time_travel() -> TestResult {
     // The same version through two spellings: one source.
     let sql = "SELECT (SELECT max(v) FROM t VERSION AS OF 1), \
         (SELECT max(v) FROM default.t VERSION AS OF 1)";
-    fixture.resolve(sql).await?.expect(1, 1, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 1, sql);
     Ok(())
 }
 
@@ -922,12 +952,12 @@ async fn test_tables_of_the_same_name_in_two_databases_are_not_merged() -> TestR
     // The columns `v` and `w` tell the two tables apart.
     let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(v) FROM default.t), \
         (SELECT max(w) FROM other.t), (SELECT max(w) FROM sail.other.t)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     // The bare name follows the current database.
     fixture.execute("USE DATABASE other").await?;
     let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(v) FROM default.t), \
         (SELECT max(w) FROM other.t), (SELECT max(v) FROM sail.default.t)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     Ok(())
 }
 
@@ -936,7 +966,7 @@ async fn test_identifier_read_spellings_share_one_catalog_load() -> TestResult {
     let fixture = Fixture::try_new(&["CREATE VIEW tv AS SELECT * FROM t"]).await?;
     for (a, b) in [("t", "default.t"), ("default.t", "sail.default.t")] {
         let plan = union(read_identifier(a), read_identifier(b));
-        fixture.resolve_plan(plan).await?.expect(1, 1, a);
+        fixture.resolve_plan(plan).await?.assert_loads(1, 1, a);
     }
     // An identifier read and a read by name share the load too.
     for plan in [
@@ -946,7 +976,10 @@ async fn test_identifier_read_spellings_share_one_catalog_load() -> TestResult {
             read_identifier("t"),
         ),
     ] {
-        fixture.resolve_plan(plan).await?.expect(1, 1, "mixed");
+        fixture
+            .resolve_plan(plan)
+            .await?
+            .assert_loads(1, 1, "mixed");
     }
     Ok(())
 }
@@ -1082,7 +1115,7 @@ async fn view_spellings_share_one_catalog_lookup() -> TestResult {
             ["table tv", "view tv", "table t"],
             "{sql}"
         );
-        resolution.expect(1, 1, sql);
+        resolution.assert_loads(1, 1, sql);
     }
     Ok(())
 }
@@ -1111,7 +1144,7 @@ async fn nested_views_share_the_catalog_lookups_of_the_query() -> TestResult {
             "table t"
         ]
     );
-    resolution.expect(1, 1, sql);
+    resolution.assert_loads(1, 1, sql);
     Ok(())
 }
 
@@ -1139,7 +1172,7 @@ async fn test_cte_is_not_merged_with_the_table_of_the_same_name() -> TestResult 
             1,
         ),
     ] {
-        fixture.resolve(sql).await?.expect(loads, loads, sql);
+        fixture.resolve(sql).await?.assert_loads(loads, loads, sql);
     }
     Ok(())
 }
@@ -1155,14 +1188,14 @@ async fn test_tables_of_the_same_name_in_two_catalogs_are_not_merged() -> TestRe
     let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM second.default.t), \
         (SELECT max(v) FROM sail.default.t), (SELECT max(w) FROM `second`.`default`.t)";
     let before = second_loads();
-    fixture.resolve(sql).await?.expect(1, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 2, sql);
     assert_eq!(second_loads() - before, 1, "{sql}");
     // The bare name and the name with a database follow the current catalog.
     fixture.execute("USE CATALOG second").await?;
     let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(w) FROM default.t), \
         (SELECT max(w) FROM second.default.t), (SELECT max(v) FROM sail.default.t)";
     let before = second_loads();
-    fixture.resolve(sql).await?.expect(1, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(1, 2, sql);
     assert_eq!(second_loads() - before, 1, "{sql}");
     Ok(())
 }
@@ -1173,11 +1206,11 @@ async fn test_table_spellings_in_a_nested_database_share_one_catalog_load() -> T
     fixture.create_table(&["a", "b", "t"], &["k", "w"]).await?;
     let sql = "SELECT (SELECT max(w) FROM a.b.t), (SELECT max(w) FROM `a`.`b`.`t`), \
         (SELECT max(v) FROM t)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     fixture.execute("USE DATABASE a.b").await?;
     let sql = "SELECT (SELECT max(w) FROM t), (SELECT max(w) FROM a.b.t), \
         (SELECT max(w) FROM `t`), (SELECT max(v) FROM sail.default.t)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     Ok(())
 }
 
@@ -1202,11 +1235,11 @@ async fn test_names_that_the_catalog_returns_one_table_for_share_the_first_load(
     ] {
         let resolution = fixture.resolve(sql).await?;
         assert_eq!(resolution.requests, requests.map(str::to_string), "{sql}");
-        resolution.expect(2, 1, sql);
+        resolution.assert_loads(2, 1, sql);
     }
     // The names keep their own read options and time travel on the shared load.
     let sql = "SELECT * FROM t a JOIN T VERSION AS OF 1 b ON a.k = b.k";
-    let sources = fixture.resolve(sql).await?.expect(2, 2, sql);
+    let sources = fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     assert_eq!(sources[0].snapshot, sources[1].snapshot, "{sql}");
     // A write is planned on the first load, and carries the name of that load.
     for (sql, name) in [
@@ -1220,7 +1253,7 @@ async fn test_names_that_the_catalog_returns_one_table_for_share_the_first_load(
     ] {
         let resolution = fixture.resolve(sql).await?;
         let writes = resolution.writes.clone();
-        let sources = resolution.expect(2, 1, sql);
+        let sources = resolution.assert_loads(2, 1, sql);
         assert_eq!(writes.len(), 1, "{sql}");
         assert_eq!(
             writes[0].snapshot,
@@ -1252,7 +1285,7 @@ async fn test_table_with_and_without_the_default_database_part_share_the_first_l
     ] {
         let resolution = fixture.resolve(sql).await?;
         let writes = resolution.writes.clone();
-        let sources = resolution.expect(2, 1, sql);
+        let sources = resolution.assert_loads(2, 1, sql);
         for write in writes {
             assert_eq!(write.snapshot, Some(sources[0].snapshot.clone()), "{sql}");
         }
@@ -1266,18 +1299,18 @@ async fn test_names_that_the_catalog_returns_different_tables_for_are_not_merged
     // for, so nothing tells that the names are one table.
     let fixture = Fixture::try_new_with_names(TableNames::IgnoreCaseAndEcho, &[]).await?;
     let sql = "SELECT * FROM t a JOIN T b ON a.k = b.k";
-    let sources = fixture.resolve(sql).await?.expect(2, 2, sql);
+    let sources = fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     assert_ne!(sources[0].snapshot, sources[1].snapshot, "{sql}");
 
     // Two tables whose names differ in letter case.
     let fixture = Fixture::try_new(&[]).await?;
     fixture.create_table(&["T"], &["k", "w"]).await?;
     let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM T)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     let sql = "INSERT INTO T SELECT * FROM t";
     let resolution = fixture.resolve(sql).await?;
     let writes = resolution.writes.clone();
-    let sources = resolution.expect(2, 1, sql);
+    let sources = resolution.assert_loads(2, 1, sql);
     assert_ne!(writes[0].snapshot, Some(sources[0].snapshot.clone()));
 
     // Two tables that the catalog returns one name for, at different locations.
@@ -1286,7 +1319,7 @@ async fn test_names_that_the_catalog_returns_different_tables_for_are_not_merged
         .create_table_at(&["T"], &["k", "w"], "memory:///other")
         .await?;
     let sql = "SELECT (SELECT max(v) FROM t), (SELECT max(w) FROM T)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
 
     // The same database and table name in two catalogs.
     let fixture = Fixture::try_new_with_names(TableNames::IgnoreCase, &[]).await?;
@@ -1296,7 +1329,7 @@ async fn test_names_that_the_catalog_returns_different_tables_for_are_not_merged
     let sql = "SELECT (SELECT max(v) FROM T), (SELECT max(w) FROM second.default.t), \
         (SELECT max(w) FROM second.default.T), (SELECT max(v) FROM t)";
     let second = fixture.second.loads.load(Ordering::SeqCst);
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     assert_eq!(fixture.second.loads.load(Ordering::SeqCst) - second, 2);
     Ok(())
 }
@@ -1312,7 +1345,7 @@ async fn test_view_is_not_merged_with_the_table_that_the_catalog_returns_its_nam
     fixture.create_table(&["v"], &["k", "x"]).await?;
     // The table `v`, and the view `V` over the table `t`.
     let sql = "SELECT (SELECT max(x) FROM v), (SELECT max(w) FROM V)";
-    fixture.resolve(sql).await?.expect(2, 2, sql);
+    fixture.resolve(sql).await?.assert_loads(2, 2, sql);
     Ok(())
 }
 
@@ -1360,7 +1393,7 @@ async fn test_write_target_shares_the_catalog_load_of_the_statement() -> TestRes
     for (sql, sources) in WRITES {
         let resolution = fixture.resolve(sql).await?;
         let writes = resolution.writes.clone();
-        let sources = resolution.expect(1, sources, sql);
+        let sources = resolution.assert_loads(1, sources, sql);
         assert_eq!(writes.len(), 1, "{sql}");
         // The write is planned on the table metadata that the statement reads.
         for source in sources {
@@ -1414,7 +1447,7 @@ async fn test_data_frame_write_target_shares_the_catalog_load_of_the_query() -> 
         let context = format!("{save_method:?} {mode:?}");
         let resolution = fixture.resolve_plan(write_table(save_method, mode)).await?;
         let writes = resolution.writes.clone();
-        let sources = resolution.expect(1, 1, &context);
+        let sources = resolution.assert_loads(1, 1, &context);
         assert_eq!(writes.len(), 1, "{context}");
         assert_eq!(
             writes[0].snapshot,
@@ -1428,7 +1461,7 @@ async fn test_data_frame_write_target_shares_the_catalog_load_of_the_query() -> 
     let sql = "CREATE TABLE IF NOT EXISTS t AS SELECT * FROM default.t";
     let resolution = fixture.resolve(sql).await?;
     assert_eq!(resolution.writes, vec![], "{sql}");
-    resolution.expect(1, 1, sql);
+    resolution.assert_loads(1, 1, sql);
     Ok(())
 }
 

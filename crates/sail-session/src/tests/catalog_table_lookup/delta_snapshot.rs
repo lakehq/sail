@@ -133,30 +133,6 @@ fn collect_delta_versions(
     Ok(())
 }
 
-/// The columns `k` and `v` of the read.
-fn select_k_v(input: spec::QueryPlan) -> spec::QueryPlan {
-    let column = |name: &str| spec::Expr::UnresolvedAttribute {
-        name: spec::ObjectName::bare(name),
-        plan_id: None,
-        is_metadata_column: false,
-    };
-    spec::QueryPlan::new(spec::QueryNode::Project {
-        input: Some(Box::new(input)),
-        expressions: vec![column("k"), column("v")],
-    })
-}
-
-/// The `UNION ALL` of the reads, which are resolved in order.
-fn union_all(reads: Vec<spec::QueryPlan>) -> TestResult<spec::Plan> {
-    let mut reads = reads.into_iter();
-    let first = reads.next().ok_or("no reads")?;
-    let plan = reads.fold(first, |left, right| match union(left, right) {
-        spec::Plan::Query(plan) => plan,
-        spec::Plan::Command(_) => unreachable!("a union is a query"),
-    });
-    Ok(read(plan))
-}
-
 #[tokio::test]
 async fn test_delta_reads_by_name_and_by_path_read_one_version() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
@@ -214,7 +190,7 @@ async fn test_delta_reads_read_one_version_when_the_statement_reads_the_location
     fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
         read_path("delta", LOCATION, &[]),
-        select_k_v(read_path("iceberg", LOCATION, &[])),
+        select(read_path("iceberg", LOCATION, &[]), &["k", "v"]),
         read_table(&["t"], &[]),
         read_path("delta", LOCATION, &[]),
     ])?;
@@ -230,11 +206,14 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
     fixture.commit_on_request("t", &store, vec![commit(1, "first")])?;
     let plan = union_all(vec![
         read_path("delta", LOCATION, &[("versionAsOf", "0")]),
-        select_k_v(read_path(
-            "delta",
-            LOCATION,
-            &[("readChangeFeed", "true"), ("startingVersion", "0")],
-        )),
+        select(
+            read_path(
+                "delta",
+                LOCATION,
+                &[("readChangeFeed", "true"), ("startingVersion", "0")],
+            ),
+            &["k", "v"],
+        ),
         read_table(&["t"], &[]),
         read_table(&["d"], &[]),
         read_table(&["d"], &[("versionAsOf", "0")]),

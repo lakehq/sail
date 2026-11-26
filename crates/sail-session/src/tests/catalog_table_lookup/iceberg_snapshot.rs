@@ -36,18 +36,6 @@ fn metadata(version: usize) -> (Path, String) {
     )
 }
 
-/// The column `k` of the read.
-fn select_k(input: spec::QueryPlan) -> spec::QueryPlan {
-    spec::QueryPlan::new(spec::QueryNode::Project {
-        input: Some(Box::new(input)),
-        expressions: vec![spec::Expr::UnresolvedAttribute {
-            name: spec::ObjectName::bare("k"),
-            plan_id: None,
-            is_metadata_column: false,
-        }],
-    })
-}
-
 /// Returns the number of columns of the version of the Iceberg table that each read of
 /// the statement reads, in plan order.
 async fn iceberg_columns(fixture: &Fixture, plan: spec::Plan) -> TestResult<Vec<usize>> {
@@ -83,19 +71,6 @@ async fn try_new_with_iceberg_table() -> TestResult<(Fixture, Arc<InMemory>)> {
     Ok((fixture, store))
 }
 
-/// The union of the column `k` of the reads, which are resolved in order.
-fn union_k(reads: Vec<spec::QueryPlan>) -> TestResult<spec::Plan> {
-    let plan = reads
-        .into_iter()
-        .map(select_k)
-        .reduce(|left, right| match union(left, right) {
-            spec::Plan::Query(plan) => plan,
-            spec::Plan::Command(_) => unreachable!("a union is a query"),
-        })
-        .ok_or("no reads")?;
-    Ok(read(plan))
-}
-
 #[tokio::test]
 async fn test_iceberg_reads_with_other_options_read_one_version_of_the_metadata() -> TestResult {
     let (fixture, store) = try_new_with_iceberg_table().await?;
@@ -114,11 +89,14 @@ async fn test_iceberg_reads_with_other_options_read_one_version_of_the_metadata(
                 let _ = log.put(&path, contents.into()).await;
             }),
         ));
-    let plan = union_k(vec![
-        read_path("iceberg", LOCATION, &[]),
-        read_table(&["i"], &[]),
-        read_path("iceberg", LOCATION, &[("metadataAsDataRead", "true")]),
-    ])?;
+    let plan = union_all(
+        [
+            read_path("iceberg", LOCATION, &[]),
+            read_table(&["i"], &[]),
+            read_path("iceberg", LOCATION, &[("metadataAsDataRead", "true")]),
+        ]
+        .map(|x| select(x, &["k"])),
+    )?;
     assert_eq!(iceberg_columns(&fixture, plan).await?, vec![1, 1, 1]);
     // The next statement reads the new version.
     let plan = read(read_path("iceberg", LOCATION, &[]));
@@ -133,18 +111,21 @@ async fn test_iceberg_reads_of_metadata_files_read_their_files() -> TestResult {
     store.put(&path, contents.into()).await?;
     let file = |version: usize| format!("{LOCATION}metadata/v{version}.metadata.json");
     let (first, second) = (file(1), file(2));
-    let plan = union_k(vec![
-        read_path(
-            "iceberg",
-            LOCATION,
-            &[("table_type", "ICEBERG"), ("metadata_location", &first)],
-        ),
-        read_path(
-            "iceberg",
-            LOCATION,
-            &[("table_type", "ICEBERG"), ("metadata_location", &second)],
-        ),
-    ])?;
+    let plan = union_all(
+        [
+            read_path(
+                "iceberg",
+                LOCATION,
+                &[("table_type", "ICEBERG"), ("metadata_location", &first)],
+            ),
+            read_path(
+                "iceberg",
+                LOCATION,
+                &[("table_type", "ICEBERG"), ("metadata_location", &second)],
+            ),
+        ]
+        .map(|x| select(x, &["k"])),
+    )?;
     assert_eq!(iceberg_columns(&fixture, plan).await?, vec![1, 2]);
     Ok(())
 }
