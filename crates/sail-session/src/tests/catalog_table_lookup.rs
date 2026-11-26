@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -14,6 +14,9 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::plan_datafusion_err;
 use futures::future::BoxFuture;
 use sail_catalog::error::CatalogResult;
+use sail_catalog::lakehouse::{
+    DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCapability,
+};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
@@ -23,6 +26,7 @@ use sail_catalog::provider::{
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common::spec;
 use sail_common::spec::CreateTableMode;
+use sail_common_datafusion::catalog::delta::DELTA_UNITY_TABLE_ID_KEY;
 use sail_common_datafusion::catalog::{
     DatabaseStatus, LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
@@ -60,6 +64,11 @@ struct SnapshotCatalogProvider {
     /// Table names and what to do once when each table is requested, such as a commit to
     /// another table in the middle of a statement.
     on_request: Mutex<Vec<(String, BoxFuture<'static, ()>)>>,
+    /// Whether the catalog ratifies the commits of its managed Delta Lake tables, as Unity
+    /// Catalog does, with the latest version of each table at version 0.
+    ratifies_delta_commits: AtomicBool,
+    /// The requests for the commits that the catalog ratified.
+    ratified_commit_requests: AtomicUsize,
 }
 
 /// How a catalog finds a table and which name it returns for the table.
@@ -89,6 +98,8 @@ impl SnapshotCatalogProvider {
             requests: Mutex::new(vec![]),
             session_local: false,
             on_request: Mutex::new(vec![]),
+            ratifies_delta_commits: AtomicBool::new(false),
+            ratified_commit_requests: AtomicUsize::new(0),
         }
     }
 
@@ -111,6 +122,27 @@ impl CatalogProvider for SnapshotCatalogProvider {
 
     fn is_session_local(&self) -> bool {
         self.session_local
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        if self.ratifies_delta_commits.load(Ordering::SeqCst) {
+            vec![LakehouseCapability::DeltaRatifiedCommits]
+        } else {
+            vec![]
+        }
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        self.ratified_commit_requests.fetch_add(1, Ordering::SeqCst);
+        Ok(DeltaRatifiedCommitResponse {
+            latest_table_version: 0,
+            commits: vec![],
+        })
     }
 
     async fn create_database(
@@ -194,8 +226,17 @@ impl CatalogProvider for SnapshotCatalogProvider {
             },
         };
         let load = self.loads.fetch_add(1, Ordering::SeqCst);
-        if let TableKind::Table { properties, .. } = &mut status.kind {
+        if let TableKind::Table {
+            properties, format, ..
+        } = &mut status.kind
+        {
             properties.push((SNAPSHOT.to_string(), load.to_string()));
+            // The ID of the table in the catalog that ratifies its commits.
+            if self.ratifies_delta_commits.load(Ordering::SeqCst)
+                && format.eq_ignore_ascii_case("delta")
+            {
+                properties.push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table.to_string()));
+            }
         }
         Ok(status)
     }

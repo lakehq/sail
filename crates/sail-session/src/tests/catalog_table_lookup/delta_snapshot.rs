@@ -351,6 +351,41 @@ async fn test_delta_reads_do_not_load_the_log_again() -> TestResult {
 }
 
 #[tokio::test]
+async fn test_catalog_managed_delta_reads_request_the_ratified_commits_once() -> TestResult {
+    let (fixture, store) = Fixture::try_new_with_delta_table().await?;
+    fixture
+        .catalog
+        .ratifies_delta_commits
+        .store(true, Ordering::SeqCst);
+    // The log is removed between the reads, as a cleanup of the log after a checkpoint
+    // removes the commits that the first read read.
+    let log = Arc::clone(&store);
+    fixture
+        .catalog
+        .on_request
+        .lock()
+        .map_err(|e| e.to_string())?
+        .push((
+            "t".to_string(),
+            Box::pin(async move {
+                let _ = log.delete(&commit(0, "first").0).await;
+            }),
+        ));
+    let plan = union_all(vec![
+        read_table(&["d"], &[]),
+        read_table(&["t"], &[]),
+        read_table(&["d"], &[("deltaLogReplayStrategy", "hash")]),
+    ])?;
+    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0]);
+    let requests = fixture
+        .catalog
+        .ratified_commit_requests
+        .load(Ordering::SeqCst);
+    assert_eq!(requests, 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_delta_row_level_target_and_source_read_one_version() -> TestResult {
     for sql in [
         "MERGE INTO d USING (SELECT k, v FROM t UNION ALL \
