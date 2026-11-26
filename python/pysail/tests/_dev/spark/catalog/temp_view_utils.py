@@ -102,7 +102,9 @@ class Table:
 def rows(spark, sql):
     """Returns the sorted rows of the query, or of the DataFrame."""
     frame = spark.sql(sql) if isinstance(sql, str) else sql
-    return sorted((tuple(row) for row in frame.collect()), key=lambda row: [(x is None, x if x is not None else 0) for x in row])
+    return sorted(
+        (tuple(row) for row in frame.collect()), key=lambda row: [(x is None, x if x is not None else 0) for x in row]
+    )
 
 
 def error(spark, sql):
