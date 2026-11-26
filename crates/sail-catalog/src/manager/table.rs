@@ -99,8 +99,9 @@ impl CatalogManager {
     pub fn has_session_catalog_table(&self, table: &SessionCatalogTable) -> CatalogResult<bool> {
         let state = self.state()?;
         Ok(state
-            .get_catalog(table.provider.get_name())
-            .is_ok_and(|provider| Arc::ptr_eq(&provider, &table.provider)))
+            .catalogs
+            .get(table.provider.get_name())
+            .is_some_and(|provider| Arc::ptr_eq(provider, &table.provider)))
     }
 
     /// In the delta namespace, an unqualified file name can also be a table name.

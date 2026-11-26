@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -29,6 +30,9 @@ pub struct CatalogManager {
     pub(super) temporary_views: TemporaryViewManager,
     pub(super) tracker: CatalogObjectTracker,
 }
+
+/// The catalogs of a session that each session has its own instance of, by name.
+pub(super) type SessionLocalCatalogs = HashMap<Arc<str>, Arc<dyn CatalogProvider>>;
 
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
@@ -142,6 +146,20 @@ impl CatalogManager {
         Ok(parts)
     }
 
+    /// Returns the catalogs of this session that each session has its own instance of (see
+    /// [`CatalogProvider::is_session_local`]), in which the query of a temporary view
+    /// resolves again in any session (see [`ViewDefinitionScope`]).
+    pub fn session_local_catalogs(&self) -> CatalogResult<Arc<dyn Any + Send + Sync>> {
+        let catalogs: SessionLocalCatalogs = self
+            .state()?
+            .catalogs
+            .iter()
+            .filter(|(_, provider)| provider.is_session_local())
+            .map(|(name, provider)| (Arc::clone(name), Arc::clone(provider)))
+            .collect();
+        Ok(Arc::new(catalogs))
+    }
+
     pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
         self.tracker.track_function(udf)
     }
@@ -181,7 +199,7 @@ impl CatalogManagerState {
             [] => Err(CatalogError::InvalidArgument(
                 "empty database reference".to_string(),
             )),
-            [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
+            [head, tail @ ..] if self.catalog(head.as_ref()).is_some() => {
                 let catalog = head.as_ref().into();
                 let database = tail.try_into()?;
                 Ok((catalog, database))
@@ -203,7 +221,7 @@ impl CatalogManagerState {
                 let (catalog, _) = self.current_namespace();
                 Ok((catalog, None))
             }
-            [name] if self.catalogs.contains_key(name.as_ref()) => {
+            [name] if self.catalog(name.as_ref()).is_some() => {
                 let catalog = name.as_ref().into();
                 Ok((catalog, None))
             }
@@ -247,7 +265,7 @@ impl CatalogManagerState {
             [x @ .., last] => {
                 let table = last.as_ref().into();
                 let (catalog, database) = match x {
-                    [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
+                    [head, tail @ ..] if self.catalog(head.as_ref()).is_some() => {
                         (head.as_ref().into(), tail.try_into()?)
                     }
                     database => (Arc::from(default_catalog), database.try_into()?),
@@ -265,13 +283,16 @@ impl CatalogManagerState {
     }
 
     pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
-        let Some(provider) = self.catalogs.get(catalog) else {
-            return Err(CatalogError::NotFound(
-                CatalogObject::Catalog,
-                catalog.to_string(),
-            ));
-        };
-        Ok(Arc::clone(provider))
+        self.catalog(catalog)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Catalog, catalog.to_string()))
+    }
+
+    /// Returns the catalog of the name, which is the one of the session that created a
+    /// temporary view while the view resolves its query again, if that session has its own
+    /// instance of the catalog.
+    fn catalog(&self, catalog: &str) -> Option<Arc<dyn CatalogProvider>> {
+        ViewDefinitionScope::pinned_catalog(catalog)
+            .or_else(|| self.catalogs.get(catalog).cloned())
     }
 }
 

@@ -7,7 +7,8 @@ use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::catalog::{TableStatus, TemporaryViewDefinition, TemporaryViewObjects};
 
 use crate::error::{CatalogError, CatalogResult};
-use crate::provider::Namespace;
+use crate::manager::SessionLocalCatalogs;
+use crate::provider::{CatalogProvider, Namespace};
 
 tokio::task_local! {
     static VIEW_DEFINITION_SCOPE: Arc<ViewDefinitionScope>;
@@ -79,6 +80,14 @@ impl ViewDefinitionScope {
         let definition = Self::pinned()?;
         let database = definition.database.clone().try_into().ok()?;
         Some((definition.catalog.as_str().into(), database))
+    }
+
+    /// Returns the catalog of the name of the session that created the view while the query
+    /// is resolved again, if that session has its own instance of the catalog.
+    pub(super) fn pinned_catalog(name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        let definition = Self::pinned()?;
+        let catalogs = definition.catalogs.downcast_ref::<SessionLocalCatalogs>()?;
+        catalogs.get(name).cloned()
     }
 
     /// Returns the temporary view that a reference names while the query is resolved again.

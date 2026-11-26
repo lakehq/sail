@@ -1108,7 +1108,7 @@ impl PlanResolver<'_> {
             }
             Ok(())
         })?;
-        let definition = self.rebound_view_definition(view, &references)?;
+        let definition = Self::rebound_view_definition(view);
         // A view created over this view expands the star again as well.
         if definition.as_ref().is_some_and(|x| x.star_in_function) {
             state.record_star_in_function();
@@ -1209,13 +1209,9 @@ impl PlanResolver<'_> {
     }
 
     /// Returns the definition of a temporary view that a read resolves again when the plan of
-    /// the view no longer fits the tables that it reads, if the view reads no table in a
-    /// catalog of another session, which no name refers to here.
-    fn rebound_view_definition(
-        &self,
-        view: &TableStatus,
-        references: &[TableScan],
-    ) -> PlanResult<Option<Arc<TemporaryViewDefinition>>> {
+    /// the view no longer fits the tables that it reads. A global temporary view resolves it
+    /// in the catalogs of the session that created it, in any session.
+    fn rebound_view_definition(view: &TableStatus) -> Option<Arc<TemporaryViewDefinition>> {
         let (TableKind::TemporaryView {
             definition: Some(definition),
             ..
@@ -1225,19 +1221,9 @@ impl PlanResolver<'_> {
             ..
         }) = &view.kind
         else {
-            return Ok(None);
+            return None;
         };
-        let manager = self.ctx.extension::<CatalogManager>()?;
-        for scan in references {
-            if let Some(reference) = ViewTableReference::try_from_scan(scan)
-                && let TableOrigin::CatalogTable(origin) = reference.origin.as_ref()
-                && let Some(table) = &origin.session_table
-                && !manager.has_session_catalog_table(table)?
-            {
-                return Ok(None);
-            }
-        }
-        Ok(Some(Arc::clone(definition)))
+        Some(Arc::clone(definition))
     }
 
     /// Returns the plan of a read of a temporary view for its definition resolved again (see
@@ -1556,13 +1542,14 @@ impl PlanResolver<'_> {
         name: &[String],
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
-        if let Some((status, resolved)) = state.get_session_catalog_table_lookup(table, name) {
-            return Ok((status, Some(resolved)));
+        let session_catalog = Some(table.catalog_id());
+        if let Some(lookup) = state.get_catalog_table_lookup(session_catalog, name) {
+            return Ok(lookup);
         }
         let request = Self::catalog_table_lookup_request(name);
-        let lookup = table.get_lakehouse_table(request).await?;
-        state.insert_session_catalog_table_lookup(table, name.to_vec(), lookup.clone());
-        let (status, resolved) = lookup;
+        let (status, resolved) = table.get_lakehouse_table(request).await?;
+        let (status, resolved) =
+            state.share_catalog_table(session_catalog, name.to_vec(), status, resolved);
         Ok((status, Some(resolved)))
     }
 }

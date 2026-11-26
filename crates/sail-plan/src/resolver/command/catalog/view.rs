@@ -172,6 +172,7 @@ impl PlanResolver<'_> {
                 database: manager.default_database()?.into(),
                 objects: scope.recorded()?,
                 config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
+                catalogs: manager.session_local_catalogs()?,
                 star_in_function: reads.star_in_function,
                 reads_folded_tables,
             }))

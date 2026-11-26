@@ -1828,6 +1828,52 @@ def test_global_view_reads_the_table_of_the_session_that_created_it(spark, obser
         spark.sql(f"DROP VIEW IF EXISTS {local}")
 
 
+def test_global_view_resolves_its_query_again_in_the_catalog_of_the_session_that_created_it(
+    spark, observer, tables, tmp_path
+):
+    table = tables("delta", "id BIGINT, b INT, c STRUCT<x: INT>")
+    table.insert("(1, 1, named_struct('x', 1))")
+    queries = [
+        f"SELECT id, CAST(b AS STRING) AS b, c FROM {table.name}",
+        f"SELECT typeof((SELECT b FROM {table.name} LIMIT 1)) AS ty",
+        f"SELECT to_json(struct(*)) AS j FROM {table.name}",
+    ]
+    views = [table.create_view("gv", query) for query in queries]
+    try:
+        # A table of the same name in the other session is another table.
+        observer.sql(f"CREATE TABLE {table.name} (id BIGINT) USING delta LOCATION '{tmp_path / 'observer'}'")
+        observer.sql(f"INSERT INTO {table.name} VALUES (9)")
+        both = f"SELECT id FROM {table.name} UNION ALL SELECT id FROM {views[0]}"
+        assert rows(observer, both) == [(1,), (9,)]
+        table.recreate("id BIGINT, b BIGINT, c STRUCT<x: INT, y: INT>", "(2, 3000000000, named_struct('x', 1, 'y', 2))")
+        # The other session resolves the queries in the catalog of the session that created the views.
+        for view, query in zip(views, queries, strict=True):
+            assert rows(observer, f"SELECT * FROM {view}") == rows(spark, query)
+        assert rows(observer, both) == [(2,), (9,)]
+        spark.sql(f"DROP TABLE {table.name}")
+        for view in views:
+            assert NOT_FOUND in error(observer, f"SELECT * FROM {view}")
+    finally:
+        observer.sql(f"DROP TABLE IF EXISTS {table.name}")
+
+
+def test_global_view_resolves_its_query_again_after_the_session_that_created_it_stopped(remote, observer, tmp_path):
+    name = f"t_{uuid.uuid4().hex}"
+    view = f"gv_{uuid.uuid4().hex}"
+    with spark_session_factory(remote) as sessions:
+        creator = sessions.create()
+        creator.sql(f"CREATE TABLE {name} (id BIGINT, b INT) USING delta LOCATION '{tmp_path / name}_1'")
+        creator.sql(f"INSERT INTO {name} VALUES (1, 1)")
+        creator.sql(f"CREATE GLOBAL TEMPORARY VIEW {view} AS SELECT id, CAST(b AS STRING) AS b FROM {name}")
+        creator.sql(f"DROP TABLE {name}")
+        creator.sql(f"CREATE TABLE {name} (id BIGINT, b BIGINT) USING delta LOCATION '{tmp_path / name}_2'")
+        creator.sql(f"INSERT INTO {name} VALUES (2, 3000000000)")
+    try:
+        assert rows(observer, f"SELECT * FROM global_temp.{view}") == [(2, "3000000000")]
+    finally:
+        observer.catalog.dropGlobalTempView(view)
+
+
 def test_views_without_catalog_tables_are_unchanged(spark, tmp_path):
     names = [f"plain_{i}_{uuid.uuid4().hex}" for i in range(6)]
     local, ranged, function, parquet, csv, random = names

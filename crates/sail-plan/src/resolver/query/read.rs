@@ -169,6 +169,19 @@ impl PlanResolver<'_> {
         Self::lookup_catalog_object(manager, table, state).await
     }
 
+    /// Returns the table of the fully qualified name `table` in the catalog instance of
+    /// another session, for a table that the query of a global temporary view reads in a
+    /// catalog of the session that created the view.
+    pub(super) fn other_session_catalog_table(
+        manager: &CatalogManager,
+        table: &[String],
+    ) -> Result<Option<SessionCatalogTable>, CatalogError> {
+        match manager.session_catalog_table(table)? {
+            Some(table) if !manager.has_session_catalog_table(&table)? => Ok(Some(table)),
+            _ => Ok(None),
+        }
+    }
+
     /// Looks up the catalog table or the catalog view of the fully qualified name `table`,
     /// reusing an earlier successful lookup in the query.
     pub(super) async fn lookup_catalog_object(
@@ -176,7 +189,9 @@ impl PlanResolver<'_> {
         table: Vec<String>,
         state: &mut PlanResolverState,
     ) -> Result<CatalogTableLookup, CatalogError> {
-        if let Some(lookup) = state.get_catalog_table_lookup(&table) {
+        let session_catalog =
+            Self::other_session_catalog_table(manager, &table)?.map(|x| x.catalog_id());
+        if let Some(lookup) = state.get_catalog_table_lookup(session_catalog, &table) {
             return Ok(lookup);
         }
         // The table is loaded by the qualified name that the lookup is stored under, so
@@ -186,11 +201,12 @@ impl PlanResolver<'_> {
             .await?;
         match lookup {
             (status, Some(resolved)) => {
-                let (status, resolved) = state.share_catalog_table(table, status, resolved);
+                let (status, resolved) =
+                    state.share_catalog_table(session_catalog, table, status, resolved);
                 Ok((status, Some(resolved)))
             }
             view => {
-                state.insert_catalog_table_lookup(table, view.clone());
+                state.insert_catalog_table_lookup(session_catalog, table, view.clone());
                 Ok(view)
             }
         }
@@ -205,15 +221,19 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> Result<(TableStatus, LakehouseResolvedTable), CatalogError> {
         let table = manager.resolve_fully_qualified_object_name(reference)?;
+        let session_catalog =
+            Self::other_session_catalog_table(manager, &table)?.map(|x| x.catalog_id());
         // An earlier lookup that found a view is not reused: the catalog is asked for
         // the table, and reports that there is none.
-        if let Some((status, Some(resolved))) = state.get_catalog_table_lookup(&table) {
+        if let Some((status, Some(resolved))) =
+            state.get_catalog_table_lookup(session_catalog, &table)
+        {
             return Ok((status, resolved));
         }
         let (status, resolved) = manager
             .get_lakehouse_table(&table, Self::catalog_table_lookup_request(&table))
             .await?;
-        Ok(state.share_catalog_table(table, status, resolved))
+        Ok(state.share_catalog_table(session_catalog, table, status, resolved))
     }
 
     /// Looks up what a read refers to. A read with a required format reads tables only.
@@ -331,6 +351,7 @@ impl PlanResolver<'_> {
                     .resolve_time_travel_options(format, temporal, state)
                     .await?;
                 let name = manager.resolve_fully_qualified_object_name(&catalog_reference)?;
+                let other_session_table = Self::other_session_catalog_table(&manager, &name)?;
                 let origin = CatalogTableOrigin {
                     session_table: if state.view_definition_mut().is_some() {
                         manager.session_catalog_table(&name)?
@@ -353,7 +374,7 @@ impl PlanResolver<'_> {
                         status,
                         resolved,
                         origin: &origin,
-                        session_table: None,
+                        session_table: other_session_table.as_ref(),
                         lake_relation,
                     },
                     state,

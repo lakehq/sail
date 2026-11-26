@@ -6,7 +6,6 @@ use datafusion_common::arrow::datatypes::{Field, FieldRef, Schema};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_catalog::lakehouse::LakehouseResolvedTable;
-use sail_catalog::manager::table::SessionCatalogTable;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableStatus;
 use sail_common_datafusion::datasource::LakeSnapshotPins;
@@ -183,16 +182,13 @@ pub(super) struct PlanResolverState {
     /// query read one version of it, by name or by path and with any read options.
     lake_snapshot_pins: Arc<LakeSnapshotPins>,
     /// The successful catalog table lookups so far, shared by repeated references to
-    /// the same table within the query. The key is the fully qualified name of the table
-    /// (the catalog, the database, and the table), which is the same for all the ways
-    /// to write the name of the table. Names that the catalog returned the same table
-    /// for have the same lookup, see [`PlanResolverState::share_catalog_table`].
-    catalog_table_lookups: HashMap<Vec<String>, CatalogTableLookup>,
-    /// The successful lookups so far of the tables that global temporary views read in a
-    /// catalog of the session that created them (see [`SessionCatalogTable`]), by the
-    /// catalog instance and the fully qualified name of the table.
-    session_catalog_table_lookups:
-        HashMap<(usize, Vec<String>), (TableStatus, LakehouseResolvedTable)>,
+    /// the same table within the query. The key is the catalog instance of another session
+    /// for a table that a global temporary view reads in a catalog of the session that
+    /// created it (see `SessionCatalogTable::catalog_id`), and the fully qualified name
+    /// of the table (the catalog, the database, and the table), which is the same for all
+    /// the ways to write the name of the table. Names that the catalog returned the same
+    /// table for have the same lookup, see [`PlanResolverState::share_catalog_table`].
+    catalog_table_lookups: HashMap<(Option<usize>, Vec<String>), CatalogTableLookup>,
     /// What the definition of a temporary view reads, while the definition is resolved.
     view_definition: Option<ViewDefinitionReads>,
 }
@@ -284,7 +280,6 @@ impl PlanResolverState {
             lake_path_sources: HashMap::new(),
             lake_snapshot_pins: Arc::default(),
             catalog_table_lookups: HashMap::new(),
-            session_catalog_table_lookups: HashMap::new(),
             view_definition: None,
         }
     }
@@ -617,32 +612,24 @@ impl PlanResolverState {
         Arc::clone(&self.lake_snapshot_pins)
     }
 
-    pub fn get_catalog_table_lookup(&self, table: &[String]) -> Option<CatalogTableLookup> {
-        self.catalog_table_lookups.get(table).cloned()
-    }
-
-    pub fn insert_catalog_table_lookup(&mut self, table: Vec<String>, lookup: CatalogTableLookup) {
-        self.catalog_table_lookups.insert(table, lookup);
-    }
-
-    pub fn get_session_catalog_table_lookup(
+    pub fn get_catalog_table_lookup(
         &self,
-        table: &SessionCatalogTable,
-        name: &[String],
-    ) -> Option<(TableStatus, LakehouseResolvedTable)> {
-        self.session_catalog_table_lookups
-            .get(&(table.catalog_id(), name.to_vec()))
+        session_catalog: Option<usize>,
+        table: &[String],
+    ) -> Option<CatalogTableLookup> {
+        self.catalog_table_lookups
+            .get(&(session_catalog, table.to_vec()))
             .cloned()
     }
 
-    pub fn insert_session_catalog_table_lookup(
+    pub fn insert_catalog_table_lookup(
         &mut self,
-        table: &SessionCatalogTable,
-        name: Vec<String>,
-        lookup: (TableStatus, LakehouseResolvedTable),
+        session_catalog: Option<usize>,
+        table: Vec<String>,
+        lookup: CatalogTableLookup,
     ) {
-        self.session_catalog_table_lookups
-            .insert((table.catalog_id(), name), lookup);
+        self.catalog_table_lookups
+            .insert((session_catalog, table), lookup);
     }
 
     /// Records what the definition of a temporary view reads, while the definition is resolved.
@@ -691,7 +678,6 @@ impl PlanResolverState {
             lake_path_sources,
             lake_snapshot_pins,
             catalog_table_lookups,
-            session_catalog_table_lookups,
             view_definition
         );
     }
@@ -701,32 +687,35 @@ impl PlanResolverState {
     /// written differently, such as names that differ in letter case in a catalog that
     /// ignores it. Such a table uses its first lookup in the query, so that all the
     /// references to the table read the same table metadata. A table is the same as
-    /// an earlier one when both are in the same catalog and the catalog returned the
-    /// same database, name, table ID, and location for both.
+    /// an earlier one when both are in the same catalog instance and the catalog returned
+    /// the same database, name, table ID, and location for both.
     pub fn share_catalog_table(
         &mut self,
+        session_catalog: Option<usize>,
         name: Vec<String>,
         status: TableStatus,
         resolved: LakehouseResolvedTable,
     ) -> (TableStatus, LakehouseResolvedTable) {
-        let first =
-            self.catalog_table_lookups
-                .iter()
-                .find_map(|(first_name, lookup)| match lookup {
-                    (first, Some(first_resolved))
-                        if first_name.first() == name.first()
-                            && first.database == status.database
-                            && first.name == status.name
-                            && first_resolved.execution.table_identity
-                                == resolved.execution.table_identity =>
-                    {
-                        Some((first.clone(), first_resolved.clone()))
-                    }
-                    _ => None,
-                });
+        let first = self.catalog_table_lookups.iter().find_map(
+            |((first_catalog, first_name), lookup)| match lookup {
+                (first, Some(first_resolved))
+                    if *first_catalog == session_catalog
+                        && first_name.first() == name.first()
+                        && first.database == status.database
+                        && first.name == status.name
+                        && first_resolved.execution.table_identity
+                            == resolved.execution.table_identity =>
+                {
+                    Some((first.clone(), first_resolved.clone()))
+                }
+                _ => None,
+            },
+        );
         let (status, resolved) = first.unwrap_or((status, resolved));
-        self.catalog_table_lookups
-            .insert(name, (status.clone(), Some(resolved.clone())));
+        self.catalog_table_lookups.insert(
+            (session_catalog, name),
+            (status.clone(), Some(resolved.clone())),
+        );
         (status, resolved)
     }
 
