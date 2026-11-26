@@ -138,6 +138,7 @@ struct ExecutorTask {
 }
 
 struct ExecutorTaskContext {
+    initial_schema: Option<SparkResult<Box<DataType>>>,
     outputs: BoxStream<'static, SparkResult<Option<ExecutorOutput>>>,
     primary: Handle,
     heartbeat_interval: Duration,
@@ -200,6 +201,8 @@ impl Executor {
         primary: Handle,
     ) -> Self {
         let reattachable = metadata.reattachable;
+        let initial_schema = matches!(mode, ExecutorMode::Query)
+            .then(|| to_spark_schema(stream.schema()).map(Box::new));
         // Keep the batch stream and command completion on the query runtime across reattachments.
         let outputs = spawn_stream_on(Handle::current(), (), move |_| {
             Self::outputs(stream, mode, reattachable)
@@ -213,6 +216,7 @@ impl Executor {
             metadata,
             state: Mutex::new(ExecutorState::Pending {
                 context: ExecutorTaskContext {
+                    initial_schema,
                     outputs,
                     primary,
                     heartbeat_interval,
@@ -245,8 +249,6 @@ impl Executor {
             let schema = stream.schema();
             match mode {
                 ExecutorMode::Query => {
-                    let spark_schema = to_spark_schema(schema.clone())?;
-                    yield Some(ExecutorOutput::new(ExecutorBatch::Schema(Box::new(spark_schema))));
                     let mut empty = true;
                     while let Some(batch) = stream.next().await {
                         let batch = to_arrow_batch(&batch?)?;
@@ -287,6 +289,12 @@ impl Executor {
         };
         for output in outputs {
             tx.send(Ok(output)).await?;
+        }
+        // Spark clients expect the query schema before any heartbeat, even when
+        // compute cannot poll the first batch yet.
+        if let Some(schema) = context.initial_schema.take() {
+            let output = ExecutorOutput::new(ExecutorBatch::Schema(schema?));
+            ExecutorTaskContext::send_output(&context.buffer, tx, output).await?;
         }
         let heartbeat = tokio::time::sleep(context.heartbeat_interval);
         tokio::pin!(heartbeat);
@@ -466,17 +474,12 @@ mod tests {
         let compute = Builder::new_multi_thread().worker_threads(1).build()?;
         let (started, ready) = oneshot::channel();
         let (release, blocked) = std::sync::mpsc::channel();
-        let schema = Arc::new(Schema::empty());
-        let input = RecordBatchStreamAdapter::new(
-            schema.clone(),
-            stream::once(async move {
-                let _ = started.send(());
-                blocked
-                    .recv_timeout(Duration::from_secs(10))
-                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
-                Ok(RecordBatch::new_empty(schema))
-            }),
-        );
+        let busy = compute.spawn(async move {
+            let _ = started.send(());
+            blocked.recv_timeout(Duration::from_secs(10))
+        });
+        primary.block_on(ready)?;
+        let input = RecordBatchStreamAdapter::new(Arc::new(Schema::empty()), stream::empty());
         let executor = {
             let _guard = compute.enter();
             Executor::new(
@@ -493,17 +496,16 @@ mod tests {
         };
         let mut responses = executor.start()?;
         primary.block_on(async {
-            ready.await?;
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while let Some(output) = responses.next().await {
-                    if matches!(output?.batch, ExecutorBatch::Heartbeat) {
-                        return Ok(());
-                    }
-                }
-                Err(SparkError::internal("expected an execution heartbeat"))
-            })
-            .await??;
+            let mut next_batch = async || -> Result<_, Box<dyn std::error::Error>> {
+                let output = tokio::time::timeout(Duration::from_secs(5), responses.next())
+                    .await?
+                    .ok_or("missing response while compute is blocked")??;
+                Ok(output.batch)
+            };
+            assert!(matches!(next_batch().await?, ExecutorBatch::Schema(_)));
+            assert!(matches!(next_batch().await?, ExecutorBatch::Heartbeat));
             release.send(())?;
+            busy.await??;
             Ok(())
         })
     }
