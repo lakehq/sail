@@ -298,11 +298,18 @@ def test_stats_custom_metadata_path_and_avro_ancestor(spark, tmp_path, directory
         assert first.data_record_count == 2
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('write.format.default'='parquet')")
         spark.sql(f"INSERT INTO {name} VALUES (3,20)")
-        second = pq.read_table(
-            _local_file_path(spark.sql(f"CALL system.compute_partition_stats('{name}')").first()[0])
-        ).to_pylist()
+        current_file = _local_file_path(spark.sql(f"CALL system.compute_partition_stats('{name}')").first()[0])
+        second = pq.read_table(current_file).to_pylist()
         assert [(row["partition"]["p"], row["data_record_count"]) for row in second] == [(10, 2), (20, 1)]
         assert second[0]["last_updated_snapshot_id"] == first.last_updated_snapshot_id
+        expired = first.last_updated_snapshot_id
+        result = spark.sql(
+            f"CALL system.expire_snapshots('{name}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
+        ).first()
+        assert result.deleted_statistics_files_count == 2
+        assert not ndv.exists()
+        assert not file.exists()
+        assert current_file.is_file()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
@@ -436,5 +443,57 @@ def test_partition_stats_on_diverging_branches(spark, tmp_path):
         ]
         assert spark.sql(f"CALL system.compute_partition_stats('{name}', {other})").first()[0] == other_path
         assert [r["partition"]["p"] for r in pq.read_table(_local_file_path(other_path)).to_pylist()] == [10, 20]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize(("transform", "keep_partition"), [("p", False), ("p", True), ("bucket(32, p)", True)])
+def test_partition_stats_after_dropping_source_column(spark, tmp_path, transform, keep_partition):
+    from pyiceberg.transforms import BucketTransform
+    from pyiceberg.types import StringType as IcebergStringType
+
+    name = "dropped_partition_source"
+    fields = f"{transform}, q" if keep_partition else transform
+    spark.sql(f"""CREATE TABLE {name} (id INT, p STRING, q INT) USING iceberg
+        PARTITIONED BY ({fields}) LOCATION '{escape_sql_string_literal(str(tmp_path))}'
+        TBLPROPERTIES ('format-version'='2')""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 'A', 7), (2, 'B', 7), (3, 'A', 7)")
+        metadata = _find_latest_metadata(tmp_path)
+        old = metadata["current-snapshot-id"]
+        field_name = metadata["partition-specs"][0]["fields"][0]["name"]
+        spark.sql(f"ALTER TABLE {name} DROP PARTITION FIELD {field_name}")
+        spark.sql(f"ALTER TABLE {name} DROP COLUMN p")
+        path = spark.sql(f"CALL system.compute_partition_stats('{name}', {old})").first()[0]
+        result = pq.read_table(_local_file_path(path))
+        partition = result.schema.field("partition").type
+        field = partition.field(field_name)
+        assert field.metadata[b"PARQUET:field_id"] == b"1000"
+        expected = {"A": 2, "B": 1}
+        if transform != "p":
+            assert field.type == pa.int32()
+            bucket = BucketTransform(32).transform(IcebergStringType())
+            expected = {bucket(value): count for value, count in expected.items()}
+        assert sorted((r["partition"][field_name], r["data_record_count"]) for r in result.to_pylist()) == sorted(
+            expected.items()
+        )
+        if keep_partition:
+            assert all(r["partition"]["q"] == 7 for r in result.to_pylist())
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("procedure", ["compute_table_stats", "compute_partition_stats"])
+def test_stats_reject_ambiguous_store_before_publication(spark, tmp_path, procedure):
+    name = "ambiguous_stats_store"
+    spark.sql(f"""CREATE TABLE {name} (id INT, p INT) USING iceberg PARTITIONED BY (p)
+        LOCATION '{escape_sql_string_literal(str(tmp_path))}'""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 1)")
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('write.metadata.path'='memory://other/stats')")
+        before = _find_latest_metadata(tmp_path)
+        with pytest.raises(Exception, match="Cannot establish distinct object stores"):
+            spark.sql(f"CALL system.{procedure}('{name}')").collect()
+        assert _find_latest_metadata(tmp_path) == before
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

@@ -194,6 +194,7 @@ impl ComputeStats {
                 )
             }
         };
+        super::expire_snapshots::checked_metadata_path(store, table_url, &path)?;
         prepared.changed = true;
         prepared.updates.push(update);
         prepared.staged_files.push((path.clone(), bytes));

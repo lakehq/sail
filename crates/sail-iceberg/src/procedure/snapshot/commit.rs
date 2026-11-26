@@ -24,7 +24,7 @@ use crate::procedure::expire_snapshots::{Expiration, ExpireSnapshots};
 use crate::procedure::rewrite_manifests::RewriteManifests;
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_file_version_from_path,
+    load_registered_metadata, metadata_file_version_from_path,
     metadata_location_to_object_path_string,
 };
 use crate::utils::metadata::metadata_files_for_version;
@@ -171,16 +171,18 @@ pub(crate) async fn commit_snapshot_operation(
             None
         };
         let metadata_file = match metadata_location.as_deref() {
-            Some(location) if is_expiration => crate::procedure::expire_snapshots::checked_path(
-                &store_context,
-                table_url,
-                location,
-            )?
-            .to_string(),
+            Some(location) if is_expiration => {
+                crate::procedure::expire_snapshots::checked_metadata_path(
+                    &store_context,
+                    table_url,
+                    location,
+                )?
+                .to_string()
+            }
             Some(location) => metadata_location_to_object_path_string(location)?,
             None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,
         };
-        let bytes = crate::table::metadata_loader::load_registered_metadata(
+        let bytes = load_registered_metadata(
             &ctx.runtime_env(),
             &object_store,
             metadata_location.as_deref(),
@@ -248,7 +250,7 @@ pub(crate) async fn commit_snapshot_operation(
             }
             ProcedureCommitOperation::ExpireSnapshots(operation) => {
                 let prepared = operation
-                    .prepare(&store_context, table_url, &metadata)
+                    .prepare(ctx, &store_context, table_url, &metadata)
                     .await?;
                 expiration = Some(prepared.expiration);
                 PreparedSnapshotOperation {
@@ -505,7 +507,7 @@ async fn finish_expiration(
                 if !std::sync::Arc::ptr_eq(&fresh_store, &store.base) {
                     return plan_err!("Iceberg object-store access changed after expiration");
                 }
-                let file = if let Some(expected) = expected_catalog {
+                let pointer = if let Some(expected) = expected_catalog {
                     let fresh = IcebergCatalogCommitCoordinator::load_expiration_table(
                         ctx,
                         &expected.execution.catalog_table,
@@ -516,7 +518,7 @@ async fn finish_expiration(
                         fresh.execution.commit,
                         sail_common_datafusion::catalog::CommitAuthority::Filesystem
                     ) {
-                        crate::table::find_latest_metadata_file(&store.base, url).await?
+                        None
                     } else {
                         let pointer =
                             metadata_location_from_properties(&fresh.status.display_properties)
@@ -526,8 +528,7 @@ async fn finish_expiration(
                                     .into(),
                             )
                                 })?;
-                        crate::procedure::expire_snapshots::checked_path(store, url, &pointer)?
-                            .to_string()
+                        Some(pointer)
                     }
                 } else {
                     let mode = IcebergCatalogCommitMode::resolve(
@@ -540,15 +541,28 @@ async fn finish_expiration(
                             "Iceberg expiration has no authoritative catalog binding"
                         );
                     }
-                    crate::table::find_latest_metadata_file(&store.base, url).await?
+                    None
                 };
-                let bytes = load_metadata_file_bytes(&store.base, &file).await?;
+                let file = match pointer.as_deref() {
+                    Some(location) => crate::procedure::expire_snapshots::checked_metadata_path(
+                        store, url, location,
+                    )?
+                    .to_string(),
+                    None => crate::table::find_latest_metadata_file(&store.base, url).await?,
+                };
+                let bytes = load_registered_metadata(
+                    &ctx.runtime_env(),
+                    &store.base,
+                    pointer.as_deref(),
+                    &file,
+                )
+                .await?;
                 TableMetadata::from_json(&bytes)
                     .map_err(|error| DataFusionError::External(Box::new(error)))
             }
             .await;
             expiration
-                .finish(store, url, current, output.schema())
+                .finish(ctx, store, url, current, output.schema())
                 .await
         }
     }
@@ -599,7 +613,7 @@ fn validate_expiration_response(
             .ok_or_else(|| {
                 DataFusionError::Execution("Missing expiration commit pointer".into())
             })?;
-        crate::procedure::expire_snapshots::checked_path(store, url, pointer)?;
+        crate::procedure::expire_snapshots::checked_metadata_path(store, url, pointer)?;
         if Some(pointer) == previous {
             return plan_err!("Expiration response did not publish a new metadata pointer");
         }

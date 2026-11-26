@@ -1863,7 +1863,7 @@ def test_stats_reject_expired_snapshot(
     [("compute_table_stats", "statistics"), ("compute_partition_stats", "partition-statistics")],
 )
 def test_stats_external_metadata_bucket(
-    spark, gated_remote, commit_gate_proxy, seaweedfs_host_endpoint, procedure, key
+    spark, gated_remote, commit_gate_proxy, seaweedfs_host_endpoint, iceberg_rest_endpoint, procedure, key
 ):
     name = f"external_{procedure}"
     table = f"{NAMESPACE}.{name}"
@@ -1904,5 +1904,24 @@ def test_stats_external_metadata_bucket(
             with pytest.raises(Exception, match="commit rejected"):
                 future.result(timeout=30)
         assert _s3_object_keys(seaweedfs_host_endpoint, location) == before
+        expired = _load_table(iceberg_rest_endpoint, name)["metadata"]["snapshots"][0]["snapshot-id"]
+        retained_path = spark.sql(f"CALL system.{procedure}('{table}')").first()[0]
+        expired_key = urllib.parse.urlparse(path).path.lstrip("/")
+        retained_key = urllib.parse.urlparse(retained_path).path.lstrip("/")
+        table_bucket = urllib.parse.urlparse(_load_table(iceberg_rest_endpoint, name)["metadata"]["location"]).netloc
+        s3.put_object(Bucket=table_bucket, Key=expired_key, Body=b"same key in table bucket")
+        try:
+            row = spark.sql(
+                f"CALL system.expire_snapshots('{table}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
+            ).first()
+            assert row.deleted_statistics_files_count == 1
+            keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+            assert expired_key not in keys
+            assert retained_key in keys
+            assert s3.get_object(Bucket=table_bucket, Key=expired_key)["Body"].read() == b"same key in table bucket"
+        finally:
+            s3.delete_object(Bucket=table_bucket, Key=expired_key)
+        metadata = _load_table(iceberg_rest_endpoint, name)["metadata"]
+        assert [f["statistics-path"] for f in metadata[key]] == [retained_path]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

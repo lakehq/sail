@@ -8,6 +8,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Int64Array, RecordBatch};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, plan_err};
+use datafusion::execution::TaskContext;
 use futures::{StreamExt, stream};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
@@ -41,6 +42,7 @@ pub(crate) struct ExpireSnapshots {
 
 pub(crate) struct Expiration {
     candidates: Inventory,
+    external_stores: HashMap<Url, Arc<dyn object_store::ObjectStore>>,
     concurrency: usize,
     table_uuid: Option<uuid::Uuid>,
     location: String,
@@ -48,9 +50,25 @@ pub(crate) struct Expiration {
 
 #[derive(Default)]
 struct Inventory {
-    paths: HashMap<Path, InventoryEntry>,
+    paths: HashMap<FileLocation, InventoryEntry>,
     // Specs referenced by unselected (retained) snapshots.
     specs: HashSet<i32>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct FileLocation {
+    // None denotes the table store, including table-relative and same-bucket absolute paths.
+    external_store: Option<Box<Url>>,
+    path: Path,
+}
+
+impl From<Path> for FileLocation {
+    fn from(path: Path) -> Self {
+        Self {
+            external_store: None,
+            path,
+        }
+    }
 }
 
 struct InventoryEntry {
@@ -231,6 +249,7 @@ impl ExpireSnapshots {
 
     pub(crate) async fn prepare(
         &self,
+        ctx: &TaskContext,
         store: &StoreContext,
         url: &Url,
         metadata: &TableMetadata,
@@ -238,6 +257,19 @@ impl ExpireSnapshots {
         let (expired, removed_refs) = self.select(metadata)?;
         // Validate every snapshot, including retained/staged branches, before publication.
         let candidates = inventory(store, url, metadata, Some(&expired)).await?;
+        let mut external_stores = HashMap::new();
+        for url in candidates
+            .paths
+            .keys()
+            .filter_map(|file| file.external_store.as_deref())
+        {
+            if !external_stores.contains_key(url) {
+                external_stores.insert(
+                    url.clone(),
+                    ctx.runtime_env().object_store_registry.get_store(url)?,
+                );
+            }
+        }
         // Keep shared expired paths until fresh post-publication reachability is known.
         // Concurrent, disjoint expirations can remove their last other reference.
         let mut requirements: Vec<_> = metadata
@@ -334,6 +366,7 @@ impl ExpireSnapshots {
             updates,
             expiration: Expiration {
                 candidates,
+                external_stores,
                 concurrency: self.concurrency,
                 table_uuid: metadata.table_uuid,
                 location: metadata.location.clone(),
@@ -398,6 +431,42 @@ pub(crate) fn checked_path(store: &StoreContext, table: &Url, raw: &str) -> Resu
     Ok(path)
 }
 
+/// Physical store identities for statistics files and authoritative metadata pointers.
+fn external_metadata_store(table: &Url, location: &Url) -> Result<Option<Url>> {
+    if location.scheme() == table.scheme() && location.authority() == table.authority() {
+        return Ok(None);
+    }
+    // Native bucket/container URIs in the same scheme have distinct physical namespaces.
+    // Mixed schemes and endpoint aliases may refer to the same objects.
+    if location.scheme() != table.scheme()
+        || !matches!(
+            table.scheme(),
+            "s3" | "s3a" | "gs" | "abfs" | "abfss" | "memory"
+        )
+        || location.host_str().is_none()
+        || location.port().is_some()
+        || table.port().is_some()
+        || location.password().is_some()
+        || (!matches!(table.scheme(), "abfs" | "abfss") && !location.username().is_empty())
+    {
+        return plan_err!(
+            "Cannot establish distinct object stores for Iceberg metadata at {location} and table at {table}"
+        );
+    }
+    Ok(Some(location.join("/").map_err(|error| {
+        DataFusionError::External(Box::new(error))
+    })?))
+}
+
+pub(super) fn checked_metadata_path(store: &StoreContext, table: &Url, raw: &str) -> Result<Path> {
+    if let Some(url) = crate::utils::parse_absolute_url(raw) {
+        external_metadata_store(table, &url)?;
+        checked_path(store, &url, raw)
+    } else {
+        checked_path(store, table, raw)
+    }
+}
+
 impl Inventory {
     fn insert(
         &mut self,
@@ -408,16 +477,26 @@ impl Inventory {
         max_paths: usize,
     ) -> Result<Path> {
         let path = checked_path(store, url, raw)?;
+        self.record(path.clone().into(), entry, max_paths)?;
+        Ok(path)
+    }
+
+    fn record(
+        &mut self,
+        path: FileLocation,
+        entry: InventoryEntry,
+        max_paths: usize,
+    ) -> Result<()> {
         if self.paths.len() >= max_paths && !self.paths.contains_key(&path) {
             return plan_err!(
                 "expire_snapshots exceeds the coordinator inventory limit of {max_paths} physical paths"
             );
         }
         self.paths
-            .entry(path.clone())
+            .entry(path)
             .and_modify(|existing| existing.selected |= entry.selected)
             .or_insert(entry);
-        Ok(path)
+        Ok(())
     }
 }
 
@@ -524,34 +603,34 @@ async fn inventory_with_limit(
             }
             lists.insert(list_path, specs);
         }
-        for file in metadata
+        for (id, raw, encrypted) in metadata
             .statistics
             .iter()
-            .filter(|s| is_selected(s.snapshot_id) == selected)
+            .map(|f| (f.snapshot_id, &f.statistics_path, f.key_metadata.is_some()))
+            .chain(
+                metadata
+                    .partition_statistics
+                    .iter()
+                    .map(|f| (f.snapshot_id, &f.statistics_path, false)),
+            )
+            .filter(|(id, _, _)| is_selected(*id) == selected)
         {
-            if file.key_metadata.is_some() {
-                return plan_err!("expire_snapshots does not support encrypted statistics");
+            if encrypted {
+                return plan_err!(
+                    "expire_snapshots does not support encrypted statistics for snapshot {id}"
+                );
             }
-            result.insert(
-                store,
-                url,
-                &file.statistics_path,
-                InventoryEntry { kind: 5, selected },
-                max_paths,
-            )?;
-        }
-        for file in metadata
-            .partition_statistics
-            .iter()
-            .filter(|s| is_selected(s.snapshot_id) == selected)
-        {
-            result.insert(
-                store,
-                url,
-                &file.statistics_path,
-                InventoryEntry { kind: 5, selected },
-                max_paths,
-            )?;
+            let file = if let Some(location) = crate::utils::parse_absolute_url(raw) {
+                let external_store = external_metadata_store(url, &location)?;
+                checked_path(store, &location, raw)?;
+                FileLocation {
+                    external_store: external_store.map(Box::new),
+                    path: store.statistics_uri_path(&location, raw)?,
+                }
+            } else {
+                checked_path(store, url, raw)?.into()
+            };
+            result.record(file, InventoryEntry { kind: 5, selected }, max_paths)?;
         }
     }
     // Bound the global union before discarding unselected paths.
@@ -573,6 +652,7 @@ impl Expiration {
     /// Called only after confirmed publication, with freshly loaded authoritative metadata.
     pub(crate) async fn finish(
         self,
+        ctx: &TaskContext,
         store: &StoreContext,
         url: &Url,
         current: Result<TableMetadata>,
@@ -602,6 +682,20 @@ impl Expiration {
                 return output(schema, [0; 6]);
             }
         };
+        for (url, original) in &self.external_stores {
+            if !ctx
+                .runtime_env()
+                .object_store_registry
+                .get_store(url)
+                .is_ok_and(|fresh| Arc::ptr_eq(&fresh, original))
+            {
+                log::warn!(
+                    "Snapshot expiration committed, but access to {url} changed; preserving all candidate files"
+                );
+                return output(schema, [0; 6]);
+            }
+        }
+        let external_stores = &self.external_stores;
         let mut counts = [0; 6];
         let mut deletes = stream::iter(
             self.candidates
@@ -609,10 +703,15 @@ impl Expiration {
                 .into_iter()
                 .filter(|(path, _)| !reachable.paths.contains_key(path)),
         )
-        .map(|(path, entry)| async move {
+        .map(|(file, entry)| async move {
+            let base = match file.external_store.as_deref() {
+                Some(url) => external_stores.get(url)?,
+                None => &store.base,
+            };
+            let path = file.path;
             let kind = entry.kind;
             for attempt in 0..3 {
-                match store.base.delete(&path).await {
+                match base.delete(&path).await {
                     Ok(()) => return Some(kind),
                     Err(object_store::Error::NotFound { .. }) => return Some(kind),
                     Err(error) if attempt == 2 => {

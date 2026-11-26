@@ -130,7 +130,7 @@ pub(super) async fn compute(
     snapshot: &Snapshot,
     ctx: &datafusion::execution::TaskContext,
 ) -> Result<Option<(Vec<u8>, &'static str)>> {
-    let part = unified_partition_type(metadata)?;
+    let part = unified_partition_type(metadata, true)?;
     if part.fields().is_empty() {
         return plan_err!("Table must be partitioned");
     }
