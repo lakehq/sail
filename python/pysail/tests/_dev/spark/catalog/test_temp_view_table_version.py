@@ -958,6 +958,28 @@ def test_view_of_a_map_reports_that_its_values_can_be_null(spark, tables, kind):
     assert spark.table(view).collect() == spark.sql(sql).collect()
 
 
+# Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The
+# definition of a view is resolved as if its columns had nulls, so the view reads the struct.
+STRUCT_COUNT_QUERIES = {
+    "count": "SELECT count(c) AS n FROM {t}",
+    "group": "SELECT k, count(c) AS n FROM {t} GROUP BY k",
+    "filter": "SELECT count(c) FILTER (WHERE k >= 0) AS n FROM {t}",
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("query", STRUCT_COUNT_QUERIES)
+def test_view_counts_a_parquet_struct_of_timestamps_without_nulls(spark, tables, kind, query):
+    table = tables("parquet", "k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL")
+    table.insert("(0, named_struct('y', TIMESTAMP '2020-01-01 00:00:00', 'z', 0))")
+    table.insert("(1, named_struct('y', TIMESTAMP '2020-01-02 00:00:00', 'z', 1))")
+    sql = STRUCT_COUNT_QUERIES[query].format(t=table.name)
+    view = table.create_view(kind, sql)
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+    structs = spark.sql(f"SELECT k, c FROM {table.name} ORDER BY k").collect()
+    assert [x.c.z for x in structs] == [0, 1]
+
+
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("query", ["SELECT a, b FROM {t}", "SELECT a, typeof(b) AS tb FROM {t}"])
 def test_view_over_a_view_reads_the_columns_that_the_inner_view_reads(spark, tables, kind, query):
