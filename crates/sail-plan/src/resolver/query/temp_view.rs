@@ -53,7 +53,6 @@ use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
 use sail_function::scalar::r#struct::struct_rename::StructRename;
-use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use super::read::{CatalogTableRead, rename_source};
 use crate::error::{PlanError, PlanResult};
@@ -1824,13 +1823,6 @@ fn required_columns(
                     // it needs (see `add_expression_uses`).
                     | LogicalPlan::Subquery(_)
                     | LogicalPlan::Unnest(_) => true,
-                    // A monotonically increasing ID counts the rows of each partition, and
-                    // the node passes its input columns on as they are.
-                    LogicalPlan::Extension(extension)
-                        if extension.node.as_any().is::<MonotonicIdNode>() =>
-                    {
-                        true
-                    }
                     LogicalPlan::Extension(extension) => {
                         add_extension_reads(extension.node.as_ref(), &mut uses, &mut derivations)
                     }
@@ -3378,16 +3370,14 @@ mod tests {
             .build()?;
         let x = ColumnUse::path(&["x".to_string()]);
         assert_eq!(uses(&plan, &reads, address)?, Some(vec![(3, x)]));
-        // A node that needs all its inputs for an output it adds reads all of them, and a
-        // node that does not report what it needs reads all its inputs as well.
+        // The partition ID and a monotonically increasing ID read no input column.
         let plan = extension(Arc::new(SparkPartitionIdNode::try_new(
             Arc::clone(&input),
             "pid".to_string(),
         )?))
-        .project(vec![col("t_a")])?
+        .project(vec![col("t_a"), col("pid")])?
         .build()?;
-        assert_eq!(uses(&plan, &reads, address)?, whole(&[0, 1, 2, 3]));
-        // A monotonically increasing ID reads no input column.
+        assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
         let plan = extension(Arc::new(MonotonicIdNode::try_new(
             Arc::clone(&input),
             "id".to_string(),
@@ -3395,6 +3385,7 @@ mod tests {
         .project(vec![col("t_a"), col("id")])?
         .build()?;
         assert_eq!(uses(&plan, &reads, address)?, whole(&[0]));
+        // A node that does not report what it needs reads all its inputs.
         let plan = extension(Arc::new(BarrierNode::new(vec![], Arc::clone(&input))))
             .project(vec![col("t_a")])?
             .build()?;

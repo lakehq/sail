@@ -1323,6 +1323,8 @@ PASSING_QUERIES = {
     "window over a sorted query with a limit": (
         "SELECT q.id, count(*) OVER (PARTITION BY q.k) AS n FROM (SELECT * FROM {t} ORDER BY k LIMIT 100) q"
     ),
+    "partition ID": "SELECT id, k, spark_partition_id() * 0 AS p FROM {t}",
+    "monotonically increasing ID": "SELECT id, k, monotonically_increasing_id() * 0 AS m FROM {t}",
 }
 
 
