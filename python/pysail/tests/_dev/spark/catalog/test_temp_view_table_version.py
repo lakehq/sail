@@ -1222,7 +1222,7 @@ def test_global_view_reads_the_table_of_the_session_that_created_it(spark, obser
         assert NOT_FOUND in error(observer, f"SELECT * FROM {direct}")
     finally:
         observer.sql(f"DROP TABLE IF EXISTS {table.name}")
-        spark.catalog.dropTempView(local)
+        spark.sql(f"DROP VIEW IF EXISTS {local}")
 
 
 def test_views_without_catalog_tables_are_unchanged(spark, tmp_path):
