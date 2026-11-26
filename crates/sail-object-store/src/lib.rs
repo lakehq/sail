@@ -6,6 +6,7 @@ mod path;
 mod registry;
 mod s3;
 
+pub use layers::runtime::GetResultExt;
 pub use path::{
     ResolvedObjectStorePath, delete_object_store_prefix_objects, resolve_object_store_path,
 };

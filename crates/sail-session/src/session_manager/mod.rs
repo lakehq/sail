@@ -17,6 +17,7 @@ use sail_common_datafusion::session::job::QueryCancellation;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
 use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::net::TcpListener;
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
@@ -33,6 +34,7 @@ pub type ServerSessionFactoryFn =
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
     shutdown: Arc<QueryCancellation>,
+    compute: Handle,
 }
 
 impl fmt::Debug for SessionManager {
@@ -48,8 +50,13 @@ impl SessionManager {
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
         let shutdown = Arc::clone(&components.shutdown);
+        let compute = options.runtime.compute().clone();
         let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self { handle, shutdown })
+        Ok(Self {
+            handle,
+            shutdown,
+            compute,
+        })
     }
 
     pub async fn get_or_create_session_context(
@@ -82,6 +89,13 @@ impl SessionManager {
         self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
+    }
+
+    pub async fn run_query<T: Send + 'static>(
+        &self,
+        query: impl Future<Output = Result<T, tonic::Status>> + Send + 'static,
+    ) -> Result<T, tonic::Status> {
+        crate::shutdown::run(&self.compute, &self.shutdown, query).await
     }
 
     pub fn query_cancellation(&self) -> &Arc<QueryCancellation> {

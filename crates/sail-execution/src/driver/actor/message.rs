@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
@@ -20,6 +19,7 @@ use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
+use crate::job_graph::JobGraph;
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
@@ -58,7 +58,7 @@ pub enum DriverMessage {
         instant: Instant,
     },
     ExecuteJob {
-        plan: Arc<dyn ExecutionPlan>,
+        graph: JobGraph,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
@@ -208,7 +208,7 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::RETRY_ATTEMPT, request.attempt.to_string()));
             }
             DriverMessage::ExecuteJob {
-                plan: _,
+                graph: _,
                 context: _,
                 result: _,
             } => {}

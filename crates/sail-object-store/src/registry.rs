@@ -50,16 +50,33 @@ pub struct DynamicObjectStoreRegistry {
 
 impl DynamicObjectStoreRegistry {
     pub fn new(runtime: RuntimeHandle) -> Self {
-        let stores: DashMap<ObjectStoreKey, Arc<dyn ObjectStore>> = DashMap::new();
-        stores.insert(
+        let registry = Self {
+            stores: DashMap::new(),
+            runtime,
+        };
+        registry.insert(
             ObjectStoreKey {
                 scheme: "file".to_string(),
-                authority: "".to_string(),
+                authority: String::new(),
                 session_fingerprint: None,
             },
             Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
         );
-        Self { stores, runtime }
+        registry
+    }
+
+    fn insert(
+        &self,
+        key: ObjectStoreKey,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.stores.insert(
+            key,
+            Arc::new(RuntimeAwareObjectStore::new(
+                store,
+                self.runtime.primary().clone(),
+            )),
+        )
     }
 
     pub fn register_session_store(
@@ -69,7 +86,7 @@ impl DynamicObjectStoreRegistry {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url, Some(session_fingerprint));
-        self.stores.insert(key, store)
+        self.insert(key, store)
     }
 
     pub fn get_store_with_session(
@@ -94,7 +111,7 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url, None);
-        self.stores.insert(key, store)
+        self.insert(key, store)
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
@@ -107,7 +124,7 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .or_try_insert_with(|| -> object_store::Result<Arc<dyn ObjectStore>> {
                 Ok(Arc::new(RuntimeAwareObjectStore::try_new(
                     || get_dynamic_object_store(url),
-                    self.runtime.io().clone(),
+                    self.runtime.primary().clone(),
                 )?))
             })?
             .clone();
@@ -251,8 +268,9 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::object_store::ObjectStoreRegistry;
-    use object_store::ObjectStore;
     use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use sail_common::runtime::RuntimeHandle;
     use tokio::runtime::Handle;
     use url::Url;
@@ -290,8 +308,16 @@ mod tests {
             .get_store_with_session(&url, Some("session-b"))
             .unwrap();
 
-        assert!(Arc::ptr_eq(&resolved_a, &store_a));
-        assert!(Arc::ptr_eq(&resolved_b, &store_b));
+        let key = Path::from("marker");
+        store_a.put(&key, "session a".into()).await.unwrap();
+        assert_eq!(
+            resolved_a.get(&key).await.unwrap().bytes().await.unwrap(),
+            "session a"
+        );
+        assert!(matches!(
+            resolved_b.get(&key).await,
+            Err(object_store::Error::NotFound { .. })
+        ));
 
         let fallback = registry
             .get_store_with_session(&url, Some("unknown"))

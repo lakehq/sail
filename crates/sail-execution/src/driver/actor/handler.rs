@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
@@ -26,6 +25,7 @@ use crate::id::{
     JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
     TaskStreamKeySet, WorkerId,
 };
+use crate::job_graph::JobGraph;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -213,11 +213,11 @@ impl DriverActor {
     pub(super) fn handle_execute_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        plan: Arc<dyn ExecutionPlan>,
+        graph: JobGraph,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
+        let out = self.job_scheduler.accept_job(ctx, graph, context);
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);

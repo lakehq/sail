@@ -45,6 +45,7 @@ pub enum TaskRunnerPlacement {
 
 pub struct TaskRunnerComponents {
     pub session_id: String,
+    pub compute: tokio::runtime::Handle,
     pub extensions: TaskRunnerExtensions,
     pub placement: TaskRunnerPlacement,
 }

@@ -80,7 +80,10 @@ impl TaskRunnerActor {
             );
             let (tx, rx) = oneshot::channel();
             self.signals.insert(key.clone(), tx);
-            ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
+            ctx.spawn(
+                TaskMonitor::new(ctx.handle().clone(), key, stream, rx)
+                    .supervise(self.compute.clone()),
+            );
         }
         Ok(())
     }

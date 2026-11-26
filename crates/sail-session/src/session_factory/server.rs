@@ -110,6 +110,7 @@ impl ServerSessionFactory {
             return internal_err!("job runner is missing from server session information");
         };
         let mut config = SessionConfig::new()
+            .with_option_extension(self.runtime_env.io_runtime())
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)

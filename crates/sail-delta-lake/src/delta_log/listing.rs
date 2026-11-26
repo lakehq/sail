@@ -6,6 +6,7 @@ use std::sync::Arc;
 use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_object_store::GetResultExt;
 
 use crate::spec::{
     CheckpointFileKind, DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint,
@@ -146,7 +147,7 @@ pub(crate) async fn read_last_checkpoint_hint_from_store(
         .get(&last_checkpoint_path())
         .await
         .ok()?
-        .bytes()
+        .read_bytes()
         .await
         .ok()?;
     serde_json::from_slice(&bytes).ok()

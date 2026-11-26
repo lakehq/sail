@@ -29,6 +29,7 @@ use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
+use sail_object_store::GetResultExt;
 use serde_json::Deserializer as JsonDeserializer;
 use uuid::Uuid;
 
@@ -907,7 +908,7 @@ async fn replay_commit_actions_for_state<S: ReplayActionState>(
                 "Missing commit file while {context}: expected version {expected_version}, found {version}"
             )));
         }
-        let bytes = root_store.get(&meta.location).await?.bytes().await?;
+        let bytes = root_store.get(&meta.location).await?.read_bytes().await?;
         let actions = get_actions(*version, &bytes)?;
         let commit_timestamp = resolve_commit_timestamp_from_actions(
             *version,
@@ -1058,7 +1059,7 @@ pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
         ))
     })?;
     let filename = meta.location.filename().unwrap_or_default().to_string();
-    let bytes = root_store.get(&meta.location).await?.bytes().await?;
+    let bytes = root_store.get(&meta.location).await?.read_bytes().await?;
     let rows = if is_json_checkpoint_filename(&filename) {
         decode_checkpoint_json_rows(version, &bytes)?
     } else {
@@ -1121,7 +1122,7 @@ async fn read_checkpoint_rows_from_main_files(
     if !sidecars.is_empty() {
         for sidecar in &sidecars {
             let sidecar_path = sidecar_file_path(&sidecar.path);
-            let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
+            let sidecar_bytes = root_store.get(&sidecar_path).await?.read_bytes().await?;
             let sidecar_rows = SpawnedTask::spawn_blocking(move || {
                 let mut sidecar_rows = Vec::new();
                 for batch in checkpoint_parquet_batches(sidecar_bytes)? {
@@ -1299,7 +1300,7 @@ async fn replay_commit_actions_with_compactions_for_state<S: ReplayActionState>(
     for entry in &replay_sequence {
         match entry {
             ReplayEntry::Commit(version, meta) => {
-                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let bytes = root_store.get(&meta.location).await?.read_bytes().await?;
                 let actions = get_actions(*version, &bytes)?;
                 let commit_timestamp = resolve_commit_timestamp_from_actions(
                     *version,
@@ -1314,7 +1315,7 @@ async fn replay_commit_actions_with_compactions_for_state<S: ReplayActionState>(
                 commit_timestamps.insert(*version, commit_timestamp);
             }
             ReplayEntry::Compaction(end, meta) => {
-                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let bytes = root_store.get(&meta.location).await?.read_bytes().await?;
                 // Compacted JSON files use the same ndjson format as regular commits.
                 // Use end_version for the "version" parameter in error messages.
                 let actions = get_actions(*end, &bytes)?;

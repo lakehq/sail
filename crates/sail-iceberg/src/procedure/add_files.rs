@@ -12,6 +12,7 @@ use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::catalog::iceberg::MIGRATION_BACKUP_PROPERTY;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
+use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_data_source::listing::utils::{is_hidden_path_name, is_metadata_file};
 
 use super::arguments::{optional_bool, optional_i32, optional_string_map, required_string};
@@ -292,7 +293,11 @@ impl AddFiles {
                 // A managed file table may have no warehouse directory until its first write.
                 let allow_missing =
                     self.ignore_missing_files || (managed_source && registered_partition.is_none());
-                if let Err(error) = tokio::fs::metadata(path).await
+                let io = IoRuntime::from_options(ctx.session_config().options());
+                if let Err(error) = io
+                    .spawn(tokio::fs::metadata(path))
+                    .await
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
                     && !(allow_missing && error.kind() == std::io::ErrorKind::NotFound)
                 {
                     return Err(error.into());

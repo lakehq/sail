@@ -5,7 +5,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_session::session_manager::SessionManager;
-use sail_session::shutdown;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -299,11 +298,13 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
-        let stream = shutdown::run(
-            cancellation,
-            Self::handle_execute_plan(self.session_manager.clone(), request),
-        )
-        .await?;
+        let stream = self
+            .session_manager
+            .run_query(Self::handle_execute_plan(
+                self.session_manager.clone(),
+                request,
+            ))
+            .await?;
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 
@@ -313,11 +314,13 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let response = shutdown::run(
-            self.session_manager.query_cancellation(),
-            Self::handle_analyze_plan(self.session_manager.clone(), request),
-        )
-        .await?;
+        let response = self
+            .session_manager
+            .run_query(Self::handle_analyze_plan(
+                self.session_manager.clone(),
+                request,
+            ))
+            .await?;
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -502,11 +505,13 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
-        let stream = shutdown::run(
-            cancellation,
-            Self::handle_reattach_execute(self.session_manager.clone(), request),
-        )
-        .await?;
+        let stream = self
+            .session_manager
+            .run_query(Self::handle_reattach_execute(
+                self.session_manager.clone(),
+                request,
+            ))
+            .await?;
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 

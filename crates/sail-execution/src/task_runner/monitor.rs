@@ -54,7 +54,7 @@ impl TaskMonitor {
         let _ = handle.send(message).await;
     }
 
-    pub async fn supervise(self) {
+    pub async fn supervise(self, compute: tokio::runtime::Handle) {
         let handle = self.handle.clone();
         let key = self.key.clone();
         // Admission now has one span per batch. Preserve task identity on the monitor
@@ -70,10 +70,7 @@ impl TaskMonitor {
                 (SpanAttribute::EXECUTION_ATTEMPT, key.attempt.to_string()),
             ]
         });
-        // TODO: Run distributed batch execution on a dedicated query runtime so long operator
-        // polls leave both RPC shutdown and object-store I/O responsive. Add a cluster shutdown
-        // test with a saturated execution runtime.
-        let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
+        let monitor = AbortOnDropHandle::new(compute.spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
             let _ = handle.send(message).await;
         }

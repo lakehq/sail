@@ -12,9 +12,10 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchReceiverStream;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err, plan_err};
-use futures::TryStreamExt;
+use datafusion_common::{Result, exec_datafusion_err, plan_err};
+use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
@@ -186,7 +187,7 @@ impl ExecutionPlan for SocketSourceExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
             return plan_err!("{} only supports a single partition", self.name());
@@ -205,38 +206,50 @@ impl ExecutionPlan for SocketSourceExec {
         }
         let options = self.options.clone();
         let projected_schema = self.projected_schema.clone();
-        let output = futures::stream::once(async move {
-            // We do not perform retries or reconnections here
-            // since the socket source is for testing purposes only.
-            let stream = tokio::net::TcpStream::connect((options.host.as_str(), options.port))
-                .await
-                .map_err(|e| {
-                    exec_datafusion_err!(
-                        "failed to connect to socket {}:{}: {e}",
-                        options.host,
-                        options.port
-                    )
-                })?;
-            let reader = BufReader::new(stream);
-            let output = LinesStream::new(reader.lines())
-                .chunks_timeout(
-                    options.max_batch_size,
-                    Duration::from_secs(options.timeout_sec),
-                )
-                .map(move |lines| {
-                    let values = lines
-                        .into_iter()
-                        .map(|x| Ok(Some(x?)))
-                        .collect::<Result<Vec<Option<String>>>>()?;
-                    let array = Arc::new(StringArray::from(values));
-                    Ok::<_, DataFusionError>(RecordBatch::try_new(
-                        projected_schema.clone(),
-                        vec![array; projected_schema.fields.len()],
-                    )?)
-                });
-            Ok::<_, DataFusionError>(Box::pin(output))
-        })
-        .try_flatten();
+        let output = futures::StreamExt::flatten(futures::stream::once(async move {
+            let io = IoRuntime::from_options(context.session_config().options());
+            let mut builder = RecordBatchReceiverStream::builder(projected_schema.clone(), 1);
+            let tx = builder.tx();
+            builder.spawn_on(
+                async move {
+                    // We do not perform retries or reconnections here
+                    // since the socket source is for testing purposes only.
+                    let stream =
+                        tokio::net::TcpStream::connect((options.host.as_str(), options.port))
+                            .await
+                            .map_err(|e| {
+                                exec_datafusion_err!(
+                                    "failed to connect to socket {}:{}: {e}",
+                                    options.host,
+                                    options.port
+                                )
+                            })?;
+                    let reader = BufReader::new(stream);
+                    let lines = LinesStream::new(reader.lines()).chunks_timeout(
+                        options.max_batch_size,
+                        Duration::from_secs(options.timeout_sec),
+                    );
+                    tokio::pin!(lines);
+                    while let Some(lines) = lines.next().await {
+                        let values = lines
+                            .into_iter()
+                            .map(|x| Ok(Some(x?)))
+                            .collect::<Result<Vec<Option<String>>>>()?;
+                        let array = Arc::new(StringArray::from(values));
+                        let batch = RecordBatch::try_new(
+                            projected_schema.clone(),
+                            vec![array; projected_schema.fields.len()],
+                        )?;
+                        if tx.send(Ok(batch)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(())
+                },
+                &io.0,
+            );
+            builder.build()
+        }));
         let output = output.map(|x| Ok(FlowEvent::append_only_data(x?)));
         let stream = Box::pin(FlowEventStreamAdapter::new(
             self.projected_schema.clone(),

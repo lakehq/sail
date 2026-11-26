@@ -2,23 +2,20 @@
 
 use std::fmt;
 use std::ops::Range;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::stream::BoxStream;
-use futures::{Stream, StreamExt};
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
     UploadPart,
 };
+use sail_common::runtime::spawn_stream_on;
 use tokio::runtime::Handle;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use tonic::codegen::Bytes;
@@ -30,6 +27,10 @@ pub struct RuntimeAwareObjectStore {
 }
 
 impl RuntimeAwareObjectStore {
+    pub fn new(inner: Arc<dyn ObjectStore>, handle: Handle) -> Self {
+        Self { inner, handle }
+    }
+
     pub fn try_new<F>(initializer: F, handle: Handle) -> Result<Self>
     where
         F: FnOnce() -> Result<Arc<dyn ObjectStore>>,
@@ -42,28 +43,57 @@ impl RuntimeAwareObjectStore {
         Ok(Self { inner, handle })
     }
 
-    fn wrap_get_result(&self, result: GetResult) -> GetResult {
-        match result {
-            GetResult {
-                payload: GetResultPayload::File { .. },
-                ..
-            } => result,
-            GetResult {
-                payload: GetResultPayload::Stream(stream),
-                meta,
-                range,
-                attributes,
-                extensions,
-            } => GetResult {
-                payload: GetResultPayload::Stream(
-                    RuntimeAwareStream::new(move |_| stream, (), self.handle.clone()).boxed(),
-                ),
-                meta,
-                range,
-                attributes,
-                extensions,
-            },
+    fn wrap_get_result(&self, mut result: GetResult, ranged: bool) -> GetResult {
+        // Whole-file decoders use the native file handle for seeking, sampling, and
+        // multi-member decompression. Range requests consume bytes on the I/O runtime.
+        if !ranged && matches!(result.payload, GetResultPayload::File { .. }) {
+            result
+                .extensions
+                .insert(FileReadRuntime(self.handle.clone()));
+            return result;
         }
+
+        let meta = result.meta.clone();
+        let range = result.range.clone();
+        let attributes = std::mem::take(&mut result.attributes);
+        let extensions = std::mem::take(&mut result.extensions);
+        GetResult {
+            payload: GetResultPayload::Stream(spawn_stream_on(
+                self.handle.clone(),
+                (),
+                move |_| result.into_stream(),
+            )),
+            meta,
+            range,
+            attributes,
+            extensions,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FileReadRuntime(Handle);
+
+/// Read an object body asynchronously while preserving native file payloads for seekable decoders.
+pub trait GetResultExt {
+    fn read_bytes(self) -> impl Future<Output = Result<Bytes>> + Send;
+    fn read_stream(self) -> BoxStream<'static, Result<Bytes>>;
+}
+
+impl GetResultExt for GetResult {
+    async fn read_bytes(self) -> Result<Bytes> {
+        if let Some(runtime) = self.extensions.get::<FileReadRuntime>() {
+            let handle = runtime.0.clone();
+            return AbortOnDropHandle::new(handle.spawn(self.bytes())).await?;
+        }
+        self.bytes().await
+    }
+
+    fn read_stream(self) -> BoxStream<'static, Result<Bytes>> {
+        if let Some(runtime) = self.extensions.get::<FileReadRuntime>().cloned() {
+            return spawn_stream_on(runtime.0, (), move |_| self.into_stream());
+        }
+        self.into_stream()
     }
 }
 
@@ -112,11 +142,12 @@ impl ObjectStore for RuntimeAwareObjectStore {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let inner = self.inner.clone();
         let location = location.clone();
+        let ranged = options.range.is_some();
         let result = self
             .handle
             .spawn(async move { inner.get_opts(&location, options).await })
             .await??;
-        Ok(self.wrap_get_result(result))
+        Ok(self.wrap_get_result(result, ranged))
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -132,22 +163,16 @@ impl ObjectStore for RuntimeAwareObjectStore {
         &self,
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
-        RuntimeAwareStream::new(
-            move |x| x.delete_stream(locations),
-            self.inner.clone(),
-            self.handle.clone(),
-        )
-        .boxed()
+        spawn_stream_on(self.handle.clone(), self.inner.clone(), move |store| {
+            store.delete_stream(locations)
+        })
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
-        RuntimeAwareStream::new(
-            move |x| x.list(prefix.as_ref()),
-            self.inner.clone(),
-            self.handle.clone(),
-        )
-        .boxed()
+        spawn_stream_on(self.handle.clone(), self.inner.clone(), move |store| {
+            store.list(prefix.as_ref())
+        })
     }
 
     fn list_with_offset(
@@ -157,12 +182,9 @@ impl ObjectStore for RuntimeAwareObjectStore {
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
-        RuntimeAwareStream::new(
-            move |x| x.list_with_offset(prefix.as_ref(), &offset),
-            self.inner.clone(),
-            self.handle.clone(),
-        )
-        .boxed()
+        spawn_stream_on(self.handle.clone(), self.inner.clone(), move |store| {
+            store.list_with_offset(prefix.as_ref(), &offset)
+        })
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -314,51 +336,16 @@ impl Drop for RuntimeAwareMultipartUpload {
     }
 }
 
-struct RuntimeAwareStream<T> {
-    inner: ReceiverStream<T>,
-}
-
-impl<T> RuntimeAwareStream<T>
-where
-    T: Send + 'static,
-{
-    pub fn new<F, A>(initializer: F, args: A, handle: Handle) -> Self
-    where
-        A: Send + 'static,
-        F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
-    {
-        // Testing with larger buffer values showed no performance improvement.
-        // Network I/O is the bottleneck, not channel capacity.
-        let (tx, rx) = mpsc::channel(1);
-        handle.spawn(async move {
-            let mut stream = initializer(&args);
-            while let Some(item) = stream.next().await {
-                if tx.send(item).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            inner: ReceiverStream::new(rx),
-        }
-    }
-}
-
-impl<T> Stream for RuntimeAwareStream<T> {
-    type Item = T;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use futures::StreamExt;
     use futures::future::try_join;
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
     use tokio::runtime::{Id, Runtime};
     use tokio::sync::{Barrier, Notify};
     use tokio::time::timeout;
@@ -458,6 +445,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn streaming_get_body_is_polled_on_primary() -> Result<(), Box<dyn Error>> {
+        let compute = Runtime::new()?;
+        let primary = Runtime::new()?;
+        let primary_id = primary.handle().id();
+        let store = Arc::new(InMemory::new());
+        let wrapper = RuntimeAwareObjectStore::new(store.clone(), primary.handle().clone());
+
+        compute.block_on(async {
+            let path = Path::from("body");
+            store.put(&path, "body".into()).await?;
+            let mut result = store.get(&path).await?;
+            result.payload = GetResultPayload::Stream(
+                futures::stream::once(async move {
+                    assert_eq!(Handle::current().id(), primary_id);
+                    Ok(Bytes::from_static(b"body"))
+                })
+                .boxed(),
+            );
+            assert_eq!(
+                wrapper.wrap_get_result(result, false).bytes().await?,
+                "body"
+            );
+            Ok(())
+        })
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn multipart_parts_upload_concurrently() -> Result<(), Box<dyn Error>> {
         let (inner, _) = RecordingMultipartUpload::new(2);
@@ -543,12 +557,13 @@ mod tests {
 
     #[test]
     fn multipart_parts_are_created_synchronously() -> Result<(), Box<dyn Error>> {
-        let io = tokio::runtime::Builder::new_current_thread()
+        let primary = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         let (inner, _) = RecordingMultipartUpload::new(2);
         let next_idx = inner.next_idx.clone();
-        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+        let mut upload =
+            RuntimeAwareMultipartUpload::new(Box::new(inner), primary.handle().clone());
 
         let first = upload.put_part(vec![1].into());
         let second = upload.put_part(vec![2].into());
@@ -560,34 +575,36 @@ mod tests {
 
     #[test]
     fn multipart_parts_upload_on_object_store_runtime() -> Result<(), Box<dyn Error>> {
+        let compute = Runtime::new()?;
         let primary = Runtime::new()?;
-        let io = Runtime::new()?;
         let (inner, records) = RecordingMultipartUpload::new(1);
-        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+        let mut upload =
+            RuntimeAwareMultipartUpload::new(Box::new(inner), primary.handle().clone());
 
-        primary.block_on(async move {
+        compute.block_on(async move {
             timeout(Duration::from_secs(5), upload.put_part(vec![1].into())).await
         })??;
 
         let records = records.blocking_lock();
         let runtime_ids: Vec<Id> = records.iter().map(|(_, _, id)| *id).collect();
-        assert_eq!(runtime_ids, vec![io.handle().id()]);
-        assert_ne!(runtime_ids, vec![primary.handle().id()]);
+        assert_eq!(runtime_ids, vec![primary.handle().id()]);
+        assert_ne!(runtime_ids, vec![compute.handle().id()]);
         Ok(())
     }
 
     #[test]
     fn dropping_upload_part_cancels_runtime_task() -> Result<(), Box<dyn Error>> {
+        let compute = Runtime::new()?;
         let primary = Runtime::new()?;
-        let io = Runtime::new()?;
         // Only one part is launched, so the two-party barrier keeps it pending.
         let (inner, _) = RecordingMultipartUpload::new(2);
         let started = inner.started.clone();
         let dropped = inner.dropped.clone();
-        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+        let mut upload =
+            RuntimeAwareMultipartUpload::new(Box::new(inner), primary.handle().clone());
         let part = upload.put_part(vec![1].into());
 
-        primary.block_on(async move {
+        compute.block_on(async move {
             let task = tokio::spawn(part);
             timeout(Duration::from_secs(5), started.notified()).await?;
             task.abort();

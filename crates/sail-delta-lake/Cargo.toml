@@ -12,6 +12,7 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+sail-object-store = { path = "../sail-object-store", default-features = false }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-cache = { path = "../sail-cache" }

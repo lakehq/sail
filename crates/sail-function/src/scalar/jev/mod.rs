@@ -16,6 +16,7 @@ use datafusion_expr::{
 };
 use parquet_variant_compute::{VariantArray, VariantType, unshred_variant};
 use parquet_variant_json::VariantToJson;
+use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_common_datafusion::variant::{
     VARIANT_VALUE_FIELD_NAME, is_variant_storage_field, variant_metadata_field,
 };
@@ -212,7 +213,8 @@ impl AsyncScalarUDFImpl for Jev {
             .get(options_index)
             .is_none_or(|input| matches!(input, Input::Scalar(_)));
         let mut parsed_options = None;
-        let mut rows = transport::evaluate(self.kind, count, |index| {
+        let io = IoRuntime::from_options(&args.config_options);
+        let mut rows = transport::evaluate(&io, self.kind, count, |index| {
             let state = if self.kind == JevKind::Models {
                 InputValue::from_value(Value::Null)?
             } else {

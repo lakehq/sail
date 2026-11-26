@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use object_store::{ObjectMeta, ObjectStoreExt};
+use sail_object_store::GetResultExt;
 
 use crate::delta_log::{LogStore, get_actions};
 use crate::spec::{
@@ -87,7 +88,7 @@ async fn read_in_commit_timestamp_from_checksum(
     let path = checksum_path(version);
     let store = log_store.object_store(None);
     let bytes = match store.get(&path).await {
-        Ok(result) => result.bytes().await?,
+        Ok(result) => result.read_bytes().await?,
         Err(object_store::Error::NotFound { .. }) => return Ok(None),
         Err(err) => return Err(err.into()),
     };

@@ -7,6 +7,7 @@ use datafusion::common::runtime::SpawnedTask;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use sail_object_store::GetResultExt;
 
 use super::{
     CheckpointFileSet, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
@@ -37,7 +38,7 @@ async fn read_checkpoint_header_from_checkpoint_files(
                 state.apply_checkpoint_row(row)?;
             }
         } else {
-            let bytes = root_store.get(&meta.location).await?.bytes().await?;
+            let bytes = root_store.get(&meta.location).await?.read_bytes().await?;
             state = SpawnedTask::spawn_blocking(move || {
                 let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
                     .map_err(DeltaTableError::generic_err)?;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_object_store::GetResultExt;
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{
@@ -158,7 +159,7 @@ impl<'a> LogSegmentResolver<'a> {
                 continue;
             }
             let bytes = match store.get(&meta.location).await {
-                Ok(r) => match r.bytes().await {
+                Ok(r) => match r.read_bytes().await {
                     Ok(b) => b,
                     Err(err) => {
                         debug!(
@@ -349,7 +350,7 @@ async fn try_read_checksum_header(
     version: i64,
 ) -> Option<ReplayedTableHeader> {
     let path = checksum_path(version);
-    let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
+    let bytes = store.get(&path).await.ok()?.read_bytes().await.ok()?;
     let checksum: VersionChecksum = match serde_json::from_slice(&bytes) {
         Ok(c) => c,
         Err(err) => {

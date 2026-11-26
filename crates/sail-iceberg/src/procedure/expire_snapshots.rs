@@ -12,6 +12,7 @@ use futures::{StreamExt, stream};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
 use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
+use sail_object_store::GetResultExt;
 use url::Url;
 
 use super::arguments::{optional_bool, optional_i32};
@@ -475,7 +476,7 @@ async fn inventory_with_limit(
             }
             let list_path = path.clone();
             let mut specs = HashSet::new();
-            let bytes = store.base.get(&path).await?.bytes().await?;
+            let bytes = store.base.get(&path).await?.read_bytes().await?;
             let list = ManifestList::parse_with_version(&bytes, metadata.format_version)
                 .map_err(DataFusionError::Execution)?;
             for descriptor in list.entries() {
@@ -493,7 +494,7 @@ async fn inventory_with_limit(
                 if !manifests.insert(path.clone()) {
                     continue;
                 }
-                let bytes = store.base.get(&path).await?.bytes().await?;
+                let bytes = store.base.get(&path).await?.read_bytes().await?;
                 let manifest = Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)?;
                 for entry in manifest.entries() {
                     if entry.data_file.key_metadata.is_some() {

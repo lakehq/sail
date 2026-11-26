@@ -102,7 +102,7 @@ mod tests {
                         })),
                     };
                     let plan = relation.try_into()?;
-                    let result = handle.primary().block_on(async {
+                    let result = handle.compute().block_on(async {
                         let spark = context.extension::<SparkSession>()?;
                         let service = context.extension::<JobService>()?;
                         let (plan, _) =

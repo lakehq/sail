@@ -20,6 +20,7 @@ use sail_common::config::{
     AppConfig, CacheType, FairMemoryPoolConfig, GreedyMemoryPoolConfig, MemoryPoolConfig,
 };
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::session::runtime::IoRuntime;
 use sail_object_store::DynamicObjectStoreRegistry;
 
 pub struct RuntimeEnvFactory {
@@ -39,6 +40,10 @@ impl RuntimeEnvFactory {
             global_file_statistics_cache: None,
             global_file_metadata_cache: None,
         }
+    }
+
+    pub fn io_runtime(&self) -> IoRuntime {
+        IoRuntime(self.runtime.primary().clone())
     }
 
     pub fn create<M>(&mut self, mutator: M) -> Result<Arc<RuntimeEnv>>

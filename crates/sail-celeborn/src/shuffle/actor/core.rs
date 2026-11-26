@@ -119,13 +119,9 @@ impl Actor for ShuffleClientActor {
                 partition_id,
                 result,
                 reply,
-            } => self.handle_read_partition_stream_complete(
-                ctx,
-                shuffle_id,
-                partition_id,
-                result,
-                reply,
-            ),
+            } => {
+                self.handle_read_partition_stream_complete(shuffle_id, partition_id, result, reply)
+            }
             ShuffleClientMessage::Stop { result } => self.handle_stop(result),
         }
     }

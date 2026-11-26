@@ -8,6 +8,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, exec_err, not_impl_err, plan_err};
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
+use sail_object_store::GetResultExt;
 use serde::Deserialize;
 
 use super::arguments::{optional_bool, optional_i32};
@@ -683,7 +684,7 @@ async fn read_entries(
         return not_impl_err!("rewrite_manifests does not support encrypted manifests");
     }
     let (object_store, path) = store.resolve(&descriptor.manifest_path)?;
-    let bytes = object_store.get(&path).await?.bytes().await?;
+    let bytes = object_store.get(&path).await?.read_bytes().await?;
     let (manifest_metadata, decoded) =
         Manifest::decode_avro_entries_with_limit(&bytes, *remaining_entries, |entry, value| {
             apache_avro::from_value::<RawEntry>(value)

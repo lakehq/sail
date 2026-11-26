@@ -6,8 +6,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::Partitioning;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
@@ -49,22 +48,10 @@ impl JobScheduler {
     pub fn accept_job(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
-        plan: Arc<dyn ExecutionPlan>,
+        graph: JobGraph,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
-
-        debug!(
-            "job {job_id} execution plan\n{}",
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
-        let graph = JobGraph::try_new(
-            plan,
-            crate::job_graph::JobGraphOptions {
-                shuffle_backend: self.options.shuffle_backend.clone(),
-            },
-        )?;
-        debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) =
             build_job_output(ctx, job_id, graph.schema().clone(), self.shutdown.clone());
@@ -1346,6 +1333,9 @@ pub(super) mod tests {
             DriverId::from(1),
             0,
         )?;
+        let graph_options = crate::job_graph::JobGraphOptions {
+            shuffle_backend: options.shuffle_backend.clone(),
+        };
         let mut scheduler =
             JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
         let mut assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
@@ -1365,8 +1355,11 @@ pub(super) mod tests {
             None,
             SnapshotUpdateKind::FastAppend,
         ));
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _output) = scheduler.accept_job(
+            &mut ctx,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            Arc::new(TaskContext::default()),
+        )?;
         scheduler.refresh_job(job_id);
         let original = TaskKey {
             job_id,
@@ -1476,6 +1469,9 @@ pub(super) mod tests {
             DriverId::from(1),
             0,
         )?;
+        let graph_options = crate::job_graph::JobGraphOptions {
+            shuffle_backend: options.shuffle_backend.clone(),
+        };
         let mut scheduler =
             JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
         let mut system = ActorSystem::new();
@@ -1496,8 +1492,11 @@ pub(super) mod tests {
             input,
             Partitioning::RoundRobinBatch(2),
         )?);
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _output) = scheduler.accept_job(
+            &mut ctx,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            Arc::new(TaskContext::default()),
+        )?;
         scheduler.refresh_job(job_id);
         let key = |stage, partition, attempt| TaskKey {
             job_id,
@@ -1599,6 +1598,9 @@ pub(super) mod tests {
             DriverId::from(1),
             0,
         )?;
+        let graph_options = crate::job_graph::JobGraphOptions {
+            shuffle_backend: options.shuffle_backend.clone(),
+        };
         let mut scheduler =
             JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
         let mut system = ActorSystem::new();
@@ -1625,8 +1627,11 @@ pub(super) mod tests {
         )?);
         let ordering = [PhysicalSortExpr::new_default(col("k", &schema)?)].into();
         let plan = Arc::new(RangeRepartitionExec::try_new(input()?, sample, ordering)?);
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _output) = scheduler.accept_job(
+            &mut ctx,
+            crate::job_graph::JobGraph::try_new(plan, graph_options.clone())?,
+            Arc::new(TaskContext::default()),
+        )?;
         let (split_points, writer) = {
             let graph = &scheduler.jobs[&job_id].graph;
             (
@@ -1699,8 +1704,11 @@ pub(super) mod tests {
             )
         };
         let plan = range(range(input()?)?)?;
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _output) = scheduler.accept_job(
+            &mut ctx,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            Arc::new(TaskContext::default()),
+        )?;
         let shuffles = scheduler.jobs[&job_id].graph.range_shuffles().len();
         let mut resolved = 0;
         for _ in 0..100 {
@@ -2099,6 +2107,9 @@ pub(super) mod tests {
             DriverId::from(1),
             0,
         )?;
+        let graph_options = crate::job_graph::JobGraphOptions {
+            shuffle_backend: options.shuffle_backend.clone(),
+        };
         let mut scheduler =
             JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
         let mut system = ActorSystem::new();
@@ -2118,8 +2129,11 @@ pub(super) mod tests {
             .ok_or("missing ordering")?;
         let sort = SortExec::new(ordering.clone(), input).with_preserve_partitioning(true);
         let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _output) = scheduler.accept_job(
+            &mut ctx,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            Arc::new(TaskContext::default()),
+        )?;
         scheduler.refresh_job(job_id);
         let key = TaskKey {
             job_id,

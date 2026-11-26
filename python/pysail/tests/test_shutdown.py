@@ -141,18 +141,21 @@ def test_sigterm_force_closes_connection_after_grace_period(service):
 
 
 @pytest.mark.parametrize(
-    "kind",
+    ("kind", "mode"),
     [
-        "scalar",
-        "scalar_literal",
-        "iterator",
-        pytest.param("analyze", marks=pytest.mark.spark(version=">=4.1", reason="Requires UDTF analysis")),
+        ("scalar", "local"),
+        ("scalar", "local-cluster"),
+        ("scalar_literal", "local"),
+        ("iterator", "local"),
+        pytest.param("analyze", "local", marks=pytest.mark.spark(version=">=4.1", reason="Requires UDTF analysis")),
         pytest.param(
-            "source_schema", marks=pytest.mark.spark(version=">=4.1", reason="Requires Python data source registration")
+            "source_schema",
+            "local",
+            marks=pytest.mark.spark(version=">=4.1", reason="Requires Python data source registration"),
         ),
     ],
 )
-def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
+def test_spark_cancels_query_while_python_callback_is_blocked(kind, mode, tmp_path):
     import grpc
     from pyspark.sql import SparkSession, functions
     from pyspark.sql.connect.proto import ExecutePlanRequest
@@ -164,7 +167,7 @@ def test_spark_cancels_query_while_python_callback_is_blocked(kind, tmp_path):
 
     released = tmp_path / "client_received_error"
     timed_out = tmp_path / "udf_timed_out"
-    with _server("spark", "local", TOKIO_WORKER_THREADS="1") as (server, address):
+    with _server("spark", mode, TOKIO_WORKER_THREADS="1") as (server, address):
         server_pid = server.pid
 
         def wait_for_client():

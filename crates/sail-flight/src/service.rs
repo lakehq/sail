@@ -200,19 +200,17 @@ impl FlightSqlService for SailFlightSqlService {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        shutdown::run(
-            self.session_manager.query_cancellation(),
-            Self::handle_statement_query(
+        self.session_manager
+            .run_query(Self::handle_statement_query(
                 self.session_manager.clone(),
                 self.config.clone(),
                 self.metrics.clone(),
                 self.state.clone(),
                 query,
                 request.into_inner(),
-            ),
-        )
-        .await
-        .map(Response::new)
+            ))
+            .await
+            .map(Response::new)
     }
 
     async fn do_get_statement(

@@ -14,7 +14,9 @@ use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_system_store::SystemEvent;
+use tokio::runtime::Handle;
 use tokio::time::Instant;
+use tokio_util::task::AbortOnDropHandle;
 use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
@@ -443,11 +445,16 @@ impl WorkerPool {
             });
             return Ok(Box::pin(futures::stream::empty()));
         }
+        // The reader can poll this stream on compute. Open the Flight connection on
+        // the driver runtime so its HTTP/2 transport keeps running during computation.
+        let primary = Handle::current();
         let stream = futures::stream::once(async move {
-            client
-                .fetch_task_streams(keys, schema.clone())
-                .await
-                .map_err(|e| TaskStreamError::External(Arc::new(e)))
+            AbortOnDropHandle::new(
+                primary.spawn(async move { client.fetch_task_streams(keys, schema).await }),
+            )
+            .await
+            .map_err(|e| TaskStreamError::External(Arc::new(e)))?
+            .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })
         .try_flatten();
         Ok(Box::pin(stream))

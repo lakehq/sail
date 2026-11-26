@@ -13,6 +13,7 @@ use datafusion::execution::TaskContext;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
+use sail_object_store::GetResultExt;
 use url::Url;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -121,7 +122,7 @@ impl StorageStreamManager {
                                 .get(&location)
                                 .await
                                 .map_err(|e| TaskStreamError::External(Arc::new(e)))?
-                                .bytes()
+                                .read_bytes()
                                 .await
                                 .map_err(|e| TaskStreamError::External(Arc::new(e)))?;
                             let reader = StreamReader::try_new(Cursor::new(bytes), None)

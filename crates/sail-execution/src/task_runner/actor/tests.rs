@@ -58,6 +58,7 @@ fn task_runner(
     ));
     Ok(system.spawn::<TaskRunnerActor>(TaskRunnerComponents {
         session_id: name.to_string(),
+        compute: tokio::runtime::Handle::current(),
         extensions: TaskRunnerExtensions {
             local_streams,
             storage_streams: None,

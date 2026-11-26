@@ -31,6 +31,7 @@ use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
+use sail_object_store::GetResultExt;
 
 use super::decoder::{CsvInputDecoder, CsvInputReader, decode_csv_input_stream};
 use super::projected::{DecoderBatchReader, ProjectedCsvDecoder, ProjectedCsvOptions};
@@ -429,7 +430,7 @@ impl FileOpener for CsvOpener {
                         local_csv_chunks(file_compression_type.convert_read(file)?)
                     }
                     _ => {
-                        let stream = result.into_stream().map_err(DataFusionError::from).boxed();
+                        let stream = result.read_stream().map_err(DataFusionError::from).boxed();
                         file_compression_type.convert_stream(stream)?
                     }
                 };
