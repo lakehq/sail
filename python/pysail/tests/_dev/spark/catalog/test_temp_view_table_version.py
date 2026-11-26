@@ -882,12 +882,13 @@ def test_data_frame_view_of_distinct_rows_reads_a_table_whose_other_column_chang
 # other columns: the query of the view, the table, its columns and rows, and the rows
 # that the view reads then, or `None` if the view must be created again.
 UNION_CHANGES = {
+    # The inputs of a union read all their columns, and the query no longer resolves.
     "column dropped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
         "w",
         "a INT",
         "(1), (3)",
-        [(1,), (1,), (1,), (2,), (3,)],
+        None,
     ),
     "column retyped on one side": (
         "SELECT a FROM (SELECT a, b FROM {t} UNION ALL SELECT a, b FROM {w})",
