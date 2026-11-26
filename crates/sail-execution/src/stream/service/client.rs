@@ -7,7 +7,9 @@ use arrow_flight::decode::FlightRecordBatchStream;
 use datafusion::arrow::datatypes::SchemaRef;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
+use sail_common::runtime::spawn_stream_on;
 use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
+use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
 
 use crate::error::ExecutionResult;
@@ -104,5 +106,7 @@ pub(super) fn decode_task_stream(
         };
         futures::future::ready(result)
     });
-    Box::pin(stream)
+    // The task that reads the batches may run on compute. Poll the gRPC body
+    // and its Flight decoder on the runtime that opened the request.
+    spawn_stream_on(Handle::current(), (), move |_| Box::pin(stream))
 }
