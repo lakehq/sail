@@ -6,6 +6,8 @@ use datafusion::execution::TaskContext;
 use log::debug;
 use prost::Message;
 use sail_common::actor::ActorHandle;
+use tokio::runtime::Handle;
+use tokio_util::task::AbortOnDropHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -23,6 +25,7 @@ pub struct WorkerServer {
     worker: ActorHandle<WorkerActor>,
     task_runner: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
+    compute: Handle,
 }
 
 impl WorkerServer {
@@ -30,11 +33,13 @@ impl WorkerServer {
         worker: ActorHandle<WorkerActor>,
         task_runner: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
+        compute: Handle,
     ) -> Self {
         Self {
             worker,
             task_runner,
             context,
+            compute,
         }
     }
 }
@@ -58,8 +63,14 @@ impl WorkerService for WorkerServer {
             .into_iter()
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
-            .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
+        let definition = AbortOnDropHandle::new(self.compute.spawn(async move {
+            let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
+                .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
+            let definition = TaskDefinition::try_from(definition)?.decode_plan()?;
+            Ok::<_, Status>(Arc::new(definition))
+        }))
+        .await
+        .map_err(ExecutionError::from)??;
         let stage =
             usize::try_from(stage).map_err(|_| Status::invalid_argument("stage overflow"))?;
         let tasks = tasks
@@ -79,7 +90,7 @@ impl WorkerService for WorkerServer {
                 job_id: job_id.into(),
                 stage,
                 tasks,
-                definition: Arc::new(TaskDefinition::try_from(definition)?),
+                definition,
                 context: self.context.clone(),
                 peers,
                 result,

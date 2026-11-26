@@ -131,6 +131,7 @@ impl Actor for WorkerActor {
                     ctx.handle().clone(),
                     task_runner,
                     task_context,
+                    self.options.runtime.compute().clone(),
                     addr,
                     self.options.shuffle_backend.flight_compression(),
                 )

@@ -9,6 +9,7 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
+use prost::Message;
 use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -366,11 +367,19 @@ impl WorkerPool {
             }
         };
         let handle = ctx.handle().clone();
+        let compute = self.options.compute.clone();
         ctx.spawn(async move {
-            if let Err(error) = client
-                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
-                .await
-            {
+            let dispatch = async {
+                let definition = AbortOnDropHandle::new(compute.spawn(async move {
+                    crate::task::r#gen::TaskDefinition::from(Arc::unwrap_or_clone(definition))
+                        .encode_to_vec()
+                }))
+                .await?;
+                client
+                    .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                    .await
+            };
+            if let Err(error) = dispatch.await {
                 for task in tasks {
                     let _ = handle
                         .send(DriverMessage::UpdateTask {

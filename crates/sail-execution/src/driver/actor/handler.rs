@@ -762,11 +762,17 @@ impl DriverActor {
             } else {
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
+                let compute = self.options.runtime.compute().clone();
                 ctx.spawn(async move {
                     let output = async {
                         let task_runner = task_runner.ok_or_else(|| {
                             ExecutionError::InternalError("task runner is not started".into())
                         })?;
+                        let definition =
+                            tokio_util::task::AbortOnDropHandle::new(compute.spawn(async move {
+                                Arc::unwrap_or_clone(definition).decode_plan().map(Arc::new)
+                            }))
+                            .await??;
                         let (result, rx) = oneshot::channel();
                         task_runner
                             .send(TaskRunnerMessage::RunTaskBatch {

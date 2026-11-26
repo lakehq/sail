@@ -168,8 +168,8 @@ impl JobRunner for ClusterJobRunner {
         )
         .map_err(|error| internal_datafusion_err!("{error}"))?;
         log::debug!("job graph\n{graph}");
-        let job =
-            PlannedJob::try_from(graph).map_err(|error| internal_datafusion_err!("{error}"))?;
+        let job = PlannedJob::try_from(graph)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let stream = execute_job(&self.driver, job, ctx.task_ctx()).await?;
         Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }

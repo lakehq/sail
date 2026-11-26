@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
-
-use prost::Message;
-
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskAttempt, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::service::{TaskStreamFlightClient, TaskStreamOwner};
-use crate::task::definition::TaskDefinition;
 use crate::worker::WorkerLocation;
 use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
 use crate::worker::r#gen::{
@@ -51,11 +46,9 @@ impl WorkerClient {
         job_id: JobId,
         stage: usize,
         tasks: Vec<TaskAttempt>,
-        definition: Arc<TaskDefinition>,
+        definition: Vec<u8>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        let definition =
-            crate::task::r#gen::TaskDefinition::from(definition.as_ref().clone()).encode_to_vec();
         log::debug!(
             "task batch tasks={} encoded definition bytes={}",
             tasks.len(),

@@ -6,6 +6,8 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::protobuf::PhysicalPlanNode;
+use prost::Message;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, WorkerId};
@@ -14,10 +16,23 @@ use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
 use crate::task::r#gen;
 
 #[derive(Debug, Clone)]
-pub struct TaskDefinition {
-    pub plan: Arc<[u8]>,
+pub struct TaskDefinition<P = Arc<[u8]>> {
+    pub plan: P,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+}
+
+impl TaskDefinition {
+    pub fn decode_plan(self) -> ExecutionResult<TaskDefinition<PhysicalPlanNode>> {
+        let plan = PhysicalPlanNode::decode(self.plan.as_ref()).map_err(|error| {
+            ExecutionError::InvalidArgument(format!("invalid physical plan: {error}"))
+        })?;
+        Ok(TaskDefinition {
+            plan,
+            inputs: self.inputs,
+            output: self.output,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

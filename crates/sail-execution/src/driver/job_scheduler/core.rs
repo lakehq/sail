@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use sail_common::actor::ActorContext;
@@ -27,16 +25,10 @@ use crate::driver::job_scheduler::{
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
-use crate::job_graph::{
-    InputMode, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
-};
-use crate::proto::{
-    encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
-};
+use crate::job_graph::{InputMode, OutputMode, Stage, StageInput, TaskPlacement};
 use crate::shuffle::ShuffleBackendKind;
 use crate::task::definition::{
-    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
-    TaskOutputLocator,
+    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput,
 };
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
@@ -742,7 +734,7 @@ impl JobScheduler {
         }
         for (s, stage) in job.stages.iter_mut().enumerate() {
             match stage.state {
-                StageState::Active => {
+                StageState::Active(_) => {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.clone(),
@@ -801,15 +793,23 @@ impl JobScheduler {
             )));
         };
 
-        let plan = encode_remote_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
+        let StageState::Active(encoded) = &job.stages[key.stage].state else {
+            return Err(ExecutionError::InvalidArgument(format!(
+                "stage {} of job {} is inactive",
+                key.stage, key.job_id
+            )));
+        };
         let inputs = stage
             .inputs
             .iter()
             .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
+        let output = TaskOutput {
+            distribution: encoded.distribution.clone(),
+            locator: job.output_locator(key.stage),
+        };
         let definition = TaskDefinition {
-            plan: Arc::from(plan),
+            plan: encoded.plan.clone(),
             inputs,
             output,
         };
@@ -833,7 +833,7 @@ impl JobScheduler {
                 });
             }
             for (s, stage) in job.stages.iter_mut().enumerate() {
-                if matches!(stage.state, StageState::Active) {
+                if matches!(stage.state, StageState::Active(_)) {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.to_string(),
@@ -1123,85 +1123,6 @@ impl<'a> TaskInputBuilder<'a> {
                 self.key.job_id, self.input.stage, partition
             )))
         }
-    }
-}
-
-struct TaskOutputBuilder<'a> {
-    job: &'a JobDescriptor,
-    key: &'a TaskKey,
-    stage: &'a Stage,
-    codec: &'a dyn PhysicalExtensionCodec,
-}
-
-impl<'a> TaskOutputBuilder<'a> {
-    fn new(
-        job: &'a JobDescriptor,
-        key: &'a TaskKey,
-        stage: &'a Stage,
-        codec: &'a dyn PhysicalExtensionCodec,
-    ) -> Self {
-        Self {
-            job,
-            key,
-            stage,
-            codec,
-        }
-    }
-
-    fn build(&self) -> ExecutionResult<TaskOutput> {
-        let distribution = match &self.stage.distribution {
-            OutputDistribution::Hash { keys, channels } => {
-                let keys = keys
-                    .iter()
-                    .map(|expr| {
-                        let expr = encode_remote_physical_expr(self.codec, expr)?;
-                        Ok(Arc::from(expr))
-                    })
-                    .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
-                TaskOutputDistribution::Hash {
-                    keys,
-                    channels: *channels,
-                }
-            }
-            OutputDistribution::Range {
-                partitioning,
-                channels,
-            } => {
-                let channels = *channels;
-                let partitioning = encode_remote_partitioning(
-                    self.codec,
-                    &Partitioning::Range(partitioning.clone()),
-                )?;
-                TaskOutputDistribution::Range {
-                    partitioning: Arc::from(partitioning),
-                    channels,
-                }
-            }
-            OutputDistribution::RoundRobinBatch { channels } => {
-                TaskOutputDistribution::RoundRobinBatch {
-                    channels: *channels,
-                }
-            }
-            OutputDistribution::RoundRobinRow { channels } => {
-                TaskOutputDistribution::RoundRobinRow {
-                    channels: *channels,
-                }
-            }
-            OutputDistribution::Channel { channels } => TaskOutputDistribution::Channel {
-                channels: *channels,
-            },
-        };
-        let locator = match self.stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Pipelined {
-                replicas: self.job.graph.replicas(self.key.stage),
-                bounded: self.job.graph.bounded_output(self.key.stage),
-            },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
-        };
-        Ok(TaskOutput {
-            distribution,
-            locator,
-        })
     }
 }
 
@@ -1692,6 +1613,21 @@ pub(super) mod tests {
                 .resolve_range_shuffle(job_id, 0, Ok(update))
                 .is_empty()
         );
+        // The worker must receive the resized plan and channel count as well.
+        let job = &scheduler.jobs[&job_id];
+        let super::StageState::Active(stage) = &job.stages[last].state else {
+            return Err("expected an active result stage".into());
+        };
+        let plan = crate::proto::decode_remote_physical_plan(
+            &job.context,
+            &crate::proto::RemoteExecutionCodec,
+            &stage.plan,
+        )?;
+        assert_eq!(plan.properties().output_partitioning().partition_count(), 2);
+        assert!(
+            matches!(&job.stages[writer].state, super::StageState::Active(stage) if matches!(stage.distribution, crate::task::definition::TaskOutputDistribution::Channel { channels: 2 }))
+        );
+
         let tasks = scheduled(&scheduler.refresh_job(job_id));
         let mut last_partitions = tasks
             .iter()
@@ -1846,9 +1782,8 @@ pub(super) mod tests {
         use datafusion::physical_expr::Partitioning;
         use datafusion::physical_plan::repartition::RepartitionExec;
 
-        use super::{JobDescriptor, JobState, TaskOutputBuilder};
+        use super::{JobDescriptor, JobState};
         use crate::job_graph::{JobGraph, JobGraphOptions};
-        use crate::proto::RemoteExecutionCodec;
         use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
         use crate::task::definition::TaskOutputLocator;
 
@@ -1873,21 +1808,12 @@ pub(super) mod tests {
             JobState::Draining,
             Arc::new(TaskContext::default()),
         );
-        let stages = job.graph.stages();
-        assert_eq!(stages.len(), 2);
-        for (s, stage) in stages.iter().enumerate() {
-            let key = TaskKey {
-                job_id: JobId::from(1),
-                stage: s,
-                partition: 0,
-                attempt: 0,
-            };
-            let output =
-                TaskOutputBuilder::new(&job, &key, stage, &RemoteExecutionCodec).build()?;
+        assert_eq!(job.graph.stages().len(), 2);
+        for s in 0..2 {
             // The first stage is read by the second stage, which is read by the driver.
             // The tasks that produce the result of the job never wait for the client.
             assert!(matches!(
-                output.locator,
+                job.output_locator(s),
                 TaskOutputLocator::Pipelined { bounded, .. } if bounded == (s == 0)
             ));
         }
