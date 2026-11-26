@@ -38,6 +38,7 @@ pub struct LogSegmentResolveOptions {
 pub async fn list_log_segment_files(
     log_store: &crate::delta_log::LogStoreRef,
     max_version: i64,
+    metadata_size_hint: Option<usize>,
 ) -> DeltaResult<LogSegmentFiles> {
     let store = log_store.object_store(None);
     let offset_version = read_last_checkpoint_version_from_store(store.clone())
@@ -61,7 +62,9 @@ pub async fn list_log_segment_files(
         // Multi-part checkpoints are always V1. Single-file classic or UUID-named checkpoints may
         // follow the V2 format and refer to sidecars.
         if let [checkpoint_meta] = checkpoint_metas.as_slice() {
-            let sidecars = inspect_checkpoint_main_file(store, checkpoint_meta.clone()).await?;
+            let sidecars =
+                inspect_checkpoint_main_file(store, checkpoint_meta.clone(), metadata_size_hint)
+                    .await?;
             for sidecar in sidecars {
                 sidecar_files.push(sidecar_log_path(&sidecar.path));
             }

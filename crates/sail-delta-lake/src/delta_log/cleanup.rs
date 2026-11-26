@@ -317,7 +317,7 @@ async fn collect_referenced_sidecars(
     {
         for checkpoint_meta in checkpoint.into_files() {
             let sidecars =
-                inspect_checkpoint_main_file(object_store.clone(), checkpoint_meta).await?;
+                inspect_checkpoint_main_file(object_store.clone(), checkpoint_meta, None).await?;
             for sidecar in sidecars {
                 referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
             }

@@ -448,14 +448,21 @@ struct CheckpointObjectStoreReader {
     store: Arc<dyn ObjectStore>,
     path: object_store::path::Path,
     file_size: u64,
+    metadata_size_hint: Option<usize>,
 }
 
 impl CheckpointObjectStoreReader {
-    fn new(store: Arc<dyn ObjectStore>, path: object_store::path::Path, file_size: u64) -> Self {
+    fn new(
+        store: Arc<dyn ObjectStore>,
+        path: object_store::path::Path,
+        file_size: u64,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
         Self {
             store,
             path,
             file_size,
+            metadata_size_hint,
         }
     }
 }
@@ -488,6 +495,7 @@ impl AsyncFileReader for CheckpointObjectStoreReader {
         async move {
             let file_size = self.file_size;
             let metadata = ParquetMetaDataReader::new()
+                .with_prefetch_hint(self.metadata_size_hint)
                 .with_arrow_reader_options(options)
                 .load_and_finish(self, file_size)
                 .await?;
@@ -963,6 +971,7 @@ impl CheckpointMainSummary {
 pub(crate) async fn inspect_checkpoint_main_file(
     root_store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
+    metadata_size_hint: Option<usize>,
 ) -> DeltaResult<Vec<Sidecar>> {
     let version = parse_checkpoint_version_from_location(&meta.location).ok_or_else(|| {
         DeltaTableError::generic(format!(
@@ -977,7 +986,12 @@ pub(crate) async fn inspect_checkpoint_main_file(
     }
 
     let uuid_named = is_uuid_checkpoint_filename(filename);
-    let reader = CheckpointObjectStoreReader::new(root_store, meta.location.clone(), meta.size);
+    let reader = CheckpointObjectStoreReader::new(
+        root_store,
+        meta.location.clone(),
+        meta.size,
+        metadata_size_hint,
+    );
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(DeltaTableError::generic_err)?;
@@ -2388,7 +2402,7 @@ mod tests {
 
         let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
         let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
-        let segment = list_log_segment_files(&log_store, 2).await?;
+        let segment = list_log_segment_files(&log_store, 2, None).await?;
         assert_eq!(
             segment.sidecar_files,
             vec![format!("_sidecars/{sidecar_filename}")]
@@ -2466,7 +2480,7 @@ mod tests {
             vec!["part-001.parquet", "part-002.parquet"]
         );
 
-        let segment = list_log_segment_files(&log_store, 2).await?;
+        let segment = list_log_segment_files(&log_store, 2, None).await?;
         assert_eq!(
             segment.checkpoint_files,
             vec![
@@ -2685,7 +2699,7 @@ mod tests {
         put_parquet_batch(store.clone(), checkpoint_path.clone(), batch).await?;
 
         let sidecars =
-            inspect_checkpoint_main_file(store.clone(), store.head(&checkpoint_path).await?)
+            inspect_checkpoint_main_file(store.clone(), store.head(&checkpoint_path).await?, None)
                 .await?;
 
         assert!(sidecars.is_empty());
