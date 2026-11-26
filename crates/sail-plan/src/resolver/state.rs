@@ -696,21 +696,22 @@ impl PlanResolverState {
         status: TableStatus,
         resolved: LakehouseResolvedTable,
     ) -> (TableStatus, LakehouseResolvedTable) {
-        let first = self.catalog_table_lookups.iter().find_map(
-            |((first_catalog, first_name), lookup)| match lookup {
-                (first, Some(first_resolved))
-                    if *first_catalog == session_catalog
-                        && first_name.first() == name.first()
-                        && first.database == status.database
-                        && first.name == status.name
-                        && first_resolved.execution.table_identity
-                            == resolved.execution.table_identity =>
-                {
-                    Some((first.clone(), first_resolved.clone()))
-                }
-                _ => None,
-            },
-        );
+        let first =
+            self.catalog_table_lookups
+                .iter()
+                .find_map(|((first_catalog, first_name), lookup)| match lookup {
+                    (first, Some(first_resolved))
+                        if *first_catalog == session_catalog
+                            && first_name.first() == name.first()
+                            && first.database == status.database
+                            && first.name == status.name
+                            && first_resolved.execution.table_identity
+                                == resolved.execution.table_identity =>
+                    {
+                        Some((first.clone(), first_resolved.clone()))
+                    }
+                    _ => None,
+                });
         let (status, resolved) = first.unwrap_or((status, resolved));
         self.catalog_table_lookups.insert(
             (session_catalog, name),

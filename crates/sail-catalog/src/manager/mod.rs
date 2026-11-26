@@ -291,8 +291,7 @@ impl CatalogManagerState {
     /// temporary view while the view resolves its query again, if that session has its own
     /// instance of the catalog.
     fn catalog(&self, catalog: &str) -> Option<Arc<dyn CatalogProvider>> {
-        ViewDefinitionScope::pinned_catalog(catalog)
-            .or_else(|| self.catalogs.get(catalog).cloned())
+        ViewDefinitionScope::pinned_catalog(catalog).or_else(|| self.catalogs.get(catalog).cloned())
     }
 }
 

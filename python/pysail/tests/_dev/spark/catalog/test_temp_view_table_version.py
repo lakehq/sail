@@ -2121,8 +2121,8 @@ def test_global_view_over_a_table_of_its_session_catalog(spark, observer, tables
     view = table.create_view(kind, f"SELECT 1 AS n FROM {table.name} WHERE id > 0")
     table.recreate("id DOUBLE", "(2.0)")
     assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
-    # The other session cannot name the table in the catalog of this session.
-    assert COLUMNS_CHANGED in error(observer, f"SELECT * FROM {view}")
+    # The other session resolves the query in the catalog of this session.
+    assert rows(observer, f"SELECT * FROM {view}") == [(1,)]
 
 
 @pytest.mark.parametrize("query", ["SELECT c FROM {t}", "SELECT c.x AS x FROM {t}"])
