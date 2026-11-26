@@ -329,12 +329,7 @@ fn build_iceberg_schema(columns: &[CreateTableColumnOptions]) -> CatalogResult<I
         .map(|(idx, col)| {
             let field =
                 arrow::datatypes::Field::new(&col.name, col.data_type.clone(), col.nullable)
-                    .with_metadata(
-                        col.metadata
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect(),
-                    );
+                    .with_metadata(col.metadata.iter().collect::<arrow::datatypes::Metadata>());
             let type_doc = arrow_field_to_iceberg_type(&field)?;
             let mut builder = IcebergStructField::builder()
                 .id((idx + 1) as i32)

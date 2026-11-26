@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, StructArray, UInt64Array,
+    Array, ArrayRef, AsArray, FixedSizeListArray, OffsetSizeTrait, StructArray, UInt64Array,
 };
+use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
@@ -92,10 +93,9 @@ fn rename_positionally(
     target_type: &DataType,
     prepare_for_cast: bool,
 ) -> Result<ArrayRef> {
-    // Null indices omit hidden list/map ranges as well as struct children.
-    // Rebuild only nullable nested storage, and only when a cast requests it.
+    // Taking the visible rows removes hidden child values from null and sliced parents.
     let visible;
-    let arr = if prepare_for_cast && arr.null_count() > 0 && arr.data_type().is_nested() {
+    let arr = if prepare_for_cast && has_hidden_children(arr) {
         let indices =
             UInt64Array::from_iter((0..arr.len()).map(|i| arr.is_valid(i).then_some(i as u64)));
         visible = datafusion::arrow::compute::take(arr.as_ref(), &indices, None)?;
@@ -248,6 +248,31 @@ fn rename_positionally(
     }
 }
 
+fn has_hidden_children(arr: &ArrayRef) -> bool {
+    fn uses_all_values<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>, len: usize) -> bool {
+        offsets[0].as_usize() == 0 && offsets[offsets.len() - 1].as_usize() == len
+    }
+
+    if arr.null_count() > 0 && arr.data_type().is_nested() {
+        return true;
+    }
+    match arr.data_type() {
+        DataType::List(_) => {
+            let list = arr.as_list::<i32>();
+            !uses_all_values(list.offsets(), list.values().len())
+        }
+        DataType::LargeList(_) => {
+            let list = arr.as_list::<i64>();
+            !uses_all_values(list.offsets(), list.values().len())
+        }
+        DataType::Map(_, _) => {
+            let map = arr.as_map();
+            !uses_all_values(map.offsets(), map.entries().len())
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::Int32Array;
@@ -286,6 +311,43 @@ mod tests {
                 .as_primitive::<datafusion::arrow::datatypes::Int32Type>()
                 .value(0),
             7
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_checked_list_cast_validates_only_visible_values() -> Result<()> {
+        use datafusion::arrow::array::ListArray;
+
+        let fields: Fields = vec![Field::new("n", DataType::Int32, true)].into();
+        let values: ArrayRef = Arc::new(StructArray::try_new(
+            fields,
+            vec![Arc::new(Int32Array::from(vec![None, Some(42)]))],
+            None,
+        )?);
+        let source: ArrayRef = Arc::new(ListArray::try_new(
+            Arc::new(Field::new("item", values.data_type().clone(), false)),
+            OffsetBuffer::from_lengths([1, 1]),
+            values,
+            None,
+        )?);
+        let target = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(vec![Field::new("n", DataType::Int32, false)].into()),
+            false,
+        )));
+        assert!(rename_positionally(&source, &target, true).is_err());
+        let visible = rename_positionally(&source.slice(1, 1), &target, true)?;
+        assert_eq!(visible.data_type(), &target);
+        assert_eq!(
+            visible
+                .as_list::<i32>()
+                .values()
+                .as_struct()
+                .column(0)
+                .as_primitive::<datafusion::arrow::datatypes::Int32Type>()
+                .value(0),
+            42
         );
         Ok(())
     }

@@ -7,10 +7,18 @@ use serde::{Deserialize, Serialize};
 
 use super::{CatalogPartitionField, CatalogTableSort, LakehouseExecutionContext};
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct MigrationBackup {
+    pub name: String,
+    pub retain: bool,
+}
+
 /// A staged catalog definition, not a data-overwrite option. It contains no live reservation
 /// or credentials and may cross the physical-plan codec boundary.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct TableReplacement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_backup: Option<MigrationBackup>,
     pub catalog_table: Vec<String>,
     pub authority: ReplacementAuthority,
     pub require_existing: bool,

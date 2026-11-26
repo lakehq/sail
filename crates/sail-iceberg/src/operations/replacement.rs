@@ -513,12 +513,19 @@ fn rest_replacement_changes(
     replacement: &IcebergTableReplacement,
     base: &TableMetadata,
 ) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
-    let authority = &replacement.catalog.authority;
+    rest_table_changes(&replacement.catalog, &replacement.metadata, base)
+}
+
+pub(crate) fn rest_table_changes(
+    catalog: &TableReplacement,
+    metadata: &TableMetadata,
+    base: &TableMetadata,
+) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
+    let authority = &catalog.authority;
     let create = matches!(
         authority,
         ReplacementAuthority::IcebergRestStagedCreate { .. }
     );
-    let metadata = &replacement.metadata;
     let uuid = base
         .table_uuid
         .ok_or_else(|| DataFusionError::Plan("Missing REST table UUID".into()))?;
@@ -614,8 +621,7 @@ fn rest_replacement_changes(
             location: metadata.location.clone(),
         });
     }
-    let requested_properties = replacement
-        .catalog
+    let requested_properties = catalog
         .property_updates
         .iter()
         .filter(|(key, _)| !key.starts_with("option."))
@@ -988,6 +994,7 @@ mod tests {
 
     fn catalog(existing: bool) -> TableReplacement {
         TableReplacement {
+            migration_backup: None,
             catalog_table: vec!["memory".into(), "db".into(), "t".into()],
             authority: sail_common_datafusion::catalog::ReplacementAuthority::Path {
                 catalog_generation: 7,

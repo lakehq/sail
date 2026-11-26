@@ -274,7 +274,12 @@ pub(crate) fn apply_operation(
             // the existing Iceberg field and must not supply a stale UUID marker.
             let target_field =
                 datafusion::arrow::datatypes::Field::new("", data_type.clone(), true)
-                    .with_metadata(target_metadata.iter().cloned().collect());
+                    .with_metadata(
+                        target_metadata
+                            .iter()
+                            .cloned()
+                            .collect::<datafusion::arrow::datatypes::Metadata>(),
+                    );
             let target = *arrow_field_to_iceberg(&target_field)?.field_type;
             update_column(metadata, column_path, *case_sensitive, |field| {
                 let allowed = *field.field_type == target

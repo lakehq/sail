@@ -10,6 +10,7 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::config::{CsvOptions, TableParquetOptions};
 use datafusion::common::parsers::CompressionTypeVariant;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{
     Constraint, Constraints, JoinSide, Result, ScalarValue, Statistics, plan_datafusion_err,
     plan_err,
@@ -30,8 +31,8 @@ use datafusion::execution::{SessionStateDefaults, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
+use datafusion::functions::core::overlay::OverlayFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
-use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
@@ -49,6 +50,7 @@ use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
@@ -131,6 +133,7 @@ use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_data_source::listing::partition_write::{HivePartitionFloat, HivePartitionWriteExec};
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -253,6 +256,7 @@ use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::predicate::rlike::RLike;
 use sail_function::scalar::spark_order_key::SparkOrderKey;
 use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
@@ -1017,6 +1021,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind,
+                ranking_field,
             }) => {
                 let [input] = inputs else {
                     return plan_err!(
@@ -1052,13 +1057,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         expr.len().saturating_sub(1)
                     );
                 }
-                Ok(Arc::new(PartitionedTopKExec::try_new(
+                let mut top_k = PartitionedTopKExec::try_new(
                     Arc::clone(input),
                     expr,
                     partition_prefix_len,
                     fetch,
                     window_fn_kind,
-                )?))
+                )?;
+                if let Some(ranking_field) = ranking_field {
+                    top_k = top_k.with_ranking_field(try_decode_field_ref(&ranking_field)?)?;
+                }
+                Ok(Arc::new(top_k))
             }
             NodeKind::DeltaWriter(delta_writer) => {
                 let r#gen::DeltaWriterExecNode {
@@ -1481,6 +1490,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let path = object_store::path::Path::parse(path)
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
                 Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
+            }
+            NodeKind::HivePartitionWrite(r#gen::HivePartitionWriteExecNode { input }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(HivePartitionWriteExec::new(input)))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
                 let input =
@@ -2465,10 +2479,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 stage_input.properties().equivalence_properties(),
                 proto_converter,
             )?;
-            let partitioning = self.try_encode_partitioning(
-                stage_input.properties().output_partitioning(),
-                proto_converter,
-            )?;
+            let partitioning = stage_input.properties().output_partitioning();
+            let partitioning = match partitioning {
+                Partitioning::Hash(exprs, count) if exprs.iter().any(uses_stage_scalar) => self
+                    .try_encode_partitioning(
+                        &Partitioning::UnknownPartitioning(*count),
+                        proto_converter,
+                    )?,
+                _ => self.try_encode_partitioning(partitioning, proto_converter)?,
+            };
             let bounded = match stage_input.properties().boundedness {
                 Boundedness::Bounded => true,
                 Boundedness::Unbounded {
@@ -2696,6 +2715,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind: Self::try_encode_partitioned_top_k_window_fn_kind(top_k.fn_kind()),
+                ranking_field: top_k
+                    .ranking_field()
+                    .map(try_encode_field_ref)
+                    .transpose()?,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
@@ -2770,8 +2793,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         options,
                     })
                 } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                    // The Parquet node carries the adapter configuration separately.
+                    let mut base_scan = file_scan.clone();
+                    base_scan.expr_adapter_factory = None;
                     let base_config = try_encode_message(serialize_file_scan_config(
-                        file_scan,
+                        &base_scan,
                         self,
                         proto_converter,
                     )?)?;
@@ -3830,6 +3856,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 rewrite_data_files,
             })
+        } else if let Some(write) = node.downcast_ref::<HivePartitionWriteExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                Arc::clone(write.input()),
+            )?;
+            NodeKind::HivePartitionWrite(r#gen::HivePartitionWriteExecNode { input })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
@@ -4217,6 +4250,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(ArrayCompact::new()))),
             "spark_cast_string_to_int32" => Ok(Arc::new(ScalarUDF::from(CastStringToInt32::new()))),
+            "sail_hive_partition_float" => {
+                Ok(Arc::new(ScalarUDF::from(HivePartitionFloat::default())))
+            }
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -4313,6 +4349,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "repeat" => Ok(Arc::new(ScalarUDF::from(RepeatFunc::new()))),
+            "spark_rlike" => Ok(Arc::new(ScalarUDF::from(RLike::default()))),
             "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_tuple" => Ok(Arc::new(ScalarUDF::from(JsonTuple::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
@@ -4451,6 +4488,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayPosition>()
             || node_inner.is::<ArrayCompact>()
             || node_inner.is::<CastStringToInt32>()
+            || node_inner.is::<HivePartitionFloat>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
@@ -4498,6 +4536,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
+            || node_inner.is::<RLike>()
             || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<AESDecrypt>()
             || node_inner.is::<AESEncrypt>()
@@ -5528,7 +5567,7 @@ impl RemoteExecutionCodec {
 
     fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
         fn field_or_descendant_contains_metadata(field: &Field, keys: &[&str]) -> bool {
-            if keys.iter().any(|key| field.metadata().contains_key(*key)) {
+            if keys.iter().any(|key| field.metadata().contains_key(key)) {
                 return true;
             }
             match field.data_type() {
@@ -6262,6 +6301,7 @@ impl RemoteExecutionCodec {
             }
             r#gen::PartitionedTopKWindowFnKind::RowNumber => Ok(WindowFnKind::RowNumber),
             r#gen::PartitionedTopKWindowFnKind::Rank => Ok(WindowFnKind::Rank),
+            r#gen::PartitionedTopKWindowFnKind::DenseRank => Ok(WindowFnKind::DenseRank),
         }
     }
 
@@ -6269,6 +6309,7 @@ impl RemoteExecutionCodec {
         (match kind {
             WindowFnKind::RowNumber => r#gen::PartitionedTopKWindowFnKind::RowNumber,
             WindowFnKind::Rank => r#gen::PartitionedTopKWindowFnKind::Rank,
+            WindowFnKind::DenseRank => r#gen::PartitionedTopKWindowFnKind::DenseRank,
         }) as i32
     }
 
@@ -6356,6 +6397,7 @@ impl RemoteExecutionCodec {
     ) -> Result<r#gen::EquivalenceClass> {
         let exprs = class
             .iter()
+            .filter(|expr| !uses_stage_scalar(expr))
             .map(|expr| try_encode_physical_expr_with_converter(self, proto_converter, expr))
             .collect::<Result<Vec<_>>>()?;
         Ok(r#gen::EquivalenceClass { exprs })
@@ -6462,6 +6504,10 @@ impl RemoteExecutionCodec {
             .iter()
             .map(|class| self.try_encode_equivalence_class(class, proto_converter))
             .collect::<Result<Vec<_>>>()?;
+        let classes = classes
+            .into_iter()
+            .filter(|class| !class.exprs.is_empty())
+            .collect();
         Ok(r#gen::EquivalenceGroup { classes })
     }
 
@@ -6511,10 +6557,15 @@ impl RemoteExecutionCodec {
         let constants = eq_properties
             .constants()
             .iter()
+            .filter(|constant| !uses_stage_scalar(&constant.expr))
             .map(|x| self.try_encode_constant_expression(x, proto_converter))
             .collect::<Result<Vec<_>>>()?;
-        let orderings =
-            self.try_encode_lex_orderings(eq_properties.oeq_class(), proto_converter)?;
+        let orderings = eq_properties
+            .oeq_class()
+            .iter()
+            .filter(|ordering| !ordering.iter().any(|expr| uses_stage_scalar(&expr.expr)))
+            .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+            .collect::<Result<_>>()?;
         let constraints = eq_properties
             .constraints()
             .iter()
@@ -6785,6 +6836,13 @@ impl RemoteExecutionCodec {
     }
 }
 
+/// Stage metadata can infer constants from scalar predicates in the producer.
+/// The consumer receives the materialized rows and has no access to that scalar scope.
+fn uses_stage_scalar(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.exists(|part| Ok(part.is::<ScalarSubqueryExpr>()))
+        .unwrap_or(true)
+}
+
 fn encode_range_sample_options(options: &RangeSampleOptions) -> r#gen::RangeSampleOptions {
     r#gen::RangeSampleOptions {
         sort_options: options
@@ -6990,16 +7048,13 @@ mod tests {
 
     #[test]
     fn uuid_codec_preserves_nested_metadata_and_error_mode() -> Result<()> {
-        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
-            [
-                (
-                    sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
-                    sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
-                ),
-                ("PARQUET:field_id".to_string(), "17".to_string()),
-            ]
-            .into(),
-        );
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata([
+            (
+                sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
+                sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
+            ),
+            ("PARQUET:field_id".to_string(), "17".to_string()),
+        ]);
         let target = Arc::new(Field::new(
             "s",
             DataType::Struct(vec![Arc::new(uuid)].into()),
@@ -7917,6 +7972,7 @@ mod tests {
         use sail_iceberg::operations::replacement::IcebergTableReplacement;
         let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
             "catalog": TableReplacement {
+            migration_backup: None,
                 catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
                 authority: sail_common_datafusion::catalog::ReplacementAuthority::Path { catalog_generation: 11, database_generation: 22, table_generation: 33 },
                 require_existing: true, existing: true,

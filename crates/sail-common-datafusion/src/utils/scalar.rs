@@ -32,7 +32,7 @@ mod tests {
     fn list_scalars_preserve_fields_and_validity() -> Result<()> {
         let field = Arc::new(
             Field::new("child", DataType::Int32, true)
-                .with_metadata([("owner".to_string(), "retained".to_string())].into()),
+                .with_metadata([("owner".to_string(), "retained".to_string())]),
         );
         let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None]));
         let validity = Some(NullBuffer::from(vec![true, true, false]));

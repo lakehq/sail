@@ -73,6 +73,8 @@ def _exercise_namespace_separator(
             spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
 
+# The first Nessie test on a CI runner may also need to pull the container image.
+@pytest.mark.timeout(300)
 @pytest.mark.usefixtures("_create_s3_bucket")
 def test_namespace_separator_custom_server_catalog_work_with_config(
     spark: SparkSession,

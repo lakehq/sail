@@ -226,6 +226,7 @@ impl Router {
         partitioning: &ShufflePartitioning,
         partition: usize,
         num_input_partitions: usize,
+        schema: &Schema,
     ) -> Result<Self> {
         let router = match partitioning {
             ShufflePartitioning::Hash(_, 0) => {
@@ -250,9 +251,7 @@ impl Router {
                     .iter()
                     .map(|sort_expr| Arc::clone(&sort_expr.expr))
                     .collect();
-                // TODO: Uncomment after DataFusion 56, and pass the input schema to the router.
-                // Self::Range(RangeExpr::try_new_with_schema(keys, range, schema)?)
-                Self::Range(RangeExpr::try_new(keys, range)?)
+                Self::Range(RangeExpr::try_new_with_schema(keys, range, schema)?)
             }
             // SPDX-SnippetBegin
             // SPDX-License-Identifier: Apache-2.0
@@ -520,7 +519,12 @@ impl ExecutionPlan for ShuffleWriteExec {
             .properties()
             .output_partitioning()
             .partition_count();
-        let router = Router::try_new(&self.partitioning, partition, num_input_partitions)?;
+        let router = Router::try_new(
+            &self.partitioning,
+            partition,
+            num_input_partitions,
+            &stream.schema(),
+        )?;
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let buffer = ShuffleBuffer::try_new(
@@ -2047,7 +2051,7 @@ mod tests {
         let strings = |batches: &[RecordBatch]| -> usize {
             batches
                 .iter()
-                .flat_map(|batch| batch.column(1).as_string_view().data_buffers())
+                .flat_map(|batch| batch.column(1).as_string_view().data_buffers().iter())
                 .map(Buffer::len)
                 .sum()
         };

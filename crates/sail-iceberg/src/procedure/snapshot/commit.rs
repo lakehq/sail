@@ -238,7 +238,7 @@ pub(crate) async fn commit_snapshot_operation(
                         &store_context,
                         table_url,
                         &metadata,
-                        output_schema.clone(),
+                        crate::procedure::add_files::ImportOutput::AddFiles(output_schema.clone()),
                     )
                     .await?
             }
@@ -656,7 +656,7 @@ fn procedure_commit_conflict() -> DataFusionError {
     ))
 }
 
-async fn stage_manifests(
+pub(crate) async fn stage_manifests(
     store: &StoreContext,
     manifests: &[(String, Vec<u8>)],
 ) -> Result<CreatedPathCleanup> {

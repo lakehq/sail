@@ -1479,3 +1479,15 @@ def test_float_string_correlation_normalizes_private_keys_and_preserves_raw_valu
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
         spark.catalog.dropTempView("scalar_float_string_payloads")
+
+
+def test_count_over_volatile_window_input_always_has_a_value(spark):
+    outer_rows = ", ".join(f"({i})" for i in range(48))
+    rows = spark.sql(f"""
+        SELECT (SELECT count(c) FROM (
+            SELECT count(*) OVER (PARTITION BY g) AS c FROM VALUES (0), (1) AS i(g)
+            WHERE i.g = o.x % 2 + CAST(pmod(xxhash64(uuid()), 2) AS INT)
+        )) AS n FROM VALUES {outer_rows} AS o(x)
+    """).collect()  # noqa: S608
+    assert len(rows) == 48
+    assert all(row.n in (0, 1, 2) for row in rows)

@@ -637,7 +637,7 @@ mod tests {
         let batch = text.next().unwrap().unwrap();
         assert_eq!(5, batch.num_rows());
         assert_eq!(1, batch.num_columns());
-        assert_eq!(&metadata, batch.schema().metadata());
+        assert_eq!(batch.schema().metadata(), &metadata);
     }
 
     #[expect(clippy::unwrap_used)]
