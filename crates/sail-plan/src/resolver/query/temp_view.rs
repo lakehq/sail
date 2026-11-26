@@ -310,7 +310,7 @@ fn is_signed_integer(field: &Field) -> bool {
 fn has_logical_type(field: &Field) -> bool {
     LOGICAL_TYPE_METADATA_KEYS
         .iter()
-        .any(|key| field.metadata().contains_key(*key))
+        .any(|key| field.metadata().contains_key(key))
 }
 
 /// Whether every value of the current field converts exactly to the type of the stored
@@ -787,7 +787,7 @@ impl<'a> Fit<'a> {
     /// Adds the change of the logical type of a field whose Arrow type can be the same.
     fn logical_type_changes(&mut self, stored: &Field, current: &Field, path: &[String]) {
         let change = LOGICAL_TYPE_METADATA_KEYS.iter().find_map(|key| {
-            let (a, b) = (stored.metadata().get(*key), current.metadata().get(*key));
+            let (a, b) = (stored.metadata().get(key), current.metadata().get(key));
             let same = match (a, b) {
                 (Some(a), Some(b)) => {
                     a == b
