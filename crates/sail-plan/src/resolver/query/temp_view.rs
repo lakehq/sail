@@ -2667,7 +2667,6 @@ mod tests {
                 assert_eq!(positions(&reference, &current, true), Ok(vec![Some(0)]));
             }
             for current in [
-                DataType::UInt8,
                 DataType::UInt64,
                 DataType::Float32,
                 DataType::Float64,

@@ -1057,13 +1057,14 @@ def test_view_joins_on_a_key_widened_on_one_side(spark, tables, kind, fmt):
     assert rows(spark, f"SELECT * FROM {view}") == rows(spark, query) == [(5, 300)]
 
 
-def test_view_fails_to_sort_by_a_column_retyped_to_a_map(spark, tables):
-    # Spark fails to analyze the query again, and Sail fails to sort by a map.
+def test_view_sorts_by_a_column_retyped_to_a_map(spark, tables):
+    # Spark fails to analyze the query again, and Sail sorts by a map as the query does.
     table = tables("delta", "a INT, b INT")
     table.insert("(1, 10)")
-    view = table.create_view("sv", f"SELECT a FROM {table.name} ORDER BY b")
+    sql = f"SELECT a FROM {table.name} ORDER BY b"
+    view = table.create_view("sv", sql)
     table.recreate("a INT, b MAP<STRING, INT>", "(5, map('x', 1)), (6, map('y', 2))")
-    assert COLUMNS_CHANGED not in error(spark, f"SELECT * FROM {view}")
+    assert spark.sql(f"SELECT * FROM {view}").collect() == spark.sql(sql).collect()
 
 
 # Table formats whose columns carry different field metadata, such as Iceberg field IDs and

@@ -540,11 +540,11 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
             vec![
                 column("k"),
                 TestColumn {
-                    data_type: DataType::Int32,
+                    data_type: DataType::Utf8,
                     ..column("v")
                 },
             ],
-            "- `v` type has changed from BIGINT to INT",
+            "- `v` type has changed from BIGINT to STRING",
         ),
     ];
     for (index, (columns, change)) in changes.into_iter().enumerate() {
