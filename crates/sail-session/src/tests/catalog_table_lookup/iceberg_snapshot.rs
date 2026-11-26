@@ -129,3 +129,31 @@ async fn test_iceberg_reads_of_metadata_files_read_their_files() -> TestResult {
     assert_eq!(iceberg_columns(&fixture, plan).await?, vec![1, 2]);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_iceberg_relative_metadata_locations_read_the_store_of_their_table() -> TestResult {
+    let (fixture, _) = try_new_with_iceberg_table().await?;
+    // The table `i` in another object store, whose metadata file at the same path has two
+    // columns.
+    let other = Arc::new(InMemory::new());
+    fixture.session.runtime_env().register_object_store(
+        ObjectStoreUrl::parse("memory://other")?.as_ref(),
+        Arc::clone(&other) as Arc<dyn object_store::ObjectStore>,
+    );
+    let (path, _) = metadata(1);
+    let (_, contents) = metadata(2);
+    other.put(&path, contents.into()).await?;
+    let options = [
+        ("table_type", "ICEBERG"),
+        ("metadata_location", "i/metadata/v1.metadata.json"),
+    ];
+    let plan = union_all(
+        [
+            read_path("iceberg", LOCATION, &options),
+            read_path("iceberg", "memory://other/i/", &options),
+        ]
+        .map(|x| select(x, &["k"])),
+    )?;
+    assert_eq!(iceberg_columns(&fixture, plan).await?, vec![1, 2]);
+    Ok(())
+}

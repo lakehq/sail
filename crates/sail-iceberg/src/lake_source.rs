@@ -1262,11 +1262,19 @@ pub(crate) async fn load_iceberg_read_table(
 ) -> Result<(Arc<Table>, IcebergReadOptions)> {
     // The reads of a table in one statement read one version of its metadata, whatever
     // their read options are, and each read selects its snapshot in that version. A read
-    // of a metadata file reads that file.
+    // of a metadata file reads that file, which is at the path of the metadata location in
+    // the object store of the table.
     let pins = info.snapshot_pins.take();
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
     let location = match &read.metadata_location {
-        Some(location) => location.clone(),
+        Some(location) => {
+            let mut file = read.table_url.clone();
+            file.set_path(&format!(
+                "/{}",
+                metadata_location_to_object_path_string(location)?
+            ));
+            file.to_string()
+        }
         None => read.table_url.to_string(),
     };
     let names_metadata_file = read.metadata_location.is_some();
