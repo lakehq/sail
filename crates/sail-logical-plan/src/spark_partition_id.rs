@@ -75,52 +75,7 @@ impl UserDefinedLogicalNodeCore for SparkPartitionIdNode {
         Self::try_new(input, self.column_name.clone())
     }
 
-    fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // The added column depends only on the partition of each row, which the columns of the
-        // input do not change.
-        let input_len = self.input.schema().fields().len();
-        Some(vec![
-            output_columns
-                .iter()
-                .copied()
-                .filter(|&i| i < input_len)
-                .collect(),
-        ])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::datatypes::Schema;
-    use datafusion::datasource::empty::EmptyTable;
-    use datafusion::datasource::provider_as_source;
-    use datafusion::optimizer::{Optimizer, OptimizerContext};
-    use datafusion_expr::{Extension, LogicalPlanBuilder, col};
-
-    use super::*;
-
-    #[test]
-    fn test_unused_input_columns_are_pruned_below_the_node() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]);
-        let scan = LogicalPlanBuilder::scan(
-            "t",
-            provider_as_source(Arc::new(EmptyTable::new(Arc::new(schema)))),
-            None,
-        )?
-        .build()?;
-        let node = SparkPartitionIdNode::try_new(Arc::new(scan), "pid".to_string())?;
-        let plan = LogicalPlanBuilder::from(LogicalPlan::Extension(Extension {
-            node: Arc::new(node),
-        }))
-        .project(vec![col("a"), col("pid")])?
-        .build()?;
-        let plan = Optimizer::new().optimize(plan, &OptimizerContext::new(), |_, _| {})?;
-        let display = plan.display_indent().to_string();
-        assert!(display.contains("SparkPartitionId"), "{display}");
-        assert!(display.contains("TableScan: t projection=[a]"), "{display}");
-        Ok(())
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        Some(vec![(0..self.input.schema().fields().len()).collect()])
     }
 }
