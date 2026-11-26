@@ -505,13 +505,13 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let cancellation = self.session_manager.query_cancellation();
-        let stream = self
-            .session_manager
-            .run_query(Self::handle_reattach_execute(
-                self.session_manager.clone(),
-                request,
-            ))
-            .await?;
+        let stream = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                return Err(Status::cancelled("query cancelled because the server is shutting down"));
+            }
+            result = Self::handle_reattach_execute(self.session_manager.clone(), request) => result?,
+        };
         Ok(Response::new(stream.cancel_on_shutdown(cancellation)))
     }
 

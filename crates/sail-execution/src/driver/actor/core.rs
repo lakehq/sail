@@ -184,8 +184,8 @@ impl Actor for DriverActor {
             DriverMessage::RangeSplitPointsRead {
                 job_id,
                 shuffle,
-                partitions,
-            } => self.handle_range_split_points_read(ctx, job_id, shuffle, partitions),
+                update,
+            } => self.handle_range_split_points_read(ctx, job_id, shuffle, update),
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }

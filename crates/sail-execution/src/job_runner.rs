@@ -20,6 +20,7 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
+use crate::driver::job_scheduler::PlannedJob;
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
@@ -167,7 +168,9 @@ impl JobRunner for ClusterJobRunner {
         )
         .map_err(|error| internal_datafusion_err!("{error}"))?;
         log::debug!("job graph\n{graph}");
-        let stream = execute_job(&self.driver, graph, ctx.task_ctx()).await?;
+        let job =
+            PlannedJob::try_from(graph).map_err(|error| internal_datafusion_err!("{error}"))?;
+        let stream = execute_job(&self.driver, job, ctx.task_ctx()).await?;
         Ok(QueryCancellation::cancel_stream_on_shutdown(ctx, stream))
     }
 
@@ -178,7 +181,7 @@ impl JobRunner for ClusterJobRunner {
 
 async fn execute_job(
     driver: &DriverHandle,
-    graph: JobGraph,
+    graph: PlannedJob,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     let (tx, rx) = oneshot::channel();

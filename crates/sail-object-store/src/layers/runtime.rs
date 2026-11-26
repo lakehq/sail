@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream::BoxStream;
+use futures::StreamExt;
+use futures::stream::{self, BoxStream};
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
@@ -57,12 +58,16 @@ impl RuntimeAwareObjectStore {
         let range = result.range.clone();
         let attributes = std::mem::take(&mut result.attributes);
         let extensions = std::mem::take(&mut result.extensions);
+        let handle = self.handle.clone();
+        let stream = if matches!(result.payload, GetResultPayload::File { .. }) {
+            // A positional range read checks for premature EOF if the file shrinks.
+            stream::once(async move { AbortOnDropHandle::new(handle.spawn(result.bytes())).await? })
+                .boxed()
+        } else {
+            spawn_stream_on(handle, (), move |_| result.into_stream())
+        };
         GetResult {
-            payload: GetResultPayload::Stream(spawn_stream_on(
-                self.handle.clone(),
-                (),
-                move |_| result.into_stream(),
-            )),
+            payload: GetResultPayload::Stream(stream),
             meta,
             range,
             attributes,
@@ -443,6 +448,32 @@ mod tests {
             self.aborted.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn local_range_read_reports_truncation() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let file = directory.path().join("body");
+        std::fs::write(&file, b"abcdef")?;
+        let store = object_store::local::LocalFileSystem::new_with_prefix(directory.path())?;
+        let store = RuntimeAwareObjectStore::new(Arc::new(store), Handle::current());
+        let result = store
+            .get_opts(
+                &Path::from("body"),
+                GetOptions {
+                    range: Some((2..6).into()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        std::fs::File::create(file)?;
+        assert!(
+            timeout(Duration::from_secs(5), result.bytes())
+                .await?
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

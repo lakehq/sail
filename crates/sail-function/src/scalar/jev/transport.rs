@@ -419,21 +419,33 @@ async fn send(
             .body(group.body.clone())
     };
     let request = request.bearer_auth(&*group.options.api_key);
+    let attempt = async move {
+        let response = request.send().await.map_err(|e| AttemptFailure {
+            retry: e.is_connect() || e.is_timeout() || e.is_body() || e.is_request(),
+            delay: None,
+            message: "Jev HTTP connection failed".to_owned(),
+        })?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.bytes().await.map_err(|_| AttemptFailure {
+            retry: true,
+            delay: None,
+            message: "Jev response body could not be read".to_owned(),
+        })?;
+        Ok((status, headers, bytes))
+    };
+    let timeout = group.options.timeout;
     let (status, retry_headers, bytes) = io
         .spawn(async move {
-            let response = request.send().await.map_err(|e| AttemptFailure {
-                retry: e.is_connect() || e.is_timeout() || e.is_body() || e.is_request(),
-                delay: None,
-                message: "Jev HTTP connection failed".to_owned(),
-            })?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let bytes = response.bytes().await.map_err(|_| AttemptFailure {
-                retry: true,
-                delay: None,
-                message: "Jev response body could not be read".to_owned(),
-            })?;
-            Ok((status, headers, bytes))
+            tokio::time::timeout(timeout, attempt)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(AttemptFailure {
+                        retry: true,
+                        delay: None,
+                        message: "Jev HTTP attempt timed out".to_owned(),
+                    })
+                })
         })
         .await
         .map_err(|error| AttemptFailure {
@@ -514,16 +526,7 @@ async fn execute(
             runtime: &runtime,
             _permit: permit,
         };
-        let result =
-            tokio::time::timeout(group.options.timeout, send(io, &runtime, models, &group))
-                .await
-                .unwrap_or_else(|_| {
-                    Err(AttemptFailure {
-                        retry: true,
-                        delay: None,
-                        message: "Jev HTTP attempt timed out".to_owned(),
-                    })
-                });
+        let result = send(io, &runtime, models, &group).await;
         drop(active);
         match result {
             Ok(value) => break value,

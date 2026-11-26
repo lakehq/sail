@@ -15,11 +15,11 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
+use crate::driver::job_scheduler::{PlannedJob, RangeShuffleUpdate};
 use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
-use crate::job_graph::JobGraph;
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
@@ -58,7 +58,7 @@ pub enum DriverMessage {
         instant: Instant,
     },
     ExecuteJob {
-        graph: JobGraph,
+        graph: PlannedJob,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
@@ -83,7 +83,7 @@ pub enum DriverMessage {
     RangeSplitPointsRead {
         job_id: JobId,
         shuffle: usize,
-        partitions: ExecutionResult<usize>,
+        update: ExecutionResult<RangeShuffleUpdate>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -260,7 +260,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::RangeSplitPointsRead {
                 job_id,
                 shuffle: _,
-                partitions: _,
+                update: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }

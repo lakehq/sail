@@ -17,7 +17,7 @@ pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::QueryCancellation;
 use sail_telemetry::events::SystemEventReporter;
-pub use state::{JobState, TaskState};
+pub use state::{JobState, PlannedJob, RangeShuffleUpdate, TaskState};
 
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
@@ -71,6 +71,7 @@ pub enum JobAction {
     /// Reads the split points of a range shuffle on the driver, for the number of
     /// partitions of the shuffle (see [`crate::job_graph::RangeShuffle`]).
     ReadRangeSplitPoints {
+        graph: Arc<crate::job_graph::JobGraph>,
         job_id: JobId,
         shuffle: usize,
         key: TaskStreamKey,

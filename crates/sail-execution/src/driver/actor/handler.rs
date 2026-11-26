@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::{JobAction, TaskState};
+use crate::driver::job_scheduler::{JobAction, PlannedJob, RangeShuffleUpdate, TaskState};
 use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
@@ -25,7 +25,6 @@ use crate::id::{
     JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
     TaskStreamKeySet, WorkerId,
 };
-use crate::job_graph::JobGraph;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -213,7 +212,7 @@ impl DriverActor {
     pub(super) fn handle_execute_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        graph: JobGraph,
+        graph: PlannedJob,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
@@ -301,11 +300,11 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
         shuffle: usize,
-        partitions: ExecutionResult<usize>,
+        update: ExecutionResult<RangeShuffleUpdate>,
     ) -> ActorAction {
         for action in self
             .job_scheduler
-            .resolve_range_shuffle(job_id, shuffle, partitions)
+            .resolve_range_shuffle(job_id, shuffle, update)
         {
             self.run_job_action(ctx, action);
         }
@@ -543,6 +542,7 @@ impl DriverActor {
                 });
             }
             JobAction::ReadRangeSplitPoints {
+                graph,
                 job_id,
                 shuffle,
                 key,
@@ -551,8 +551,9 @@ impl DriverActor {
                 // The split points are picked on the driver, so their stream is local.
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
+                let compute = self.options.runtime.compute().clone();
                 ctx.spawn(async move {
-                    let partitions = async {
+                    let plan = compute.spawn(async move {
                         let task_runner = task_runner.ok_or_else(|| {
                             ExecutionError::InternalError("task runner is not started".to_string())
                         })?;
@@ -574,14 +575,21 @@ impl DriverActor {
                                         "cannot read the range split points: {e}"
                                     ))
                                 })?;
-                        Ok(range_split_from_batches(&batches)?.partitions())
-                    }
-                    .await;
+                        RangeShuffleUpdate::try_new(
+                            &graph,
+                            shuffle,
+                            range_split_from_batches(&batches)?.partitions(),
+                        )
+                    });
+                    let update = tokio_util::task::AbortOnDropHandle::new(plan)
+                        .await
+                        .map_err(ExecutionError::from)
+                        .and_then(|result| result);
                     let _ = driver
                         .send(DriverMessage::RangeSplitPointsRead {
                             job_id,
                             shuffle,
-                            partitions,
+                            update,
                         })
                         .await;
                 });

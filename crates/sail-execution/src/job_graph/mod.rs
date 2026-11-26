@@ -33,7 +33,7 @@ pub struct JobGraphOptions {
 /// *partitions*. There are *tasks* which each corresponds to the execution of a single partition
 /// of a stage and can have multiple *attempts*.
 /// Each task produces output split into multiple *channels*.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JobGraph {
     /// A list of stages sorted in topological order.
     /// For any stage, all its input stages are guaranteed to
@@ -351,7 +351,7 @@ impl fmt::Display for JobGraph {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Stage {
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,

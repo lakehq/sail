@@ -11,10 +11,46 @@ use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::JobGraph;
 
+/// A graph and its task dependencies, built together on the compute runtime.
+#[derive(Debug)]
+pub struct PlannedJob {
+    pub graph: Arc<JobGraph>,
+    pub topology: JobTopology,
+}
+
+impl TryFrom<JobGraph> for PlannedJob {
+    type Error = ExecutionError;
+
+    fn try_from(graph: JobGraph) -> ExecutionResult<Self> {
+        let topology = JobTopology::try_new(&graph)?;
+        Ok(Self {
+            graph: Arc::new(graph),
+            topology,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RangeShuffleUpdate {
+    plan: PlannedJob,
+    changed: Vec<usize>,
+}
+
+impl RangeShuffleUpdate {
+    pub fn try_new(graph: &JobGraph, shuffle: usize, partitions: usize) -> ExecutionResult<Self> {
+        let mut graph = graph.clone();
+        let changed = graph.resize_range_shuffle(shuffle, partitions)?;
+        Ok(Self {
+            plan: graph.try_into()?,
+            changed,
+        })
+    }
+}
+
 /// Tracks graph/topology and runtime state for a single job.
 pub struct JobDescriptor {
     pub context: Arc<TaskContext>,
-    pub graph: JobGraph,
+    pub graph: Arc<JobGraph>,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
@@ -68,11 +104,8 @@ impl JobState {
 }
 
 impl JobDescriptor {
-    pub fn try_new(
-        graph: JobGraph,
-        state: JobState,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<Self> {
+    pub fn new(plan: PlannedJob, state: JobState, context: Arc<TaskContext>) -> Self {
+        let PlannedJob { graph, topology } = plan;
         let stages = graph
             .stages()
             .iter()
@@ -83,10 +116,9 @@ impl JobDescriptor {
                 state: StageState::Active,
             })
             .collect();
-        let topology = JobTopology::try_new(&graph)?;
         let regions = TaskRegionDescriptor::new_regions(&topology);
         let range_shuffles = vec![RangeShuffleState::Sampling; graph.range_shuffles().len()];
-        Ok(Self {
+        Self {
             context,
             graph,
             topology,
@@ -94,7 +126,7 @@ impl JobDescriptor {
             regions,
             range_shuffles,
             state,
-        })
+        }
     }
 
     /// Gives the range shuffle its number of partitions, and the stages that read it
@@ -103,9 +135,9 @@ impl JobDescriptor {
     pub fn resolve_range_shuffle(
         &mut self,
         shuffle: usize,
-        partitions: usize,
+        update: RangeShuffleUpdate,
     ) -> ExecutionResult<Vec<usize>> {
-        let changed = self.graph.resize_range_shuffle(shuffle, partitions)?;
+        let RangeShuffleUpdate { plan, changed } = update;
         for &s in &changed {
             let stage = &mut self.stages[s];
             if stage.tasks.iter().any(|task| !task.attempts.is_empty()) {
@@ -113,7 +145,7 @@ impl JobDescriptor {
                     "stage {s} has run before the partitions of range shuffle {shuffle} are known"
                 )));
             }
-            let partitions = self.graph.stages()[s]
+            let partitions = plan.graph.stages()[s]
                 .plan
                 .output_partitioning()
                 .partition_count();
@@ -121,7 +153,8 @@ impl JobDescriptor {
                 stage.tasks = TaskDescriptor::new_tasks(partitions);
             }
         }
-        self.topology = JobTopology::try_new(&self.graph)?;
+        self.graph = plan.graph;
+        self.topology = plan.topology;
         self.regions = TaskRegionDescriptor::new_regions(&self.topology);
         self.range_shuffles[shuffle] = RangeShuffleState::Resolved;
         Ok(changed)

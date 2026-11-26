@@ -21,12 +21,14 @@ use crate::driver::job_scheduler::state::{
     JobDescriptor, RangeShuffleState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
+use crate::driver::job_scheduler::{
+    JobAction, JobScheduler, JobState, PlannedJob, RangeShuffleUpdate,
+};
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
-    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+    InputMode, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
 use crate::proto::{
     encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
@@ -48,14 +50,18 @@ impl JobScheduler {
     pub fn accept_job(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
-        graph: JobGraph,
+        plan: PlannedJob,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
 
-        let (output, stream) =
-            build_job_output(ctx, job_id, graph.schema().clone(), self.shutdown.clone());
-        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
+        let (output, stream) = build_job_output(
+            ctx,
+            job_id,
+            plan.graph.schema().clone(),
+            self.shutdown.clone(),
+        );
+        let descriptor = JobDescriptor::new(plan, JobState::Running { output }, context);
         self.jobs.insert(job_id, descriptor);
 
         if let Some(job) = self.jobs.get(&job_id) {
@@ -232,7 +238,11 @@ impl JobScheduler {
 
     /// Reads the split points of each range shuffle once they are picked.
     fn read_range_split_points(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
-        let mut actions = vec![];
+        // Each update resizes the last installed graph. Start the next update after
+        // installing this one so independent shuffles cannot overwrite each other.
+        if job.range_shuffles.contains(&RangeShuffleState::Reading) {
+            return vec![];
+        }
         for (shuffle, range) in job.graph.range_shuffles().iter().enumerate() {
             if job.range_shuffles[shuffle] != RangeShuffleState::Sampling {
                 continue;
@@ -248,7 +258,8 @@ impl JobScheduler {
                 continue;
             }
             job.range_shuffles[shuffle] = RangeShuffleState::Reading;
-            actions.push(JobAction::ReadRangeSplitPoints {
+            return vec![JobAction::ReadRangeSplitPoints {
+                graph: job.graph.clone(),
                 job_id,
                 shuffle,
                 key: TaskStreamKey {
@@ -259,9 +270,9 @@ impl JobScheduler {
                     channel: 0,
                 },
                 schema: job.graph.stages()[range.split_points].plan.schema(),
-            });
+            }];
         }
-        actions
+        vec![]
     }
 
     /// Gives a range shuffle the number of partitions that the driver has read from its
@@ -270,7 +281,7 @@ impl JobScheduler {
         &mut self,
         job_id: JobId,
         shuffle: usize,
-        partitions: ExecutionResult<usize>,
+        update: ExecutionResult<RangeShuffleUpdate>,
     ) -> Vec<JobAction> {
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
@@ -281,9 +292,7 @@ impl JobScheduler {
         {
             return vec![];
         }
-        let error = match partitions
-            .and_then(|partitions| job.resolve_range_shuffle(shuffle, partitions))
-        {
+        let error = match update.and_then(|update| job.resolve_range_shuffle(shuffle, update)) {
             Err(error) => error,
             Ok(changed) => {
                 for s in changed {
@@ -1357,7 +1366,7 @@ pub(super) mod tests {
         ));
         let (job_id, _output) = scheduler.accept_job(
             &mut ctx,
-            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?.try_into()?,
             Arc::new(TaskContext::default()),
         )?;
         scheduler.refresh_job(job_id);
@@ -1494,7 +1503,7 @@ pub(super) mod tests {
         )?);
         let (job_id, _output) = scheduler.accept_job(
             &mut ctx,
-            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?.try_into()?,
             Arc::new(TaskContext::default()),
         )?;
         scheduler.refresh_job(job_id);
@@ -1577,7 +1586,7 @@ pub(super) mod tests {
         use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
         use sail_physical_plan::range_sample::RangePartitionSampleExec;
 
-        use super::{JobAction, JobScheduler, JobState, TaskState};
+        use super::{JobAction, JobScheduler, JobState, RangeShuffleUpdate, TaskState};
         use crate::driver::job_scheduler::JobSchedulerOptions;
         use crate::driver::{DriverActor, DriverComponents, DriverOptions};
         use crate::id::DriverId;
@@ -1629,7 +1638,7 @@ pub(super) mod tests {
         let plan = Arc::new(RangeRepartitionExec::try_new(input()?, sample, ordering)?);
         let (job_id, _output) = scheduler.accept_job(
             &mut ctx,
-            crate::job_graph::JobGraph::try_new(plan, graph_options.clone())?,
+            crate::job_graph::JobGraph::try_new(plan, graph_options.clone())?.try_into()?,
             Arc::new(TaskContext::default()),
         )?;
         let (split_points, writer) = {
@@ -1677,7 +1686,12 @@ pub(super) mod tests {
         assert!(scheduled(&scheduler.refresh_job(job_id)).is_empty());
 
         // The split points give 2 partitions, so the stages after them have 2 tasks.
-        assert!(scheduler.resolve_range_shuffle(job_id, 0, Ok(2)).is_empty());
+        let update = RangeShuffleUpdate::try_new(&scheduler.jobs[&job_id].graph, 0, 2)?;
+        assert!(
+            scheduler
+                .resolve_range_shuffle(job_id, 0, Ok(update))
+                .is_empty()
+        );
         let tasks = scheduled(&scheduler.refresh_job(job_id));
         let mut last_partitions = tasks
             .iter()
@@ -1706,7 +1720,7 @@ pub(super) mod tests {
         let plan = range(range(input()?)?)?;
         let (job_id, _output) = scheduler.accept_job(
             &mut ctx,
-            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?.try_into()?,
             Arc::new(TaskContext::default()),
         )?;
         let shuffles = scheduler.jobs[&job_id].graph.range_shuffles().len();
@@ -1720,10 +1734,11 @@ pub(super) mod tests {
                 scheduler.update_task(&task, TaskState::Succeeded, None, None);
             }
             for action in &actions {
-                if let JobAction::ReadRangeSplitPoints { shuffle, .. } = action {
+                if let JobAction::ReadRangeSplitPoints { graph, shuffle, .. } = action {
+                    let update = RangeShuffleUpdate::try_new(graph, *shuffle, 2)?;
                     assert!(
                         scheduler
-                            .resolve_range_shuffle(job_id, *shuffle, Ok(2))
+                            .resolve_range_shuffle(job_id, *shuffle, Ok(update))
                             .is_empty()
                     );
                     resolved += 1;
@@ -1767,8 +1782,11 @@ pub(super) mod tests {
                 },
             },
         )?;
-        let mut job =
-            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let mut job = JobDescriptor::new(
+            graph.try_into()?,
+            JobState::Draining,
+            Arc::new(TaskContext::default()),
+        );
         let attempt = |state, cause| TaskAttemptDescriptor {
             state,
             messages: vec![],
@@ -1850,8 +1868,11 @@ pub(super) mod tests {
                 },
             },
         )?;
-        let job =
-            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let job = JobDescriptor::new(
+            graph.try_into()?,
+            JobState::Draining,
+            Arc::new(TaskContext::default()),
+        );
         let stages = job.graph.stages();
         assert_eq!(stages.len(), 2);
         for (s, stage) in stages.iter().enumerate() {
@@ -1914,8 +1935,11 @@ pub(super) mod tests {
                 },
             },
         )?;
-        let mut job =
-            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let mut job = JobDescriptor::new(
+            graph.try_into()?,
+            JobState::Draining,
+            Arc::new(TaskContext::default()),
+        );
         let attempt = || TaskAttemptDescriptor {
             state: TaskState::Created,
             messages: vec![],
@@ -2131,7 +2155,7 @@ pub(super) mod tests {
         let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
         let (job_id, _output) = scheduler.accept_job(
             &mut ctx,
-            crate::job_graph::JobGraph::try_new(plan, graph_options)?,
+            crate::job_graph::JobGraph::try_new(plan, graph_options)?.try_into()?,
             Arc::new(TaskContext::default()),
         )?;
         scheduler.refresh_job(job_id);
