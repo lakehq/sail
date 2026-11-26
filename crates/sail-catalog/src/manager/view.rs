@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use std::sync::Arc;
+
+use sail_common_datafusion::catalog::{TableKind, TableStatus, TemporaryViewDefinition};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -29,6 +31,7 @@ impl CatalogManager {
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
                     source: view.source().clone(),
+                    definition: view.definition().clone(),
                 },
             })
             .collect();
@@ -53,6 +56,7 @@ impl CatalogManager {
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
                     source: view.source().clone(),
+                    definition: view.definition().clone(),
                 },
             })
             .collect();
@@ -153,16 +157,19 @@ impl CatalogManager {
         &self,
         view: &str,
         options: CreateTemporaryViewOptions,
+        definition: Option<Arc<TemporaryViewDefinition>>,
     ) -> CatalogResult<()> {
-        GLOBAL_TEMPORARY_VIEW_MANAGER.create_view(view.to_string(), options)
+        GLOBAL_TEMPORARY_VIEW_MANAGER.create_view(view.to_string(), options, definition)
     }
 
     pub async fn create_temporary_view(
         &self,
         view: &str,
         options: CreateTemporaryViewOptions,
+        definition: Option<Arc<TemporaryViewDefinition>>,
     ) -> CatalogResult<()> {
-        self.temporary_views.create_view(view.to_string(), options)
+        self.temporary_views
+            .create_view(view.to_string(), options, definition)
     }
 
     pub async fn get_global_temporary_view(&self, name: &str) -> CatalogResult<TableStatus> {
@@ -178,6 +185,7 @@ impl CatalogManager {
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
                 source: view.source().clone(),
+                definition: view.definition().clone(),
             },
         })
     }
@@ -194,6 +202,7 @@ impl CatalogManager {
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
                 source: view.source().clone(),
+                definition: view.definition().clone(),
             },
         })
     }

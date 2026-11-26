@@ -13,6 +13,7 @@ use crate::lakehouse::{
     ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
+use crate::manager::scope::ViewDefinitionScope;
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateTableMetadataRequirement, CreateTableOptions,
     DropTableOptions, Namespace, StageTableOptions,
@@ -477,6 +478,20 @@ impl CatalogManager {
     /// would otherwise name. A reference into the global temporary view database names
     /// nothing in the catalogs, so a missing view there is an error.
     pub async fn find_temporary_view<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+    ) -> CatalogResult<Option<TableStatus>> {
+        if let Some(view) = ViewDefinitionScope::pinned_temporary_view(reference) {
+            return Ok(view);
+        }
+        let view = self.find_session_temporary_view(reference).await?;
+        if let Some(view) = &view {
+            ViewDefinitionScope::record_temporary_view(reference, view);
+        }
+        Ok(view)
+    }
+
+    async fn find_session_temporary_view<T: AsRef<str>>(
         &self,
         reference: &[T],
     ) -> CatalogResult<Option<TableStatus>> {

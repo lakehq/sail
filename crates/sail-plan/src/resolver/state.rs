@@ -38,6 +38,7 @@ pub(super) struct TableSourceKey {
     pub session_catalog: Option<usize>,
 }
 
+#[derive(Clone)]
 struct SharedTableSource(Arc<dyn TableSource>);
 
 /// Identifies what a read of a Delta Lake or Iceberg table by its path scans.
@@ -198,7 +199,7 @@ pub(super) struct PlanResolverState {
 
 /// What the definition of a temporary view reads, which is recorded while the definition is
 /// resolved.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct ViewDefinitionReads {
     /// What the table sources of the scans read, by the address of the source, for the
     /// sources that the view obtains again at each read.
@@ -649,6 +650,34 @@ impl PlanResolverState {
     /// Returns what the definition of a temporary view reads, while it is resolved.
     pub fn view_definition_mut(&mut self) -> Option<&mut ViewDefinitionReads> {
         self.view_definition.as_mut()
+    }
+
+    /// Swaps the parts of the state that belong to the whole statement with those of another
+    /// state: the generators of IDs, the fields, the sources and lookups of the tables that the
+    /// statement reads, its shared CTE definitions, and what the definition of a view that the
+    /// statement creates reads. The SQL query of a temporary view is resolved again in a new
+    /// state that has these parts of the state of the query, and none of its scopes, such as
+    /// its CTEs or its outer query.
+    pub fn swap_statement(&mut self, other: &mut Self) {
+        macro_rules! swap {
+            ($($field:ident),*) => { $(std::mem::swap(&mut self.$field, &mut other.$field);)* };
+        }
+        swap!(
+            next_id,
+            next_lateral_id,
+            next_origin,
+            relation_names,
+            fields,
+            next_cte_definition_index,
+            shared_cte_definitions,
+            config,
+            table_sources,
+            lake_path_sources,
+            lake_snapshot_pins,
+            catalog_table_lookups,
+            session_catalog_table_lookups,
+            view_definition
+        );
     }
 
     /// Stores what the catalog returned for the table `name` and returns the lookup that

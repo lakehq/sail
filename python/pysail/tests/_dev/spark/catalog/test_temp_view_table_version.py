@@ -21,6 +21,8 @@ from pysail.tests._dev.spark.catalog.temp_view_utils import (
     LAKE_FORMATS,
     NOT_FOUND,
     PLAN_KINDS,
+    SQL_KINDS,
+    SQL_VIEWS,
     create_view,
     drop_view,
     error,
@@ -49,7 +51,16 @@ def table(tables, request):
 
 
 def assert_view_reads(spark, view, expected):
-    """Asserts that the view reads the rows, or that it must be created again if `expected` is `None`."""
+    """Asserts that the view reads the rows, or that its plan no longer fits its tables if `expected` is
+    `None`. A view of a SQL kind then resolves its query again: it reads its columns of what the query
+    reads now, or it fails as that fails."""
+    if expected is None and view in SQL_VIEWS:
+        query, columns = SQL_VIEWS[view]
+        try:
+            expected = rows(spark, f"SELECT {', '.join(f'`{x}`' for x in columns)} FROM ({query}) AS q")
+        except Exception:  # noqa: BLE001
+            error(spark, f"SELECT * FROM {view}")
+            return
     if expected is None:
         assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
     else:
@@ -139,8 +150,10 @@ def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, 
     assert rows(spark, f"SELECT * FROM {view}") == [(1,), (2,)]
     spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN id TO key")
     message = error(spark, f"SELECT * FROM {view}")
-    assert COLUMNS_CHANGED in message
-    assert "- `id` BIGINT has been removed" in message
+    # A SQL view fails to resolve its query again.
+    if kind not in SQL_KINDS:
+        assert COLUMNS_CHANGED in message
+        assert "- `id` BIGINT has been removed" in message
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
@@ -168,10 +181,87 @@ def test_view_matches_columns_as_the_session_did_when_it_was_created(spark, tabl
         if created == "false":
             assert rows(spark, f"SELECT * FROM {view}") == [(2,)]
         else:
-            # A definition that was resolved case-sensitively can tell `id` from `ID`.
+            # A definition that was resolved case-sensitively can tell `id` from `ID`, also
+            # when a SQL view resolves its query again.
             assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
     finally:
         spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize(
+    ("query", "created", "current", "value", "cast"),
+    [
+        (
+            "SELECT hash(b) AS v, xxhash64(b) AS w FROM {t}",
+            "b BIGINT",
+            "b INT",
+            "7",
+            "SELECT hash(CAST(b AS BIGINT)) AS v, xxhash64(CAST(b AS BIGINT)) AS w FROM {t}",
+        ),
+        (
+            "SELECT CAST(b AS STRING) AS v, concat('x', b) AS w FROM {t}",
+            "b DOUBLE",
+            "b FLOAT",
+            "1.1",
+            "SELECT CAST(CAST(b AS DOUBLE) AS STRING) AS v, concat('x', CAST(b AS DOUBLE)) AS w FROM {t}",
+        ),
+        (
+            "SELECT CAST(b AS STRING) AS v FROM {t}",
+            "b DECIMAL(10, 2)",
+            "b DECIMAL(5, 1)",
+            "1.1",
+            "SELECT CAST(CAST(b AS DECIMAL(10, 2)) AS STRING) AS v FROM {t}",
+        ),
+    ],
+)
+def test_view_computes_on_the_types_of_the_columns_that_its_definition_resolves_to(
+    spark, tables, fmt, kind, query, created, current, value, cast
+):
+    table = tables(fmt, f"id INT, {created}")
+    table.insert(f"(1, {value})")
+    view = table.create_view(kind, query.format(t=table.name))
+    table.recreate(f"id INT, {current}", f"(2, {value})")
+    # The values of the column convert exactly to the type that the view was created with. A SQL view
+    # resolves its query again and computes on the current type, as Spark does, and a DataFrame view
+    # computes on the type that it was created with.
+    expected = query if kind in SQL_KINDS else cast
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, expected.format(t=table.name))
+
+
+@pytest.mark.parametrize("kind", SQL_KINDS)
+def test_sql_view_fails_as_its_query_on_the_values_of_a_narrowed_column(spark, tables, kind):
+    table = tables("delta", "id INT, b BIGINT")
+    table.insert("(1, 7)")
+    sql = f"SELECT b * 2 AS v FROM {table.name}"
+    view = table.create_view(kind, sql)
+    table.recreate("id INT, b INT", "(2, 2000000000)")
+    # The product of the current type overflows, as in the query.
+    assert "ARITHMETIC_OVERFLOW" in error(spark, sql)
+    assert "ARITHMETIC_OVERFLOW" in error(spark, f"SELECT * FROM {view}")
+
+
+@pytest.mark.parametrize("kind", SQL_KINDS)
+@pytest.mark.parametrize(
+    ("current", "value"),
+    [
+        ("s STRUCT<y: INT, x: INT>", "struct(3, 4)"),
+        ("s STRUCT<X: INT, y: INT>", "struct(3, 4)"),
+        ("s STRUCT<x: INT, y: INT, z: INT>", "struct(3, 4, 5)"),
+    ],
+)
+@pytest.mark.parametrize(
+    "query",
+    ["SELECT to_json(s) AS v FROM {t}", "SELECT xxhash64(s) AS v FROM {t}", "SELECT CAST(s AS STRING) AS v FROM {t}"],
+)
+def test_sql_view_computes_on_a_struct_whose_fields_changed(spark, tables, kind, current, value, query):
+    table = tables("delta", "id INT, s STRUCT<x: INT, y: INT>")
+    table.insert("(1, struct(1, 2))")
+    sql = query.format(t=table.name)
+    view = table.create_view(kind, sql)
+    table.recreate(f"id INT, {current}", f"(2, {value})")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
 
 
 @pytest.mark.parametrize("kind", PLAN_KINDS)
@@ -1477,15 +1567,22 @@ def test_view_reads_a_table_whose_column_comment_changed(spark, tables, kind):
 
 
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
-@pytest.mark.parametrize("kind", PLAN_KINDS)
-def test_plan_view_does_not_read_a_view_that_takes_the_name_of_its_table(spark, table, kind):
+@pytest.mark.parametrize("kind", ["sv", "svc", "gv", "dv", "dgv"])
+def test_view_of_a_table_whose_name_is_now_the_name_of_a_view(spark, table, kind):
     table.insert("(1)")
     view = table.create_view(kind)
     spark.sql(f"DROP TABLE {table.name}")
     spark.sql(f"CREATE VIEW {table.name} AS SELECT 5L AS id")
-    message = error(spark, f"SELECT * FROM {view}")
-    assert NOT_FOUND in message
-    assert "is now a view" in message
+    try:
+        if kind in SQL_KINDS:
+            # A SQL view resolves its query again, which reads the view.
+            assert rows(spark, f"SELECT * FROM {view}") == [(5,)]
+        else:
+            message = error(spark, f"SELECT * FROM {view}")
+            assert NOT_FOUND in message
+            assert "is now a view" in message
+    finally:
+        spark.sql(f"DROP VIEW {table.name}")
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -1789,3 +1886,181 @@ def test_view_over_a_lake_table_path_with_time_travel_reads_its_version(spark, t
         assert rows(spark, joined) == [(1, 1), (None, 2)]
     finally:
         drop_view(spark, view)
+
+
+@pytest.mark.parametrize("kind", SQL_KINDS)
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize(
+    ("query", "columns", "values", "expected"),
+    [
+        ("SELECT u FROM {t} WHERE a > 0", "a DOUBLE, u INT", "(0.5, 1), (-0.5, 2)", [(1,)]),
+        ("SELECT u FROM {t} WHERE a = '2'", "a STRING, u INT", "('2', 1), ('02', 2)", [(1,)]),
+        ("SELECT count(DISTINCT a) AS n FROM {t}", "a DOUBLE, u INT", "(0.0, 1), (-0.0, 2)", [(1,)]),
+        (
+            "SELECT u, CASE WHEN u > 0 THEN a ELSE 0 END AS c FROM {t}",
+            "a BIGINT, u INT",
+            "(3000000000, 1)",
+            [(1, 3000000000)],
+        ),
+        ("SELECT typeof(a) AS t FROM {t}", "a STRING, u INT", "('q', 1)", [("string",)]),
+        # The outputs have the types of the query now, and the outputs that the view did not have are not read.
+        ("SELECT a FROM {t}", "a BIGINT, u INT", "(3000000000, 1)", [(3000000000,)]),
+        ("SELECT * FROM {t}", "a STRING, u INT, x INT", "('q', 1, 7)", [("q", 1)]),
+    ],
+)
+def test_sql_view_resolves_its_query_again_for_a_column_that_changed(
+    spark, tables, kind, fmt, query, columns, values, expected
+):
+    table = tables(fmt, "a INT, u INT")
+    table.insert("(1, 1), (2, 2)")
+    view = table.create_view(kind, query.format(t=table.name))
+    table.recreate(columns, values)
+    assert rows(spark, f"SELECT * FROM {view}") == expected
+
+
+def test_sql_view_resolves_its_query_again_with_its_context(spark, tables, tmp_path):
+    table = tables("delta", "a INT, u INT, ts TIMESTAMP")
+    other = f"db_{uuid.uuid4().hex}"
+    previous = spark.conf.get("spark.sql.session.timeZone")
+    try:
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+        values = "(1, 10, TIMESTAMP '2020-01-01 01:00:00'), (1, 20, TIMESTAMP '2020-01-01 03:00:00')"
+        table.insert(values)
+        query = f"SELECT u FROM {table.name} WHERE a > 0 AND ts > '2020-01-01 02:00:00'"
+        view = table.create_view("sv", query)
+        expected = rows(spark, query)
+        assert expected == [(20,)]
+        table.recreate("a DOUBLE, u INT, ts TIMESTAMP", values)
+        # The time zone, the database, the CTEs and the temporary views of the reader.
+        spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+        spark.sql(f"CREATE DATABASE {other}")
+        spark.catalog.setCurrentDatabase(other)
+        spark.sql(
+            f"CREATE TABLE {table.name} (a BIGINT, u INT, ts TIMESTAMP) USING delta LOCATION '{tmp_path / other}'"
+        )
+        spark.sql(f"INSERT INTO {table.name} VALUES (1, 99, TIMESTAMP '2030-01-01 00:00:00')")
+        assert rows(spark, f"SELECT * FROM {view}") == expected
+        spark.catalog.setCurrentDatabase("default")
+        cte = f"WITH {table.name} AS (SELECT 1D AS a, 99 AS u, TIMESTAMP '2030-01-01 00:00:00' AS ts)"
+        assert rows(spark, f"{cte} SELECT * FROM {view}") == expected
+        spark.sql(f"CREATE TEMPORARY VIEW {table.name} AS SELECT 1D AS a, 99 AS u, TIMESTAMP '2030-01-01' AS ts")
+        assert rows(spark, f"SELECT * FROM {view}") == expected
+    finally:
+        spark.catalog.setCurrentDatabase("default")
+        spark.catalog.dropTempView(table.name)
+        spark.conf.set("spark.sql.session.timeZone", previous)
+        spark.sql(f"DROP DATABASE IF EXISTS {other} CASCADE")
+
+
+def test_sql_view_resolves_its_query_again_with_the_temporary_views_that_it_read(spark, tables):
+    table = tables("delta", "a INT, u INT")
+    table.insert("(1, 1), (-1, 2)")
+    inner = table.create_view("sv", f"SELECT * FROM {table.name}")
+    outer = table.create_view("sv", f"SELECT u FROM {inner} WHERE a > 0")
+    spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {inner} AS SELECT 5 AS a, 50 AS u")
+    # A view that reads itself reads the view that it replaced.
+    spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {outer} AS SELECT u FROM {outer} WHERE u > 0")
+    table.recreate("a DOUBLE, u INT", "(0.5, 3), (-1.0, 4)")
+    assert rows(spark, f"SELECT * FROM {outer}") == [(3,)]
+
+
+def test_view_created_over_a_sql_view_that_resolves_its_query_again(spark, tables):
+    table = tables("delta", "a INT, u INT")
+    table.insert("(1, 1)")
+    inner = table.create_view("sv", f"SELECT u FROM {table.name} WHERE a > 0")
+    table.recreate("a DOUBLE, u INT", "(0.5, 2), (-0.5, 3)")
+    outer = table.create_view("sv", f"SELECT u FROM {inner}")
+    assert rows(spark, f"SELECT * FROM {outer}") == [(2,)]
+    table.recreate("a STRING, u INT", "('1', 4), ('-1', 5)")
+    assert rows(spark, f"SELECT * FROM {outer}") == [(4,)]
+
+
+def test_sql_view_fails_when_its_query_no_longer_has_its_columns(spark, tables):
+    table = tables("delta", "a INT, u INT")
+    view = table.create_view("sv", f"SELECT * FROM {table.name}")
+    table.recreate("a BIGINT", "(1)")
+    assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+
+
+def test_global_sql_view_over_a_table_of_its_session_catalog(spark, observer, tables):
+    table = tables("delta")
+    table.insert("(1)")
+    view = table.create_view("gv", f"SELECT 1 AS n FROM {table.name} WHERE id > 0")
+    table.recreate("id DOUBLE", "(2.0)")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    # The other session cannot name the table in the catalog of this session.
+    assert COLUMNS_CHANGED in error(observer, f"SELECT * FROM {view}")
+
+
+@pytest.mark.parametrize("query", ["SELECT c FROM {t}", "SELECT c.x AS x FROM {t}"])
+def test_sql_view_resolves_its_query_again_for_a_struct_field_renamed_in_letter_case(spark, tables, query):
+    table = tables("delta", "id INT, c STRUCT<x: INT>")
+    table.insert("(1, named_struct('x', 1))")
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+        view = table.create_view("sv", query.format(t=table.name))
+        table.recreate("id INT, c STRUCT<X: INT>", "(2, named_struct('X', 2))")
+        if query.startswith("SELECT c "):
+            # The struct has the field names of the query now.
+            result = spark.sql(f"SELECT * FROM {view}").collect()
+            assert [row.c.asDict() for row in result] == [{"X": 2}]
+        else:
+            assert "x" in error(spark, f"SELECT * FROM {view}").lower()
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
+
+
+# Queries over `t (id, arr ARRAY<STRUCT<x, y>>, m MAP<STRING, STRUCT<x, y>>)` that read the field `x`
+# through a container, which reads the whole column, so that a change of `y` makes a SQL view resolve
+# its query again.
+CONTAINER_FIELD_QUERIES = [
+    "SELECT arr[0].x AS v FROM {t}",
+    "SELECT m['k'].x AS v FROM {t}",
+    "SELECT element_at(arr, 1).x AS v FROM {t}",
+    "SELECT transform(arr, e -> e.x) AS v FROM {t}",
+]
+CONTAINER_COLUMNS = "id INT, arr ARRAY<STRUCT<x: INT, {f}>>, m MAP<STRING, STRUCT<x: INT, {f}>>"
+
+
+def container_row(i, f):
+    return f"({i}, array(named_struct('x', {i}, {f})), map('k', named_struct('x', {i}, {f})))"
+
+
+@pytest.mark.parametrize("fmt", ["delta", "parquet"])
+@pytest.mark.parametrize("query", CONTAINER_FIELD_QUERIES)
+@pytest.mark.parametrize(
+    ("field", "value"), [("y: STRING", "'y', 'q'"), ("y: INT, z: INT", "'y', 2, 'z', 3"), (None, None)]
+)
+def test_sql_view_reads_a_field_through_a_container_whose_other_field_changed(spark, tables, fmt, query, field, value):
+    table = tables(fmt, CONTAINER_COLUMNS.format(f="y: INT"))
+    table.insert(container_row(1, "'y', 1"))
+    sql = query.format(t=table.name)
+    view = table.create_view("sv", sql)
+    if field is None:
+        # The field `y` is dropped.
+        table.recreate("id INT, arr ARRAY<STRUCT<x: INT>>, m MAP<STRING, STRUCT<x: INT>>")
+        table.insert("(2, array(named_struct('x', 2)), map('k', named_struct('x', 2)))")
+    else:
+        table.recreate(CONTAINER_COLUMNS.format(f=field), container_row(2, value))
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)
+
+
+@pytest.mark.parametrize("query", CONTAINER_FIELD_QUERIES)
+@pytest.mark.parametrize(
+    "changes",
+    [
+        ["ALTER COLUMN arr.element.y TYPE BIGINT", "ALTER COLUMN m.value.y TYPE BIGINT"],
+        ["ADD COLUMN arr.element.z INT", "ADD COLUMN m.value.z INT"],
+        ["DROP COLUMN arr.element.y", "DROP COLUMN m.value.y"],
+    ],
+)
+def test_sql_view_reads_a_field_through_a_container_whose_other_field_changed_in_place(spark, tables, query, changes):
+    table = tables("iceberg", CONTAINER_COLUMNS.format(f="y: INT"))
+    table.insert(container_row(1, "'y', 1"))
+    sql = query.format(t=table.name)
+    view = table.create_view("sv", sql)
+    for change in changes:
+        spark.sql(f"ALTER TABLE {table.name} {change}")
+    table.insert("(2, NULL, NULL)")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql)

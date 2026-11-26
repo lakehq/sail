@@ -583,6 +583,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                             is_global: temporary.global.is_some(),
                             definition: spec::TemporaryViewDefinition {
                                 input: Box::new(query),
+                                definition: Some(query_text.clone()),
                                 columns,
                                 if_not_exists: if_not_exists.is_some(),
                                 replace: or_replace.is_some(),
@@ -655,6 +656,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         is_global: temporary.global.is_some(),
                         definition: spec::TemporaryViewDefinition {
                             input: Box::new(input),
+                            definition: None,
                             columns,
                             if_not_exists: false,
                             replace: or_replace.is_some(),

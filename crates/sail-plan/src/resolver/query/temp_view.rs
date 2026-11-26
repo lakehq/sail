@@ -28,24 +28,25 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, ScalarValue, TableReference};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, BinaryExpr, Cast, InList, InSubquery, SetComparison,
 };
 use datafusion_expr::{
-    Distinct, Expr, LogicalPlan, Projection, ScalarUDF, TableScan, TableScanBuilder, TableSource,
-    UserDefinedLogicalNode, lit, when,
+    Distinct, Expr, LogicalPlan, Projection, ScalarUDF, SubqueryAlias, TableScan, TableScanBuilder,
+    TableSource, UserDefinedLogicalNode, lit, when,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_functions::core::{get_field, named_struct};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_catalog::manager::table::SessionCatalogTable;
 use sail_catalog::utils::quote_name_if_needed;
 use sail_common::spec::{
     SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use sail_common_datafusion::catalog::{TableKind, TableStatus, TemporaryViewDefinition};
 use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::LakeRelationResolution;
@@ -55,6 +56,7 @@ use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
 use sail_function::scalar::r#struct::struct_rename::StructRename;
 
 use super::read::{CatalogTableRead, rename_source};
+use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::is_comparison;
@@ -193,14 +195,19 @@ impl ViewTableReference {
     /// column that only tells rows apart or orders them, or
     /// only stays a signed integer for a column that is only an operand (see
     /// [`ColumnUse::Operand`]). A column that the plan does not read has a position only if
-    /// it did not change.
+    /// it did not change. A view that `rebinds` its SQL query when its plan no longer fits
+    /// reads neither values that convert exactly nor structs read whole whose fields were
+    /// added, reordered or renamed, since its plan would compute on other values than the
+    /// query resolved again.
     fn fit_columns(
         &self,
         table: &Schema,
         case_sensitive: bool,
+        rebinds: bool,
         type_name: &dyn Fn(&DataType) -> String,
     ) -> Result<Vec<Option<(usize, Read)>>, Vec<String>> {
         let mut fit = Fit::new(case_sensitive, type_name);
+        fit.rebinds = rebinds;
         let matches = match_fields(self.table.fields(), table.fields(), case_sensitive);
         let mut reads = Vec::with_capacity(matches.len());
         for ((field, found), used) in self.table.fields().iter().zip(matches).zip(&self.required) {
@@ -217,6 +224,7 @@ impl ViewTableReference {
                 // A column that the view does not read is read only if it did not change.
                 (None, found) => {
                     let mut unread = Fit::new(case_sensitive, type_name);
+                    unread.rebinds = rebinds;
                     let read = unread.column(field, found, table.fields(), None);
                     read.filter(|_| unread.changes.is_empty())
                 }
@@ -510,6 +518,9 @@ struct Fit<'a> {
     /// The fields that structs read whole gained in the column, which the cast to the
     /// stored type leaves out if it matches the fields of structs by name.
     added: Vec<String>,
+    /// Whether the view resolves its SQL query again instead of a cast of the values that
+    /// convert exactly or of the structs read whole whose fields changed.
+    rebinds: bool,
 }
 
 impl<'a> Fit<'a> {
@@ -519,6 +530,7 @@ impl<'a> Fit<'a> {
             type_name,
             changes: vec![],
             added: vec![],
+            rebinds: false,
         }
     }
 
@@ -549,18 +561,19 @@ impl<'a> Fit<'a> {
         if added.is_empty() {
             return;
         }
-        let left_out = match read {
-            Some((position, Read::Cast)) => casts_by_name(
-                current[*position].data_type(),
-                nullable_field(stored).data_type(),
-            ),
-            Some((position, Read::Rename)) => {
-                let current = current[*position].data_type();
-                let (order, _) = rename_types(stored.data_type(), current, self.case_sensitive);
-                casts_by_name(current, &order)
-            }
-            _ => false,
-        };
+        let left_out = !self.rebinds
+            && match read {
+                Some((position, Read::Cast)) => casts_by_name(
+                    current[*position].data_type(),
+                    nullable_field(stored).data_type(),
+                ),
+                Some((position, Read::Rename)) => {
+                    let current = current[*position].data_type();
+                    let (order, _) = rename_types(stored.data_type(), current, self.case_sensitive);
+                    casts_by_name(current, &order)
+                }
+                _ => false,
+            };
         if !left_out {
             self.changes
                 .extend(added.into_iter().map(|x| format!("{x} has been added")));
@@ -614,7 +627,7 @@ impl<'a> Fit<'a> {
             return Read::Same;
         }
         self.logical_type_changes(stored, current, path);
-        let read = match converts_exactly(current, stored) {
+        let read = match !self.rebinds && converts_exactly(current, stored) {
             true => Read::Cast,
             false => self.data_type(stored.data_type(), current.data_type(), used, path),
         };
@@ -773,6 +786,13 @@ impl<'a> Fit<'a> {
         }
         match used {
             _ if same => Read::Same,
+            // The plan of a view that resolves its query again would compute on the fields
+            // as stored, such as in their stored order and with their stored names.
+            None if self.rebinds => {
+                let change = format!("{} fields have changed", quote_names(path));
+                self.changes.push(change);
+                Read::Same
+            }
             None if rename => Read::Rename,
             None => Read::Cast,
             Some(_) => Read::Struct(reads),
@@ -1049,18 +1069,44 @@ impl PlanResolver<'_> {
             }
             Ok(())
         })?;
+        let definition = self.rebound_view_definition(view, &references)?;
         let plan = plan.clone();
         let mut scans = HashMap::new();
         // Whether a scan has another schema than the scan that the view was created with,
         // which is the case when only the metadata of its columns or the constraints of
         // the table changed. The nodes above the scan then compute their schemas again.
         let mut recompute_schemas = false;
+        let recorded = state.view_definition_mut().map(|reads| reads.clone());
         for scan in references {
             let address = table_source_address(&scan.source);
             if scans.contains_key(&address) {
                 continue;
             }
-            let bound = self.bind_view_table_scan(&scan, view, state).await?;
+            let rebinds = definition.is_some();
+            let bound = match self
+                .bind_view_table_scan(&scan, view, rebinds, state)
+                .await?
+            {
+                Ok(bound) => bound,
+                Err(error) => {
+                    // A view that the query creates does not read the scans bound so far.
+                    if let (Some(reads), Some(recorded)) = (state.view_definition_mut(), recorded) {
+                        *reads = recorded;
+                    }
+                    // The query fails with the error of the columns that changed if it no
+                    // longer resolves, which names the column that the query no longer has.
+                    let Some(definition) = &definition else {
+                        return Err(error);
+                    };
+                    return match self
+                        .resolve_view_definition(&plan, view, definition, state)
+                        .await
+                    {
+                        Ok(Some(plan)) => Ok(plan),
+                        _ => Err(error),
+                    };
+                }
+            };
             recompute_schemas |= bound.schema() != &scan.projected_schema;
             scans.insert(address, bound);
         }
@@ -1080,22 +1126,128 @@ impl PlanResolver<'_> {
         self.renew_shared_cte_definitions(plan, &mut bind, recompute_schemas, state)
     }
 
-    /// Returns the scan of a read of the view, for a scan of the stored plan of the view.
+    /// Returns the SQL definition of a temporary view that a read resolves again when the
+    /// plan of the view no longer fits the tables that it reads, if the view is defined by a
+    /// SQL query and reads no table in a catalog of another session, which no name refers to
+    /// here.
+    fn rebound_view_definition(
+        &self,
+        view: &TableStatus,
+        references: &[TableScan],
+    ) -> PlanResult<Option<Arc<TemporaryViewDefinition>>> {
+        let (TableKind::TemporaryView {
+            definition: Some(definition),
+            ..
+        }
+        | TableKind::GlobalTemporaryView {
+            definition: Some(definition),
+            ..
+        }) = &view.kind
+        else {
+            return Ok(None);
+        };
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        for scan in references {
+            if let Some(reference) = ViewTableReference::try_from_scan(scan)
+                && let TableOrigin::CatalogTable(origin) = reference.origin.as_ref()
+                && let Some(table) = &origin.session_table
+                && !manager.has_session_catalog_table(table)?
+            {
+                return Ok(None);
+            }
+        }
+        Ok(Some(Arc::clone(definition)))
+    }
+
+    /// Returns the plan of a read of a temporary view whose plan no longer fits the tables
+    /// that it reads, for the SQL definition of the view. The query is resolved again as
+    /// when the view was created (see [`ViewDefinitionScope`]), in a state that has only the
+    /// parts of the state of this query that belong to the whole statement, and the view
+    /// returns the outputs of the query that have the names of its outputs then, as Spark
+    /// reads a temporary view. Returns `None` if the query no longer has those outputs.
+    async fn resolve_view_definition(
+        &self,
+        plan: &LogicalPlan,
+        view: &TableStatus,
+        definition: &Arc<TemporaryViewDefinition>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<LogicalPlan>> {
+        let Ok(config) = Arc::clone(&definition.config).downcast::<PlanConfig>() else {
+            return Ok(None);
+        };
+        let case_sensitive = config.case_sensitive;
+        let resolver = PlanResolver {
+            ctx: self.ctx,
+            config,
+            share_ctes: self.share_ctes,
+        };
+        let scope = Arc::new(ViewDefinitionScope::Resolve(Arc::clone(definition)));
+        let mut query_state = PlanResolverState::new();
+        state.swap_statement(&mut query_state);
+        let query = scope
+            .run(resolver.resolve_view_query(&definition.query, &mut query_state))
+            .await;
+        state.swap_statement(&mut query_state);
+        let query = query?;
+        let names = Self::get_field_names(query.schema(), state)?;
+        let names_like = |names: &[String], name: &str| {
+            names
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| same_name(x, name, case_sensitive))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+        let outputs = definition.output_names.iter().zip(plan.schema().fields());
+        let outputs = outputs
+            .enumerate()
+            .map(|(i, (name, field))| {
+                // The output of the name at the position of the stored output among those
+                // of its name, if the query has as many outputs of the name.
+                let stored = names_like(&definition.output_names, name);
+                let found = names_like(&names, name);
+                if found.len() != stored.len() {
+                    return None;
+                }
+                let ordinal = stored.iter().position(|x| *x == i)?;
+                let j = *found.get(ordinal)?;
+                let column = Column::from(query.schema().qualified_field(j));
+                Some(Expr::Column(column).alias(field.name()))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(outputs) = outputs else {
+            return Ok(None);
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(outputs, Arc::new(query))?);
+        Ok(Some(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+            Arc::new(plan),
+            TableReference::bare(view.name.as_str()),
+        )?)))
+    }
+
+    /// Returns the scan of a read of the view, for a scan of the stored plan of the view, or
+    /// the error of the columns that changed, for a view that `rebinds` its SQL query (see
+    /// [`ViewTableReference::fit_columns`]) or not.
     async fn bind_view_table_scan(
         &self,
         scan: &TableScan,
         view: &TableStatus,
+        rebinds: bool,
         state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<PlanResult<LogicalPlan>> {
         let Some(reference) = ViewTableReference::try_from_scan(scan) else {
             return Err(PlanError::internal("scan without a view table reference"));
         };
         let (source, table) = match reference.origin.as_ref() {
-            TableOrigin::CatalogTable(origin) => (
-                self.resolve_view_catalog_table_source(origin, view, state)
-                    .await?,
-                origin.name.clone(),
-            ),
+            TableOrigin::CatalogTable(origin) => {
+                match self
+                    .resolve_view_catalog_table_source(origin, view, state)
+                    .await?
+                {
+                    Ok(source) => (source, origin.name.clone()),
+                    Err(error) => return Ok(Err(error)),
+                }
+            }
             TableOrigin::LakePath(origin) => (
                 self.create_path_source(origin, true, state).await?,
                 vec![origin.format.clone(), origin.paths.join(",")],
@@ -1116,10 +1268,11 @@ impl PlanResolver<'_> {
         };
         // The columns are matched as the definition of the view matched them.
         let case_sensitive = reference.origin.read_case_sensitive();
-        let reads = reference
-            .fit_columns(&table_schema, case_sensitive, &type_name)
-            .map_err(|changes| {
-                PlanError::AnalysisError(format!(
+        let reads = match reference.fit_columns(&table_schema, case_sensitive, rebinds, &type_name)
+        {
+            Ok(reads) => reads,
+            Err(changes) => {
+                return Ok(Err(PlanError::AnalysisError(format!(
                     "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View {} plan \
                     references table {} whose data columns changed since the view plan was \
                     initially captured.\nColumn changes:\n- {}\nThis indicates the table has \
@@ -1127,8 +1280,9 @@ impl PlanResolver<'_> {
                     view_name(view),
                     quote_names(&table),
                     changes.join("\n- "),
-                ))
-            })?;
+                ))));
+            }
+        };
         let positions = reads
             .iter()
             .map(|read| read.as_ref().map(|(position, _)| *position))
@@ -1193,17 +1347,22 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        reference.with_stored_output(bound, &reads, case_sensitive)
+        Ok(Ok(reference.with_stored_output(
+            bound,
+            &reads,
+            case_sensitive,
+        )?))
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
-    /// over, with the catalog table lookups and the table sources of the query.
+    /// over, with the catalog table lookups and the table sources of the query, or the error
+    /// that the name of the table is now the name of a view.
     async fn resolve_view_catalog_table_source(
         &self,
         origin: &CatalogTableOrigin,
         view: &TableStatus,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Arc<dyn TableSource>> {
+    ) -> PlanResult<PlanResult<Arc<dyn TableSource>>> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         // A table in a catalog of the session that created the view, which is not this
         // session, is read in that catalog. Any other table is read in the catalog of that
@@ -1233,12 +1392,13 @@ impl PlanResolver<'_> {
             Err(error) => return Err(error.into()),
         };
         let TableKind::Table { format, .. } = &status.kind else {
-            return Err(PlanError::AnalysisError(format!(
+            // A view defined by a SQL query reads the view of the name instead.
+            return Ok(Err(PlanError::AnalysisError(format!(
                 "[TABLE_OR_VIEW_NOT_FOUND] {} is now a view, and the temporary view {} reads it \
                 as a table. Create the temporary view again.",
                 quote_names(&origin.name),
                 view_name(view),
-            )));
+            ))));
         };
         if !origin.temporal_options.is_empty() && !format.eq_ignore_ascii_case(&origin.format) {
             return Err(PlanError::AnalysisError(format!(
@@ -1282,6 +1442,7 @@ impl PlanResolver<'_> {
             state,
         )
         .await
+        .map(Ok)
     }
 
     /// Looks up the table `name` in the catalog of another session, reusing an earlier
@@ -2076,7 +2237,7 @@ mod tests {
         table: &Schema,
         case_sensitive: bool,
     ) -> Result<Vec<Option<usize>>, Vec<String>> {
-        let reads = reference.fit_columns(table, case_sensitive, &type_name)?;
+        let reads = reference.fit_columns(table, case_sensitive, false, &type_name)?;
         Ok(reads
             .into_iter()
             .map(|read| read.map(|(position, _)| position))
@@ -3598,7 +3759,7 @@ mod tests {
                 ..reference(&stored)
             };
             let reads = reference
-                .fit_columns(&table, true, &type_name)
+                .fit_columns(&table, true, false, &type_name)
                 .map_err(|e| e.join(", "))?;
             assert_eq!(reads, vec![Some((0, Read::Same)), None], "{data_type}");
             let source =

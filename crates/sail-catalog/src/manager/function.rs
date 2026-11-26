@@ -9,6 +9,7 @@ use sail_common_datafusion::catalog::FunctionStatus;
 use crate::command::CatalogTableFunction;
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::manager::scope::ViewDefinitionScope;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -24,9 +25,15 @@ impl CatalogManager {
     }
 
     pub fn get_function<T: AsRef<str>>(&self, name: T) -> CatalogResult<Option<ScalarUDF>> {
-        let state = self.state()?;
         let name = Self::canonical_function_name(name.as_ref());
-        Ok(state.functions.get(&name).cloned())
+        if let Some(function) = ViewDefinitionScope::pinned_function(&name) {
+            return Ok(function);
+        }
+        let function = self.state()?.functions.get(&name).cloned();
+        if let Some(function) = &function {
+            ViewDefinitionScope::record_function(&name, function);
+        }
+        Ok(function)
     }
 
     pub async fn list_functions<T: AsRef<str>>(

@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::manager::scope::ViewDefinitionScope;
 use sail_catalog::manager::tracker::CatalogLogicalPlanId;
 use sail_catalog::provider::{
     CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions, CreateViewColumnOptions,
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::catalog::TemporaryViewSource;
+use sail_common_datafusion::catalog::{TemporaryViewDefinition, TemporaryViewSource};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -96,6 +98,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let spec::TemporaryViewDefinition {
             input,
+            definition,
             columns,
             if_not_exists,
             replace,
@@ -120,8 +123,20 @@ impl PlanResolver<'_> {
         };
         // The tables that the view reads again at each read can have nulls later in columns
         // that have none now, so the definition is resolved as if all their columns had nulls.
+        // A view defined by a SQL query resolves the query again when its plan no longer fits
+        // the tables that it reads, in the scope that records what the query resolves now.
+        let scope = definition
+            .as_ref()
+            .map(|_| Arc::new(ViewDefinitionScope::create()));
         state.begin_view_definition();
-        let input = self.resolve_query_plan(*input, state).await;
+        let input = match &scope {
+            Some(scope) => {
+                Arc::clone(scope)
+                    .run(self.resolve_query_plan(*input, state))
+                    .await
+            }
+            None => self.resolve_query_plan(*input, state).await,
+        };
         let reads = state.end_view_definition();
         let input = input?;
         // The view outlives the query, so its CTEs are not shared with other plans, except
@@ -134,6 +149,7 @@ impl PlanResolver<'_> {
             },
         )?);
 
+        let output_names = Self::get_field_names(input.schema(), state)?;
         let (fields, columns) = match columns {
             Some(columns) => {
                 let fields = columns.iter().map(|x| x.name.clone()).collect();
@@ -146,14 +162,26 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>();
                 (fields, columns)
             }
-            None => (Self::get_field_names(input.schema(), state)?, vec![]),
+            None => (output_names.clone(), vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
         // The view reads its tables again at each read, so its plan does not keep the
         // table sources that the definition was resolved with.
         let input = Self::store_view_plan(input, &reads)?;
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let input: CatalogLogicalPlanId = manager.track_logical_plan(Arc::new(input))?;
+        let definition = match (definition, scope) {
+            (Some(query), Some(scope)) => Some(Arc::new(TemporaryViewDefinition {
+                query,
+                output_names,
+                catalog: manager.default_catalog()?.to_string(),
+                database: manager.default_database()?.into(),
+                objects: scope.recorded()?,
+                config: Arc::clone(&self.config) as Arc<dyn Any + Send + Sync>,
+            })),
+            _ => None,
+        };
+        let input: CatalogLogicalPlanId =
+            manager.track_logical_plan((Arc::new(input), definition))?;
         let command = CatalogCommand::CreateTemporaryView {
             view: view.into(),
             is_global,

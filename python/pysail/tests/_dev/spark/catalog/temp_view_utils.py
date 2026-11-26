@@ -16,6 +16,11 @@ FORMATS = [*LAKE_FORMATS, "parquet"]
 KINDS = ["sv", "svc", "gv", "dv", "dgv"]
 # The kinds whose stored plan refers to the table by its columns, as a Spark DataFrame view does.
 PLAN_KINDS = ["gv", "dv", "dgv"]
+# The kinds of views defined by a SQL query, which resolve the query again when their plans no longer
+# fit their tables, as Spark analyzes the query of such a view at each read.
+SQL_KINDS = ["sv", "svc", "gv"]
+# The query of each view of a SQL kind and its columns, by the name that reads the view.
+SQL_VIEWS = {}
 
 COLUMNS_CHANGED = "INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION"
 NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
@@ -38,7 +43,10 @@ def create_view(spark, kind, query, frame=None):
         (spark.sql(query) if frame is None else frame).createOrReplaceGlobalTempView(view)
     else:
         raise ValueError(kind)
-    return f"global_temp.{view}" if kind in ("gv", "dgv") else view
+    name = f"global_temp.{view}" if kind in ("gv", "dgv") else view
+    if kind in SQL_KINDS:
+        SQL_VIEWS[name] = (query, spark.sql(query).columns)
+    return name
 
 
 def drop_view(spark, view):

@@ -62,6 +62,7 @@ impl Fixture {
                 is_global,
                 definition: spec::TemporaryViewDefinition {
                     input: Box::new(input),
+                    definition: None,
                     columns: None,
                     if_not_exists: false,
                     replace: true,
@@ -110,6 +111,12 @@ fn count_scans(plan: &LogicalPlan) -> datafusion_common::Result<(usize, usize)> 
         Ok(())
     })?;
     Ok(scans)
+}
+
+/// Whether a view of [`create_views`] is defined by a SQL query, which the view resolves again
+/// when its plan no longer fits its table.
+fn defined_by_sql(view: &str) -> bool {
+    !view.ends_with("_dv") && !view.ends_with("_dgv")
 }
 
 /// Creates the temporary views of each kind over the table `t`, which are named after
@@ -484,18 +491,10 @@ async fn test_temporary_view_reads_the_columns_that_it_was_created_with() -> Tes
         fixture.resolve(sql).await?.expect(1, 1, sql);
         fixture.execute(sql).await?;
     }
+    // The view is defined by a SQL query, which no longer resolves.
     let resolution = fixture.resolve("SELECT * FROM wide").await?;
     let error = resolution.error.ok_or("missing error")?;
-    assert!(
-        error.contains(
-            "[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION] View `wide` plan \
-            references table `sail`.`default`.`t` whose data columns changed since the view \
-            plan was initially captured.\nColumn changes:\n- `w` BIGINT has been removed\n\
-            This indicates the table has evolved and the view based on the plan must be \
-            recreated."
-        ),
-        "{error}"
-    );
+    assert!(error.contains(r#"Identifier("w")"#), "{error}");
     Ok(())
 }
 
@@ -521,6 +520,12 @@ async fn test_temporary_view_rejects_changes_of_the_columns_that_it_reads() -> T
         for view in &views {
             let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
             assert_eq!(resolution.loads, 1, "{view}");
+            // A view defined by a SQL query resolves the query again, with the one load of
+            // the table, and fails only if the query no longer has its columns.
+            if defined_by_sql(view) {
+                assert_eq!(resolution.error.is_some(), index == 0, "{view}");
+                continue;
+            }
             let error = resolution.error.ok_or("missing error")?;
             assert!(
                 error.contains("[INCOMPATIBLE_COLUMN_CHANGES_AFTER_VIEW_WITH_PLAN_CREATION]"),
@@ -687,6 +692,11 @@ async fn temporary_view_of_a_missing_table_is_not_found() -> TestResult {
         .await?;
     for view in &views {
         let resolution = fixture.resolve(&format!("SELECT * FROM {view}")).await?;
+        // A view defined by a SQL query resolves the query again, which reads the view.
+        if defined_by_sql(view) {
+            assert_eq!(resolution.error, None, "{view}");
+            continue;
+        }
         let error = resolution.error.ok_or("missing error")?;
         assert!(error.contains("[TABLE_OR_VIEW_NOT_FOUND]"), "{error}");
         assert!(

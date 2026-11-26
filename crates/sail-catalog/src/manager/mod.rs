@@ -3,17 +3,21 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datafusion_expr::{LogicalPlan, ScalarUDF};
+use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
+use crate::manager::scope::ViewDefinitionScope;
+use crate::manager::tracker::{
+    CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker, TrackedLogicalPlan,
+};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
 pub mod catalog;
 pub mod database;
 pub mod function;
+pub mod scope;
 pub mod table;
 pub mod tracker;
 pub mod view;
@@ -81,8 +85,7 @@ impl CatalogManager {
         &self,
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
-        let catalog = state.default_catalog.clone();
-        let database = state.default_database.clone();
+        let (catalog, database) = state.current_namespace();
         Ok((state.get_catalog(&catalog)?, database))
     }
 
@@ -101,8 +104,7 @@ impl CatalogManager {
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
         if qualifier.is_empty() {
-            let catalog = state.default_catalog.clone();
-            let database = state.default_database.clone();
+            let (catalog, database) = state.current_namespace();
             Ok((state.get_catalog(&catalog)?, database))
         } else {
             let (catalog, database) = state.resolve_database_reference(qualifier)?;
@@ -150,7 +152,7 @@ impl CatalogManager {
 
     pub fn track_logical_plan(
         &self,
-        plan: Arc<LogicalPlan>,
+        plan: TrackedLogicalPlan,
     ) -> CatalogResult<CatalogLogicalPlanId> {
         self.tracker.track_logical_plan(plan)
     }
@@ -158,12 +160,19 @@ impl CatalogManager {
     pub fn get_tracked_logical_plan(
         &self,
         id: CatalogLogicalPlanId,
-    ) -> CatalogResult<Arc<LogicalPlan>> {
+    ) -> CatalogResult<TrackedLogicalPlan> {
         self.tracker.get_tracked_logical_plan(id)
     }
 }
 
 impl CatalogManagerState {
+    /// The current catalog and database, which are those of the session that created a
+    /// temporary view while the view resolves its query again.
+    fn current_namespace(&self) -> (Arc<str>, Namespace) {
+        ViewDefinitionScope::namespace()
+            .unwrap_or_else(|| (self.default_catalog.clone(), self.default_database.clone()))
+    }
+
     pub fn resolve_database_reference<T: AsRef<str>>(
         &self,
         reference: &[T],
@@ -178,7 +187,7 @@ impl CatalogManagerState {
                 Ok((catalog, database))
             }
             x => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 let database = x.try_into()?;
                 Ok((catalog, database))
             }
@@ -191,7 +200,7 @@ impl CatalogManagerState {
     ) -> CatalogResult<(Arc<str>, Option<Namespace>)> {
         match reference {
             [] => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 Ok((catalog, None))
             }
             [name] if self.catalogs.contains_key(name.as_ref()) => {
@@ -199,7 +208,7 @@ impl CatalogManagerState {
                 Ok((catalog, None))
             }
             x => {
-                let catalog = self.default_catalog.clone();
+                let (catalog, _) = self.current_namespace();
                 let database = x.try_into()?;
                 Ok((catalog, Some(database)))
             }
@@ -210,7 +219,8 @@ impl CatalogManagerState {
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
-        self.resolve_object_reference_with_default_catalog(&self.default_catalog, reference)
+        let (catalog, _) = self.current_namespace();
+        self.resolve_object_reference_with_default_catalog(&catalog, reference)
     }
 
     pub fn resolve_object_reference_with_default_catalog<T: AsRef<str>>(
@@ -226,8 +236,9 @@ impl CatalogManagerState {
             [name] => {
                 let table = name.as_ref().into();
                 let catalog = Arc::from(default_catalog);
-                let database = if default_catalog == self.default_catalog.as_ref() {
-                    self.default_database.clone()
+                let (current_catalog, current_database) = self.current_namespace();
+                let database = if default_catalog == current_catalog.as_ref() {
+                    current_database
                 } else {
                     provider.default_namespace()
                 };

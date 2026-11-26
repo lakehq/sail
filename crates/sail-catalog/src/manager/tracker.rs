@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
+use sail_common_datafusion::catalog::TemporaryViewDefinition;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -19,8 +20,11 @@ struct CatalogObjectTrackerState {
     next_function_id: u64,
     next_logical_plan_id: u64,
     functions: HashMap<u64, ScalarUDF>,
-    logical_plans: HashMap<u64, Arc<LogicalPlan>>,
+    logical_plans: HashMap<u64, TrackedLogicalPlan>,
 }
+
+/// The plan of a temporary view, with the SQL definition of a view defined by SQL.
+pub type TrackedLogicalPlan = (Arc<LogicalPlan>, Option<Arc<TemporaryViewDefinition>>);
 
 /// Tracks in-memory objects (UDFs and logical plans) that cannot be serialized directly,
 /// assigning each a unique ID. The ID can then be stored in [`super::super::command::CatalogCommand`]
@@ -57,7 +61,7 @@ impl CatalogObjectTracker {
 
     pub fn track_logical_plan(
         &self,
-        plan: Arc<LogicalPlan>,
+        plan: TrackedLogicalPlan,
     ) -> CatalogResult<CatalogLogicalPlanId> {
         let mut state = self.state()?;
         let id = state.next_logical_plan_id;
@@ -69,7 +73,7 @@ impl CatalogObjectTracker {
     pub fn get_tracked_logical_plan(
         &self,
         id: CatalogLogicalPlanId,
-    ) -> CatalogResult<Arc<LogicalPlan>> {
+    ) -> CatalogResult<TrackedLogicalPlan> {
         let state = self.state()?;
         state
             .logical_plans

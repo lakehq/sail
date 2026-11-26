@@ -1863,6 +1863,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
             is_global,
             definition: spec::TemporaryViewDefinition {
                 input: Box::new(input),
+                definition: None,
                 columns: None,
                 if_not_exists: false,
                 replace,
