@@ -41,7 +41,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::functions_window::rank::rank_udwf;
+use datafusion::functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::execution_plan::replace_children_if_necessary;
@@ -54,9 +54,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal, TryCastExpr};
 use datafusion_physical_expr::window::StandardWindowExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use crate::PhysicalOptimizerRule;
 
@@ -103,6 +103,9 @@ use crate::PhysicalOptimizerRule;
 /// - `rn < K` → fetch = K - 1
 /// - `K >= rn` (flipped) → fetch = K
 /// - `K > rn` (flipped) → fetch = K - 1
+///
+/// `rn` may also be wrapped in an integer cast that cannot change the result,
+/// such as Sail's `CAST(rn AS Int32) <= K` (see [`ranking_column`]).
 ///
 /// # When the Rule Fires
 ///
@@ -264,15 +267,13 @@ impl WindowTopN {
         // operator appends a single column, and it has to reproduce the whole
         // of the window node's output schema. With two or more the window node
         // stays and computes them as before.
-        // TODO: Uncomment after DataFusion 56
-        // let ranking_field = if window_exprs.len() == 1 {
-        //     Some(matched_expr.field().ok()?)
-        // } else {
-        //     None
-        // };
+        let ranking_field = if window_exprs.len() == 1 {
+            Some(matched_expr.field().ok()?)
+        } else {
+            None
+        };
 
-        // TODO: make `mut` after DataFusion 56
-        let partitioned_topk = PartitionedTopKExec::try_new(
+        let mut partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
             expr,
             partition_prefix_len,
@@ -281,12 +282,11 @@ impl WindowTopN {
         )
         .ok()?;
 
-        // TODO: Uncomment after DataFusion 56
-        // if let Some(field) = &ranking_field {
-        //     partitioned_topk = partitioned_topk
-        //         .with_ranking_field(Arc::clone(field))
-        //         .ok()?;
-        // }
+        if let Some(field) = &ranking_field {
+            partitioned_topk = partitioned_topk
+                .with_ranking_field(Arc::clone(field))
+                .ok()?;
+        }
 
         // Step 7: Rebuild the pipeline above the operator.
         //
@@ -297,14 +297,10 @@ impl WindowTopN {
         // its window expressions' fields, which is what the operator now
         // produces, so the nodes above it keep referencing the same column
         // indices. Drop it.
-        // TODO: Uncomment after DataFusion 56
-        // let mut result: Arc<dyn ExecutionPlan> = Arc::new(partitioned_topk);
-        // if ranking_field.is_none() {
-        //     result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
-        // }
-        // TODO: Remove this line after DataFusion 56
-        let mut result =
-            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)]).ok()?;
+        let mut result: Arc<dyn ExecutionPlan> = Arc::new(partitioned_topk);
+        if ranking_field.is_none() {
+            result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
+        }
 
         // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
@@ -360,6 +356,8 @@ impl PhysicalOptimizerRule for WindowTopN {
 /// | `Literal(N) >= Column(idx)` | `(idx, N)` |
 /// | `Literal(N) > Column(idx)` | `(idx, N-1)` |
 ///
+/// `Column(idx)` may also be a cast of it accepted by [`ranking_column`].
+///
 /// # Examples
 ///
 /// - `rn <= 5` → `Some((2, 5))` (assuming rn is column index 2)
@@ -376,10 +374,9 @@ fn extract_window_limit(
     let right = binary.right();
 
     // Try Column op Literal
-    if let (Some(col), Some(lit_val)) = (
-        left.downcast_ref::<Column>(),
-        right.downcast_ref::<Literal>(),
-    ) {
+    if let Some(lit_val) = right.downcast_ref::<Literal>()
+        && let Some(col) = ranking_column(left, lit_val.value())
+    {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
             Operator::LtEq => Some((col.index(), n)),
@@ -389,10 +386,9 @@ fn extract_window_limit(
     }
 
     // Try Literal op Column (flipped)
-    if let (Some(lit_val), Some(col)) = (
-        left.downcast_ref::<Literal>(),
-        right.downcast_ref::<Column>(),
-    ) {
+    if let Some(lit_val) = left.downcast_ref::<Literal>()
+        && let Some(col) = ranking_column(right, lit_val.value())
+    {
         let n = scalar_to_usize(lit_val.value())?;
         return match *op {
             Operator::GtEq => Some((col.index(), n)),
@@ -402,6 +398,39 @@ fn extract_window_limit(
     }
 
     None
+}
+
+/// Returns the column compared with `limit` by a window limit predicate: a bare
+/// [`Column`], or one under a cast to `limit`'s integer type that keeps the
+/// rows ranked up to `limit` unchanged and raises no error the pruned plan
+/// would hide. The caller only accepts a `ROW_NUMBER`/`RANK`/`DENSE_RANK`
+/// output column, whose values are positive `UInt64`s.
+///
+/// - A null-on-overflow cast ([`TryCastExpr`], or [`CastExpr`] with `safe`
+///   options): `limit` fits the target type, so ranks up to it are unchanged
+///   and ranks that overflow become NULL, which the filter drops anyway.
+/// - A strict cast to `Int32`: Sail's representation of Spark's `IntegerType`
+///   ranking column. It can only fail on a rank past `i32::MAX`, which Spark,
+///   applying its window group limit for the same filter, never computes.
+///
+/// Other strict casts are rejected: `CAST(rank AS Int8) <= 2` fails at rank
+/// 128, and pruning that row would turn the error into a result.
+fn ranking_column<'a>(expr: &'a Arc<dyn PhysicalExpr>, limit: &ScalarValue) -> Option<&'a Column> {
+    let (input, cast_type, null_on_overflow) = if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        (cast.expr(), cast.cast_type(), cast.cast_options().safe)
+    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
+        (cast.expr(), cast.cast_type(), true)
+    } else {
+        return expr.downcast_ref::<Column>();
+    };
+    let transparent = cast_type.is_integer()
+        && *cast_type == limit.data_type()
+        && (null_on_overflow || *cast_type == DataType::Int32);
+    if transparent {
+        input.downcast_ref::<Column>()
+    } else {
+        None
+    }
 }
 
 /// Convert a [`ScalarValue`] to `usize` if it's a positive integer.
@@ -443,13 +472,11 @@ fn supported_window_fn(
         Some(WindowFnKind::RowNumber)
     } else if fun == &rank_udwf() {
         Some(WindowFnKind::Rank)
+    } else if fun == &dense_rank_udwf() {
+        Some(WindowFnKind::DenseRank)
     } else {
         None
     }
-    // TODO: Uncomment after DataFusion 56
-    // else if fun == &dense_rank_udwf() {
-    //     Some(WindowFnKind::DenseRank)
-    // }
 }
 
 type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>);
@@ -504,4 +531,376 @@ fn column_index_below(col_idx: usize, intermediates: &[Arc<dyn ExecutionPlan>]) 
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Int32Array, RecordBatch, UInt64Array};
+    use arrow::compute::{CastOptions, concat_batches};
+    use arrow::datatypes::{Field, Schema};
+    use datafusion::execution::TaskContext;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::windows::create_window_expr;
+    use datafusion::physical_plan::{InputOrderMode, collect, displayable};
+    use datafusion_datasource::memory::MemorySourceConfig;
+    use datafusion_expr::{WindowFrame, WindowFunctionDefinition, WindowUDF};
+
+    use super::*;
+
+    /// `FilterExec(<predicate>)` over `RANK() OVER (PARTITION BY pk ORDER BY v)`,
+    /// where the window's output column `rank` is at index 2. The input has
+    /// `rows` rows with `pk = 0` and `v = 0, 1, ...`, so `rank` runs from 1.
+    fn plan(rows: i32, predicate: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn ExecutionPlan>> {
+        let pk = vec![0; rows as usize];
+        window_plan(rank_udwf(), pk, (0..rows).collect(), predicate)
+    }
+
+    /// `FilterExec(<predicate>)` over `<fun>() OVER (PARTITION BY pk ORDER BY v)`,
+    /// where the window's output column `rank` is at index 2.
+    fn window_plan(
+        fun: Arc<WindowUDF>,
+        pk: Vec<i32>,
+        v: Vec<i32>,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("v", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(pk)),
+                Arc::new(Int32Array::from(v)),
+            ],
+        )?;
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let pk: Arc<dyn PhysicalExpr> = Arc::new(Column::new("pk", 0));
+        let v = PhysicalSortExpr::new_default(Arc::new(Column::new("v", 1)));
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&pk)),
+            v.clone(),
+        ])
+        .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty ordering"))?;
+        let input = Arc::new(SortExec::new(ordering, source));
+        let rank = create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(fun),
+            "rank".to_string(),
+            &[],
+            &[pk],
+            &[v],
+            Arc::new(WindowFrame::new(Some(true))),
+            schema,
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(BoundedWindowAggExec::try_new(
+            vec![rank],
+            input,
+            InputOrderMode::Sorted,
+            true,
+        )?);
+        Ok(Arc::new(FilterExec::try_new(predicate, window)?))
+    }
+
+    fn rank() -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new("rank", 2))
+    }
+
+    /// A `CastExpr`, strict unless `safe`.
+    fn cast(expr: Arc<dyn PhysicalExpr>, cast_type: DataType, safe: bool) -> Arc<dyn PhysicalExpr> {
+        let options = CastOptions {
+            safe,
+            ..Default::default()
+        };
+        Arc::new(CastExpr::new(expr, cast_type, Some(options)))
+    }
+
+    fn compare(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(left, op, right))
+    }
+
+    /// The integer literal `value` of type `data_type`.
+    fn literal(value: i64, data_type: &DataType) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Literal::new(
+            ScalarValue::Int64(Some(value)).cast_to(data_type)?,
+        )))
+    }
+
+    fn optimize_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_window_topn = true;
+        let optimized = WindowTopN::new().optimize(Arc::clone(plan), &config)?;
+        assert_eq!(plan.schema(), optimized.schema());
+        Ok(optimized)
+    }
+
+    /// Runs the rule and returns the rewritten plan's display, asserting that
+    /// the schema is unchanged.
+    fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        let optimized = optimize_plan(&plan)?;
+        Ok(displayable(optimized.as_ref()).indent(true).to_string())
+    }
+
+    /// Executes `plan` to completion and concatenates its output.
+    async fn execute(plan: Arc<dyn ExecutionPlan>) -> Result<RecordBatch> {
+        let schema = plan.schema();
+        let batches = collect(plan, Arc::new(TaskContext::default())).await?;
+        Ok(concat_batches(&schema, &batches)?)
+    }
+
+    #[test]
+    fn test_window_topn_through_integer_cast() -> Result<()> {
+        let int32 = DataType::Int32;
+        let mut cases = vec![
+            // Sail's ranking column: `CAST(rank AS Int32) <= 2`, `< 3`, `2 >=`, `3 >`
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::LtEq,
+                literal(2, &int32)?,
+            ),
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::Lt,
+                literal(3, &int32)?,
+            ),
+            compare(
+                literal(2, &int32)?,
+                Operator::GtEq,
+                cast(rank(), int32.clone(), false),
+            ),
+            compare(
+                literal(3, &int32)?,
+                Operator::Gt,
+                cast(rank(), int32.clone(), false),
+            ),
+            // `rank <= 2`
+            compare(rank(), Operator::LtEq, literal(2, &DataType::UInt64)?),
+        ];
+        for t in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ] {
+            // Null-on-overflow casts: `CAST(rank AS t, safe) <= 2`, `TRY_CAST(rank AS t) <= 2`
+            cases.push(compare(
+                cast(rank(), t.clone(), true),
+                Operator::LtEq,
+                literal(2, &t)?,
+            ));
+            cases.push(compare(
+                Arc::new(TryCastExpr::new(rank(), t.clone())),
+                Operator::LtEq,
+                literal(2, &t)?,
+            ));
+        }
+        for predicate in cases {
+            let actual = optimize(plan(0, predicate)?)?;
+            assert!(!actual.contains("FilterExec"), "{actual}");
+            assert!(
+                actual.contains("PartitionedTopKExec: fn=rank, fetch=2"),
+                "{actual}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_topn_ignores_unsafe_cast() -> Result<()> {
+        let mut cases = vec![];
+        // Strict casts other than Sail's `Int32` (e.g. `Int8` fails at rank 128).
+        for t in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ] {
+            cases.push(compare(
+                cast(rank(), t.clone(), false),
+                Operator::LtEq,
+                literal(2, &t)?,
+            ));
+            cases.push(compare(
+                literal(2, &t)?,
+                Operator::GtEq,
+                cast(rank(), t, false),
+            ));
+        }
+        let (int8, int32, int64) = (DataType::Int8, DataType::Int32, DataType::Int64);
+        cases.extend([
+            // Nested casts: `CAST(CAST(rank AS Int32) AS Int8, safe) <= 2`
+            compare(
+                cast(cast(rank(), int32.clone(), false), int8.clone(), true),
+                Operator::LtEq,
+                literal(2, &int8)?,
+            ),
+            // Non-integer casts
+            compare(
+                cast(rank(), DataType::Float64, true),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Float64(Some(2.0)))),
+            ),
+            compare(
+                cast(rank(), DataType::Decimal128(20, 0), true),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Decimal128(Some(2), 20, 0))),
+            ),
+            // Unsupported comparisons: `= 2`, `< 1`
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::Eq,
+                literal(2, &int32)?,
+            ),
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::Lt,
+                literal(1, &int32)?,
+            ),
+        ]);
+        // `K` does not fit the cast's type, e.g. `CAST(rank AS Int8, safe) <= 200`.
+        // `FilterExec` rejects such ill-typed predicates, so check the matcher.
+        for predicate in [
+            compare(
+                cast(rank(), int8.clone(), true),
+                Operator::LtEq,
+                literal(200, &DataType::Int16)?,
+            ),
+            compare(
+                Arc::new(TryCastExpr::new(rank(), int8.clone())),
+                Operator::LtEq,
+                literal(200, &DataType::Int16)?,
+            ),
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::LtEq,
+                literal(2, &int64)?,
+            ),
+        ] {
+            assert_eq!(extract_window_limit(&predicate), None);
+        }
+        for predicate in cases {
+            let actual = optimize(plan(0, predicate)?)?;
+            assert!(actual.contains("FilterExec"), "{actual}");
+            assert!(!actual.contains("PartitionedTopKExec"), "{actual}");
+        }
+        Ok(())
+    }
+
+    /// With 128 rows in one partition, `rank` reaches 128, which a strict
+    /// `Int8` cast cannot hold. The rewrite must neither hide that error nor
+    /// change the rows returned through Sail's `Int32` cast.
+    #[tokio::test]
+    async fn test_window_topn_cast_execution() -> Result<()> {
+        let (int8, int32) = (DataType::Int8, DataType::Int32);
+
+        let strict_int8 = plan(
+            128,
+            compare(
+                cast(rank(), int8.clone(), false),
+                Operator::LtEq,
+                literal(2, &int8)?,
+            ),
+        )?;
+        let result = execute(optimize_plan(&strict_int8)?).await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("Can't cast value 128 to type Int8")),
+            "{result:?}"
+        );
+
+        for predicate in [
+            compare(
+                cast(rank(), int32.clone(), false),
+                Operator::LtEq,
+                literal(2, &int32)?,
+            ),
+            compare(
+                cast(rank(), int8.clone(), true),
+                Operator::LtEq,
+                literal(2, &int8)?,
+            ),
+        ] {
+            let original = plan(128, predicate)?;
+            let optimized = optimize_plan(&original)?;
+            let display = displayable(optimized.as_ref()).indent(true).to_string();
+            assert!(display.contains("PartitionedTopKExec"), "{display}");
+            let expected = execute(original).await?;
+            assert_eq!(expected.num_rows(), 2);
+            assert_eq!(execute(optimized).await?, expected);
+        }
+        Ok(())
+    }
+
+    /// Ties at the cutoff in two window partitions, through Sail's
+    /// `CAST(<fn> AS Int32) <= 2`: the rewrite must keep exactly the rows, and
+    /// emit the same ranking values, as the unoptimized plan.
+    #[tokio::test]
+    async fn test_window_topn_ties_execution() -> Result<()> {
+        let int32 = DataType::Int32;
+        // Sorted by (pk, v): pk 0 has v = [1, 1, 2, 2, 3], pk 1 has v = [5, 5, 5, 6, 7].
+        let pk = vec![1, 0, 1, 0, 0, 1, 1, 0, 0, 1];
+        let v = vec![5, 2, 7, 1, 3, 6, 5, 2, 1, 5];
+        // Expected `(pk, v, <fn>)` columns, all sorted by `(pk, v)`.
+        let cases: [(_, _, &[i32], &[i32], &[u64]); 3] = [
+            (
+                dense_rank_udwf(),
+                "dense_rank",
+                &[0, 0, 0, 0, 1, 1, 1, 1],
+                &[1, 1, 2, 2, 5, 5, 5, 6],
+                &[1, 1, 2, 2, 1, 1, 1, 2],
+            ),
+            (
+                rank_udwf(),
+                "rank",
+                &[0, 0, 1, 1, 1],
+                &[1, 1, 5, 5, 5],
+                &[1, 1, 1, 1, 1],
+            ),
+            (
+                row_number_udwf(),
+                "row_number",
+                &[0, 0, 1, 1],
+                &[1, 1, 5, 5],
+                &[1, 2, 1, 2],
+            ),
+        ];
+        for (fun, name, expected_pk, expected_v, expected_rank) in cases {
+            let predicate = compare(
+                cast(rank(), int32.clone(), false),
+                Operator::LtEq,
+                literal(2, &int32)?,
+            );
+            let original = window_plan(fun, pk.clone(), v.clone(), predicate)?;
+            let optimized = optimize_plan(&original)?;
+            let display = displayable(optimized.as_ref()).indent(true).to_string();
+            assert!(!display.contains("FilterExec"), "{display}");
+            assert!(
+                display.contains(&format!("PartitionedTopKExec: fn={name}, fetch=2")),
+                "{display}"
+            );
+            let expected = RecordBatch::try_new(
+                original.schema(),
+                vec![
+                    Arc::new(Int32Array::from(expected_pk.to_vec())),
+                    Arc::new(Int32Array::from(expected_v.to_vec())),
+                    Arc::new(UInt64Array::from(expected_rank.to_vec())),
+                ],
+            )?;
+            assert_eq!(execute(original).await?, expected, "{name}");
+            assert_eq!(execute(optimized).await?, expected, "{name}");
+        }
+        Ok(())
+    }
 }
