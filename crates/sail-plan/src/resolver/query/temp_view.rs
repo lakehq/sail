@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::expr::{Cast, InSubquery, SetComparison};
 use datafusion_expr::{
-    Distinct, Expr, LogicalPlan, Projection, TableScan, TableScanBuilder, TableSource,
+    Distinct, Expr, LogicalPlan, Projection, ScalarUDF, TableScan, TableScanBuilder, TableSource,
     UserDefinedLogicalNode, lit, when,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
@@ -44,6 +44,7 @@ use sail_common_datafusion::lakerelation::LakeRelationResolution;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::variant::VARIANT_METADATA_MARKER_KEY;
+use sail_function::scalar::r#struct::struct_rename::StructRename;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use super::read::{CatalogTableRead, rename_source};
@@ -210,6 +211,7 @@ impl ViewTableReference {
         &self,
         scan: TableScan,
         reads: &[Option<(usize, Read)>],
+        case_sensitive: bool,
     ) -> PlanResult<LogicalPlan> {
         let source = scan.source.schema();
         let columns = self
@@ -252,10 +254,10 @@ impl ViewTableReference {
                         return Ok(column.alias_qualified(qualifier.clone(), stored.name()));
                     }
                     Read::Cast => cast_target(stored, current),
-                    Read::Struct(_) => nullable_field(stored),
+                    Read::Rename | Read::Struct(_) => nullable_field(stored),
                 };
                 let expression = Expr::Cast(Cast::new_from_field(
-                    Box::new(read_value(column, stored, current, read)?),
+                    Box::new(read_value(column, stored, current, read, case_sensitive)?),
                     Arc::new(target.with_nullable(current.is_nullable())),
                 ));
                 Ok(expression.alias_qualified(qualifier.clone(), stored.name()))
@@ -365,13 +367,20 @@ fn match_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> Vec<
                 .push(i);
         }
     }
+    if unmatched.is_empty() {
+        return matches;
+    }
+    let mut unclaimed: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, field) in current.iter().enumerate() {
+        if !claimed[i] {
+            unclaimed
+                .entry(field.name().to_lowercase())
+                .or_default()
+                .push(i);
+        }
+    }
     for (name, fields) in unmatched {
-        let candidates = current
-            .iter()
-            .enumerate()
-            .filter(|(i, x)| !claimed[*i] && x.name().to_lowercase() == name)
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>();
+        let candidates = unclaimed.remove(&name).unwrap_or_default();
         if candidates.len() > fields.len() {
             for i in fields {
                 matches[i] = FieldMatch::Several(candidates.clone());
@@ -386,7 +395,13 @@ fn match_fields(stored: &Fields, current: &Fields, case_sensitive: bool) -> Vec<
 }
 
 fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
-    a == b || (!case_sensitive && a.to_lowercase() == b.to_lowercase())
+    a == b
+        || (!case_sensitive
+            && if a.is_ascii() && b.is_ascii() {
+                a.eq_ignore_ascii_case(b)
+            } else {
+                a.to_lowercase() == b.to_lowercase()
+            })
 }
 
 fn describe_field(
@@ -425,6 +440,11 @@ enum Read {
     /// `LargeUtf8` instead of `Utf8`, the fields of a struct are in another order, or the
     /// metadata that clients see differs. A cast matches the fields of structs by name.
     Cast,
+    /// The value whose structs, also inside lists and maps, are put in the stored order of
+    /// their fields, then given the stored names of their fields by position, then cast to
+    /// the stored type: a field of a struct was renamed in letter case. A cast alone matches
+    /// the fields of structs by their names, so it would read such a field as nulls.
+    Rename,
     /// A struct built field by field: each field that the plan reads from the current
     /// field at that position, and a null for the other fields.
     Struct(Vec<Option<(usize, Read)>>),
@@ -493,6 +513,9 @@ impl<'a> Fit<'a> {
         used: Option<&HashMap<String, ColumnUse>>,
         path: &[String],
     ) -> Read {
+        if stored == current {
+            return Read::Same;
+        }
         logical_type_changes(stored, current, path, self.type_name, &mut self.changes);
         let read = self.data_type(stored.data_type(), current.data_type(), used, path);
         let key = SPARK_METADATA_JSON_KEY;
@@ -522,10 +545,17 @@ impl<'a> Fit<'a> {
                 List(b) | LargeList(b) | ListView(b) | LargeListView(b),
             ) => {
                 let read = self.element(a, b, path, "element");
-                if std::mem::discriminant(stored) == std::mem::discriminant(current) {
-                    cast_if_changed(&[read])
-                } else {
+                let views = |x: &DataType| matches!(x, ListView(_) | LargeListView(_));
+                let read = match views(stored) || views(current) {
+                    true => self.inside(read, path),
+                    false => read,
+                };
+                if read == Read::Same
+                    && std::mem::discriminant(stored) != std::mem::discriminant(current)
+                {
                     Read::Cast
+                } else {
+                    read
                 }
             }
             (FixedSizeList(a, n), FixedSizeList(b, m)) if n == m => {
@@ -543,7 +573,8 @@ impl<'a> Fit<'a> {
                 cast_if_changed(&[self.inside(read, path)])
             }
             (RunEndEncoded(x, a), RunEndEncoded(y, b)) if x.data_type() == y.data_type() => {
-                cast_if_changed(&[self.element(a, b, path, "values")])
+                let read = self.element(a, b, path, "values");
+                cast_if_changed(&[self.inside(read, path)])
             }
             (Union(a, x), Union(b, y))
                 if x == y
@@ -555,7 +586,10 @@ impl<'a> Fit<'a> {
                 let reads = a
                     .iter()
                     .zip(b.iter())
-                    .map(|((_, a), (_, b))| self.element(a, b, path, a.name()))
+                    .map(|((_, a), (_, b))| {
+                        let read = self.element(a, b, path, a.name());
+                        self.inside(read, path)
+                    })
                     .collect::<Vec<_>>();
                 cast_if_changed(&reads)
             }
@@ -587,7 +621,7 @@ impl<'a> Fit<'a> {
         let matches = match_fields(stored, current, self.case_sensitive);
         let mut reads = Vec::with_capacity(stored.len());
         let mut same = stored.len() == current.len();
-        let mut cast = used.is_none();
+        let mut rename = false;
         for (i, (field, found)) in stored.iter().zip(matches).enumerate() {
             let fields = match used {
                 Some(used) => match used
@@ -613,43 +647,44 @@ impl<'a> Fit<'a> {
             if let Some((position, read)) = &read {
                 let renamed = current[*position].name() != field.name();
                 same &= *position == i && !renamed && read == &Read::Same;
-                cast &= !renamed && !matches!(read, Read::Struct(_));
+                rename |= renamed || read == &Read::Rename;
             }
             reads.push(read);
         }
         if used.is_none() {
+            let fold = |name: &str| match self.case_sensitive {
+                true => name.to_string(),
+                false => name.to_lowercase(),
+            };
+            let names = stored
+                .iter()
+                .map(|x| fold(x.name()))
+                .collect::<HashSet<_>>();
             for field in current {
-                if !stored
-                    .iter()
-                    .any(|x| same_name(x.name(), field.name(), self.case_sensitive))
-                {
+                if !names.contains(&fold(field.name())) {
                     let path = child_path(path, field.name());
                     let change = describe_field(&path, field, self.type_name);
                     self.changes.push(format!("{change} has been added"));
                 }
             }
         }
-        if same {
-            Read::Same
-        } else if cast {
-            Read::Cast
-        } else {
-            Read::Struct(reads)
+        match used {
+            _ if same => Read::Same,
+            None if rename => Read::Rename,
+            None => Read::Cast,
+            Some(_) => Read::Struct(reads),
         }
     }
 
     /// Returns how a value inside a list, a map or another such type is read, whole.
     fn element(&mut self, stored: &Field, current: &Field, path: &[String], name: &str) -> Read {
-        let path = child_path(path, name);
-        let read = self.value(stored, current, None, &path);
-        self.inside(read, &path)
+        self.value(stored, current, None, &child_path(path, name))
     }
 
-    /// Returns the read of a value inside a list, a map or another such type, which is cast.
-    /// A cast matches the fields of structs by name, so it cannot read a field that was
-    /// renamed in letter case.
+    /// Returns the read of a value inside a type whose values cannot be given other field
+    /// names by position, such as a dictionary or a list view (see [`Read::Rename`]).
     fn inside(&mut self, read: Read, path: &[String]) -> Read {
-        if matches!(read, Read::Struct(_)) {
+        if read == Read::Rename {
             self.changes.push(format!(
                 "{} has fields renamed in letter case",
                 quote_names(path)
@@ -661,7 +696,9 @@ impl<'a> Fit<'a> {
 
 /// Returns a cast if any of the values inside a type is read in another way.
 fn cast_if_changed(reads: &[Read]) -> Read {
-    if reads.iter().all(|x| x == &Read::Same) {
+    if reads.contains(&Read::Rename) {
+        Read::Rename
+    } else if reads.iter().all(|x| x == &Read::Same) {
         Read::Same
     } else {
         Read::Cast
@@ -687,12 +724,34 @@ fn cast_target(stored: &Field, current: &Field) -> Field {
     stored.clone().with_data_type(data_type)
 }
 
-/// Returns `value`, a value of the current field, with the fields of the stored struct for
-/// a struct that is built (see [`Read::Struct`]), and as it is otherwise. A field that the
-/// view does not read is null, so every field of a struct that is built can have nulls.
-fn read_value(value: Expr, stored: &Field, current: &Field, read: &Read) -> PlanResult<Expr> {
-    let (Read::Struct(reads), DataType::Struct(stored_fields), DataType::Struct(current_fields)) =
-        (read, stored.data_type(), current.data_type())
+/// Returns `value`, a value of the current field, in the stored type before the cast to the
+/// stored type: with the fields of the stored struct for a struct that is built, and with
+/// the stored order and names of the fields of its structs for a value that is renamed
+/// (see [`Read`]). A field that the view does not read is null, so every field of a
+/// struct that is built can have nulls.
+fn read_value(
+    value: Expr,
+    stored: &Field,
+    current: &Field,
+    read: &Read,
+    case_sensitive: bool,
+) -> PlanResult<Expr> {
+    let reads = match read {
+        Read::Same | Read::Cast => return Ok(value),
+        Read::Rename => {
+            let (order, names) =
+                rename_types(stored.data_type(), current.data_type(), case_sensitive);
+            let value = if &order == current.data_type() {
+                value
+            } else {
+                Expr::Cast(Cast::new(Box::new(value), order))
+            };
+            return Ok(ScalarUDF::new_from_impl(StructRename::new(names)).call(vec![value]));
+        }
+        Read::Struct(reads) => reads,
+    };
+    let (DataType::Struct(stored_fields), DataType::Struct(current_fields)) =
+        (stored.data_type(), current.data_type())
     else {
         return Ok(value);
     };
@@ -702,7 +761,7 @@ fn read_value(value: Expr, stored: &Field, current: &Field, read: &Read) -> Plan
             Some((position, read)) => {
                 let current = &current_fields[*position];
                 let value = get_field().call(vec![value.clone(), lit(current.name().as_str())]);
-                read_value(value, field, current, read)?
+                read_value(value, field, current, read, case_sensitive)?
             }
             None => Expr::Literal(ScalarValue::try_new_null(field.data_type())?, None),
         };
@@ -717,6 +776,66 @@ fn read_value(value: Expr, stored: &Field, current: &Field, read: &Read) -> Plan
         None,
     );
     Ok(when(value.is_null(), null).otherwise(named_struct().call(args))?)
+}
+
+/// Returns the current type with the fields of its structs in the order of the stored type,
+/// and that type with the names of the stored fields, for a value that is renamed (see
+/// [`Read::Rename`]). The values keep their current types.
+fn rename_types(
+    stored: &DataType,
+    current: &DataType,
+    case_sensitive: bool,
+) -> (DataType, DataType) {
+    use DataType::*;
+    let field = |stored: &Field, current: &Field| {
+        let (order, names) = rename_types(stored.data_type(), current.data_type(), case_sensitive);
+        let order = current.clone().with_data_type(order);
+        let names = order.clone().with_name(stored.name()).with_data_type(names);
+        (Arc::new(order), Arc::new(names))
+    };
+    match (stored, current) {
+        (Struct(stored), Struct(current)) => {
+            let (order, names): (Vec<_>, Vec<_>) = stored
+                .iter()
+                .zip(match_fields(stored, current, case_sensitive))
+                .filter_map(|(stored, found)| match found {
+                    FieldMatch::Found(position) => Some(field(stored, &current[position])),
+                    _ => None,
+                })
+                .unzip();
+            (Struct(order.into()), Struct(names.into()))
+        }
+        (List(a) | LargeList(a), List(b)) => {
+            let (order, names) = field(a, b);
+            (List(order), List(names))
+        }
+        (List(a) | LargeList(a), LargeList(b)) => {
+            let (order, names) = field(a, b);
+            (LargeList(order), LargeList(names))
+        }
+        (FixedSizeList(a, _), FixedSizeList(b, n)) => {
+            let (order, names) = field(a, b);
+            (FixedSizeList(order, *n), FixedSizeList(names, *n))
+        }
+        // The key and the value of a map are matched by position.
+        (Map(a, _), Map(b, sorted)) => match (a.data_type(), b.data_type()) {
+            (Struct(x), Struct(y)) if x.len() == 2 && y.len() == 2 => {
+                let ((key, key_name), (value, value_name)) =
+                    (field(&x[0], &y[0]), field(&x[1], &y[1]));
+                let order = b
+                    .as_ref()
+                    .clone()
+                    .with_data_type(Struct(vec![key, value].into()));
+                let names = order
+                    .clone()
+                    .with_name(a.name())
+                    .with_data_type(Struct(vec![key_name, value_name].into()));
+                (Map(Arc::new(order), *sorted), Map(Arc::new(names), *sorted))
+            }
+            _ => (current.clone(), current.clone()),
+        },
+        _ => (current.clone(), current.clone()),
+    }
 }
 
 fn quote_names(names: &[String]) -> String {
@@ -916,7 +1035,7 @@ impl PlanResolver<'_> {
             .with_filters(scan.filters.clone())
             .with_fetch(scan.fetch)
             .build()?;
-        reference.with_stored_output(bound, &reads)
+        reference.with_stored_output(bound, &reads, self.config.case_sensitive)
     }
 
     /// Returns the source of a read of a catalog table that a temporary view was created
@@ -2932,7 +3051,7 @@ mod tests {
             let LogicalPlan::TableScan(scan) = scan else {
                 return Err("expected a scan".into());
             };
-            let plan = reference.with_stored_output(scan, &reads)?;
+            let plan = reference.with_stored_output(scan, &reads, true)?;
             let output = plan.schema().field(1);
             assert_eq!(output.name(), "c");
             assert_eq!(output.data_type(), &data_type);
@@ -2973,38 +3092,41 @@ mod tests {
             ),
             Ok(Read::Cast)
         );
-        // A field renamed in letter case is read by its position in a struct that is built.
+        // A field renamed in letter case is given its stored name by position.
         let renamed = field("s", pair("X", "y"));
-        assert_eq!(
-            read_of(&stored, &renamed),
-            Ok(Read::Struct(vec![
-                Some((0, Read::Same)),
-                Some((1, Read::Same))
-            ]))
-        );
+        assert_eq!(read_of(&stored, &renamed), Ok(Read::Rename));
     }
 
     #[test]
-    fn test_struct_fields_renamed_in_letter_case_in_lists_are_column_changes() {
+    fn test_struct_fields_renamed_in_letter_case_in_lists_and_maps_are_renamed() {
         let element = |name: &str| {
             field(
                 "item",
                 DataType::Struct(vec![field(name, DataType::Int32)].into()),
             )
         };
-        for (stored, current) in [
-            (list(element("a")), list(element("A"))),
-            (
-                map(Field::new("key", DataType::Utf8, false), element("a")),
-                map(Field::new("key", DataType::Utf8, false), element("A")),
+        let key = || Field::new("key", DataType::Utf8, false);
+        assert_eq!(
+            read_of(
+                &field("c", list(element("a"))),
+                &field("c", list(element("A")))
             ),
-        ] {
-            let changes = read_of(&field("c", stored), &field("c", current)).err();
-            assert!(
-                changes.as_ref().is_some_and(|changes| changes.len() == 1
-                    && changes[0].contains("has fields renamed in letter case")),
-                "{changes:?}"
-            );
-        }
+            Ok(Read::Rename)
+        );
+        assert_eq!(
+            read_of(
+                &field("c", map(key(), element("a"))),
+                &field("c", map(key(), element("A")))
+            ),
+            Ok(Read::Rename)
+        );
+        // A list view cannot be given other field names.
+        let view = |name: &str| DataType::ListView(Arc::new(element(name)));
+        let changes = read_of(&field("c", view("a")), &field("c", view("A"))).err();
+        assert!(
+            changes.as_ref().is_some_and(|changes| changes.len() == 1
+                && changes[0].contains("has fields renamed in letter case")),
+            "{changes:?}"
+        );
     }
 }

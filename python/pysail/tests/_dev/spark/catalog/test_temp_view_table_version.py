@@ -820,16 +820,46 @@ NESTED_STRUCT_QUERIES = {
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
 @pytest.mark.parametrize("case", NESTED_STRUCT_QUERIES)
-def test_view_fails_for_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
-    # A known limit: the view reads the array or the map whole and casts it, which matches the
-    # fields of the structs in it by name, so it cannot read a field renamed in letter case.
+def test_view_reads_a_struct_in_an_array_or_a_map_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
     query, column, data_type, value = NESTED_STRUCT_QUERIES[case]
     table = tables("parquet", f"k INT, {column} {data_type.format(a='a')}")
     table.insert(f"(1, {value.format(a='a')})")
-    view = table.create_view(kind, query.format(t=table.name))
-    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    sql = query.format(t=table.name)
+    view = table.create_view(kind, sql)
+    schema = spark.table(view).schema
     table.recreate(f"k INT, {column} {data_type.format(a='A')}", f"(2, {value.format(a='A')})")
-    assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
+    # The view gives the field its stored name, whatever the plan of the view computes from it.
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, sql) == [(1,)]
+    assert spark.table(view).schema.simpleString() == schema.simpleString()
+
+
+# Queries over `t (c ARRAY<STRUCT<x INT, y INT>>)` that compute with the whole array, and
+# their rows once the table has the row `[(7, 8)]` with the field `x` renamed to `X`.
+ARRAY_OF_STRUCT_QUERIES = {
+    "read": ("SELECT c FROM {t}", [[[[7, 8]]]]),
+    "union": (
+        "SELECT c FROM {t} UNION ALL SELECT array(named_struct('x', 10L, 'y', 20L))",
+        [[[[10, 20]]], [[[7, 8]]]],
+    ),
+    "equality": ("SELECT c = array(named_struct('x', 7, 'y', 8)) AS eq FROM {t}", [[True]]),
+    "cast": ("SELECT CAST(c AS ARRAY<STRUCT<x: BIGINT, y: BIGINT>>) AS c FROM {t}", [[[[7, 8]]]]),
+}
+
+
+def plain(value):
+    """Returns the value with lists in the place of rows, whose field names are not compared."""
+    return [plain(x) for x in value] if isinstance(value, (list, tuple)) else value
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+@pytest.mark.parametrize("case", ARRAY_OF_STRUCT_QUERIES)
+def test_view_computes_with_an_array_of_structs_whose_field_was_renamed_in_letter_case(spark, tables, kind, case):
+    query, expected = ARRAY_OF_STRUCT_QUERIES[case]
+    table = tables("delta", "c ARRAY<STRUCT<x: INT, y: INT>>")
+    table.insert("(array(named_struct('x', 1, 'y', 2)))")
+    view = table.create_view(kind, query.format(t=table.name))
+    table.recreate("c ARRAY<STRUCT<X: INT, y: INT>>", "(array(named_struct('X', 7, 'y', 8)))")
+    assert sorted(plain(spark.table(view).collect()), key=str) == expected
 
 
 @pytest.mark.parametrize("kind", ["sv", "dv"])
