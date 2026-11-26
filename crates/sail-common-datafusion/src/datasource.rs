@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -240,53 +241,48 @@ pub struct SourceInfo {
     /// reconcile a requested schema against files on read (e.g. Parquet); it is
     /// inert for formats that resolve their schema from metadata.
     pub read_case_sensitive: bool,
-    /// The table versions that the reads of the statement share, for a read of the data
+    /// The table snapshots that the reads of the statement share, for a read of the data
     /// of a table.
     pub snapshot_pins: Option<Arc<LakeSnapshotPins>>,
 }
 
-/// The versions of the lake tables that the reads of one statement read, so that all the
-/// reads of a table in the statement read one version of it, whether they read it by name
+/// The snapshots of the lake tables that the reads of one statement read, so that all the
+/// reads of a table in the statement read one snapshot of it, whether they read it by name
 /// or by path and whatever their read options are.
 #[derive(Debug, Default)]
 pub struct LakeSnapshotPins {
-    /// The table ID and the version, by the location of the table and whether the version
-    /// was read with the commits that the catalog ratified.
-    versions: Mutex<HashMap<(String, bool), (String, i64)>>,
+    /// The snapshot, by the location of the table and whether the snapshot was read with
+    /// the commits that the catalog ratified.
+    snapshots: Mutex<HashMap<(String, bool), Arc<dyn Any + Send + Sync>>>,
 }
 
 impl LakeSnapshotPins {
-    /// Returns the table ID and the version that the first read of the table read.
-    pub fn get(&self, location: &str, catalog_managed: bool) -> Result<Option<(String, i64)>> {
-        let versions = self
-            .versions
+    /// Returns the snapshot that the reads of the table read.
+    pub fn get(
+        &self,
+        location: &str,
+        catalog_managed: bool,
+    ) -> Result<Option<Arc<dyn Any + Send + Sync>>> {
+        let snapshots = self
+            .snapshots
             .lock()
             .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
-        Ok(versions
+        Ok(snapshots
             .get(&(location.to_string(), catalog_managed))
             .cloned())
     }
 
-    /// Records the table ID and the version that a read of the table read, unless an
-    /// earlier read of the table with the same ID recorded them. A table that was created
-    /// again at the location has another ID, and its first read sets its version.
+    /// Records the snapshot that the reads of the table read.
     pub fn insert(
         &self,
         location: String,
         catalog_managed: bool,
-        table_id: String,
-        version: i64,
+        snapshot: Arc<dyn Any + Send + Sync>,
     ) -> Result<()> {
-        let mut versions = self
-            .versions
+        self.snapshots
             .lock()
-            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?;
-        let pinned = versions
-            .entry((location, catalog_managed))
-            .or_insert_with(|| (table_id.clone(), version));
-        if pinned.0 != table_id {
-            *pinned = (table_id, version);
-        }
+            .map_err(|_| plan_datafusion_err!("lake snapshot pins poisoned"))?
+            .insert((location, catalog_managed), snapshot);
         Ok(())
     }
 }
@@ -806,22 +802,19 @@ mod tests {
     impl LakeSource for TestLakeSource {}
 
     #[test]
-    fn lake_snapshot_pins_keep_the_first_version_of_each_table_and_commit_kind() -> Result<()> {
+    fn lake_snapshot_pins_keep_a_snapshot_for_each_table_and_commit_kind() -> Result<()> {
         let pins = LakeSnapshotPins::default();
         let location = "memory:///d/";
-        pins.insert(location.to_string(), false, "id".to_string(), 1)?;
-        // A load of the same location with the commits that the catalog ratified is
-        // another table version, and a later load does not replace the first.
-        pins.insert(location.to_string(), true, "id".to_string(), 2)?;
-        pins.insert(location.to_string(), false, "id".to_string(), 3)?;
-        assert_eq!(pins.get(location, false)?, Some(("id".to_string(), 1)));
-        assert_eq!(pins.get(location, true)?, Some(("id".to_string(), 2)));
-        assert_eq!(pins.get("memory:///e/", false)?, None);
-        // A table that was created again has another ID, and its first version replaces
-        // the version of the old table.
-        pins.insert(location.to_string(), false, "other".to_string(), 4)?;
-        pins.insert(location.to_string(), false, "other".to_string(), 5)?;
-        assert_eq!(pins.get(location, false)?, Some(("other".to_string(), 4)));
+        let version = |pinned: Option<Arc<dyn Any + Send + Sync>>| {
+            pinned.and_then(|x| x.downcast_ref::<i64>().copied())
+        };
+        pins.insert(location.to_string(), false, Arc::new(1_i64))?;
+        // A snapshot of the same location with the commits that the catalog ratified is
+        // another snapshot.
+        pins.insert(location.to_string(), true, Arc::new(2_i64))?;
+        assert_eq!(version(pins.get(location, false)?), Some(1));
+        assert_eq!(version(pins.get(location, true)?), Some(2));
+        assert!(pins.get("memory:///e/", false)?.is_none());
         Ok(())
     }
 

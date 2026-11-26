@@ -844,44 +844,41 @@ pub(crate) async fn load_delta_read_state(
     let mut table_config = delta_read_snapshot_config(metadata_only, &options);
     let catalog_managed = catalog_managed_commits.is_some();
     table_config.catalog_managed_commits = catalog_managed_commits;
+    let require_files = table_config.require_files;
     let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
-    // The reads of a table in a statement read the version that the first of them read,
-    // unless they travel in time or read changes. A table that was created again at the
-    // location has another ID, or may not have the version, and the read reads its latest
-    // version. A version that the same table cannot load is an error.
+    // The reads of a table in a statement read the snapshot that the first of them read,
+    // unless they travel in time or read changes. A read that needs the files of the
+    // snapshot loads them for the version of a snapshot that was read without them.
     let pins = pins.filter(|_| {
         options.version_as_of.is_none()
             && options.timestamp_as_of.is_none()
             && !options.read_change_feed
     });
-    match pins
+    let pinned = pins
         .map(|pins| pins.get(table_url.as_str(), catalog_managed))
         .transpose()?
         .flatten()
-    {
-        Some((table_id, version)) => {
-            let pinned = deltalake_table.load_version(version).await;
-            if pinned.is_err() || deltalake_table.snapshot()?.metadata().id() != table_id {
-                deltalake_table.load().await?;
-                if deltalake_table.snapshot()?.metadata().id() == table_id {
-                    pinned?;
-                }
+        .and_then(|snapshot| snapshot.downcast::<DeltaSnapshot>().ok());
+    let snapshot = match pinned {
+        Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
+        pinned => {
+            match pinned {
+                Some(pinned) => deltalake_table.load_version(pinned.version()).await?,
+                // Load the table state according to the provided time travel options.
+                None => load_table_by_options(&mut deltalake_table, &options).await?,
             }
+            let snapshot = Arc::clone(deltalake_table.snapshot()?);
+            if let Some(pins) = pins {
+                pins.insert(
+                    table_url.to_string(),
+                    catalog_managed,
+                    Arc::clone(&snapshot) as _,
+                )?;
+            }
+            snapshot
         }
-        // Load the table state according to the provided time travel options.
-        None => load_table_by_options(&mut deltalake_table, &options).await?,
-    }
-
-    let snapshot = deltalake_table.snapshot()?.clone();
-    if let Some(pins) = pins {
-        pins.insert(
-            table_url.to_string(),
-            catalog_managed,
-            snapshot.metadata().id().to_string(),
-            snapshot.version(),
-        )?;
-    }
+    };
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,

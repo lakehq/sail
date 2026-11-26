@@ -221,12 +221,12 @@ async fn test_delta_time_travel_and_change_reads_do_not_set_the_version() -> Tes
 }
 
 #[tokio::test]
-async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestResult {
+async fn test_delta_table_created_again_is_read_at_the_snapshot_of_the_first_read() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     fixture.create_table(&["t2"], &["k", "v"]).await?;
     fixture.commit_on_request("t", &store, vec![commit(0, "second"), commit(1, "second")])?;
     fixture.commit_on_request("t2", &store, vec![commit(2, "second")])?;
-    // The reads after the table was created again read one version of the new table.
+    // The reads after the table was created again read the snapshot of the first read.
     let plan = union_all(vec![
         read_table(&["d"], &[]),
         read_table(&["t"], &[]),
@@ -234,16 +234,19 @@ async fn test_delta_table_created_again_is_read_at_its_latest_version() -> TestR
         read_table(&["t2"], &[]),
         read_path("delta", LOCATION, &[("deltaLogReplayStrategy", "hash")]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 1, 1]);
+    assert_eq!(fixture.delta_versions(plan).await?, vec![0, 0, 0]);
+    // The next statement reads the new table.
+    let plan = read(read_table(&["d"], &[]));
+    assert_eq!(fixture.delta_versions(plan).await?, vec![2]);
     Ok(())
 }
 
 #[tokio::test]
-async fn test_delta_table_created_again_without_the_version_is_read_at_its_latest_version()
--> TestResult {
+async fn test_delta_reads_do_not_load_the_log_again() -> TestResult {
     let (fixture, store) = Fixture::try_new_with_delta_table().await?;
     put(&store, commit(1, "first")).await?;
-    // The table is created again with only version 0 after the first read read version 1.
+    // The commits that the first read read are removed, as the cleanup of the log removes
+    // the commits before a checkpoint.
     let log = Arc::clone(&store);
     fixture
         .catalog
@@ -253,8 +256,9 @@ async fn test_delta_table_created_again_without_the_version_is_read_at_its_lates
         .push((
             "t".to_string(),
             Box::pin(async move {
-                let _ = log.delete(&commit(1, "first").0).await;
-                let _ = put(&log, commit(0, "second")).await;
+                for version in 0..=1 {
+                    let _ = log.delete(&commit(version, "first").0).await;
+                }
             }),
         ));
     let plan = union_all(vec![
@@ -262,7 +266,7 @@ async fn test_delta_table_created_again_without_the_version_is_read_at_its_lates
         read_table(&["t"], &[]),
         read_path("delta", LOCATION, &[]),
     ])?;
-    assert_eq!(fixture.delta_versions(plan).await?, vec![1, 0]);
+    assert_eq!(fixture.delta_versions(plan).await?, vec![1, 1]);
     Ok(())
 }
 
