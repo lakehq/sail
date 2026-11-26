@@ -489,7 +489,8 @@ pub fn recompute_plan_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
                 .map(|(i, (qualifier, field))| {
                     let fields = inputs.iter().map(|x| x.schema().field(i));
                     let nullable = fields.clone().any(|x| x.is_nullable());
-                    let metadata = fields.flat_map(|x| x.metadata().clone()).collect();
+                    let metadata: HashMap<_, _> =
+                        fields.flat_map(|x| x.metadata().clone()).collect();
                     let field = field
                         .as_ref()
                         .clone()
