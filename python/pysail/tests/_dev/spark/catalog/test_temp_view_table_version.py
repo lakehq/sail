@@ -166,6 +166,59 @@ def test_view_reads_a_table_whose_unread_columns_were_dropped_or_renamed(spark, 
     assert "- `id` BIGINT has been removed" in message
 
 
+# Queries over `t (a INT, b INT)` that pass `b` on through a subquery or a CTE, and read only `a`.
+PASSED_ON_QUERIES = {
+    "subquery": "SELECT a FROM (SELECT a, b FROM {t})",
+    "cte": "WITH s AS (SELECT a, b FROM {t}) SELECT a FROM s",
+}
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("query", PASSED_ON_QUERIES)
+@pytest.mark.parametrize(
+    ("fmt", "change"),
+    [
+        ("delta", "drop"),
+        ("delta", "rename"),
+        ("parquet", "drop"),
+        ("parquet", "rename"),
+        ("delta_cm", "alter drop"),
+        ("delta_cm", "alter rename"),
+    ],
+)
+def test_view_reads_a_table_whose_column_that_it_passes_on_but_does_not_read_changed(
+    spark, tables, kind, query, fmt, change
+):
+    using, properties = METADATA_FORMATS[fmt]
+    table = tables(using, "a INT, b INT", properties)
+    table.insert("(1, 10), (2, 20)")
+    view = table.create_view(kind, query.format(t=table.name))
+    if change == "drop":
+        table.recreate("a INT", "(3), (4)")
+    elif change == "rename":
+        table.recreate("a INT, c INT", "(3, 30), (4, 40)")
+    elif change == "alter drop":
+        spark.sql(f"ALTER TABLE {table.name} DROP COLUMN b")
+        table.insert("(3)")
+    else:
+        spark.sql(f"ALTER TABLE {table.name} RENAME COLUMN b TO c")
+        table.insert("(3, 30)")
+    assert rows(spark, f"SELECT * FROM {view}") == rows(spark, f"SELECT a FROM {table.name}")
+
+
+@pytest.mark.parametrize("kind", ["sv", "dv"])
+def test_views_over_views_read_a_table_whose_unread_column_changed_its_type(spark, tables, kind):
+    table = tables("delta", "a INT, b INT, u INT")
+    table.insert("(1, 10, 100), (2, 20, 200)")
+    view = table.create_view(kind, f"SELECT a, b FROM {table.name}")
+    for _ in range(2):
+        frame = spark.table(view).selectExpr("a + 1 AS a", "b") if kind == "dv" else None
+        view = create_view(spark, kind, f"SELECT a + 1 AS a, b FROM {view}", frame)
+        table.views.append(view)
+    table.recreate("a INT, b INT, u STRING", "(3, 30, 'x')")
+    assert rows(spark, f"SELECT * FROM {view}") == [(5, 30)]
+
+
 @pytest.mark.parametrize("table", LAKE_FORMATS, indirect=True)
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_reads_a_column_renamed_only_in_letter_case(spark, table, kind):
