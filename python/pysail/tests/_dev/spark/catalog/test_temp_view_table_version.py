@@ -1688,6 +1688,17 @@ def test_view_with_time_travel_reads_its_version(spark, tables, kind):
     assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
 
 
+def test_data_frame_view_that_travels_in_time_by_a_read_option_reads_its_version(spark, tables):
+    table = tables("delta")
+    table.insert("(1)")
+    view = table.create_view("dv", frame=spark.read.option("versionAsOf", 1).table(table.name))
+    table.insert("(2)")
+    assert rows(spark, f"SELECT * FROM {view}") == [(1,)]
+    # The version of a Delta Lake table is not a version of a Parquet table.
+    table.recreate("id BIGINT", "(7), (8)", fmt="parquet")
+    assert "created again with another format" in error(spark, f"SELECT * FROM {view}")
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_view_over_an_iceberg_metadata_table_reads_the_current_snapshots(spark, tables, kind):
     table = tables("iceberg")
