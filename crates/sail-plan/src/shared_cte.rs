@@ -11,9 +11,8 @@ use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference};
-use datafusion_expr::utils::{conjunction, disjunction};
 use datafusion_expr::expr::Cast;
-use datafusion_expr::utils::merge_schema;
+use datafusion_expr::utils::{conjunction, disjunction, merge_schema};
 use datafusion_expr::{
     Distinct, Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
     TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource, Union,
