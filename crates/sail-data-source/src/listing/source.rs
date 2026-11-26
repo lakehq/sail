@@ -191,6 +191,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         if recursive && !partition_by.is_empty() {
             return plan_err!("recursiveFileLookup is not supported for a partitioned table");
         }
+        let partition_directories_only = options.iter().any(|layer| matches!(layer, OptionLayer::TablePropertyList {items} if items.iter().any(|(key,value)|key == sail_common_datafusion::catalog::iceberg::MIGRATION_BACKUP_PROPERTY && value == "true")));
         let path = read_option(&options, "basePath");
         let mut read_format = T::read(ctx, options.clone())?;
         let hadoop_paths = path.is_some() || recursive;
@@ -213,6 +214,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             ctx,
             &urls,
             path_glob_filter.as_ref(),
+            partition_directories_only,
             base_path.as_ref(),
             recursive,
             sampling,
@@ -381,6 +383,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
             path_glob_filter,
+            partition_directories_only,
             compression,
         })?;
         Ok(Arc::new(source))

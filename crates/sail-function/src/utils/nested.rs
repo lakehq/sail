@@ -51,10 +51,7 @@ pub(crate) fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> 
 /// An empty array has a length of zero but may have a nonzero start.
 #[inline]
 pub(crate) fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
-    // TODO: Uncomment after DataFusion 56
-    // let start = offsets.first().as_usize();
-    // (start, offsets.last().as_usize() - start)
-    let start = offsets[0].as_usize();
-    (start, offsets[offsets.len() - 1].as_usize() - start)
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
 }
 // SPDX-SnippetEnd

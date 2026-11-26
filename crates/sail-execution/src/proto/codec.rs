@@ -7972,6 +7972,7 @@ mod tests {
         use sail_iceberg::operations::replacement::IcebergTableReplacement;
         let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
             "catalog": TableReplacement {
+            migration_backup: None,
                 catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
                 authority: sail_common_datafusion::catalog::ReplacementAuthority::Path { catalog_generation: 11, database_generation: 22, table_generation: 33 },
                 require_existing: true, existing: true,

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
+use datafusion::datasource::file_format::ensure_unique_field_names;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -185,12 +187,7 @@ async fn infer_parquet_checkpoint_schema(
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
                 .with_coerce_int96(coerce_int96)
                 .with_coerce_int96_tz(coerce_int96_tz.clone())
-                // TODO: Uncomment together with the `uniform_dict_schemas` branch below, which
-                //   must be ported first.
-                // .with_enable_rle_to_dictionary(
-                //     format.options().global.enable_rle_to_dictionary,
-                // )
-                ;
+                .with_enable_rle_to_dictionary(format.options().global.enable_rle_to_dictionary);
             // Body of `fetch_schema_with_location()` (crate-private in DataFusion 55.2 and 56).
             let result = (object.location.clone(), meta.fetch_schema().await?);
             Ok::<_, DataFusionError>(result)
@@ -215,28 +212,22 @@ async fn infer_parquet_checkpoint_schema(
     // https://github.com/apache/datafusion/pull/6629
     schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-    // TODO: Uncomment after DataFusion 56
-    // let mut seen = HashSet::new();
-    // for (location, schema) in &schemas {
-    //     ensure_unique_field_names(schema, &mut seen).map_err(|err| {
-    //         DataFusionError::Context(
-    //             format!("Error when processing Parquet file {location}"),
-    //             Box::new(err),
-    //         )
-    //     })?;
-    // }
-    // drop(seen);
+    let mut seen = HashSet::new();
+    for (location, schema) in &schemas {
+        ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+            DataFusionError::Context(
+                format!("Error when processing Parquet file {location}"),
+                Box::new(err),
+            )
+        })?;
+    }
+    drop(seen);
 
     // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
-    // TODO: Uncomment together with the `uniform_dict_schemas` branch below.
-    // let mut schemas: Vec<Schema> =
-    //     schemas.into_iter().map(|(_, schema)| schema).collect();
-    let schemas: Vec<Schema> = schemas.into_iter().map(|(_, schema)| schema).collect();
-    // TODO: `uniform_dict_schemas` is private in DataFusion 56; port it before enabling
-    //   `enable_rle_to_dictionary`.
-    // if format.options().global.enable_rle_to_dictionary {
-    //     schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
-    // }
+    let mut schemas: Vec<Schema> = schemas.into_iter().map(|(_, schema)| schema).collect();
+    if format.options().global.enable_rle_to_dictionary {
+        schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
+    }
 
     let source_schemas = schemas.clone();
     let schema = if format.skip_metadata() {

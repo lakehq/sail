@@ -1502,7 +1502,7 @@ pub(crate) fn create_table_partition_spec(
     Ok(partition_spec_builder.build())
 }
 
-fn iceberg_table_properties_from_catalog_create(
+pub(crate) fn iceberg_table_properties_from_catalog_create(
     properties: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>> {
     let catalog_table_option = sail_common_datafusion::datasource::CATALOG_TABLE_OPTION;
