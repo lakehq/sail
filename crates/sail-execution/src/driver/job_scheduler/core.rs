@@ -730,7 +730,7 @@ impl JobScheduler {
         }
         for (s, stage) in job.stages.iter_mut().enumerate() {
             match stage.state {
-                StageState::Active(_) => {
+                StageState::Active => {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.clone(),
@@ -748,6 +748,7 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
+        job.stage_definitions.clear();
         job.state.finish_output(outcome);
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,
@@ -789,10 +790,10 @@ impl JobScheduler {
             )));
         };
 
-        let StageState::Active(encoded) = &job.stages[key.stage].state else {
+        let Some(encoded) = job.stage_definitions.get(key.stage) else {
             return Err(ExecutionError::InvalidArgument(format!(
-                "stage {} of job {} is inactive",
-                key.stage, key.job_id
+                "job {} has been closed",
+                key.job_id
             )));
         };
         let inputs = stage
@@ -818,6 +819,7 @@ impl JobScheduler {
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         for (job_id, job) in self.jobs.iter_mut() {
+            job.stage_definitions.clear();
             let job_id = u64::from(*job_id);
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 job.state = JobState::Canceled;
@@ -829,7 +831,7 @@ impl JobScheduler {
                 });
             }
             for (s, stage) in job.stages.iter_mut().enumerate() {
-                if matches!(stage.state, StageState::Active(_)) {
+                if matches!(stage.state, StageState::Active) {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.to_string(),
@@ -1611,18 +1613,17 @@ pub(super) mod tests {
         );
         // The worker must receive the resized plan and channel count as well.
         let job = &scheduler.jobs[&job_id];
-        let super::StageState::Active(stage) = &job.stages[last].state else {
-            return Err("expected an active result stage".into());
-        };
+        let stage = &job.stage_definitions[last];
         let plan = crate::proto::decode_remote_physical_plan(
             &job.context,
             &crate::proto::RemoteExecutionCodec,
             &stage.plan,
         )?;
         assert_eq!(plan.properties().output_partitioning().partition_count(), 2);
-        assert!(
-            matches!(&job.stages[writer].state, super::StageState::Active(stage) if matches!(stage.distribution, crate::task::definition::TaskOutputDistribution::Channel { channels: 2 }))
-        );
+        assert!(matches!(
+            job.stage_definitions[writer].distribution,
+            crate::task::definition::TaskOutputDistribution::Channel { channels: 2 }
+        ));
 
         let tasks = scheduled(&scheduler.refresh_job(job_id));
         let mut last_partitions = tasks

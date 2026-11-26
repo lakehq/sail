@@ -136,6 +136,9 @@ pub struct JobDescriptor {
     pub graph: Arc<JobGraph>,
     pub topology: JobTopology,
     pub stages: Vec<StageDescriptor>,
+    /// Region retries can relaunch a stage after its output was cleaned up.
+    /// Keep the definitions until the whole job is closed.
+    pub stage_definitions: Vec<EncodedStage>,
     pub regions: Vec<TaskRegionDescriptor>,
     /// The state of each range shuffle of the job graph.
     pub range_shuffles: Vec<RangeShuffleState>,
@@ -191,17 +194,16 @@ impl JobDescriptor {
         let PlannedJob {
             graph,
             topology,
-            stages,
+            stages: stage_definitions,
         } = plan;
         let stages = graph
             .stages()
             .iter()
-            .zip(stages)
-            .map(|(stage, definition)| StageDescriptor {
+            .map(|stage| StageDescriptor {
                 tasks: TaskDescriptor::new_tasks(
                     stage.plan.output_partitioning().partition_count(),
                 ),
-                state: StageState::Active(definition),
+                state: StageState::Active,
             })
             .collect();
         let regions = TaskRegionDescriptor::new_regions(&topology);
@@ -212,6 +214,7 @@ impl JobDescriptor {
             topology,
             stages,
             regions,
+            stage_definitions,
             range_shuffles,
             state,
         }
@@ -238,7 +241,7 @@ impl JobDescriptor {
                     "stage {s} has run before the partitions of range shuffle {shuffle} are known"
                 )));
             }
-            stage.state = StageState::Active(definition);
+            self.stage_definitions[s] = definition;
             updated.push(s);
             let partitions = graph.stages()[s]
                 .plan
@@ -278,7 +281,7 @@ pub struct StageDescriptor {
 pub enum StageState {
     /// The tasks in the stage are not yet completed,
     /// or the task streams are still being consumed.
-    Active(EncodedStage),
+    Active,
     /// The tasks in the stage will not be scheduled anymore,
     /// and the task streams are no longer being consumed.
     Inactive,
@@ -287,7 +290,7 @@ pub enum StageState {
 impl StageState {
     pub fn status(&self) -> &'static str {
         match self {
-            StageState::Active(_) => "ACTIVE",
+            StageState::Active => "ACTIVE",
             StageState::Inactive => "INACTIVE",
         }
     }
