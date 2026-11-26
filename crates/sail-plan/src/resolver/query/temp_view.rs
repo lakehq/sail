@@ -87,6 +87,22 @@ impl TableOrigin {
             Self::LakePath(origin) => origin.read_case_sensitive,
         }
     }
+
+    /// Whether the read reads a version of the table, by a clause or a read option.
+    fn travels_in_time(&self) -> bool {
+        match self {
+            Self::CatalogTable(origin) => origin.travels_in_time(),
+            Self::LakePath(origin) => has_time_travel_option(&origin.options),
+        }
+    }
+}
+
+/// Whether the read options include a read option that Spark reads as time travel for a
+/// table of any format.
+fn has_time_travel_option(options: &[(String, String)]) -> bool {
+    options.iter().any(|(key, _)| {
+        key.eq_ignore_ascii_case("versionAsOf") || key.eq_ignore_ascii_case("timestampAsOf")
+    })
 }
 
 /// A read of paths in a format. A temporary view stores it for a read of a Delta Lake or
@@ -122,10 +138,7 @@ impl CatalogTableOrigin {
     /// Whether the read travels in time, by a clause or by a read option that Spark reads
     /// as time travel for a table of any format.
     fn travels_in_time(&self) -> bool {
-        !self.temporal_options.is_empty()
-            || self.options.iter().any(|(key, _)| {
-                key.eq_ignore_ascii_case("versionAsOf") || key.eq_ignore_ascii_case("timestampAsOf")
-            })
+        !self.temporal_options.is_empty() || has_time_travel_option(&self.options)
     }
 }
 
@@ -1025,11 +1038,14 @@ impl PlanResolver<'_> {
                 ))));
             }
         };
-        let gained = has_new_fields(
-            reference.table.fields(),
-            table_schema.fields(),
-            case_sensitive,
-        );
+        // A read of a version of the table reads columns that do not change, so a column
+        // that the current table has is not one that the version gained.
+        let gained = !reference.origin.travels_in_time()
+            && has_new_fields(
+                reference.table.fields(),
+                table_schema.fields(),
+                case_sensitive,
+            );
         let positions = reads
             .iter()
             .map(|read| read.as_ref().map(|(position, _)| *position))

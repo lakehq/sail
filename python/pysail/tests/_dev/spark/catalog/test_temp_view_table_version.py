@@ -362,6 +362,30 @@ def test_view_reads_the_column_that_its_star_or_natural_join_gains(spark, tables
 
 
 @pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
+@pytest.mark.parametrize("query", ["SELECT DISTINCT * FROM {t} VERSION AS OF 1", "SELECT * FROM {t} VERSION AS OF 1"])
+@pytest.mark.parametrize(
+    ("fmt", "change"),
+    [
+        ("delta", "ADD COLUMNS (z INT)"),
+        ("delta_cm", "ADD COLUMNS (z INT)"),
+        ("delta_cm", "RENAME COLUMN c TO c_r"),
+    ],
+)
+def test_view_of_a_version_reads_the_version_after_the_table_gained_or_renamed_a_column(
+    spark, tables, kind, query, fmt, change
+):
+    using, properties = METADATA_FORMATS[fmt]
+    table = tables(using, "k INT, c INT", properties)
+    table.insert("(1, 1), (1, 1), (2, 2)")
+    view = table.create_view(kind, query.format(t=table.name))
+    expected = rows(spark, f"SELECT * FROM {view}")
+    spark.sql(f"ALTER TABLE {table.name} {change}")
+    table.insert("(3, 3, 3)" if change.startswith("ADD") else "(3, 3)")
+    # The columns of the version do not change, and the view reads the rows of the version.
+    assert rows(spark, f"SELECT * FROM {view}") == expected
+
+
+@pytest.mark.parametrize("kind", ["sv", "gv", "dv"])
 def test_view_reads_the_current_database_of_its_creation(spark, tmp_path, kind):
     suffix = uuid.uuid4().hex
     a, b = f"a_{suffix}", f"b_{suffix}"
