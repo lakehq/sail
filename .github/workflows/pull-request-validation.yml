@@ -8,14 +8,14 @@ on:
       - reopened
 
 jobs:
-  python-test-selection:
-    name: Initialize Python test selection
-    if: github.event.action == 'opened'
+  validate:
+    name: Validate pull request
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write
     steps:
       - name: Create Python test selection comment
+        if: github.event.action == 'opened'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: python-test-selection
@@ -25,13 +25,9 @@ jobs:
 
             The test suites will be available after the build finishes.
 
-  title:
-    name: Validate title
-    runs-on: ubuntu-slim
-    permissions:
-      pull-requests: read
-    steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - name: Validate title
+        if: ${{ !cancelled() }}
+        uses: amannn/action-semantic-pull-request@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
