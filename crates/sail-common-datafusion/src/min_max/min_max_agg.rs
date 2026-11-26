@@ -17,8 +17,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, SetMonotonicity, Signature, StatisticsArgs,
-    Volatility, udaf_default_return_field,
+    Accumulator, AggregateUDFImpl, DistinctHandling, GroupsAccumulator, SetMonotonicity, Signature,
+    StatisticsArgs, Volatility, udaf_default_return_field,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
@@ -375,11 +375,10 @@ impl AggregateUDFImpl for Max {
         SetMonotonicity::Increasing
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn distinct_handling(&self) -> DistinctHandling {
-    //     // `MAX` is idempotent: duplicates cannot change the maximum.
-    //     DistinctHandling::Insensitive
-    // }
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MAX` is idempotent: duplicates cannot change the maximum.
+        DistinctHandling::Insensitive
+    }
 }
 
 #[derive(Debug)]
@@ -592,11 +591,10 @@ impl AggregateUDFImpl for Min {
         SetMonotonicity::Decreasing
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn distinct_handling(&self) -> DistinctHandling {
-    //     // `MIN` is idempotent: duplicates cannot change the minimum.
-    //     DistinctHandling::Insensitive
-    // }
+    fn distinct_handling(&self) -> DistinctHandling {
+        // `MIN` is idempotent: duplicates cannot change the minimum.
+        DistinctHandling::Insensitive
+    }
 }
 
 #[derive(Debug)]

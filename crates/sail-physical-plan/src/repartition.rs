@@ -444,6 +444,22 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         vec![false]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // A sort below `coalesce(n)` or `repartition(1)` stays in effect in Spark, so
+        // `orderBy(...).coalesce(1)` returns sorted rows. Both keep the rows of a single input
+        // partition in order, so the sort below must not be removed. Spark does not keep the
+        // order for hash repartitioning or round-robin repartitioning into several partitions,
+        // so the sort can still be removed there.
+        let single_input = self.input.output_partitioning().partition_count() <= 1;
+        vec![
+            single_input
+                && matches!(
+                    self.properties.partitioning,
+                    Partitioning::UnknownPartitioning(_) | Partitioning::RoundRobinBatch(1)
+                ),
+        ]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }

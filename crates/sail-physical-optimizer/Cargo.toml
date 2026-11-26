@@ -28,3 +28,4 @@ log = { workspace = true }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }
+tokio = { workspace = true }

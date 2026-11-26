@@ -26,10 +26,6 @@ use datafusion_common::{
     internal_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-// TODO: Uncomment after DataFusion 56
-// use datafusion_expr::utils::{
-//     AggregateOrderSensitivity, format_state_name, ordering_state_fields,
-// };
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, Expr, ExprFunctionExt, GroupsAccumulator,
@@ -43,7 +39,6 @@ mod state;
 use sail_common_datafusion::metadata::type_metadata;
 use state::{BytesValueState, GenericValueState, PrimitiveValueState, ValueState};
 
-// TODO: Remove after DataFusion 56, which has `datafusion_expr::utils::ordering_state_fields`.
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/expr/src/utils.rs#L1577-L1589
@@ -882,17 +877,16 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
 
-    // TODO: Uncomment after DataFusion 56
-    // fn shrink_to_fit(&mut self) {
-    //     // `take_state` truncates the per-batch scoreboard, which keeps its
-    //     // capacity for every group seen before the emit. Every user of the
-    //     // scoreboard accepts it all-false, so rebuild it at the current size.
-    //     let num_groups = self.extreme_of_each_group_buf.1.len();
-    //     let mut scoreboard = BooleanBufferBuilder::new(num_groups);
-    //     scoreboard.append_n(num_groups, false);
-    //     self.extreme_of_each_group_buf.1 = scoreboard;
-    //     self.extreme_buf_dirty = false;
-    // }
+    fn shrink_to_fit(&mut self) {
+        // `take_state` truncates the per-batch scoreboard, which keeps its
+        // capacity for every group seen before the emit. Every user of the
+        // scoreboard accepts it all-false, so rebuild it at the current size.
+        let num_groups = self.extreme_of_each_group_buf.1.len();
+        let mut scoreboard = BooleanBufferBuilder::new(num_groups);
+        scoreboard.append_n(num_groups, false);
+        self.extreme_of_each_group_buf.1 = scoreboard;
+        self.extreme_buf_dirty = false;
+    }
 
     fn convert_to_state(
         &self,
