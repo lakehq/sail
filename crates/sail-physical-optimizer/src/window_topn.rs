@@ -535,7 +535,7 @@ fn column_index_below(col_idx: usize, intermediates: &[Arc<dyn ExecutionPlan>]) 
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, RecordBatch};
+    use arrow::array::{Int32Array, RecordBatch, UInt64Array};
     use arrow::compute::{CastOptions, concat_batches};
     use arrow::datatypes::{Field, Schema};
     use datafusion::execution::TaskContext;
@@ -543,7 +543,7 @@ mod tests {
     use datafusion::physical_plan::windows::create_window_expr;
     use datafusion::physical_plan::{InputOrderMode, collect, displayable};
     use datafusion_datasource::memory::MemorySourceConfig;
-    use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+    use datafusion_expr::{WindowFrame, WindowFunctionDefinition, WindowUDF};
 
     use super::*;
 
@@ -551,6 +551,18 @@ mod tests {
     /// where the window's output column `rank` is at index 2. The input has
     /// `rows` rows with `pk = 0` and `v = 0, 1, ...`, so `rank` runs from 1.
     fn plan(rows: i32, predicate: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn ExecutionPlan>> {
+        let pk = vec![0; rows as usize];
+        window_plan(rank_udwf(), pk, (0..rows).collect(), predicate)
+    }
+
+    /// `FilterExec(<predicate>)` over `<fun>() OVER (PARTITION BY pk ORDER BY v)`,
+    /// where the window's output column `rank` is at index 2.
+    fn window_plan(
+        fun: Arc<WindowUDF>,
+        pk: Vec<i32>,
+        v: Vec<i32>,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("pk", DataType::Int32, false),
             Field::new("v", DataType::Int32, false),
@@ -558,8 +570,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![0; rows as usize])),
-                Arc::new(Int32Array::from_iter_values(0..rows)),
+                Arc::new(Int32Array::from(pk)),
+                Arc::new(Int32Array::from(v)),
             ],
         )?;
         let source = MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
@@ -572,7 +584,7 @@ mod tests {
         .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty ordering"))?;
         let input = Arc::new(SortExec::new(ordering, source));
         let rank = create_window_expr(
-            &WindowFunctionDefinition::WindowUDF(rank_udwf()),
+            &WindowFunctionDefinition::WindowUDF(fun),
             "rank".to_string(),
             &[],
             &[pk],
@@ -827,6 +839,67 @@ mod tests {
             let expected = execute(original).await?;
             assert_eq!(expected.num_rows(), 2);
             assert_eq!(execute(optimized).await?, expected);
+        }
+        Ok(())
+    }
+
+    /// Ties at the cutoff in two window partitions, through Sail's
+    /// `CAST(<fn> AS Int32) <= 2`: the rewrite must keep exactly the rows, and
+    /// emit the same ranking values, as the unoptimized plan.
+    #[tokio::test]
+    async fn test_window_topn_ties_execution() -> Result<()> {
+        let int32 = DataType::Int32;
+        // Sorted by (pk, v): pk 0 has v = [1, 1, 2, 2, 3], pk 1 has v = [5, 5, 5, 6, 7].
+        let pk = vec![1, 0, 1, 0, 0, 1, 1, 0, 0, 1];
+        let v = vec![5, 2, 7, 1, 3, 6, 5, 2, 1, 5];
+        // Expected `(pk, v, <fn>)` columns, all sorted by `(pk, v)`.
+        let cases: [(_, _, &[i32], &[i32], &[u64]); 3] = [
+            (
+                dense_rank_udwf(),
+                "dense_rank",
+                &[0, 0, 0, 0, 1, 1, 1, 1],
+                &[1, 1, 2, 2, 5, 5, 5, 6],
+                &[1, 1, 2, 2, 1, 1, 1, 2],
+            ),
+            (
+                rank_udwf(),
+                "rank",
+                &[0, 0, 1, 1, 1],
+                &[1, 1, 5, 5, 5],
+                &[1, 1, 1, 1, 1],
+            ),
+            (
+                row_number_udwf(),
+                "row_number",
+                &[0, 0, 1, 1],
+                &[1, 1, 5, 5],
+                &[1, 2, 1, 2],
+            ),
+        ];
+        for (fun, name, expected_pk, expected_v, expected_rank) in cases {
+            let predicate = compare(
+                cast(rank(), int32.clone(), false),
+                Operator::LtEq,
+                literal(2, &int32)?,
+            );
+            let original = window_plan(fun, pk.clone(), v.clone(), predicate)?;
+            let optimized = optimize_plan(&original)?;
+            let display = displayable(optimized.as_ref()).indent(true).to_string();
+            assert!(!display.contains("FilterExec"), "{display}");
+            assert!(
+                display.contains(&format!("PartitionedTopKExec: fn={name}, fetch=2")),
+                "{display}"
+            );
+            let expected = RecordBatch::try_new(
+                original.schema(),
+                vec![
+                    Arc::new(Int32Array::from(expected_pk.to_vec())),
+                    Arc::new(Int32Array::from(expected_v.to_vec())),
+                    Arc::new(UInt64Array::from(expected_rank.to_vec())),
+                ],
+            )?;
+            assert_eq!(execute(original).await?, expected, "{name}");
+            assert_eq!(execute(optimized).await?, expected, "{name}");
         }
         Ok(())
     }
