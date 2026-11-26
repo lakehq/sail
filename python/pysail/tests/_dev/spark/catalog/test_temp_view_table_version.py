@@ -2333,7 +2333,7 @@ def test_dataframe_view_fails_when_a_column_that_it_reads_was_dropped(spark, tab
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_view_whose_definition_no_longer_resolves_reads_values_that_convert_exactly(spark, tables, kind):
+def test_view_whose_definition_no_longer_resolves_fails_with_the_column_change(spark, tables, kind):
     table = tables("delta", "id INT, b BIGINT")
     other = tables("delta", "k INT")
     table.insert("(1, 7)")
@@ -2342,12 +2342,12 @@ def test_view_whose_definition_no_longer_resolves_reads_values_that_convert_exac
     try:
         spark.sql(f"CREATE VIEW {persistent} AS SELECT k FROM {other.name}")
         view = table.create_view(kind, f"SELECT t.id, t.b, p.k FROM {table.name} t CROSS JOIN {persistent} p")
-        # The definition no longer resolves, and the plan reads the values of `b` as the type that
-        # it was created with.
+        # The definition no longer resolves, and the plan does not fit the table. The schema of the
+        # view is the schema that it was created with.
         spark.sql(f"CREATE OR REPLACE VIEW {persistent} AS SELECT 1 AS other")
         table.recreate("id INT, b INT", "(2, 3)")
         assert spark.table(view).schema["b"].dataType == LongType()
-        assert rows(spark, f"SELECT * FROM {view}") == [(2, 3, 5)]
+        assert COLUMNS_CHANGED in error(spark, f"SELECT * FROM {view}")
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {persistent}")
 
