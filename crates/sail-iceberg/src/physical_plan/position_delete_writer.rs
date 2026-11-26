@@ -210,6 +210,7 @@ impl PositionDeleteAccumulator {
         table_store: &StoreContext,
         data_store: &StoreContext,
         data_url: &Url,
+        metadata_size_hint: Option<usize>,
     ) -> Result<Vec<DataFile>> {
         if self.rows_by_group.is_empty() {
             return Ok(vec![]);
@@ -227,7 +228,7 @@ impl PositionDeleteAccumulator {
                     table_store,
                     &target.positional_deletes,
                     &path,
-                    None,
+                    metadata_size_hint,
                 )
                 .await?;
                 if combined
@@ -478,7 +479,7 @@ mod tests {
                 .add_batch(&base, &batch, "file", "pos")
                 .expect("positions");
             let files = accumulator
-                .finish_deletion_vectors(&store, &store, &url)
+                .finish_deletion_vectors(&store, &store, &url, None)
                 .await
                 .expect("DV without manifests");
             assert_eq!(files.len(), 1);

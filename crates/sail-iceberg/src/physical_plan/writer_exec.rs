@@ -518,6 +518,12 @@ impl ExecutionPlan for IcebergWriterExec {
         let parquet_properties = self.parquet_properties.clone();
         let target_file_size_bytes = self.target_file_size_bytes;
         let metrics = self.metrics.clone();
+        let metadata_size_hint = context
+            .session_config()
+            .options()
+            .execution
+            .parquet
+            .metadata_size_hint;
 
         let schema = self.schema();
         let future = async move {
@@ -663,7 +669,12 @@ impl ExecutionPlan for IcebergWriterExec {
                         &table_url,
                     )?;
                     position_deletes
-                        .finish_deletion_vectors(&table_store, &data_store_ctx, &data_location)
+                        .finish_deletion_vectors(
+                            &table_store,
+                            &data_store_ctx,
+                            &data_location,
+                            metadata_size_hint,
+                        )
                         .await?
                 } else {
                     position_deletes
