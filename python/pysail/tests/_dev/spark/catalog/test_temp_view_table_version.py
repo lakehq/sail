@@ -1141,6 +1141,13 @@ STRUCT_GAINS = {
         "array(named_struct('a', 11, 'b', 21, 'c', 31))",
         [(11, 21)],
     ),
+    "struct in a map": (
+        "s MAP<STRING, STRUCT<a: INT, b: INT>>",
+        "map('k', named_struct('a', 10, 'b', 20))",
+        "s MAP<STRING, STRUCT<a: INT, b: INT, c: INT>>",
+        "map('k', named_struct('a', 11, 'b', 21, 'c', 31))",
+        {"k": (11, 21)},
+    ),
     "struct renamed in letter case": (
         "s STRUCT<a: INT, b: INT>",
         "named_struct('a', 10, 'b', 20)",
@@ -1163,15 +1170,6 @@ def test_view_reads_a_struct_without_the_fields_that_it_gained(spark, tables, fm
     table.recreate(f"id INT, {new_columns}", f"(2, {new_value})")
     assert spark.table(view).schema == schema
     assert rows(spark, f"SELECT * FROM {view}") == [(2, expected)]
-
-
-@pytest.mark.parametrize("kind", ["sv", "dv"])
-def test_view_of_a_map_of_structs_that_gained_a_field_must_be_created_again(spark, tables, kind):
-    table = tables("delta", "id INT, m MAP<STRING, STRUCT<a: INT>>")
-    table.insert("(1, map('k', named_struct('a', 10)))")
-    view = table.create_view(kind)
-    table.recreate("id INT, m MAP<STRING, STRUCT<a: INT, c: INT>>", "(2, map('k', named_struct('a', 11, 'c', 31)))")
-    assert_view_reads(spark, view, None)
 
 
 # Queries over `t (k INT, c STRUCT<y: TIMESTAMP, z: INT> NOT NULL)` that count the struct. The

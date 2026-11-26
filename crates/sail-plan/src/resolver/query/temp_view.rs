@@ -538,7 +538,7 @@ impl<'a> Fit<'a> {
 
     /// Takes the fields that the structs of a value read whole gained. The value is read
     /// without them, as a table that gained a column, unless the cast to the stored type
-    /// cannot leave them out, such as a cast of a map.
+    /// cannot leave them out, such as a cast of a union.
     fn leave_out_added_fields(
         &mut self,
         stored: &Field,
@@ -2893,7 +2893,7 @@ mod tests {
         );
         assert_eq!(fit.changes, Vec::<String>::new());
         assert_eq!(read, Some((0, Read::Struct(vec![Some((0, Read::Cast))]))));
-        // A cast of a map cannot leave out the fields that the structs of its values gained.
+        // A cast of a map leaves out the fields that the structs of its values gained.
         let value = |names: &[&str]| {
             field(
                 "c",
@@ -2908,10 +2908,7 @@ mod tests {
             &Schema::new(vec![value(&["a", "d"])]),
             true,
         );
-        assert_eq!(
-            changes,
-            Err(vec!["`c`.`value`.`d` Int32 has been added".to_string()])
-        );
+        assert_eq!(changes, Ok(vec![0]));
     }
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
