@@ -92,7 +92,12 @@ message ExtendedPhysicalPlanNode {
     RangeChannelExecNode range_channel = 75;
     RangeResampleExecNode range_resample = 76;
     RangeResampleDecisionExecNode range_resample_decision = 77;
+    HivePartitionWriteExecNode hive_partition_write = 78;
   }
+}
+
+message HivePartitionWriteExecNode {
+  bytes input = 1;
 }
 
 message IdentityGenerateExecNode {
@@ -902,12 +907,14 @@ message PartitionedTopKExecNode {
   uint64 partition_prefix_len = 2;
   uint64 fetch = 3;
   PartitionedTopKWindowFnKind window_fn_kind = 4;
+  optional bytes ranking_field = 5;
 }
 
 enum PartitionedTopKWindowFnKind {
   PARTITIONED_TOP_K_WINDOW_FN_KIND_UNSPECIFIED = 0;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_ROW_NUMBER = 1;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_RANK = 2;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_DENSE_RANK = 3;
 }
 
 message AppendMode {}

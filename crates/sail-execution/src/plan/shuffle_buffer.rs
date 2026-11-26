@@ -850,7 +850,8 @@ fn place_views<T: ByteViewType>(
     // SAFETY: Each view is an inline view of a valid array, the view of a null row, or
     // the view of a whole string of a valid array, with its length and prefix, in the
     // buffer and at the offset that the string was copied to.
-    let array = unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), own, nulls) };
+    let array =
+        unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), own.into(), nulls) };
     Some((Arc::new(array), owned))
 }
 
@@ -933,7 +934,8 @@ fn split_views<T: ByteViewType>(column: &ArrayRef, pieces: &[Piece]) -> (ArrayRe
     // SAFETY: Each view is an inline view of a valid array, the view of a null row, or
     // the view of a whole string of a valid array, with its length and prefix, in the
     // buffer and at the offset that the string was copied to.
-    let array = unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), own, nulls) };
+    let array =
+        unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), own.into(), nulls) };
     (Arc::new(array), owned)
 }
 
@@ -1231,7 +1233,9 @@ fn view_array<T: ByteViewType>(
     // the view of a whole string of a valid array, with its length and prefix, either at
     // the offset that the string was copied to in `data` or where it was in a buffer of
     // that array that is kept.
-    Arc::new(unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, nulls) })
+    Arc::new(unsafe {
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), nulls)
+    })
 }
 
 /// Copies the rows of the runs of a column of any type into one array, from the pieces

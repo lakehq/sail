@@ -221,11 +221,7 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
     name: &str,
     offsets: &OffsetBuffer<O>,
 ) -> Result<ArrayRef> {
-    let total = offsets
-        .last()
-        .map(|o| o.as_usize())
-        .unwrap_or(0)
-        .saturating_sub(offsets.first().map(|o| o.as_usize()).unwrap_or(0));
+    let total = offsets.last().as_usize() - offsets.first().as_usize();
     let mut out: Vec<i32> = Vec::with_capacity(total);
     for &[start, end] in offsets.array_windows::<2>() {
         let len = end.as_usize() - start.as_usize();

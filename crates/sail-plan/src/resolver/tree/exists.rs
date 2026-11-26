@@ -310,6 +310,7 @@ impl ExistsRewriter<'_> {
                 Expr::Column(column) if columns.contains(&column) => Ok(Transformed::yes(
                     Expr::Column(Column::new(Some(alias.clone()), column.name)),
                 )),
+                Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
                 expr => Ok(Transformed::no(expr)),
             })
             .data()?;

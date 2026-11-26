@@ -28,7 +28,7 @@ pub(crate) fn unity_struct_field_type_json(
     name: &str,
     data_type: &DataType,
     nullable: bool,
-    metadata: &HashMap<String, String>,
+    metadata: &arrow::datatypes::Metadata,
 ) -> CatalogResult<serde_json::Value> {
     let data_type_json = spark_data_type_json(data_type)?;
     Ok(serde_json::json!({
@@ -49,7 +49,7 @@ fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
 }
 
 fn spark_field_metadata_json(
-    metadata: &HashMap<String, String>,
+    metadata: &arrow::datatypes::Metadata,
 ) -> CatalogResult<serde_json::Value> {
     let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
         match serde_json::from_str::<serde_json::Value>(raw) {

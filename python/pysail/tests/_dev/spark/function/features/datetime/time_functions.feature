@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-Feature: TIME functions (make_time, time_diff, time_trunc)
+Feature: TIME functions (make_time, time_diff, time_trunc, time_from_*, time_to_*)
 
   # `spark.sql.timeType.enabled` is an internal Spark configuration whose default is
   # `Utils.isTesting`, so it is on only inside Spark's own test suite and off in every real
@@ -122,3 +122,69 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
         | 09:00:00 |
         | 09:32:00 |
         | 09:32:05 |
+
+  Rule: time_to_micros / time_to_millis / time_to_seconds
+
+    Scenario Outline: time_to_*: <case>
+      When query
+        """
+        SELECT <function>(<time>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                       | function        | time                   | result        |
+        | micros midnight            | time_to_micros  | TIME '00:00:00'        | 0             |
+        | micros fractional          | time_to_micros  | TIME '14:30:00.5'      | 52200500000   |
+        | micros max                 | time_to_micros  | TIME '23:59:59.999999' | 86399999999   |
+        | millis midnight            | time_to_millis  | TIME '00:00:00'        | 0             |
+        | millis whole               | time_to_millis  | TIME '14:30:00'        | 52200000      |
+        | millis fractional          | time_to_millis  | TIME '14:30:00.5'      | 52200500      |
+        | millis truncates           | time_to_millis  | TIME '23:59:59.999999' | 86399999      |
+        | seconds midnight           | time_to_seconds | TIME '00:00:00'        | 0.000000      |
+        | seconds whole              | time_to_seconds | TIME '14:30:00'        | 52200.000000  |
+        | seconds fractional         | time_to_seconds | TIME '14:30:00.5'      | 52200.500000  |
+        | seconds max                | time_to_seconds | TIME '23:59:59.999999' | 86399.999999  |
+        | micros NULL propagates     | time_to_micros  | NULL                   | NULL          |
+        | millis NULL propagates     | time_to_millis  | NULL                   | NULL          |
+        | seconds NULL propagates    | time_to_seconds | NULL                   | NULL          |
+
+  Rule: time_from_micros / time_from_millis / time_from_seconds
+
+    Scenario Outline: time_from_*: <case>
+      When query
+        """
+        SELECT <function>(<value>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                     | function          | value          | result          |
+        | micros midnight          | time_from_micros  | 0              | 00:00:00        |
+        | micros fractional        | time_from_micros  | 52200500000    | 14:30:00.5      |
+        | micros max               | time_from_micros  | 86399999999    | 23:59:59.999999 |
+        | millis midnight          | time_from_millis  | 0              | 00:00:00        |
+        | millis whole             | time_from_millis  | 52200000       | 14:30:00        |
+        | millis fractional        | time_from_millis  | 52200500       | 14:30:00.5      |
+        | seconds midnight         | time_from_seconds | 0              | 00:00:00        |
+        | seconds whole            | time_from_seconds | 52200          | 14:30:00        |
+        | seconds fractional       | time_from_seconds | 52200.5        | 14:30:00.5      |
+        | seconds max              | time_from_seconds | 86399.999999   | 23:59:59.999999 |
+        | micros NULL propagates   | time_from_micros  | NULL           | NULL            |
+        | millis NULL propagates   | time_from_millis  | NULL           | NULL            |
+        | seconds NULL propagates  | time_from_seconds | NULL           | NULL            |
+
+  Rule: time_to_* and time_from_* round-trip
+
+    Scenario: round trip through micros
+      When query
+        """
+        SELECT time_from_micros(time_to_micros(TIME '09:32:05.123456')) AS result
+        """
+      Then query result
+        | result          |
+        | 09:32:05.123456 |

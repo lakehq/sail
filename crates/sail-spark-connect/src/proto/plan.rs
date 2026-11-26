@@ -50,14 +50,15 @@ fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableCo
         .metadata
         .iter()
         .cloned()
-        .collect::<std::collections::HashMap<_, _>>();
-    let identity = sail_common_datafusion::column_features::ColumnFeatures::from_map(&metadata)
-        .identity()
-        .map(|identity| spec::TableColumnIdentity {
-            start: Some(identity.start),
-            step: Some(identity.step),
-            allow_explicit_insert: identity.allow_explicit_insert,
-        });
+        .collect::<datafusion::arrow::datatypes::Metadata>();
+    let identity =
+        sail_common_datafusion::column_features::ColumnFeatures::from_metadata(&metadata)
+            .identity()
+            .map(|identity| spec::TableColumnIdentity {
+                start: Some(identity.start),
+                step: Some(identity.step),
+                allow_explicit_insert: identity.allow_explicit_insert,
+            });
     spec::TableColumnDefinition {
         name: field.name.clone(),
         data_type: field.data_type.clone(),

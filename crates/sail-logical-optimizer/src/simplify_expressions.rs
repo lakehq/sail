@@ -8,6 +8,8 @@ use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, lit};
 
+use crate::nested_cast::rewrite_plan_casts;
+
 /// Extend the existing simplification pass with exact numeric widening comparisons.
 #[derive(Debug, Default)]
 pub struct SimplifyExpressions(DataFusionSimplifyExpressions);
@@ -27,52 +29,57 @@ impl OptimizerRule for SimplifyExpressions {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // Folding first exposes constants written as casts or constant expressions.
-        self.0.rewrite(plan, config)?.transform_data(|plan| {
-            let mut candidate = false;
-            plan.apply_expressions(|expr| {
-                candidate = expr.exists(|expr| {
-                    let Expr::BinaryExpr(binary) = expr else {
-                        return Ok(false);
-                    };
-                    let pair = |value: &Expr, literal: &Expr| {
-                        matches!(value, Expr::Cast(_) | Expr::TryCast(_))
-                            && matches!(
-                                literal,
-                                Expr::Literal(ScalarValue::Float32(_) | ScalarValue::Float64(_), _)
-                            )
-                    };
-                    Ok(pair(&binary.left, &binary.right) || pair(&binary.right, &binary.left))
+        rewrite_plan_casts(plan)?
+            .transform_data(|plan| self.0.rewrite(plan, config))?
+            .transform_data(|plan| {
+                let mut candidate = false;
+                plan.apply_expressions(|expr| {
+                    candidate = expr.exists(|expr| {
+                        let Expr::BinaryExpr(binary) = expr else {
+                            return Ok(false);
+                        };
+                        let pair = |value: &Expr, literal: &Expr| {
+                            matches!(value, Expr::Cast(_) | Expr::TryCast(_))
+                                && matches!(
+                                    literal,
+                                    Expr::Literal(
+                                        ScalarValue::Float32(_) | ScalarValue::Float64(_),
+                                        _
+                                    )
+                                )
+                        };
+                        Ok(pair(&binary.left, &binary.right) || pair(&binary.right, &binary.left))
+                    })?;
+                    Ok(if candidate {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
                 })?;
-                Ok(if candidate {
-                    TreeNodeRecursion::Stop
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            })?;
-            if !candidate {
-                return Ok(Transformed::no(plan));
-            }
-            let schema = match &plan {
-                LogicalPlan::TableScan(scan) => DFSchema::try_from_qualified_schema(
-                    scan.table_name.clone(),
-                    &scan.source.schema(),
-                )?,
-                _ => merge_schema(&plan.inputs()),
-            };
-            let names = NamePreserver::new(&plan);
-            let rewrite = |expr: Expr| {
-                let name = names.save(&expr);
-                expr.transform_up(|expr| unwrap_comparison(expr, &schema))
-                    .map(|result| result.update_data(|expr| name.restore(expr)))
-            };
-            plan.map_expressions(|expr| {
-                if matches!(expr, Expr::GroupingSet(_)) {
-                    expr.map_children(rewrite)
-                } else {
-                    rewrite(expr)
+                if !candidate {
+                    return Ok(Transformed::no(plan));
                 }
+                let schema = match &plan {
+                    LogicalPlan::TableScan(scan) => DFSchema::try_from_qualified_schema(
+                        scan.table_name.clone(),
+                        &scan.source.schema(),
+                    )?,
+                    _ => merge_schema(&plan.inputs()),
+                };
+                let names = NamePreserver::new(&plan);
+                let rewrite = |expr: Expr| {
+                    let name = names.save(&expr);
+                    expr.transform_up(|expr| unwrap_comparison(expr, &schema))
+                        .map(|result| result.update_data(|expr| name.restore(expr)))
+                };
+                plan.map_expressions(|expr| {
+                    if matches!(expr, Expr::GroupingSet(_)) {
+                        expr.map_children(rewrite)
+                    } else {
+                        rewrite(expr)
+                    }
+                })
             })
-        })
     }
 }
 

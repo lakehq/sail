@@ -1,4 +1,4 @@
-name: Pull Request Validation
+name: Pull Request Setup
 
 on:
   pull_request_target:
@@ -8,13 +8,27 @@ on:
       - reopened
 
 jobs:
-  title:
-    name: Validate title
+  setup:
+    name: Setup
     runs-on: ubuntu-slim
     permissions:
-      pull-requests: read
+      pull-requests: write
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - name: Create Python test selection comment
+        if: github.event.action == 'opened'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: python-test-selection
+          only_create: true
+          message: |
+            ### Python Test Selection
+
+            If the build runs Python test discovery, the test suite list will appear here when the build finishes.
+            Only builds that include Python tests publish the list.
+
+      - name: Validate title
+        if: ${{ !cancelled() }}
+        uses: amannn/action-semantic-pull-request@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

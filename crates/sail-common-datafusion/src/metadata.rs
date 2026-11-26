@@ -369,7 +369,7 @@ mod tests {
     fn uuid_consensus_removes_extension_parameters_together() {
         let mut uuid = uuid_field("1");
         uuid.metadata_mut()
-            .insert(EXTENSION_TYPE_METADATA_KEY.into(), String::new());
+            .insert(EXTENSION_TYPE_METADATA_KEY, String::new());
         let fixed = Field::new("fixed", DataType::FixedSizeBinary(16), true);
         for sources in [[&uuid, &fixed], [&fixed, &uuid]] {
             // A missing extension name is not a conflicting extension type.

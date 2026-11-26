@@ -237,6 +237,36 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "time_from_micros",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "time_from_millis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "time_from_seconds",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "time_to_micros",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "time_to_millis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "time_to_seconds",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "time_trunc",
     "status": "supported"
   },

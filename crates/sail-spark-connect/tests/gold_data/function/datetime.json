@@ -3296,7 +3296,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_micros"
+        "success": "ok"
       }
     },
     {
@@ -3318,7 +3318,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_micros"
+        "success": "ok"
       }
     },
     {
@@ -3340,7 +3340,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_micros"
+        "success": "ok"
       }
     },
     {
@@ -3362,7 +3362,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_micros"
+        "success": "ok"
       }
     },
     {
@@ -3384,7 +3384,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_millis"
+        "success": "ok"
       }
     },
     {
@@ -3406,7 +3406,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_millis"
+        "success": "ok"
       }
     },
     {
@@ -3428,7 +3428,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_millis"
+        "success": "ok"
       }
     },
     {
@@ -3450,7 +3450,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_millis"
+        "success": "ok"
       }
     },
     {
@@ -3472,7 +3472,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3494,7 +3494,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3516,7 +3516,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3538,7 +3538,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_from_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3560,7 +3560,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_micros"
+        "success": "ok"
       }
     },
     {
@@ -3582,7 +3582,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_micros"
+        "success": "ok"
       }
     },
     {
@@ -3604,7 +3604,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_micros"
+        "success": "ok"
       }
     },
     {
@@ -3626,7 +3626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_micros"
+        "success": "ok"
       }
     },
     {
@@ -3648,7 +3648,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_millis"
+        "success": "ok"
       }
     },
     {
@@ -3670,7 +3670,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_millis"
+        "success": "ok"
       }
     },
     {
@@ -3692,7 +3692,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_millis"
+        "success": "ok"
       }
     },
     {
@@ -3714,7 +3714,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_millis"
+        "success": "ok"
       }
     },
     {
@@ -3736,7 +3736,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3758,7 +3758,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3780,7 +3780,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_seconds"
+        "success": "ok"
       }
     },
     {
@@ -3802,7 +3802,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: time_to_seconds"
+        "success": "ok"
       }
     },
     {

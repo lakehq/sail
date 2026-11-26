@@ -53,6 +53,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
+use sail_logical_optimizer::rewrite_nested_nullability_casts;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -268,6 +269,7 @@ impl ExtensionQueryPlanner {
             logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
         logical_plan = sail_plan::function::prepare_async_functions(logical_plan)?;
+        logical_plan = rewrite_nested_nullability_casts(logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
@@ -699,7 +701,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 Some(names) => {
                     let names = to_flow_event_field_names(names);
                     let projection = node.projection().map(|x| to_flow_event_projection(x));
-                    rename_projected_physical_plan(plan, &names, projection.as_ref())?
+                    rename_projected_physical_plan(plan, &names, projection.as_deref())?
                 }
                 None => plan,
             }

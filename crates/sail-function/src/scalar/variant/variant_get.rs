@@ -143,7 +143,18 @@ pub(super) fn write_variant_json(
         Variant::TimestampNtzMicros(ts) | Variant::TimestampNtzNanos(ts) => {
             write!(out, r#""{}""#, TimestampFormatter(&ts.and_utc(), None))?;
         }
+        Variant::Double(v) => write_json_float(out, spark_f64_to_string(v), v.is_finite())?,
+        Variant::Float(v) => write_json_float(out, spark_f32_to_string(v), v.is_finite())?,
         v => v.to_json(out)?,
+    }
+    Ok(())
+}
+
+fn write_json_float(out: &mut Vec<u8>, value: String, finite: bool) -> Result<()> {
+    if finite {
+        out.extend_from_slice(value.as_bytes());
+    } else {
+        Variant::String(&value).to_json(out)?;
     }
     Ok(())
 }

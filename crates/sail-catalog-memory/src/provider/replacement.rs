@@ -23,15 +23,22 @@ impl MemoryCatalogProvider {
             ));
         }
         let existing = db.tables.get(table);
-        let options = options.into().resolve(existing)?;
+        let (options, migration, migration_backup) = match options.into() {
+            StageTableOptions::IcebergMigration {
+                definition,
+                source,
+                backup,
+            } => {
+                if !existing.is_some_and(|table| table.kind == *source) {
+                    return Err(CatalogError::Conflict("migration source changed".into()));
+                }
+                (definition, true, Some(backup))
+            }
+            options => (options.resolve(existing)?, false, None),
+        };
         validate_create_table_options(&options.format, &options.partition_by)?;
         let is_delta = options.format.eq_ignore_ascii_case("delta");
         if !(is_delta || options.format.eq_ignore_ascii_case("iceberg"))
-            || (!is_delta
-                && !matches!(
-                    options.mode,
-                    CreateTableMode::Replace | CreateTableMode::CreateOrReplace
-                ))
             || options.bucket_by.is_some()
             || !options.constraints.is_empty()
         {
@@ -52,7 +59,9 @@ impl MemoryCatalogProvider {
             CatalogError::InvalidArgument("replacement requires a table location".into())
         })?;
         let mut properties = Vec::new();
-        if let Some(status) = existing {
+        if let Some(status) = existing
+            && !migration
+        {
             match &status.kind {
                 TableKind::Table {
                     format,
@@ -92,6 +101,7 @@ impl MemoryCatalogProvider {
         catalog_table.extend(Vec::<String>::from(database.clone()));
         catalog_table.push(table.to_string());
         Ok(TableReplacement {
+            migration_backup,
             catalog_table,
             authority: sail_common_datafusion::catalog::ReplacementAuthority::Path {
                 catalog_generation: self.generation,
@@ -164,7 +174,12 @@ impl MemoryCatalogProvider {
         // Only this short final publication is reserved, not worker execution. Dropping the
         // caller's JoinHandle detaches this task; publication and status installation continue.
         tokio::spawn(async move {
-            let _namespace = namespace_gate.read_owned().await;
+            // Reserve the whole namespace only when the publication also installs a backup name.
+            let (_shared, _exclusive) = if replacement.migration_backup.is_some() {
+                (None, Some(namespace_gate.write_owned().await))
+            } else {
+                (Some(namespace_gate.read_owned().await), None)
+            };
             let _reservation = table_gate.write_owned().await;
             let status = {
                 let db = databases.get(&database).ok_or_else(|| {
@@ -180,6 +195,16 @@ impl MemoryCatalogProvider {
                         "replacement catalog identity changed".into(),
                     ));
                 }
+                if let Some(backup) = &replacement.migration_backup {
+                    let backup = &backup.name;
+                    db.check_known(backup)?;
+                    if db.tables.contains_key(backup) || db.views.contains_key(backup) {
+                        return Err(CatalogError::AlreadyExists(
+                            CatalogObject::Table,
+                            backup.clone(),
+                        ));
+                    }
+                }
                 prepared_status(&replacement, &database, &table)
             };
             // A publication panic is also an unknown outcome, never evidence that files are unused.
@@ -190,6 +215,22 @@ impl MemoryCatalogProvider {
             // guard survives the I/O above and there is no await or fallible step after it.
             databases.entry(database).and_modify(|db| {
                 if result.is_ok() {
+                    if let Some(backup) = &replacement.migration_backup
+                        && backup.retain
+                        && let Some(mut original) = db.tables.remove(&table)
+                    {
+                        let backup = &backup.name;
+                        original.name.clone_from(backup);
+                        if let TableKind::Table { properties, .. } = &mut original.kind {
+                            properties.push((
+                                sail_common_datafusion::catalog::iceberg::MIGRATION_BACKUP_PROPERTY
+                                    .into(),
+                                "true".into(),
+                            ));
+                        }
+                        db.tables.insert(backup.clone(), original);
+                        db.changed(backup);
+                    }
                     db.tables.insert(table.clone(), status);
                     db.changed(&table);
                 } else if matches!(result, Err(CatalogError::CommitStateUnknown(_))) {

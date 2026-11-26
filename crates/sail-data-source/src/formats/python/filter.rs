@@ -360,8 +360,8 @@ fn filter_to_python(
                 .iter()
                 .map(|v| v.to_python(py))
                 .collect::<PyResult<_>>()?;
-            let values_tuple = PyTuple::new(py, py_values)?;
-            cls.call1((col_tuple, values_tuple))
+            let values = PyList::new(py, py_values)?;
+            cls.call1((col_tuple, values))
                 .map(|o| o.into_any().unbind())
         }
         PythonFilter::And { left, right } => {

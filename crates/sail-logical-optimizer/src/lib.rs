@@ -14,6 +14,7 @@ mod eliminate_sorts;
 mod float_decimal_keys;
 mod input_file_metadata;
 mod lateral_join;
+mod nested_cast;
 mod partition_sensitive_subquery;
 mod prune_seeded_random;
 mod resolve_lambda_variables;
@@ -32,6 +33,7 @@ pub use eliminate_sorts::{is_order_irrelevant_aggregate, push_down_left_semi_ant
 use float_decimal_keys::RestorePredicateSubqueryCastKeys;
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
+pub use nested_cast::rewrite_nested_nullability_casts;
 pub use partition_sensitive_subquery::pull_up_correlated_filters_in_predicate_subquery;
 use prune_seeded_random::PruneSeededRandomColumns;
 use resolve_lambda_variables::ResolveLambdaVariables;

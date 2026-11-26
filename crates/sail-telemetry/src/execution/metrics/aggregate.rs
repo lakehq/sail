@@ -114,6 +114,8 @@ impl MetricEmitter for AggregateMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
+            // Per-expression timers drill down into the aggregate-level timers above.
+            MetricValue::Time { name, .. } if name.starts_with("agg_expr_") => MetricHandled::Yes,
             _ => MetricHandled::No,
         }
     }

@@ -482,7 +482,7 @@ data:
             AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 UnionExec
-                  ProjectionExec: expr=[CAST(column1@0 AS Int64) as #2, column2@1 as __sail_delta_count_weight]
+                  ProjectionExec: expr=[CAST(column1@0 AS Int64;N) as #2, column2@1 as __sail_delta_count_weight]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                   DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[v@0 as #2, 1 as __sail_delta_count_weight], file_type=parquet
   filtered_count: |-
@@ -556,7 +556,7 @@ data:
           AggregateExec: mode=Partial, gby=[#3@0 as #3, #4@1 as #4], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
               UnionExec
-                ProjectionExec: expr=[CAST(column1@0 AS Int32) as #3, column2@1 as #4, column3@2 as __sail_delta_count_weight]
+                ProjectionExec: expr=[CAST(column1@0 AS Int32;N) as #3, column2@1 as #4, column3@2 as __sail_delta_count_weight]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[q@2 as #3, p@1 as #4, 1 as __sail_delta_count_weight], file_type=parquet
   partition_group: |-
@@ -568,7 +568,7 @@ data:
             AggregateExec: mode=Partial, gby=[#0@0 as #0, #1@1 as #1], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 UnionExec
-                  ProjectionExec: expr=[column1@0 as #0, CAST(column2@1 AS Int32) as #1, column3@2 as __sail_delta_count_weight]
+                  ProjectionExec: expr=[column1@0 as #0, CAST(column2@1 AS Int32;N) as #1, column3@2 as __sail_delta_count_weight]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                   DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[p@1 as #0, q@2 as #1, 1 as __sail_delta_count_weight], file_type=parquet
 ---

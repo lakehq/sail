@@ -98,7 +98,7 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Sort(_) => {
                 plan_err!("sort is not supported for streaming: {plan:?}")
             }
-            LogicalPlan::Join(_) => {
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_) => {
                 not_impl_err!("streaming join: {plan:?}")
             }
             LogicalPlan::Repartition(_) => {
@@ -115,8 +115,12 @@ impl TreeNodeRewriter for StreamingRewriter {
                             projected_schema: _,
                             filters,
                             fetch,
+                            skip,
                             statistics_requests: _,
                         } = scan;
+                        if skip.is_some_and(|skip| skip > 0) {
+                            return not_impl_err!("streaming table scan with an offset: {skip:?}");
+                        }
                         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                             node: Arc::new(StreamSourceWrapperNode::try_new(
                                 table_name.clone(),
@@ -164,6 +168,9 @@ impl TreeNodeRewriter for StreamingRewriter {
                 // for each marker row.
                 not_impl_err!("streaming unnest: {plan:?}")
             }
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!("streaming materialized CTE: {plan:?}")
+            }
             LogicalPlan::RecursiveQuery(_) => {
                 not_impl_err!("recursive streaming query: {plan:?}")
             }
@@ -184,7 +191,7 @@ impl TreeNodeRewriter for StreamingRewriter {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 internal_err!("unexpected command for streaming rewriter: {plan:?}")
             }
         }
