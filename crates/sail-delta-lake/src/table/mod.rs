@@ -847,23 +847,21 @@ pub(crate) async fn load_delta_read_state(
     let snapshot = match pinned {
         Some(pinned) if pinned.load_config().require_files || !require_files => pinned,
         pinned => {
-            // The commits that the catalog ratified. A read with the files of a snapshot that
-            // an earlier read read without them loads the version with the commits of that
-            // snapshot, without asking the catalog again.
+            // The commits that the catalog ratified, up to the version of a snapshot that a
+            // read with the files of the snapshot loads again. A pinned snapshot has them.
             if let Some(context) = managed_commit_context {
-                table_config.catalog_managed_commits = match &pinned {
-                    Some(pinned) => pinned.load_config().catalog_managed_commits.clone(),
-                    None => {
-                        load_catalog_managed_commits_for_snapshot(
-                            &ctx,
-                            context,
-                            &table_url,
-                            log_store.clone(),
-                            options.version_as_of,
-                        )
-                        .await?
-                    }
-                };
+                let version = pinned
+                    .as_ref()
+                    .map(|x| x.version())
+                    .or(options.version_as_of);
+                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                    &ctx,
+                    context,
+                    &table_url,
+                    log_store.clone(),
+                    version,
+                )
+                .await?;
             }
             let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
             match pinned {
